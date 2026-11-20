@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.data.activeTarget
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -44,7 +45,7 @@ fun ValuePickerSheet(
     val settings = rememberAppSettings()
     val recents by services.recents.recents.collectAsStateWithLifecycle()
     val projects by services.projects.projects.collectAsStateWithLifecycle()
-    val project = projects.firstOrNull { it.id == settings.activeProjectId && !it.archived }
+    val project = settings.activeTarget(projects)?.project
 
     val recentRows = remember(recents, kinds) {
         recents.filter { it.value.kind in kinds }.map {

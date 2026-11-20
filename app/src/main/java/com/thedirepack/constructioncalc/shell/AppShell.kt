@@ -48,6 +48,8 @@ import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import com.thedirepack.constructioncalc.core.model.ProjectItem
 import com.thedirepack.constructioncalc.core.model.RecentResult
 import com.thedirepack.constructioncalc.core.model.ResultValue
+import com.thedirepack.constructioncalc.core.model.ToolTarget
+import com.thedirepack.constructioncalc.core.data.activeTarget
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.components.ImportFileDialog
 import com.thedirepack.constructioncalc.core.ui.components.SaveToProjectSheet
@@ -65,8 +67,8 @@ import kotlinx.coroutines.launch
 
 /** A place in the app. The shell keeps a simple back stack of these. */
 sealed interface Destination {
-    /** A tool, optionally showing a saved item. */
-    data class Tool(val toolId: String, val item: ProjectItem? = null) : Destination
+    /** A tool, optionally showing a saved item, or opened for a project, circuit or run. */
+    data class Tool(val toolId: String, val item: ProjectItem? = null, val target: ToolTarget? = null) : Destination
 
     /** The one Settings screen; [toolId] opens that tool's page directly. */
     data class Settings(val toolId: String? = null) : Destination
@@ -82,7 +84,9 @@ private val StackSaver = listSaver<SnapshotStateList<Destination>, String>(
     save = { stack ->
         stack.map { d ->
             when (d) {
-                is Destination.Tool -> "T" + d.toolId + SEP + (d.item?.let { ProjectCodec.json.encodeToString(ProjectItem.serializer(), it) } ?: "")
+                is Destination.Tool -> "T" + d.toolId + SEP +
+                    (d.item?.let { ProjectCodec.json.encodeToString(ProjectItem.serializer(), it) } ?: "") + SEP +
+                    (d.target?.encode() ?: "")
                 is Destination.Settings -> "S" + (d.toolId ?: "")
             }
         }
@@ -92,11 +96,11 @@ private val StackSaver = listSaver<SnapshotStateList<Destination>, String>(
             when (s.firstOrNull()) {
                 'T' -> {
                     val body = s.drop(1)
-                    val toolId = body.substringBefore(SEP)
-                    val itemJson = body.substringAfter(SEP, "")
-                    val item = itemJson.takeIf { it.isNotEmpty() }
+                    // JSON escapes control characters, so SEP never appears inside the item.
+                    val parts = body.split(SEP)
+                    val item = parts.getOrNull(1)?.takeIf { it.isNotEmpty() }
                         ?.let { runCatching { ProjectCodec.json.decodeFromString(ProjectItem.serializer(), it) }.getOrNull() }
-                    Destination.Tool(toolId, item)
+                    Destination.Tool(parts[0], item, parts.getOrNull(2)?.let(ToolTarget::decode))
                 }
                 'S' -> Destination.Settings(s.drop(1).ifEmpty { null })
                 else -> null
@@ -161,11 +165,13 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
                             ShellHost(
                                 tool = tool,
                                 openedItem = current.item,
+                                target = current.target,
                                 onOpenDrawer = { scope.launch { drawer.open() } },
-                                onOpenTool = { id, item -> push(Destination.Tool(id, item)) },
+                                onOpenTool = { id, item, target -> push(Destination.Tool(id, item, target)) },
                                 onOpenProject = { id ->
-                                    if (id != null) ProjectsTool.requestOpen(id) else ProjectsTool.requestList()
-                                    if (tool.id != ProjectsTool.ID) push(Destination.Tool(ProjectsTool.ID))
+                                    val projects = Destination.Tool(ProjectsTool.ID, target = id?.let { ToolTarget.OfProject(it) })
+                                    // Already in Projects: show that page (or the list) in place.
+                                    if (tool.id == ProjectsTool.ID) stack[stack.lastIndex] = projects else push(projects)
                                 },
                                 onBack = ::pop,
                                 onSave = { pendingSave = it to current.item },
@@ -218,8 +224,7 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
             onFinished = { text, projectId ->
                 pendingImport = null
                 if (projectId != null) {
-                    ProjectsTool.requestOpen(projectId)
-                    navigateTopLevel(Destination.Tool(ProjectsTool.ID))
+                    navigateTopLevel(Destination.Tool(ProjectsTool.ID, target = ToolTarget.OfProject(projectId)))
                 }
                 message(text)
             },
@@ -243,8 +248,9 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
 private class ShellHost(
     private val tool: ToolModule,
     override val openedItem: ProjectItem?,
+    override val target: ToolTarget?,
     private val onOpenDrawer: () -> Unit,
-    private val onOpenTool: (String, ProjectItem?) -> Unit,
+    private val onOpenTool: (String, ProjectItem?, ToolTarget?) -> Unit,
     private val onOpenProject: (String?) -> Unit,
     private val onBack: () -> Unit,
     private val onSave: (ItemDraft) -> Unit,
@@ -254,7 +260,7 @@ private class ShellHost(
     private val onMessage: (String) -> Unit,
 ) : ToolHost {
     override fun openDrawer() = onOpenDrawer()
-    override fun openTool(toolId: String, item: ProjectItem?) = onOpenTool(toolId, item)
+    override fun openTool(toolId: String, item: ProjectItem?, target: ToolTarget?) = onOpenTool(toolId, item, target)
     override fun openProject(projectId: String?) = onOpenProject(projectId)
     override fun back() = onBack()
     override fun saveToProject(draft: ItemDraft) = onSave(draft)
@@ -269,7 +275,7 @@ private fun AppDrawer(current: Destination, onSelect: (Destination) -> Unit) {
     val services = LocalAppServices.current
     val settings = rememberAppSettings()
     val projects by services.projects.projects.collectAsStateWithLifecycle()
-    val active = projects.firstOrNull { it.id == settings.activeProjectId }
+    val active = settings.activeTarget(projects)
     val currentToolId = (current as? Destination.Tool)?.toolId
 
     ModalDrawerSheet {
@@ -277,9 +283,8 @@ private fun AppDrawer(current: Destination, onSelect: (Destination) -> Unit) {
             Spacer(Modifier.height(20.dp))
             Text("Construction Calc", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 16.dp))
             Text(
-                active?.let { p ->
-                    val run = p.run(settings.activeRunId ?: "")
-                    "Saving to: ${p.name}" + (run?.let { " › ${it.name}" } ?: "")
+                active?.let { (p, run) ->
+                    "Saving to: ${p.name}" + (run?.takeIf { p.runs.size > 1 }?.let { " › ${it.name}" } ?: "")
                 } ?: "No active project",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

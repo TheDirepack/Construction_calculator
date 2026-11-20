@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.projects
 
+import com.thedirepack.constructioncalc.core.model.ToolTarget
 import android.content.ActivityNotFoundException
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.platform.LocalContext
@@ -59,15 +60,8 @@ import java.util.Date
 internal fun ProjectsScreen(host: ToolHost) {
     val services = LocalAppServices.current
     val projects by services.projects.projects.collectAsStateWithLifecycle()
-    val request by ProjectsTool.openRequest.collectAsStateWithLifecycle()
-    var openId by rememberSaveable { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(request) {
-        request?.let {
-            openId = it
-            ProjectsTool.openRequest.value = null
-        }
-    }
+    // Opened for a project (from the switcher, an import…): show its page; otherwise the list.
+    var openId by rememberSaveable(host.target) { mutableStateOf((host.target as? ToolTarget.OfProject)?.projectId) }
 
     val open = projects.firstOrNull { it.id == openId }
     if (open != null) {

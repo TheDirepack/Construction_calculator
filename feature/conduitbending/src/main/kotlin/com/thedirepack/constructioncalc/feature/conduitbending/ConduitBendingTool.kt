@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.conduitbending
 
+import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import androidx.compose.runtime.Composable
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.tool.ToolCategory
@@ -7,7 +8,7 @@ import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 import com.thedirepack.constructioncalc.core.ui.tool.ToolModule
 
 object ConduitBendingTool : ToolModule {
-    const val ID = "conduit-bending"
+    const val ID = ToolIds.CONDUIT_BENDING
 
     override val id = ID
     override val title = "Conduit Bending"

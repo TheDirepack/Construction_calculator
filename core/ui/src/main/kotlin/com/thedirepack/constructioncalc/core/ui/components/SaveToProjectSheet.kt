@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.data.activeTarget
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -75,7 +76,7 @@ fun SaveToProjectSheet(
     val project = projects.firstOrNull { it.id == projectId }
     var runId by remember(projectId) {
         mutableStateOf(
-            project?.runs?.firstOrNull { it.id == settings.activeRunId }?.id
+            settings.activeTarget(projects)?.takeIf { it.project.id == project?.id }?.run?.id
                 ?: project?.runs?.lastOrNull()?.id
                 ?: NEW,
         )

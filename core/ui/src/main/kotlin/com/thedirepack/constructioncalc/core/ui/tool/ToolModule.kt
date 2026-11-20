@@ -8,6 +8,7 @@ import com.thedirepack.constructioncalc.core.data.AppServices
 import com.thedirepack.constructioncalc.core.data.ToolBackup
 import com.thedirepack.constructioncalc.core.model.ProjectItem
 import com.thedirepack.constructioncalc.core.model.ResultValue
+import com.thedirepack.constructioncalc.core.model.ToolTarget
 import kotlinx.serialization.json.JsonObject
 
 /** Groups tools in the drawer. */
@@ -69,10 +70,13 @@ interface ToolHost {
     /** The saved item this screen was opened from (to view or edit it), if any. */
     val openedItem: ProjectItem?
 
+    /** What this screen was opened for (a project page, a circuit, a run), if anything. */
+    val target: ToolTarget?
+
     fun openDrawer()
 
-    /** Opens another tool, optionally with a saved item. */
-    fun openTool(toolId: String, item: ProjectItem? = null)
+    /** Opens another tool, optionally with a saved item or for a project circuit or run ([ToolIds]). */
+    fun openTool(toolId: String, item: ProjectItem? = null, target: ToolTarget? = null)
 
     /** Opens a project's page in Projects, or the project list when [projectId] is null. */
     fun openProject(projectId: String?)

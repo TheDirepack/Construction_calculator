@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.LaunchedEffect
 import com.thedirepack.constructioncalc.core.ui.components.ToggleRow
 
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +25,8 @@ import com.thedirepack.constructioncalc.core.ui.formatDecimal
 import com.thedirepack.constructioncalc.core.ui.toDecimalOrNull
 
 /** The project's design assumptions (they live in the project file, not in app settings). */
+private const val TYPING_SETTLE_MS = 600L
+
 @Composable
 internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
     val design = ctx.project.design
@@ -30,6 +34,17 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
     var targetText by remember(ctx.project.id) { mutableStateOf(formatDecimal(design.voltageDropTargetPercent, 1)) }
     fun update(change: (com.thedirepack.constructioncalc.core.model.DesignDefaults) -> com.thedirepack.constructioncalc.core.model.DesignDefaults) =
         ctx.edit { p, now -> p.copy(design = change(p.design), updatedAt = now) }
+    // Apply typed numbers once they settle, so typing "45" doesn't save and re-run the design for 4 °C first.
+    LaunchedEffect(ambientText) {
+        delay(TYPING_SETTLE_MS)
+        ambientText.toDecimalOrNull()?.takeIf { it in -50.0..100.0 && it != ctx.project.design.ambientC }
+            ?.let { v -> update { it.copy(ambientC = v) } }
+    }
+    LaunchedEffect(targetText) {
+        delay(TYPING_SETTLE_MS)
+        targetText.toDecimalOrNull()?.takeIf { it > 0.0 && it <= 20.0 && it != ctx.project.design.voltageDropTargetPercent }
+            ?.let { v -> update { it.copy(voltageDropTargetPercent = v) } }
+    }
 
     Column(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -58,10 +73,7 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
                 NumberField(
                     label = "Default ambient temperature",
                     value = ambientText,
-                    onValueChange = { text ->
-                        ambientText = text
-                        text.toDecimalOrNull()?.takeIf { it in -50.0..100.0 }?.let { v -> update { it.copy(ambientC = v) } }
-                    },
+                    onValueChange = { ambientText = it },
                     unit = "°C",
                     allowNegative = true,
                     supportingText = "Runs can set their own (hot attic, rooftop).",
@@ -69,10 +81,7 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
                 NumberField(
                     label = "Voltage-drop target",
                     value = targetText,
-                    onValueChange = { text ->
-                        targetText = text
-                        text.toDecimalOrNull()?.takeIf { it > 0.0 && it <= 20.0 }?.let { v -> update { it.copy(voltageDropTargetPercent = v) } }
-                    },
+                    onValueChange = { targetText = it },
                     unit = "%",
                     supportingText = "NEC recommends 3% on a branch circuit, 5% overall (informational notes).",
                 )

@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thedirepack.constructioncalc.core.data.ProjectSharing
+import com.thedirepack.constructioncalc.core.data.activeTarget
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
@@ -52,8 +53,9 @@ fun ProjectSwitcher(onOpenProject: (String?) -> Unit, onMessage: (String) -> Uni
     val settings = rememberAppSettings()
     val all by services.projects.projects.collectAsStateWithLifecycle()
     val projects = all.filterNot { it.archived } // archived projects are read-only: never a save target
-    val active = projects.firstOrNull { it.id == settings.activeProjectId }
-    val activeRun = active?.run(settings.activeRunId ?: "") ?: active?.runs?.lastOrNull()
+    val target = settings.activeTarget(all)
+    val active = target?.project
+    val activeRun = target?.run
     var open by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(false) }
 

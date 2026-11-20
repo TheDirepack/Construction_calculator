@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop
 
+import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import androidx.compose.runtime.Composable
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.tool.ToolCategory
@@ -7,7 +8,7 @@ import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 import com.thedirepack.constructioncalc.core.ui.tool.ToolModule
 
 object VoltageDropTool : ToolModule {
-    const val ID = "voltage-drop"
+    const val ID = ToolIds.VOLTAGE_DROP
 
     override val id = ID
     override val title = "Voltage Drop"
