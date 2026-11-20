@@ -128,6 +128,15 @@ class ConversionsOutputTest {
         assertTrue(o.notices.any { it.level == NoticeLevel.WARNING })
     }
 
+    @Test fun wireAreaOverflowProducesAnErrorInsteadOfCrashing() {
+        val input = ConversionsInputs(category = ConversionCategory.WIRE_SIZE, wireFrom = WireFrom.MM2)
+        for (value in listOf("1e309", "1e307")) {
+            val output = out(input.copy(value = value))
+            assertTrue(output.results.isEmpty())
+            assertEquals(NoticeLevel.ERROR, output.notices.single().level)
+        }
+    }
+
     @Test fun currentPowerThreePhase() {
         val o = out(
             ConversionsInputs(
@@ -155,5 +164,28 @@ class ConversionsOutputTest {
         val missing = out(base.copy(value = "100", voltage = ""))
         assertTrue(missing.results.isEmpty())
         assertTrue(missing.notices.single().text.contains("Voltage"))
+    }
+
+    @Test fun currentPowerOverflowProducesAnErrorInsteadOfCrashing() {
+        val input = ConversionsInputs(
+            category = ConversionCategory.CURRENT_POWER,
+            powerFrom = PowerTerm.KVA,
+            voltage = "240",
+            powerFactor = "1",
+        )
+        for (value in listOf("9".repeat(309), "9".repeat(307))) {
+            val output = out(input.copy(value = value))
+            assertTrue(output.results.isEmpty())
+            assertEquals(NoticeLevel.ERROR, output.notices.single().level)
+        }
+    }
+
+    @Test fun excessiveExponentsAreRejectedAtNumberEntry() {
+        assertEquals(Rational.of(1, 1000), parseRational("1e-3"))
+        for (value in listOf("1e10020", "1e-10020")) {
+            val output = table(ConversionCategory.PRESSURE, "psi", value)
+            assertTrue(output.results.isEmpty())
+            assertEquals(NoticeLevel.ERROR, output.notices.single().level)
+        }
     }
 }

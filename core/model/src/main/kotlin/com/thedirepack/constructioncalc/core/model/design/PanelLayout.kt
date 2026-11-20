@@ -30,8 +30,9 @@ object PanelLayout {
 
     /** True if [poles] positions starting at [slot] are free and inside the panel. [ignore] lets a circuit be moved. */
     fun canPlace(panel: Panel, slot: Int, poles: Int, ignore: String? = null): Boolean {
+        if (poles !in 1..3 || slot !in 1..panel.spaces) return false
         val wanted = (0 until poles).map { slot + 2 * it }
-        if (wanted.any { it < 1 || it > panel.spaces }) return false
+        if (wanted.last() > panel.spaces) return false
         val taken = panel.circuits.filter { it.id != ignore }.flatMap { it.slots }.toSet()
         return wanted.none { it in taken }
     }

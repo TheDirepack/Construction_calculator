@@ -54,6 +54,14 @@ class ProjectEditsTest {
         assertTrue(1 in freeSlots(panel, 2, ignore = panel.circuits.single().id))
     }
 
+    @Test fun invalidPoleCountsHaveNoFreePositions() {
+        val panel = Panel(name = "P")
+        for (poles in listOf(0, 4, Int.MAX_VALUE)) {
+            assertTrue(freeSlots(panel, poles).isEmpty())
+            assertNull(newCircuit(panel, poles))
+        }
+    }
+
     @Test fun movingACircuitWithinAPanel() {
         val c = Circuit(slot = 1, description = "Kitchen")
         val p = Panel(name = "P", spaces = 8, circuits = listOf(c, Circuit(slot = 3)))

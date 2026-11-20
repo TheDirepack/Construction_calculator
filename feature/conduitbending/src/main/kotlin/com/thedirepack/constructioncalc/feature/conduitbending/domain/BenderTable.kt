@@ -1,12 +1,15 @@
 package com.thedirepack.constructioncalc.feature.conduitbending.domain
 
 import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.electrical.ConduitType as RacewayType
 
 /** Conduit types the bender table covers. */
-enum class ConduitType(val label: String, val sizes: List<String>) {
-    EMT("EMT", listOf("1/2", "3/4", "1", "1-1/4")),
-    IMC("IMC", listOf("1/2", "3/4", "1")),
-    RIGID("Rigid (RMC)", listOf("1/2", "3/4", "1"));
+enum class ConduitType(val raceway: RacewayType, val sizes: List<String>) {
+    EMT(RacewayType.EMT, listOf("1/2", "3/4", "1", "1-1/4")),
+    IMC(RacewayType.IMC, listOf("1/2", "3/4", "1")),
+    RIGID(RacewayType.RMC, listOf("1/2", "3/4", "1"));
+
+    val label get() = raceway.displayName
 
     companion object {
         fun fromName(name: String) = entries.firstOrNull { it.name == name } ?: EMT

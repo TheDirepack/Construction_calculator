@@ -160,7 +160,7 @@ class FuzzAndCorruptionTest {
         }
         val json = ProjectCodec.encode(good)
         assertEquals(good, ProjectCodec.decode(json))
-        for (bad in listOf("abc", "1/0", "", "1/2/3")) {
+        for (bad in listOf("abc", "1/0", "", "1/2/3", "1e10020", "1e-10020")) {
             val broken = json.replace("\"exact\": \"120\"", "\"exact\": \"$bad\"")
             assertTrue("payload should change for $bad", broken != json)
             assertThrows(ProjectFormatException::class.java) { ProjectCodec.decode(broken) }
@@ -169,6 +169,61 @@ class FuzzAndCorruptionTest {
                 put("exact", kotlinx.serialization.json.JsonPrimitive(bad))
                 put("dimension", kotlinx.serialization.json.JsonPrimitive("LENGTH"))
             }))
+        }
+    }
+
+    @Test
+    fun impossiblePanelGeometryIsRejectedByBothImportFormats() {
+        val project = Project.create("Job", 1L).copy(
+            panels = listOf(Panel(name = "Lighting", spaces = 120, circuits = listOf(Circuit(slot = 118, poles = 2)))),
+        )
+
+        val exportedFiles = listOf(ProjectCodec.encode(project), AppFileCodec.encodeBackup(BackupDocument(projects = listOf(project))))
+        for ((field, valid, invalid) in listOf(
+            Triple("spaces", 120, Int.MIN_VALUE),
+            Triple("spaces", 120, Int.MAX_VALUE),
+            Triple("slot", 118, -3),
+            Triple("slot", 118, Int.MAX_VALUE),
+            Triple("poles", 2, 0),
+            Triple("poles", 2, Int.MAX_VALUE),
+        )) {
+            for (encoded in exportedFiles) {
+                val broken = encoded.replace("\"$field\": $valid", "\"$field\": $invalid")
+                assertTrue("$field should change", broken != encoded)
+                assertThrows("$field = $invalid", ProjectFormatException::class.java) { AppFileCodec.decode(broken) }
+            }
+        }
+    }
+
+    @Test
+    fun panelThatWasResizedCanStillBeImportedForRepairs() {
+        val panel = Panel(name = "Lighting", spaces = 4, circuits = listOf(Circuit(slot = 5, poles = 3)))
+        val project = Project.create("Job", 1L).copy(panels = listOf(panel))
+        assertEquals(AppFile.SingleProject(project), AppFileCodec.decode(ProjectCodec.encode(project)))
+    }
+
+    @Test
+    fun truncatedDeepJsonIsReportedAsAFormatError() {
+        val nested = "{\"nested\":[".repeat(4096)
+        val json = "{\"format\":\"construction-calc/backup\",\"tool_data\":$nested"
+        assertThrows(ProjectFormatException::class.java) { AppFileCodec.decode(json) }
+    }
+
+    @Test
+    fun everyTruncatedPrefixOfAnExportIsRejected() {
+        val project = Project.create("Café ⚡", 1L).withNote("Quote: \" and newline:\n", 2L)
+        val backup = BackupDocument(projects = listOf(project))
+        val exports = mapOf(
+            ProjectCodec.encode(project) to AppFile.SingleProject(project),
+            AppFileCodec.encodeBackup(backup) to AppFile.Backup(backup),
+        )
+        for ((export, expected) in exports) {
+            assertEquals(expected, AppFileCodec.decode(export))
+            for (length in export.indices) {
+                assertThrows("truncated after $length characters", ProjectFormatException::class.java) {
+                    AppFileCodec.decode(export.take(length))
+                }
+            }
         }
     }
 }

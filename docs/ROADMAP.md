@@ -5,6 +5,8 @@ The app is a single multi-mode toolbox for field electricians and builders. Each
 [ARCHITECTURE.md](ARCHITECTURE.md) for how tools share the calculator engine, values, projects and
 settings.
 
+See [Requirements and acceptance checklist](REQUIREMENTS.md) for the original scope and current implementation status.
+
 ## Foundations (v0.2, done)
 
 - Multi-module build with convention plugins; pure-Kotlin engine (`:core:measure`), model

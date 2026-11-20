@@ -98,7 +98,13 @@ class Rational private constructor(val numerator: BigInteger, val denominator: B
         /** Parses [toString] output: "12", "-3", "7/16", "-25/2". Also accepts decimals like "2.5". */
         fun parse(text: String): Rational {
             val slash = text.indexOf('/')
-            if (slash < 0) return of(BigDecimal(text))
+            if (slash < 0) {
+                val decimal = BigDecimal(text)
+                // A short exponent must not expand into an arbitrarily large numerator or denominator.
+                val maxScale = text.length.toLong() + 10_000
+                require(decimal.scale().toLong() in -maxScale..maxScale) { "Decimal exponent is too large" }
+                return of(decimal)
+            }
             return of(BigInteger(text.substring(0, slash)), BigInteger(text.substring(slash + 1)))
         }
 

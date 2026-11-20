@@ -193,4 +193,14 @@ class UnitTableTest {
         assertEquals("6.213712E-7", NumberText.significant(Rational.ONE / d("1609344")))
         assertEquals("1.234568E+12", NumberText.significant(d("1234567890123")))
     }
+
+    @Test fun numberTextPreservesTinyNonzeroValues() {
+        assertEquals("1.234568E-70", NumberText.significant(d("1.2345678E-70")))
+        assertEquals("−1.234568E-70", NumberText.significant(d("-1.2345678E-70")))
+    }
+
+    @Test fun numberTextRoundsOnlyOnceAtTheSignificantDigitBoundary() {
+        assertEquals("1.234564", NumberText.significant(d("1.2345644" + "9".repeat(65))))
+        assertEquals("1.234565", NumberText.significant(d("1.2345645")))
+    }
 }

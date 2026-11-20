@@ -25,9 +25,9 @@ data class CurrentPowerResult(val amps: Double, val kw: Double, val kva: Double)
 object CurrentPower {
     /** Reasons the numbers can't be used; empty when they can. */
     fun problems(value: Double, volts: Double, powerFactor: Double): List<String> = buildList {
-        if (value < 0) add("Enter a value of zero or more.")
-        if (volts <= 0) add("Voltage must be more than zero.")
-        if (powerFactor <= 0 || powerFactor > 1) add("Power factor must be above 0 and at most 1.")
+        if (!value.isFinite() || value < 0) add("Enter a finite value of zero or more.")
+        if (!volts.isFinite() || volts <= 0) add("Voltage must be finite and more than zero.")
+        if (!powerFactor.isFinite() || powerFactor <= 0 || powerFactor > 1) add("Power factor must be above 0 and at most 1.")
     }
 
     /** Call only when [problems] is empty. */

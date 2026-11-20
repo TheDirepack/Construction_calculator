@@ -111,6 +111,9 @@ private fun wireSizeOutput(inputs: ConversionsInputs): ConversionsOutput {
             result = if (inputs.wireFrom == WireFrom.CMIL) WireSizes.fromCircularMils(number) else WireSizes.fromSquareMillimeters(number)
         }
     }
+    if (!result.circularMils.isFinite() || !result.squareMillimeters.isFinite()) {
+        return empty(Notice("The wire area is outside the supported range.", NoticeLevel.ERROR))
+    }
 
     fun areaRow(key: String, label: String, mm2: Double) = ResultValue.number(
         key, label, ValueKind.AREA, exact(mm2) * SQ_IN_PER_MM2, NumberText.significant(Rational.of(mm2), 4) + " mm²",
@@ -164,11 +167,16 @@ private fun currentPowerOutput(inputs: ConversionsInputs): ConversionsOutput {
     if (problems.isNotEmpty()) return empty(*problems.map { Notice(it, NoticeLevel.ERROR) }.toTypedArray())
 
     val r = CurrentPower.calculate(inputs.powerFrom, value, inputs.phase, volts, pf)
+    val watts = r.kw * 1000
+    val voltAmps = r.kva * 1000
+    if (!r.amps.isFinite() || !watts.isFinite() || !voltAmps.isFinite()) {
+        return empty(Notice("The calculated current or power is outside the supported range.", NoticeLevel.ERROR))
+    }
     fun text(x: Double, unit: String) = NumberText.significant(Rational.of(x), 4) + " $unit"
     val results = listOf(
         ResultValue.number("amps", "Current", ValueKind.CURRENT, exact(r.amps), text(r.amps, "A")),
-        ResultValue.number("kw", "Real power", ValueKind.POWER, exact(r.kw * 1000), text(r.kw, "kW")),
-        ResultValue.number("kva", "Apparent power", ValueKind.APPARENT_POWER, exact(r.kva * 1000), text(r.kva, "kVA")),
+        ResultValue.number("kw", "Real power", ValueKind.POWER, exact(watts), text(r.kw, "kW")),
+        ResultValue.number("kva", "Apparent power", ValueKind.APPARENT_POWER, exact(voltAmps), text(r.kva, "kVA")),
     )
     val notices = listOf(
         Notice("Balanced ${inputs.phase.label.lowercase()} load" + (if (inputs.phase.factor > 1) ", line-to-line voltage" else "") + ". kVA = V × A" + (if (inputs.phase.factor > 1) " × √3" else "") + " ÷ 1000; kW = kVA × power factor."),

@@ -1,33 +1,36 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.measure.Dimension
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.ResultValue
@@ -56,20 +59,12 @@ fun MeasureField(
 ) {
     val settings = rememberAppSettings()
     var editing by remember { mutableStateOf(false) }
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    LaunchedEffect(pressed) { if (pressed) editing = true }
-
-    OutlinedTextField(
-        value = value?.let { settings.format(it, preferInches) }.orEmpty(),
-        onValueChange = {},
-        readOnly = true,
-        label = { Text(label) },
-        placeholder = { Text("Tap to enter") },
-        supportingText = supportingText?.let { { Text(it) } },
+    PickerField(
+        label = label,
+        value = value?.let { settings.format(it, preferInches) } ?: "Tap to enter",
+        onClick = { editing = true },
+        supportingText = supportingText,
         isError = isError,
-        singleLine = true,
-        interactionSource = interaction,
         trailingIcon = {
             if (value != null) {
                 IconButton(onClick = { onValueChange(null) }) {
@@ -79,7 +74,7 @@ fun MeasureField(
                 Icon(painterResource(R.drawable.ic_calculate), contentDescription = null)
             }
         },
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier,
     )
 
     if (editing) {
@@ -159,20 +154,14 @@ fun <T> ChoiceField(
     supportingText: String? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    LaunchedEffect(pressed) { if (pressed) expanded = true }
     Box(modifier) {
-        OutlinedTextField(
+        PickerField(
+            label = label,
             value = optionLabel(selected),
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            supportingText = supportingText?.let { { Text(it) } },
-            singleLine = true,
-            interactionSource = interaction,
+            onClick = { expanded = true },
+            supportingText = supportingText,
             trailingIcon = { Text("▾", style = MaterialTheme.typography.titleMedium) },
-            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "$label: ${optionLabel(selected)}" },
+            modifier = Modifier.semantics { contentDescription = "$label: ${optionLabel(selected)}" },
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { option ->
@@ -184,6 +173,45 @@ fun <T> ChoiceField(
                     },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun PickerField(
+    label: String,
+    value: String,
+    onClick: () -> Unit,
+    trailingIcon: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    supportingText: String? = null,
+    isError: Boolean = false,
+) {
+    val colors = MaterialTheme.colorScheme
+    Column(modifier.fillMaxWidth()) {
+        OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (isError) colors.error else colors.onSurfaceVariant,
+                    )
+                    Text(fractionText(value), style = MaterialTheme.typography.bodyLarge)
+                }
+                trailingIcon()
+            }
+        }
+        if (supportingText != null) {
+            Text(
+                supportingText,
+                Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (isError) colors.error else colors.onSurfaceVariant,
+            )
         }
     }
 }
