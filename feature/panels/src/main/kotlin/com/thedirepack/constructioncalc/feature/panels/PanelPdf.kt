@@ -14,7 +14,7 @@ import com.thedirepack.constructioncalc.feature.panels.domain.LoadMath
 import com.thedirepack.constructioncalc.feature.panels.domain.PanelFacts
 import com.thedirepack.constructioncalc.feature.panels.domain.ScheduleBlock
 import com.thedirepack.constructioncalc.feature.panels.domain.ScheduleLayout
-import com.thedirepack.constructioncalc.feature.panels.domain.Wire
+import com.thedirepack.constructioncalc.core.model.design.Wire
 import java.io.OutputStream
 
 /**

@@ -1,8 +1,7 @@
-package com.thedirepack.constructioncalc.feature.panels.domain
+package com.thedirepack.constructioncalc.core.model.design
 
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.model.Circuit
-import com.thedirepack.constructioncalc.core.model.design.CircuitDesign
 import java.util.Locale
 
 /** How wire is written on a panel schedule: `2#12, 1#12G`. */

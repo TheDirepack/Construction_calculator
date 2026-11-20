@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.panels.domain
 
+import com.thedirepack.constructioncalc.core.model.design.PublishedValues
+import com.thedirepack.constructioncalc.core.model.design.Wire
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.math.Rational

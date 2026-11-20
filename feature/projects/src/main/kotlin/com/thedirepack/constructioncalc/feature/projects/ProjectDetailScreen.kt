@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.projects
 
+import com.thedirepack.constructioncalc.core.ui.format
+
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -100,7 +102,7 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
         if (project.runs.any { it.raceway != null }) ProjectAnalysis.analyze(project).runs else emptyMap()
     }
 
-    val toText = { ProjectText.render(project, tools::titleOf, header = settings.company.headerLines()) }
+    val toText = { ProjectText.render(project, tools::titleOf, header = settings.company.headerLines(), length = { settings.format(it) }) }
     val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ProjectCodec.MIME_TYPE)) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {

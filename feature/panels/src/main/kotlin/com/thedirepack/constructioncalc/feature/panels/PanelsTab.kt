@@ -38,7 +38,7 @@ import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.components.ConfirmDialog
 import com.thedirepack.constructioncalc.core.ui.components.TextInputDialog
 import com.thedirepack.constructioncalc.feature.panels.domain.PanelFacts
-import com.thedirepack.constructioncalc.feature.panels.domain.Wire
+import com.thedirepack.constructioncalc.core.model.design.Wire
 import com.thedirepack.constructioncalc.feature.panels.domain.duplicatePanel
 import com.thedirepack.constructioncalc.feature.panels.domain.newPanel
 import com.thedirepack.constructioncalc.feature.panels.domain.suggestedPanelName

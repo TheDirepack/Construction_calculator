@@ -40,7 +40,7 @@ import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.components.ConfirmDialog
 import com.thedirepack.constructioncalc.core.ui.components.TextInputDialog
 import com.thedirepack.constructioncalc.feature.panels.domain.GroupColors
-import com.thedirepack.constructioncalc.feature.panels.domain.Wire
+import com.thedirepack.constructioncalc.core.model.design.Wire
 import com.thedirepack.constructioncalc.feature.panels.domain.addGroup
 import com.thedirepack.constructioncalc.feature.panels.domain.circuitLabel
 import com.thedirepack.constructioncalc.feature.panels.domain.circuitsInGroup

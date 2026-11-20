@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.panels.domain
 
+import com.thedirepack.constructioncalc.core.model.design.Wire
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.Circuit
 import com.thedirepack.constructioncalc.core.model.design.CircuitDesign

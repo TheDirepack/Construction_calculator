@@ -63,8 +63,8 @@ import com.thedirepack.constructioncalc.core.ui.formatDecimal
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.toDecimalOrNull
 import com.thedirepack.constructioncalc.feature.panels.domain.LoadMath
-import com.thedirepack.constructioncalc.feature.panels.domain.PublishedValues
-import com.thedirepack.constructioncalc.feature.panels.domain.Wire
+import com.thedirepack.constructioncalc.core.model.design.PublishedValues
+import com.thedirepack.constructioncalc.core.model.design.Wire
 import com.thedirepack.constructioncalc.feature.panels.domain.designRuns
 import com.thedirepack.constructioncalc.feature.panels.domain.deleteCircuit
 import com.thedirepack.constructioncalc.feature.panels.domain.freeSlots

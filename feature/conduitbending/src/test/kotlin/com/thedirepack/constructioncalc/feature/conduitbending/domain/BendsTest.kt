@@ -291,4 +291,13 @@ class BendsTest {
             assertEquals(2 * geometry, s.idealShrink.toDouble(), 1e-6)
         }
     }
+
+    @Test fun eachPlanReportsItsTotalBendDegrees() {
+        assertEquals(60.0, BendPlanner.plan(BendRequest(BendType.OFFSET, size = r(4), angleDeg = 30.0)).totalDegrees!!, 1e-9)
+        assertEquals(90.0, BendPlanner.plan(BendRequest(BendType.SADDLE_3, size = r(2), angleDeg = 45.0)).totalDegrees!!, 1e-9)
+        assertEquals(120.0, BendPlanner.plan(BendRequest(BendType.SADDLE_4, size = r(3), width = r(6), angleDeg = 30.0)).totalDegrees!!, 1e-9)
+        assertEquals(90.0, BendPlanner.plan(BendRequest(BendType.STUB_UP, size = r(10))).totalDegrees!!, 1e-9)
+        assertEquals(180.0, BendPlanner.plan(BendRequest(BendType.STUB_UP, size = r(10), backToBack = true, between = r(30))).totalDegrees!!, 1e-9)
+        assertEquals(22.5, BendPlanner.plan(BendRequest(BendType.KICK, size = r(4), angleDeg = 22.5)).totalDegrees!!, 1e-9)
+    }
 }

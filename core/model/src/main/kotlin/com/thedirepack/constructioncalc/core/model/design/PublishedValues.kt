@@ -1,11 +1,9 @@
-package com.thedirepack.constructioncalc.feature.panels.domain
+package com.thedirepack.constructioncalc.core.model.design
 
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ValueKind
-import com.thedirepack.constructioncalc.core.model.design.CircuitDesign
-import com.thedirepack.constructioncalc.core.model.design.PanelDesign
 
 /** Values the Panels tool offers to other tools' input fields (`ToolHost.publish`). */
 object PublishedValues {

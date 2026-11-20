@@ -253,4 +253,30 @@ class ProjectAnalysisTest {
         val r = ProjectAnalysis.analyze(Project(name = "P", createdAt = 0, runs = listOf(run), panels = listOf(Panel(name = "LP", circuits = listOf(c))))).runs.getValue(run.id)
         assertTrue(r.notes.any { it.isWarning && "no 1/2\"" in it.text })
     }
+
+    @Test fun savedBendsAddUpPerRunAndWarnPast360() {
+        fun bend(deg: Double) = com.thedirepack.constructioncalc.core.model.ProjectItem(
+            toolId = ProjectAnalysis.BEND_TOOL_ID, title = "Bend", createdAt = 0,
+            results = listOf(com.thedirepack.constructioncalc.core.model.ResultValue.number(ProjectAnalysis.BEND_DEGREES_KEY, "Total bend", com.thedirepack.constructioncalc.core.model.ValueKind.ANGLE, deg, "$deg°")),
+        )
+        val run = Run(name = "R", raceway = Raceway(ConduitType.EMT), items = listOf(bend(90.0), bend(90.0), bend(60.0)))
+        val ok = ProjectAnalysis.analyze(Project(name = "P", createdAt = 0, runs = listOf(run))).runs.getValue(run.id)
+        assertEquals(240.0, ok.bendDegrees!!, 1e-9)
+        assertFalse(ok.notes.any { "360" in it.text })
+        val tooMany = run.copy(items = run.items + bend(180.0))
+        val over = ProjectAnalysis.analyze(Project(name = "P", createdAt = 0, runs = listOf(tooMany))).runs.getValue(run.id)
+        assertTrue(over.notes.any { it.isWarning && "360" in it.text })
+    }
+
+    @Test fun fillEntriesKnowWhichConductorsCarryCurrent() {
+        val run = Run(name = "R", raceway = Raceway(ConduitType.EMT))
+        // 2-pole + neutral on 120/240 V: the neutral carries only unbalanced current (310.15(E)(1)).
+        val c = Circuit(slot = 1, poles = 2, breakerAmps = 30, neutral = true, runIds = listOf(run.id))
+        val panel = Panel(name = "LP", system = PanelSystem.SINGLE_120_240, circuits = listOf(c))
+        val r = ProjectAnalysis.analyze(Project(name = "P", createdAt = 0, runs = listOf(run), panels = listOf(panel))).runs.getValue(run.id)
+        val wires = r.entries.single { !it.ground }
+        assertEquals(3, wires.count)
+        assertEquals(2, wires.currentCarrying)
+        assertEquals(0, r.entries.single { it.ground }.currentCarrying)
+    }
 }

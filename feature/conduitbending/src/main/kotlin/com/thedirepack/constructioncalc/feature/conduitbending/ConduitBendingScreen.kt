@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conduitbending
 
+import com.thedirepack.constructioncalc.feature.conduitbending.domain.fmt
+import com.thedirepack.constructioncalc.core.model.design.ProjectAnalysis
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -294,7 +296,10 @@ private fun BendPlan.toResults(settings: AppSettings): List<ResultValue> {
     val markResults = if (markFigure) emptyList() else marks.map {
         ResultValue.of(it.key, it.label, Quantity.inches(it.position), settings.format(Quantity.inches(it.position)))
     }
-    return figures.map { it.toResult(settings) } + markResults
+    val degrees = totalDegrees?.let {
+        listOf(ResultValue.number(ProjectAnalysis.BEND_DEGREES_KEY, "Total bend", ValueKind.ANGLE, it, "${it.fmt()}°"))
+    }.orEmpty()
+    return figures.map { it.toResult(settings) } + markResults + degrees
 }
 
 private fun BendPlan.summary(settings: AppSettings): String {

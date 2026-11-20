@@ -42,7 +42,7 @@ import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
-import com.thedirepack.constructioncalc.feature.panels.domain.PublishedValues
+import com.thedirepack.constructioncalc.core.model.design.PublishedValues
 import com.thedirepack.constructioncalc.feature.panels.domain.duplicatePanel
 
 private val TABS = listOf("Panels", "Runs", "Groups", "Design")

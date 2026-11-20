@@ -100,4 +100,15 @@ class ProjectCodecTest {
         assertTrue(text, text.contains("• Wall  [Foot-Inch]"))
         assertTrue(text, text.contains("5' 3 1/2\" + 2' 8\" = 7' 11 1/2\""))
     }
+
+    @Test fun sharedTextIncludesPanelsCircuitsAndConduits() {
+        val run = Run(name = "Home run", raceway = Raceway(com.thedirepack.constructioncalc.core.electrical.ConduitType.EMT, length = com.thedirepack.constructioncalc.core.measure.Quantity.feet(com.thedirepack.constructioncalc.core.math.Rational.of(50)).stored()))
+        val c = Circuit(slot = 1, breakerAmps = 20, loadVa = 1200.0, description = "Kitchen", runIds = listOf(run.id))
+        val project = Project(name = "Job", createdAt = 0, runs = listOf(run), panels = listOf(Panel(name = "LP-1", circuits = listOf(c))))
+        val text = ProjectText.render(project, zone = ZoneOffset.UTC)
+        assertTrue(text, "PANELS" in text)
+        assertTrue(text, "■ LP-1 — 208Y/120 V 3φ 4W" in text)
+        assertTrue(text, "1 · 20/1 · Kitchen · 1,200 VA · 2#12, 1#12G" in text)
+        assertTrue(text, "Conduit: 1/2\" EMT (auto) · 50' 0\" · 1 circuit · fill" in text)
+    }
 }

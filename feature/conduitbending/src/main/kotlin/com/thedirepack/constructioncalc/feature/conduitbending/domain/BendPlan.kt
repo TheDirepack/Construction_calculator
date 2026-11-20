@@ -46,6 +46,8 @@ data class BendPlan(
     val marks: List<Mark>,
     val marksFromEnd: Boolean,
     val issues: List<Issue>,
+    /** Every bend's angle added up (a 30° offset is 60°), for the 360°-between-pull-points check on a run. */
+    val totalDegrees: Double? = null,
 ) {
     val hasResults get() = figures.isNotEmpty()
 }
@@ -133,7 +135,7 @@ object BendPlanner {
             add(SHRINK_NOTE)
             if (r.distance != null) add(DISTANCE_NOTE)
         }
-        return BendPlan(BendType.OFFSET, offsetFigures(o), offsetMarks(o), r.distance != null, issues)
+        return BendPlan(BendType.OFFSET, offsetFigures(o), offsetMarks(o), r.distance != null, issues, 2 * angle)
     }
 
     // ---- rolling offset -------------------------------------------------------------------
@@ -156,7 +158,7 @@ object BendPlanner {
             add(SHRINK_NOTE)
             if (r.distance != null) add(DISTANCE_NOTE)
         }
-        return BendPlan(BendType.ROLLING_OFFSET, figures, offsetMarks(o), r.distance != null, issues)
+        return BendPlan(BendType.ROLLING_OFFSET, figures, offsetMarks(o), r.distance != null, issues, 2 * angle)
     }
 
     // ---- 3-point saddle -------------------------------------------------------------------
@@ -186,7 +188,7 @@ object BendPlanner {
             add(Issue(Severity.INFO, "Outer marks use the usual field multiplier (2.5 for 45°/22.5°, 2 for 60°/30°), bent at the center angle and half that angle either side. The field shrink (${s.shrinkPerInch}\" per inch of height) is what the conduit loses up to the center bend; the whole saddle loses about twice that."))
             if (r.distance != null) add(Issue(Severity.INFO, "Center mark = distance to the obstruction's center + the shrink."))
         }
-        return BendPlan(BendType.SADDLE_3, figures, marks, r.distance != null, issues)
+        return BendPlan(BendType.SADDLE_3, figures, marks, r.distance != null, issues, center + 2 * s.outerAngleDeg)
     }
 
     // ---- 4-point saddle -------------------------------------------------------------------
@@ -210,7 +212,7 @@ object BendPlanner {
             add(Issue(Severity.INFO, "Two equal offsets with straight conduit between them. Bends 1 and 2 go one way, 3 and 4 return; shrink is exact for each offset and doubled."))
             if (r.distance != null) add(Issue(Severity.INFO, "First mark = distance to the obstruction + the first offset's shrink."))
         }
-        return BendPlan(BendType.SADDLE_4, figures, marks, r.distance != null, issues)
+        return BendPlan(BendType.SADDLE_4, figures, marks, r.distance != null, issues, 4 * angle)
     }
 
     // ---- stub-up and back-to-back --------------------------------------------------------
@@ -248,7 +250,7 @@ object BendPlanner {
                 issues.add(Issue(Severity.WARNING, "Enter the back-to-back distance to get the second mark."))
             }
         }
-        return BendPlan(BendType.STUB_UP, figures, marks, true, issues)
+        return BendPlan(BendType.STUB_UP, figures, marks, true, issues, if (r.backToBack && r.between != null) 180.0 else 90.0)
     }
 
     // ---- kick -----------------------------------------------------------------------------
@@ -273,7 +275,7 @@ object BendPlanner {
             add(Issue(Severity.INFO, "A kick is one bend: the conduit leaves its line at the angle and gains the height after the travel. The bend mark is the distance to where the kick must reach its height minus the run."))
         }
         val marks = k.bendMark?.takeIf { it.signum >= 0 }?.let { listOf(Mark("mark_1", "Bend mark", it)) }.orEmpty()
-        return BendPlan(BendType.KICK, figures, marks, k.bendMark != null, issues)
+        return BendPlan(BendType.KICK, figures, marks, k.bendMark != null, issues, angle)
     }
 
     private fun angleText(deg: Double) = deg.fmt() + "°"

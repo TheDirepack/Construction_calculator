@@ -70,7 +70,15 @@ data class CircuitDesign(
 )
 
 /** One conductor line in a run's fill: e.g. 3 × 12 AWG THHN. */
-data class FillEntry(val count: Int, val size: ConductorSize, val insulation: InsulationType, val areaEach: Double, val ground: Boolean)
+data class FillEntry(
+    val count: Int,
+    val size: ConductorSize,
+    val insulation: InsulationType,
+    val areaEach: Double,
+    val ground: Boolean,
+    /** How many of the [count] are current-carrying (310.15(E)/(F)): a neutral carrying only unbalanced current isn't. */
+    val currentCarrying: Int = if (ground) 0 else count,
+)
 
 /** Fill check result for a run's conduit. */
 enum class FillStatus { OK, OVER, INCOMPLETE, NO_CONDUIT, TOO_MANY_FOR_ANY_SIZE, EMPTY }
@@ -96,6 +104,8 @@ data class RunDesign(
     val fillPercent: Double?,
     val smallestFitting: ConduitSize?,
     val notes: List<DesignNote>,
+    /** Total degrees of the bends saved to this run from Conduit Bending, or null if none were saved. */
+    val bendDegrees: Double? = null,
 )
 
 data class PanelDesign(
@@ -127,6 +137,13 @@ data class ProjectDesign(
 object ProjectAnalysis {
     private const val POWER_FACTOR = 0.85
     private const val MAX_VD_UPSIZE_STEPS = 8
+
+    /** Conduit Bending's tool id and the result key its saved items carry their total bend angle in. */
+    const val BEND_TOOL_ID = "conduit-bending"
+    const val BEND_DEGREES_KEY = "bend_degrees"
+
+    /** Most raceway articles allow at most 360° of bends between pull points (358.26, 344.26, 352.26…). */
+    const val MAX_BEND_DEGREES = 360.0
     private data class DropSegment(val lengthInches: Double, val conduit: Table9Conduit)
 
     private data class PhaseLoad(
@@ -430,7 +447,8 @@ object ProjectAnalysis {
                 notes += warn("No Table 5 area for ${size.label} ${insulation.code}.")
                 return@forEach
             }
-            entries += FillEntry(wires, size, insulation, area, ground = false)
+            val carrying = CurrentCarryingConductors.count(c.poles, c.neutral, panel.system.supply, c.nonlinear).coerceAtMost(wires)
+            entries += FillEntry(wires, size, insulation, area, ground = false, currentCarrying = carrying)
         }
         // One EGC sized for the largest circuit serves the raceway (250.122(C)).
         largestGround?.let { (g, ins) ->
@@ -485,7 +503,13 @@ object ProjectAnalysis {
             conduit == null -> FillStatus.TOO_MANY_FOR_ANY_SIZE
             else -> FillStatus.OK
         }
-        return RunDesign(run, members, ccc, adjustment, ambient, ambientFactor, status, entries, total, area, limit, conduit, fill, smallest, notes)
+        val bends = run.items.filter { it.toolId == BEND_TOOL_ID }
+            .mapNotNull { item -> item.results.firstOrNull { it.key == BEND_DEGREES_KEY }?.rational?.toDouble() }
+        val bendDegrees = bends.takeIf { it.isNotEmpty() }?.sum()
+        if (bendDegrees != null && bendDegrees > MAX_BEND_DEGREES + 1e-9) {
+            notes += warn("Saved bends total ${fmt(bendDegrees)}°: more than ${MAX_BEND_DEGREES.toInt()}° between pull points (e.g. NEC 358.26, 344.26). Add a pull point.")
+        }
+        return RunDesign(run, members, ccc, adjustment, ambient, ambientFactor, status, entries, total, area, limit, conduit, fill, smallest, notes, bendDegrees)
     }
 
     private fun designPanel(panel: Panel, loads: Map<CircuitRef, Load?>): PanelDesign {

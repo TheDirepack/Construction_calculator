@@ -31,7 +31,7 @@ import com.thedirepack.constructioncalc.core.model.Panel
 import com.thedirepack.constructioncalc.feature.panels.domain.PanelFacts
 import com.thedirepack.constructioncalc.feature.panels.domain.ScheduleBlock
 import com.thedirepack.constructioncalc.feature.panels.domain.ScheduleLayout
-import com.thedirepack.constructioncalc.feature.panels.domain.Wire
+import com.thedirepack.constructioncalc.core.model.design.Wire
 
 private val RowHeight = 62.dp
 private val NumberWidth = 22.dp
