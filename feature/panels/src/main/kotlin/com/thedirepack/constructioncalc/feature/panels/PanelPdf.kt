@@ -107,7 +107,7 @@ internal object PanelPdf {
 
         // --- Table ---
         val pd = design.panels.firstOrNull { it.panel.id == panel.id }
-        val warnings = (pd?.conflicts.orEmpty() + pd?.notes.orEmpty()).take(4)
+        val warnings = (pd?.conflicts.orEmpty() + pd?.notes.orEmpty().map { it.text }).take(4)
         val totalsHeight = 16f + 12f * (3 + warnings.size) + 24f
         val schedule = ScheduleLayout.build(panel)
         val rows = schedule.rows.size

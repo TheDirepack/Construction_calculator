@@ -134,7 +134,7 @@ object ScheduleText {
             append("Total: ${Wire.va(pd.totalVa)}")
             LoadMath.imbalancePercent(pd.phaseVa.values)?.let { append(" · imbalance ${Wire.percent(it)}") }
             appendLine()
-            val warnings = pd.conflicts + pd.notes
+            val warnings = pd.conflicts + pd.notes.map { it.text }
             warnings.forEach { appendLine("⚠ $it") }
         }
     }

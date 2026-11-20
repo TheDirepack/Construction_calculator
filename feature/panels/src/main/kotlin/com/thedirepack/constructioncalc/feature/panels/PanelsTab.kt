@@ -120,7 +120,7 @@ internal fun PanelsTab(ctx: PanelsContext, export: ExportActions, onOpen: (Strin
 private fun PanelCard(ctx: PanelsContext, panel: Panel, onOpen: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val pd = ctx.design.panels.firstOrNull { it.panel.id == panel.id }
-    val warnings = (pd?.conflicts.orEmpty() + pd?.notes.orEmpty())
+    val warnings = (pd?.conflicts.orEmpty() + pd?.notes.orEmpty().map { it.text })
     val used = panel.circuits.sumOf { if (it.kind == CircuitKind.SPACE) 0 else it.poles }
     Card(
         Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${panel.name}", onClick = onOpen),

@@ -84,6 +84,9 @@ class InsulatedConductorAreaTest {
         // with its own values, then the THW rows from 6 AWG up.
         assertEquals(24, InsulatedConductorArea.sizes(InsulationType.THHN).size)
         assertEquals(28, InsulatedConductorArea.sizes(InsulationType.XHHW).size)
+        // XHHW-2 shares the XHHW row of Table 5.
+        assertEquals(InsulatedConductorArea.sizes(InsulationType.XHHW), InsulatedConductorArea.sizes(InsulationType.XHHW_2))
+        assertEquals(area(InsulationType.XHHW, ConductorSize.AWG_4_0), area(InsulationType.XHHW_2, ConductorSize.AWG_4_0), 0.0)
         assertEquals(28, InsulatedConductorArea.sizes(InsulationType.THW).size)
         assertEquals(28, InsulatedConductorArea.sizes(InsulationType.TW).size)
         assertEquals(28, InsulatedConductorArea.sizes(InsulationType.RHH_COVERED).size)

@@ -171,7 +171,7 @@ private fun Totals(pd: PanelDesign, panel: Panel) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            (pd.conflicts + pd.notes).forEach { WarningText(it) }
+            (pd.conflicts + pd.notes.map { it.text }).forEach { WarningText(it) }
         }
     }
 }

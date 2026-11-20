@@ -25,6 +25,18 @@ import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.Run
 import kotlin.math.sqrt
 
+/** How much a design note matters: [WARNING]s are problems to fix; [INFO] explains a figure. */
+enum class NoteLevel { INFO, WARNING }
+
+/** One line of explanation from the design engine. */
+data class DesignNote(val text: String, val level: NoteLevel = NoteLevel.INFO) {
+    val isWarning: Boolean get() = level == NoteLevel.WARNING
+    override fun toString() = text
+}
+
+private fun info(text: String) = DesignNote(text, NoteLevel.INFO)
+private fun warn(text: String) = DesignNote(text, NoteLevel.WARNING)
+
 /** A circuit's computed design: what wire it needs and why. */
 data class CircuitDesign(
     val panel: Panel,
@@ -51,7 +63,7 @@ data class CircuitDesign(
     val lengthInches: Double?,
     val voltageDropVolts: Double?,
     val voltageDropPercent: Double?,
-    val notes: List<String>,
+    val notes: List<DesignNote>,
 )
 
 /** One conductor line in a run's fill: e.g. 3 × 12 AWG THHN. */
@@ -80,7 +92,7 @@ data class RunDesign(
     val conduit: ConduitSize?,
     val fillPercent: Double?,
     val smallestFitting: ConduitSize?,
-    val notes: List<String>,
+    val notes: List<DesignNote>,
 )
 
 data class PanelDesign(
@@ -90,7 +102,7 @@ data class PanelDesign(
     /** Sum of the connected circuits' current magnitudes on each pole. */
     val phaseAmps: Map<Phase, Double>,
     val conflicts: List<String>,
-    val notes: List<String>,
+    val notes: List<DesignNote>,
 )
 
 data class ProjectDesign(
@@ -242,24 +254,24 @@ object ProjectAnalysis {
         load: Load?,
     ): CircuitDesign {
         val spec = c.conductor ?: project.design.conductor
-        val notes = mutableListOf<String>()
+        val notes = mutableListOf<DesignNote>()
         val amps = load?.amps
-        load?.problem?.let(notes::add)
+        load?.problem?.let { notes += warn(it) }
         val loadVa = load?.va
         if (load?.fromFed == true && loadVa != null) {
             val names = project.panels.filter { it.fedFrom == CircuitRef(panel.id, c.id) }.joinToString { it.name }
-            notes += "Feeder load from $names: ${fmt(loadVa)} VA connected, ${fmt(load.continuousVa)} VA continuous. Current magnitudes are added by feeder pole order, without demand factors."
+            notes += info("Feeder load from $names: ${fmt(loadVa)} VA connected, ${fmt(load.continuousVa)} VA continuous. Current magnitudes are added by feeder pole order, without demand factors.")
         }
         val runs = c.runIds.mapNotNull { runsById[it] }
         val ownCcc = CurrentCarryingConductors.count(c.poles, c.neutral, panel.system.supply, c.nonlinear)
         // Nipples (≤ 24") aren't subject to count adjustment (310.15(C)(1)(b)).
         val ccc = (runs.filter { it.raceway?.nipple != true }.mapNotNull { runCcc[it.id] } + ownCcc).max()
         // Each run's own ambient (or the project default) plus its own rooftop adder; the hottest run governs.
-        val xhhw2 = spec.insulation == InsulationType.XHHW
+        val xhhw2 = spec.insulation == InsulationType.XHHW_2
         val ambient = if (runs.isEmpty()) project.design.ambientC else runs.maxOf { runAmbient(project, it, xhhw2) }
         val hottest = runs.maxByOrNull { runAmbient(project, it, xhhw2) }
         if (hottest?.raceway?.rooftop == true && !xhhw2) {
-            notes += "${hottest.name} is on a rooftop: +${AmbientCorrection.ROOFTOP_ADDER_C.toInt()} °C adder (310.15(B)(2))."
+            notes += info("${hottest.name} is on a rooftop: +${AmbientCorrection.ROOFTOP_ADDER_C.toInt()} °C adder (310.15(B)(2)).")
         }
         val runConduits = runs.map { it.raceway?.conduitType?.let(::table9Conduit) ?: Table9Conduit.PVC }
         val runSegments = runs.zip(runConduits).mapNotNull { (run, conduit) ->
@@ -269,20 +281,20 @@ object ProjectAnalysis {
             .takeIf { runs.isNotEmpty() && runSegments.size == c.runIds.size }
         val overrideLength = c.length?.toQuantity()?.value?.toDouble()
         val length = overrideLength ?: routeLength
-        if (length == null && c.runIds.isNotEmpty()) notes += "Set the length of every assigned run to check voltage drop."
+        if (length == null && c.runIds.isNotEmpty()) notes += info("Set the length of every assigned run to check voltage drop.")
         val dropSegments = when {
             length == null -> emptyList()
             runs.size != c.runIds.size -> {
-                notes += "An assigned run is missing. Check the route before calculating voltage drop."
+                notes += info("An assigned run is missing. Check the route before calculating voltage drop.")
                 emptyList()
             }
             runConduits.distinct().size <= 1 -> listOf(DropSegment(length, runConduits.firstOrNull() ?: Table9Conduit.PVC))
             routeLength == null || routeLength <= 0.0 -> {
-                notes += "Set each run's length to check voltage drop through mixed raceways."
+                notes += info("Set each run's length to check voltage drop through mixed raceways.")
                 emptyList()
             }
             overrideLength != null && overrideLength != routeLength -> {
-                notes += "Distributed the circuit length override across raceways in proportion to their entered lengths."
+                notes += info("Distributed the circuit length override across raceways in proportion to their entered lengths.")
                 runSegments.map { it.copy(lengthInches = it.lengthInches * (overrideLength / routeLength)) }
             }
             else -> runSegments
@@ -294,7 +306,7 @@ object ProjectAnalysis {
         }
         val breaker = c.breakerAmps
         if (breaker == null) {
-            notes += "Set a breaker size to size the wire."
+            notes += warn("Set a breaker size to size the wire.")
             return CircuitDesign(panel, c, spec, load?.va, fromFed, amps, ccc, null, null, null, null, length, null, null, notes)
         }
 
@@ -313,7 +325,7 @@ object ProjectAnalysis {
                 multipleCordReceptacles = c.multipleCordReceptacles,
             ),
         )
-        notes += sizing.notes
+        notes += sizing.notes.map { if (sizing.size == null) warn(it) else info(it) }
         val minimum = sizing.size
         var size = minimum
         var vd: Pair<Double, Double>? = null
@@ -330,13 +342,13 @@ object ProjectAnalysis {
                 steps++
             }
             if (candidate != minimum) {
-                notes += "Upsized from ${minimum.label} to ${candidate.label} for ${fmt(target)}% voltage drop."
+                notes += info("Upsized from ${minimum.label} to ${candidate.label} for ${fmt(target)}% voltage drop.")
                 size = candidate
             }
             vd = current
-            if (current != null && current.second > target) notes += "Voltage drop ${fmt(current.second)}% exceeds the ${fmt(target)}% target."
+            if (current != null && current.second > target) notes += warn("Voltage drop ${fmt(current.second)}% exceeds the ${fmt(target)}% target.")
         } else if (amps == null) {
-            notes += "Enter the load (VA) to check voltage drop."
+            notes += info("Enter the load (VA) to check voltage drop.")
         }
         val ground = if (minimum != null && size != null) {
             EquipmentGroundingConductor.sizeWithUpsize(breaker, spec.material, minimum, size)
@@ -386,7 +398,7 @@ object ProjectAnalysis {
         designs: Map<String, CircuitDesign>,
         ccc: Int,
     ): RunDesign {
-        val notes = mutableListOf<String>()
+        val notes = mutableListOf<DesignNote>()
         val members = all.filter { (_, c) -> run.id in c.runIds }
         val entries = mutableListOf<FillEntry>()
         var largestGround: Pair<ConductorSize, InsulationType>? = null
@@ -397,13 +409,13 @@ object ProjectAnalysis {
             val size = d.size
             if (size == null) {
                 incomplete = true
-                notes += "${panel.name} ${PanelLayout.label(c)} has no calculated conductor size."
+                notes += info("${panel.name} ${PanelLayout.label(c)} has no calculated conductor size.")
             }
             val ground = d.groundSize
             val insulation = d.conductor.insulation
             if (ground == null) {
                 incomplete = true
-                if (size != null) notes += "${panel.name} ${PanelLayout.label(c)} has no calculated equipment grounding conductor size."
+                if (size != null) notes += info("${panel.name} ${PanelLayout.label(c)} has no calculated equipment grounding conductor size.")
             } else if (largestGround?.let { ground > it.first } != false) {
                 largestGround = ground to insulation
             }
@@ -412,7 +424,7 @@ object ProjectAnalysis {
             val area = InsulatedConductorArea.area(insulation, size)
             if (area == null) {
                 incomplete = true
-                notes += "No Table 5 area for ${size.label} ${insulation.code}."
+                notes += warn("No Table 5 area for ${size.label} ${insulation.code}.")
                 return@forEach
             }
             entries += FillEntry(wires, size, insulation, area, ground = false)
@@ -422,11 +434,11 @@ object ProjectAnalysis {
             val groundArea = InsulatedConductorArea.area(ins, g)
             if (groundArea == null) {
                 incomplete = true
-                notes += "No Table 5 area for the ${g.label} ${ins.code} equipment grounding conductor."
+                notes += warn("No Table 5 area for the ${g.label} ${ins.code} equipment grounding conductor.")
             } else {
                 entries += FillEntry(1, g, ins, groundArea, ground = true)
             }
-            if (loads.size > 1 && !incomplete) notes += "One equipment grounding conductor (${g.label}) sized for the largest circuit (250.122(C))."
+            if (loads.size > 1 && !incomplete) notes += info("One equipment grounding conductor (${g.label}) sized for the largest circuit (250.122(C)).")
         }
         val total = entries.sumOf { it.count }
         val area = entries.sumOf { it.count * it.areaEach }
@@ -442,20 +454,20 @@ object ProjectAnalysis {
         }
         val conduit = raceway?.let { r -> r.tradeSize?.let { ConduitTable.find(r.conduitType, it) } ?: smallest }
         val fill = conduit?.takeUnless { incomplete || total == 0 }?.let { 100.0 * area / it.area100SqIn }
-        if (raceway == null && members.isNotEmpty()) notes += "Set the conduit for this run to check fill."
+        if (raceway == null && members.isNotEmpty()) notes += warn("Set the conduit for this run to check fill.")
         if (conduit != null && fill != null && fill > limit + 1e-9) {
-            notes += "Over ${limit}% fill (${fmt(fill)}%). Smallest that fits: ${smallest?.displayName ?: "none in Table 4"}."
+            notes += warn("Over ${limit}% fill (${fmt(fill)}%). Smallest that fits: ${smallest?.displayName ?: "none in Table 4"}.")
         }
-        if (raceway != null && !incomplete && smallest == null && area > 0) notes += "Too many conductors for any ${raceway.conduitType.displayName}."
+        if (raceway != null && !incomplete && smallest == null && area > 0) notes += warn("Too many conductors for any ${raceway.conduitType.displayName}.")
         val insulation = project.design.conductor
-        val ambient = runAmbient(project, run, insulation.insulation == InsulationType.XHHW)
+        val ambient = runAmbient(project, run, insulation.insulation == InsulationType.XHHW_2)
         val ambientFactor = AmbientCorrection.factor(ambient, insulation.insulationRating)
         val adjustment = if (raceway?.nipple == true) 1.0 else ConductorCountAdjustment.factor(ccc)
         if (adjustment < 1.0) {
-            notes += "$ccc current-carrying conductors: ampacity ×$adjustment (Table 310.15(C)(1)) for every circuit in this run."
+            notes += info("$ccc current-carrying conductors: ampacity ×$adjustment (Table 310.15(C)(1)) for every circuit in this run.")
         }
         if (ambientFactor != null && ambientFactor != 1.0) {
-            notes += "${fmt(ambient)} °C: ampacity ×$ambientFactor (Table 310.15(B)(1)(1), ${insulation.insulationRating.label} column)."
+            notes += info("${fmt(ambient)} °C: ampacity ×$ambientFactor (Table 310.15(B)(1)(1), ${insulation.insulationRating.label} column).")
         }
         val status = when {
             incomplete -> FillStatus.INCOMPLETE
@@ -477,11 +489,11 @@ object ProjectAnalysis {
         }
         val phaseVa = totals.mapValues { it.value.va }
         val phaseAmps = totals.mapValues { it.value.amps }
-        val notes = mutableListOf<String>()
-        if (panelLoads.any { it.problem != null }) notes += "Phase totals are incomplete because a feeder load could not be calculated."
+        val notes = mutableListOf<DesignNote>()
+        if (panelLoads.any { it.problem != null }) notes += warn("Phase totals are incomplete because a feeder load could not be calculated.")
         val worst = phaseAmps.values.maxOrNull() ?: 0.0
-        panel.busAmps?.let { if (worst > it) notes += "Phase current ${fmt(worst)} A exceeds the ${it} A bus." }
-        panel.mainAmps?.let { if (worst > it) notes += "Phase current ${fmt(worst)} A exceeds the ${it} A main." }
+        panel.busAmps?.let { if (worst > it) notes += warn("Phase current ${fmt(worst)} A exceeds the ${it} A bus.") }
+        panel.mainAmps?.let { if (worst > it) notes += warn("Phase current ${fmt(worst)} A exceeds the ${it} A main.") }
         return PanelDesign(panel, phaseVa, phaseVa.values.sum(), phaseAmps, PanelLayout.conflicts(panel), notes)
     }
 

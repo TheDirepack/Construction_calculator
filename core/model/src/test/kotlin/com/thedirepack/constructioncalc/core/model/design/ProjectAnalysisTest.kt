@@ -99,7 +99,7 @@ class ProjectAnalysisTest {
         val withOverride = project.copy(panels = listOf(panel.copy(circuits = listOf(circuit.copy(length = length)))))
         val withoutPvcLength = withOverride.copy(runs = listOf(emt, pvc.copy(raceway = Raceway(ConduitType.PVC_40))))
         assertNull(analyze(withoutPvcLength).voltageDropVolts)
-        assertTrue(analyze(withoutPvcLength).notes.any { "mixed raceways" in it })
+        assertTrue(analyze(withoutPvcLength).notes.any { "mixed raceways" in it.text })
     }
 
     @Test fun fillIsIncompleteWhenAnAssignedCircuitCannotBeSized() {
@@ -115,7 +115,7 @@ class ProjectAnalysisTest {
         assertEquals(3, result.totalConductors)
         assertNull(result.fillPercent)
         assertNull(result.smallestFitting)
-        assertTrue(result.notes.any { "no calculated conductor size" in it })
+        assertTrue(result.notes.any { "no calculated conductor size" in it.text })
     }
 
     @Test fun panelPhaseBalance() {
@@ -148,7 +148,7 @@ class ProjectAnalysisTest {
         val project = Project(name = "P", createdAt = 0, runs = listOf(indoor, roof), panels = listOf(Panel(name = "LP", circuits = listOf(c))))
         val d = ProjectAnalysis.analyze(project).circuits.getValue(c.id)
         assertEquals(63.0, d.sizing!!.effectiveAmbientC, 0.0)
-        assertTrue(d.notes.any { "Roof" in it && "33" in it })
+        assertTrue(d.notes.any { "Roof" in it.text && "33" in it.text && !it.isWarning })
     }
 
     @Test fun aCoolerRunAmbientIsHonoredLikeTheRunsTabShowsIt() {
@@ -177,7 +177,7 @@ class ProjectAnalysisTest {
         assertEquals(30_000.0, d.loadVa!!, 1e-9)
         assertTrue(d.loadFromFedPanels)
         assertEquals(100.0 + 18_000.0 / (Math.sqrt(3.0) * 208), d.amps!!, 1e-9)
-        assertTrue(d.notes.any { it.startsWith("Feeder load from LP") })
+        assertTrue(d.notes.any { it.text.startsWith("Feeder load from LP") })
         // The busiest leg carries about 150 A, of which 100 A is continuous.
         assertEquals(ConductorSize.AWG_2_0, d.minimumSize)
         // The upstream panel's totals include the subpanel.
@@ -202,7 +202,7 @@ class ProjectAnalysisTest {
         assertEquals(60.0, result.circuits.getValue(feeder.id).amps!!, 1e-9)
         val upstream = result.panels.first()
         assertEquals(mapOf(Phase.A to 0.0, Phase.B to 60.0, Phase.C to 0.0), upstream.phaseAmps)
-        assertTrue(upstream.notes.any { "exceeds the 50 A bus" in it })
+        assertTrue(upstream.notes.any { "exceeds the 50 A bus" in it.text && it.isWarning })
     }
 
     @Test fun feederTerminalLoadCanBeGovernedByADifferentPhaseThanPeakOperatingCurrent() {

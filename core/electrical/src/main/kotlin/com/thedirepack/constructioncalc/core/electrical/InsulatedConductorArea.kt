@@ -11,7 +11,13 @@ import kotlin.math.abs
  */
 enum class InsulationType(val code: String, val label: String, val types: String) {
     THHN("THHN", "THHN / THWN / THWN-2", "THHN, THWN, THWN-2"),
-    XHHW("XHHW", "XHHW / XHHW-2 / XHH", "XHH, XHHW, XHHW-2, ZW"),
+    XHHW("XHHW", "XHHW / XHH / ZW", "XHH, XHHW, ZW"),
+
+    /**
+     * XHHW-2: the same Table 5 row as [XHHW], kept separate because only XHHW-2 is exempt from the
+     * rooftop temperature adder (310.15(B)(2) Exception) and is 90 °C wet as well as dry.
+     */
+    XHHW_2("XHHW-2", "XHHW-2", "XHHW-2"),
     THW("THW", "THW / THW-2 / THHW", "THHW, THW, THW-2"),
     TW("TW", "TW", "TW"),
 
@@ -141,6 +147,7 @@ object InsulatedConductorArea {
     private val tables: Map<InsulationType, Map<ConductorSize, ConductorDimensions>> = mapOf(
         InsulationType.THHN to thhn,
         InsulationType.XHHW to xhhw,
+        InsulationType.XHHW_2 to xhhw,
         InsulationType.THW to thw,
         InsulationType.TW to thw,
         InsulationType.RHH_COVERED to rhhCovered,

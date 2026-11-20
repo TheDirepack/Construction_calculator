@@ -459,12 +459,8 @@ internal fun DesignResult(d: CircuitDesign?) {
     }
     val notices = buildList {
         sizing?.governing?.takeIf { it.isNotBlank() }?.let { add(Notice("Governing rule: $it", NoticeLevel.INFO)) }
-        d.notes.forEach { add(Notice(it, if (isProblem(it)) NoticeLevel.WARNING else NoticeLevel.INFO)) }
+        d.notes.forEach { add(Notice(it.text, if (it.isWarning) NoticeLevel.WARNING else NoticeLevel.INFO)) }
     }
     ResultCard(rows, notices = notices)
 }
 
-private fun isProblem(note: String): Boolean {
-    val n = note.lowercase()
-    return listOf("exceed", "over ", "too many", "no table", "can't", "cannot", "not ").any { it in n }
-}

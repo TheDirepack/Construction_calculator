@@ -46,10 +46,13 @@ class FillDeratingTest {
         assertEquals(0.58, thhnRow.ambientFactor!!, 0.0)
         assertEquals(17.4, thhnRow.usable!!, 1e-9)
         assertEquals(20, thhnRow.maxOcpd) // next standard size up from 17.4 A (240.4(B))
-        val xhhw = DeratingGroup(3, ConductorSize.AWG_12, InsulationType.XHHW, true)
-        val xRow = FillDerating.compute(listOf(xhhw), 35.0, true, cu, TemperatureRating.C75, false).rows.single()
+        val xhhw2 = DeratingGroup(3, ConductorSize.AWG_12, InsulationType.XHHW_2, true)
+        val xRow = FillDerating.compute(listOf(xhhw2), 35.0, true, cu, TemperatureRating.C75, false).rows.single()
         assertEquals(35.0, xRow.ambientC, 0.0)
         assertEquals(0.96, xRow.ambientFactor!!, 0.0)
+        // Only XHHW-2 is exempt (310.15(B)(2) Exception); plain XHHW gets the adder.
+        val xhhw = DeratingGroup(3, ConductorSize.AWG_12, InsulationType.XHHW, true)
+        assertEquals(68.0, FillDerating.compute(listOf(xhhw), 35.0, true, cu, TemperatureRating.C75, false).rows.single().ambientC, 0.0)
     }
 
     @Test fun maxOcpdUsesNextSizeUpAndSmallConductorLimits() {

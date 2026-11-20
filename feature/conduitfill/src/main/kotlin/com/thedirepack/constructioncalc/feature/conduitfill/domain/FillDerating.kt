@@ -55,7 +55,7 @@ object FillDerating {
     fun insulationRating(type: InsulationType): TemperatureRating? = when (type) {
         InsulationType.TW -> TemperatureRating.C60
         InsulationType.THW -> TemperatureRating.C75
-        InsulationType.THHN, InsulationType.XHHW, InsulationType.RHH_COVERED, InsulationType.RHH_NO_COVERING -> TemperatureRating.C90
+        InsulationType.THHN, InsulationType.XHHW, InsulationType.XHHW_2, InsulationType.RHH_COVERED, InsulationType.RHH_NO_COVERING -> TemperatureRating.C90
         InsulationType.TFN -> null // fixture wire: Table 402.5, not 310.16
     }
 
@@ -79,7 +79,7 @@ object FillDerating {
 
         val rows = groups.filter { it.insulation != null && it.currentCarrying }.map { g ->
             val rating = insulationRating(g.insulation!!)
-            val ambient = AmbientCorrection.effectiveAmbient(ambientC, rooftop, g.insulation == InsulationType.XHHW)
+            val ambient = AmbientCorrection.effectiveAmbient(ambientC, rooftop, g.insulation == InsulationType.XHHW_2)
             val factor = rating?.let { AmbientCorrection.factor(ambient, it) }
             val table = rating?.let { Ampacity.of(g.size, material, it) }
             val adjusted = if (table != null && factor != null) table * factor * adjustment else null

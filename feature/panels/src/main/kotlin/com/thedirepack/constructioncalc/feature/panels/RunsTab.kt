@@ -206,7 +206,13 @@ private fun RunCard(
                         )
                     }
                     rd.smallestFitting?.let { Text("Smallest that fits: ${it.displayName}", style = MaterialTheme.typography.bodySmall) }
-                    rd.notes.forEach { WarningText(it) }
+                    rd.notes.forEach { note ->
+                        if (note.isWarning) {
+                            WarningText(note.text)
+                        } else {
+                            Text(note.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
             }
             if (!ctx.readOnly) {
