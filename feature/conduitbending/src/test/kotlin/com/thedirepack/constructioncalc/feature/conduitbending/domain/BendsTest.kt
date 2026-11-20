@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conduitbending.domain
 
+import com.thedirepack.constructioncalc.core.electrical.ConduitType
+import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.math.Rational
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -202,25 +204,25 @@ class BendsTest {
     // ---- bender defaults ----------------------------------------------------------
 
     @Test fun defaultTakeUpsAreTheCommonHandBenderValues() {
-        assertRat(r(5), BenderDefaults.spec(ConduitType.EMT, "1/2")!!.takeUp)
-        assertRat(r(6), BenderDefaults.spec(ConduitType.EMT, "3/4")!!.takeUp)
-        assertRat(r(8), BenderDefaults.spec(ConduitType.EMT, "1")!!.takeUp)
-        assertRat(r(11), BenderDefaults.spec(ConduitType.EMT, "1-1/4")!!.takeUp)
-        assertRat(r(6), BenderDefaults.spec(ConduitType.RIGID, "1/2")!!.takeUp)
-        assertNull(BenderDefaults.spec(ConduitType.RIGID, "1-1/4"))
+        assertRat(r(5), BenderDefaults.spec(ConduitType.EMT, TradeSize.S_1_2)!!.takeUp)
+        assertRat(r(6), BenderDefaults.spec(ConduitType.EMT, TradeSize.S_3_4)!!.takeUp)
+        assertRat(r(8), BenderDefaults.spec(ConduitType.EMT, TradeSize.S_1)!!.takeUp)
+        assertRat(r(11), BenderDefaults.spec(ConduitType.EMT, TradeSize.S_1_1_4)!!.takeUp)
+        assertRat(r(6), BenderDefaults.spec(ConduitType.RMC, TradeSize.S_1_2)!!.takeUp)
+        assertNull(BenderDefaults.spec(ConduitType.RMC, TradeSize.S_1_1_4))
     }
 
     @Test fun defaultGainsAreDerivedAndPlausible() {
         // 2T − (π/2)(T − OD/2), nearest 1/8: 1/2" EMT → 2.70 → 2-3/4"
-        assertRat(r(11, 4), BenderDefaults.spec(ConduitType.EMT, "1/2")!!.gain)
-        val gains = ConduitType.EMT.sizes.map { BenderDefaults.spec(ConduitType.EMT, it)!!.gain.toDouble() }
+        assertRat(r(11, 4), BenderDefaults.spec(ConduitType.EMT, TradeSize.S_1_2)!!.gain)
+        val gains = Bendable.sizes(ConduitType.EMT).map { BenderDefaults.spec(ConduitType.EMT, it)!!.gain.toDouble() }
         assertEquals(gains.sorted(), gains) // gain grows with size
     }
 
     @Test fun customTableOverridesDefaults() {
-        val table = BenderTable(mapOf(BenderTable.key(ConduitType.EMT, "1/2") to BenderSpec(r(51, 10), r(2))))
-        assertRat(r(51, 10), table.spec(ConduitType.EMT, "1/2")!!.takeUp)
-        assertRat(r(6), table.spec(ConduitType.EMT, "3/4")!!.takeUp)
+        val table = BenderTable(mapOf(BenderTable.key(ConduitType.EMT, TradeSize.S_1_2) to BenderSpec(r(51, 10), r(2))))
+        assertRat(r(51, 10), table.spec(ConduitType.EMT, TradeSize.S_1_2)!!.takeUp)
+        assertRat(r(6), table.spec(ConduitType.EMT, TradeSize.S_3_4)!!.takeUp)
     }
 
     // ---- plans ---------------------------------------------------------------------
@@ -258,20 +260,20 @@ class BendsTest {
     }
 
     @Test fun stubPlanUsesTheBenderTable() {
-        val plan = BendPlanner.plan(BendRequest(BendType.STUB_UP, size = r(10), conduit = ConduitType.EMT, conduitSize = "1/2"))
+        val plan = BendPlanner.plan(BendRequest(BendType.STUB_UP, size = r(10), conduit = ConduitType.EMT, conduitSize = TradeSize.S_1_2))
         assertRat(r(5), plan.marks.single().position)
         assertTrue(plan.figures.first().isMark)
     }
 
     @Test fun stubPlanErrorsWhenShorterThanTakeUp() {
-        val plan = BendPlanner.plan(BendRequest(BendType.STUB_UP, size = r(4), conduit = ConduitType.EMT, conduitSize = "1/2"))
+        val plan = BendPlanner.plan(BendRequest(BendType.STUB_UP, size = r(4), conduit = ConduitType.EMT, conduitSize = TradeSize.S_1_2))
         assertFalse(plan.hasResults)
         assertEquals(Severity.ERROR, plan.issues.single().severity)
     }
 
     @Test fun backToBackPlanAddsSecondMarkAndCutLength() {
         val plan = BendPlanner.plan(
-            BendRequest(BendType.STUB_UP, size = r(10), conduitSize = "1/2", backToBack = true, between = r(30), secondStub = r(12)),
+            BendRequest(BendType.STUB_UP, size = r(10), conduitSize = TradeSize.S_1_2, backToBack = true, between = r(30), secondStub = r(12)),
         )
         assertTrue(plan.figures.any { it.key == "second_from_back" && it.value == r(30) })
         assertTrue(plan.figures.any { it.key == "cut_length" })

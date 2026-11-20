@@ -53,10 +53,9 @@ import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.BendPlan
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.BendPlanner
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.BendType
-import com.thedirepack.constructioncalc.feature.conduitbending.domain.ConduitType
+import com.thedirepack.constructioncalc.feature.conduitbending.domain.Bendable
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.FigureKind
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.Severity
-import com.thedirepack.constructioncalc.feature.conduitbending.domain.sizeLabel
 
 @Composable
 fun ConduitBendingScreen(host: ToolHost) {
@@ -127,29 +126,24 @@ fun ConduitBendingScreen(host: ToolHost) {
 
 @Composable
 private fun ConduitFields(inputs: ConduitBendingInputs, update: ((ConduitBendingInputs) -> ConduitBendingInputs) -> Unit) {
-    val type = ConduitType.fromName(inputs.conduitType)
+    val type = inputs.conduit
     FormSection("Conduit") {
         ChoiceField(
             label = "Conduit type",
-            options = ConduitType.entries,
+            options = Bendable.types,
             selected = type,
             onSelect = { selected ->
-                update {
-                    it.copy(
-                        conduitType = selected.name,
-                        conduitSize = it.conduitSize.takeIf { size -> size in selected.sizes } ?: selected.sizes.first(),
-                    )
-                }
+                update { it.copy(conduitType = selected.code, conduitSize = Bendable.sizeOrNearest(selected, it.tradeSize).label) }
             },
-            optionLabel = { it.label },
-            supportingText = type.raceway.fullName,
+            optionLabel = { it.displayName },
+            supportingText = type.fullName,
         )
         ChoiceField(
             label = "Trade size",
-            options = type.sizes,
-            selected = inputs.conduitSize.takeIf { it in type.sizes } ?: type.sizes.first(),
-            onSelect = { size -> update { it.copy(conduitSize = size) } },
-            optionLabel = ::sizeLabel,
+            options = Bendable.sizes(type),
+            selected = inputs.tradeSize,
+            onSelect = { size -> update { it.copy(conduitSize = size.label) } },
+            optionLabel = { it.display },
             supportingText = "Sizes with hand-bender profiles",
         )
     }

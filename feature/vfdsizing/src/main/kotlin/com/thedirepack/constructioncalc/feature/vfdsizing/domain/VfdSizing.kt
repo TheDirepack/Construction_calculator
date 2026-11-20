@@ -4,13 +4,10 @@ import com.thedirepack.constructioncalc.core.electrical.Ampacity
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.MotorFullLoadCurrent
-import com.thedirepack.constructioncalc.core.electrical.MotorPhase
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.StandardOcpd
 import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
 import kotlin.math.abs
-
-/** Power supplied to the drive's input terminals. The motor is always three-phase (the drive's output). */
-enum class SupplyPhase(val label: String) { THREE("Three-phase"), SINGLE("Single-phase") }
 
 /** Whether the motor rating is entered in horsepower or kilowatts. */
 enum class RatingUnit(val label: String) { HP("HP"), KW("kW") }
@@ -32,7 +29,7 @@ enum class OutputBasis { NAMEPLATE_FLA, TABLE_FLC }
 data class VfdRequest(
     val hp: Double,
     val volts: Int,
-    val supplyPhase: SupplyPhase = SupplyPhase.THREE,
+    val supplyPhase: AcPhases = AcPhases.THREE,
     /** Motor nameplate full-load amps. Optional. */
     val nameplateFla: Double? = null,
     /** The drive's rated input current from its nameplate or manual. Optional. */
@@ -112,7 +109,7 @@ object VfdSizing {
     private const val KW_PER_HP = 0.7457
 
     /** Standard horsepower ratings with a Table 430.250 value at [volts]. */
-    fun horsepowers(volts: Int): List<Double> = MotorFullLoadCurrent.horsepowers(MotorPhase.THREE, volts)
+    fun horsepowers(volts: Int): List<Double> = MotorFullLoadCurrent.horsepowers(AcPhases.THREE, volts)
 
     /**
      * The standard horsepower for a motor rated [kw]: the smallest table rating at least the converted
@@ -142,7 +139,7 @@ object VfdSizing {
         val minOutput = fla ?: flc
         val inputEstimate = request.driveInputAmps == null
         val inputBasis = request.driveInputAmps
-            ?: if (request.supplyPhase == SupplyPhase.SINGLE) flc * SINGLE_PHASE_INPUT_ESTIMATE_FACTOR else flc
+            ?: if (request.supplyPhase == AcPhases.SINGLE) flc * SINGLE_PHASE_INPUT_ESTIMATE_FACTOR else flc
         val inputRequired = inputBasis * CONDUCTOR_FACTOR
         val outputRequired = flc * CONDUCTOR_FACTOR
         val breakerCalc = flc * BREAKER_FACTOR
@@ -151,7 +148,7 @@ object VfdSizing {
             tableFlc = flc,
             minDriveOutputAmps = minOutput,
             outputBasis = if (fla != null) OutputBasis.NAMEPLATE_FLA else OutputBasis.TABLE_FLC,
-            singlePhaseDriveGuidanceAmps = if (request.supplyPhase == SupplyPhase.SINGLE) minOutput * SINGLE_PHASE_DRIVE_MULTIPLIER else null,
+            singlePhaseDriveGuidanceAmps = if (request.supplyPhase == AcPhases.SINGLE) minOutput * SINGLE_PHASE_DRIVE_MULTIPLIER else null,
             overloadMaxAmps = fla?.let { it * OVERLOAD_FACTOR },
             nameplatePercentOfTable = fla?.let { 100.0 * it / flc },
             inputBasisAmps = inputBasis,

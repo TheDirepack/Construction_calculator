@@ -1,12 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conversions.domain
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import kotlinx.serialization.Serializable
-
-@Serializable
-enum class Phase(val label: String, val factor: Double) {
-    SINGLE("Single-phase", 1.0),
-    THREE("Three-phase", 1.7320508075688772), // √3
-}
 
 /** Which of the three related quantities the user types in. */
 @Serializable
@@ -31,8 +26,8 @@ object CurrentPower {
     }
 
     /** Call only when [problems] is empty. */
-    fun calculate(from: PowerTerm, value: Double, phase: Phase, volts: Double, powerFactor: Double): CurrentPowerResult {
-        val voltAmpsPerAmp = volts * phase.factor / 1000.0
+    fun calculate(from: PowerTerm, value: Double, phase: AcPhases, volts: Double, powerFactor: Double): CurrentPowerResult {
+        val voltAmpsPerAmp = volts * phase.powerFactorK / 1000.0
         return when (from) {
             PowerTerm.AMPS -> {
                 val kva = value * voltAmpsPerAmp

@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.vfdsizing.domain
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
@@ -76,9 +77,9 @@ class VfdSizingTest {
     }
 
     @Test fun singlePhaseInputGivesDriveGuidance() {
-        val r = calc(VfdRequest(hp = 3.0, volts = 230, supplyPhase = SupplyPhase.SINGLE, nameplateFla = 9.0))
+        val r = calc(VfdRequest(hp = 3.0, volts = 230, supplyPhase = AcPhases.SINGLE, nameplateFla = 9.0))
         assertEquals(18.0, r.singlePhaseDriveGuidanceAmps!!, 1e-9)
-        val noPlate = calc(VfdRequest(hp = 3.0, volts = 230, supplyPhase = SupplyPhase.SINGLE))
+        val noPlate = calc(VfdRequest(hp = 3.0, volts = 230, supplyPhase = AcPhases.SINGLE))
         assertEquals(19.2, noPlate.singlePhaseDriveGuidanceAmps!!, 1e-9)
     }
 
@@ -132,12 +133,12 @@ class VfdSizingTest {
 
     @Test fun singlePhaseInputEstimateIsTwiceTheMotorFlc() {
         val three = calc(VfdRequest(hp = 3.0, volts = 230))
-        val single = calc(VfdRequest(hp = 3.0, volts = 230, supplyPhase = SupplyPhase.SINGLE))
+        val single = calc(VfdRequest(hp = 3.0, volts = 230, supplyPhase = AcPhases.SINGLE))
         assertEquals(9.6, three.inputBasisAmps, 1e-9)
         assertEquals(19.2, single.inputBasisAmps, 1e-9)
         assertTrue(single.inputAmpacityRequired > three.inputAmpacityRequired)
         // A drive input rating always wins over the estimate.
-        val rated = calc(VfdRequest(hp = 3.0, volts = 230, supplyPhase = SupplyPhase.SINGLE, driveInputAmps = 15.0))
+        val rated = calc(VfdRequest(hp = 3.0, volts = 230, supplyPhase = AcPhases.SINGLE, driveInputAmps = 15.0))
         assertEquals(15.0, rated.inputBasisAmps, 1e-9)
     }
 

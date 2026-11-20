@@ -1,10 +1,10 @@
 package com.thedirepack.constructioncalc.feature.vfdsizing
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.LoadType
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.RatingUnit
-import com.thedirepack.constructioncalc.feature.vfdsizing.domain.SupplyPhase
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdRequest
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizing
 import kotlinx.serialization.Serializable
@@ -19,7 +19,7 @@ data class VfdSizingInputs(
     val kw: String = "",
     /** Rated motor voltage, one of [VfdSizing.MOTOR_VOLTAGES]. */
     val volts: Int = 460,
-    val supplyPhase: SupplyPhase = SupplyPhase.THREE,
+    val supplyPhase: AcPhases = AcPhases.THREE,
     /** Motor nameplate full-load amps. Optional. */
     val nameplateFla: String = "",
     /** Drive rated input amps. Optional. */

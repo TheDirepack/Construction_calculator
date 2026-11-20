@@ -1,12 +1,12 @@
 package com.thedirepack.constructioncalc.feature.vfdsizing
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.model.ToolInputs
 import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.LoadType
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.RatingUnit
-import com.thedirepack.constructioncalc.feature.vfdsizing.domain.SupplyPhase
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -17,7 +17,7 @@ import org.junit.Test
 class VfdSizingInputsTest {
     @Test fun savedInputsRoundTripAndDefaultsDecode() {
         val custom = VfdSizingInputs(
-            unit = RatingUnit.KW, hp = 7.5, kw = "5.5", volts = 230, supplyPhase = SupplyPhase.SINGLE,
+            unit = RatingUnit.KW, hp = 7.5, kw = "5.5", volts = 230, supplyPhase = AcPhases.SINGLE,
             nameplateFla = "18.4", driveInputAmps = "22", loadType = LoadType.CONSTANT_TORQUE,
             material = "ALUMINUM", termination = 60,
         )
@@ -57,7 +57,7 @@ class VfdSizingInputsTest {
     }
 
     @Test fun singlePhaseAddsGuidanceWithAWarning() {
-        val out = vfdSizingOutput(VfdSizingInputs(hp = 3.0, volts = 230, supplyPhase = SupplyPhase.SINGLE))
+        val out = vfdSizingOutput(VfdSizingInputs(hp = 3.0, volts = 230, supplyPhase = AcPhases.SINGLE))
         val byKey = out.results.associateBy { it.key }
         assertNotNull(byKey["single_phase_drive_guidance"])
         assertEquals(ValueKind.PERCENT, byKey.getValue("single_phase_derate").kind)

@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.conversions
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
@@ -29,7 +30,6 @@ import com.thedirepack.constructioncalc.core.ui.toFieldText
 import com.thedirepack.constructioncalc.core.ui.tool.ItemDraft
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 import com.thedirepack.constructioncalc.feature.conversions.domain.ConversionCategory
-import com.thedirepack.constructioncalc.feature.conversions.domain.Phase
 import com.thedirepack.constructioncalc.feature.conversions.domain.PowerTerm
 import com.thedirepack.constructioncalc.feature.conversions.domain.UnitTable
 
@@ -172,7 +172,7 @@ private fun WireSizeForm(inputs: ConversionsInputs, vm: ConversionsViewModel) {
 private fun CurrentPowerForm(inputs: ConversionsInputs, vm: ConversionsViewModel) {
     FormSection("Load") {
         SegmentedChoice(
-            options = Phase.entries,
+            options = AcPhases.entries,
             selected = inputs.phase,
             onSelect = { p -> vm.update { it.copy(phase = p) } },
             label = "System",
@@ -209,7 +209,7 @@ private fun CurrentPowerForm(inputs: ConversionsInputs, vm: ConversionsViewModel
             value = inputs.voltage,
             onValueChange = { t -> vm.update { it.copy(voltage = t) } },
             unit = "V",
-            supportingText = if (inputs.phase == Phase.THREE) "Line-to-line" else null,
+            supportingText = if (inputs.phase == AcPhases.THREE) "Line-to-line" else null,
             pickKinds = setOf(ValueKind.VOLTAGE),
         )
         NumberField(

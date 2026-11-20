@@ -179,7 +179,7 @@ private fun currentPowerOutput(inputs: ConversionsInputs): ConversionsOutput {
         ResultValue.number("kva", "Apparent power", ValueKind.APPARENT_POWER, exact(voltAmps), text(r.kva, "kVA")),
     )
     val notices = listOf(
-        Notice("Balanced ${inputs.phase.label.lowercase()} load" + (if (inputs.phase.factor > 1) ", line-to-line voltage" else "") + ". kVA = V × A" + (if (inputs.phase.factor > 1) " × √3" else "") + " ÷ 1000; kW = kVA × power factor."),
+        Notice("Balanced ${inputs.phase.label.lowercase()} load" + (if (inputs.phase.powerFactorK > 1) ", line-to-line voltage" else "") + ". kVA = V × A" + (if (inputs.phase.powerFactorK > 1) " × √3" else "") + " ÷ 1000; kW = kVA × power factor."),
         Notice("Load power factor only: motor nameplate hp or output kW also depends on efficiency."),
     )
     val entered = text(value, inputs.powerFrom.unit)

@@ -93,17 +93,17 @@ fun RacewayEditorSheet(
                 supportingText = "Leave blank to use the project default.",
                 allowNegative = true,
             )
-            SwitchRow(
+            ToggleRow(
                 title = "Rooftop",
                 detail = "In sunlight less than 3/4\" above a roof (adds a temperature adder, NEC 310.15(B)(2)).",
                 checked = draft.rooftop,
-                onChange = { draft = draft.copy(rooftop = it) },
+                onCheckedChange = { draft = draft.copy(rooftop = it) },
             )
-            SwitchRow(
+            ToggleRow(
                 title = "Nipple (24\" or shorter)",
                 detail = "No conductor-count adjustment, and 60% conduit fill.",
                 checked = draft.nipple,
-                onChange = { draft = draft.copy(nipple = it) },
+                onCheckedChange = { draft = draft.copy(nipple = it) },
             )
             Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (onRemove != null) {
@@ -118,19 +118,6 @@ fun RacewayEditorSheet(
     }
 }
 
-@Composable
-private fun SwitchRow(title: String, detail: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(value = checked, role = Role.Switch, onValueChange = onChange),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Switch(checked = checked, onCheckedChange = null, modifier = Modifier.padding(start = 12.dp))
-    }
-}
 
 /**
  * One line describing a run's conduit, e.g. `1" EMT · 150' · 6 circuits`.

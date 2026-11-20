@@ -1,23 +1,34 @@
 package com.thedirepack.constructioncalc.feature.conduitbending.domain
 
+import com.thedirepack.constructioncalc.core.electrical.ConduitType
+import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.math.Rational
-import com.thedirepack.constructioncalc.core.electrical.ConduitType as RacewayType
 
-/** Conduit types the bender table covers. */
-enum class ConduitType(val raceway: RacewayType, val sizes: List<String>) {
-    EMT(RacewayType.EMT, listOf("1/2", "3/4", "1", "1-1/4")),
-    IMC(RacewayType.IMC, listOf("1/2", "3/4", "1")),
-    RIGID(RacewayType.RMC, listOf("1/2", "3/4", "1"));
+/**
+ * The conduit a hand bender handles: the app's own conduit types (the same ones a project run
+ * uses) and the trade sizes that have hand-bender values.
+ */
+object Bendable {
+    private val bySize: Map<ConduitType, List<TradeSize>> = linkedMapOf(
+        ConduitType.EMT to listOf(TradeSize.S_1_2, TradeSize.S_3_4, TradeSize.S_1, TradeSize.S_1_1_4),
+        ConduitType.IMC to listOf(TradeSize.S_1_2, TradeSize.S_3_4, TradeSize.S_1),
+        ConduitType.RMC to listOf(TradeSize.S_1_2, TradeSize.S_3_4, TradeSize.S_1),
+    )
 
-    val label get() = raceway.displayName
+    val types: List<ConduitType> get() = bySize.keys.toList()
 
-    companion object {
-        fun fromName(name: String) = entries.firstOrNull { it.name == name } ?: EMT
+    fun sizes(type: ConduitType): List<TradeSize> = bySize[type].orEmpty()
+
+    /** [type] if a hand bender handles it, else EMT. */
+    fun typeOrDefault(type: ConduitType?): ConduitType = type?.takeIf { it in bySize } ?: ConduitType.EMT
+
+    /** [size] if [type] has bender values for it, else the nearest larger one (or the largest). */
+    fun sizeOrNearest(type: ConduitType, size: TradeSize?): TradeSize {
+        val sizes = sizes(typeOrDefault(type))
+        if (size == null) return sizes.first()
+        return sizes.firstOrNull { it.inches >= size.inches } ?: sizes.last()
     }
 }
-
-/** Trade-size label for a size such as "1-1/4" → `1-1/4"`. */
-fun sizeLabel(size: String) = "$size\""
 
 /**
  * What a hand bender does to one size of conduit, in inches.
@@ -31,10 +42,10 @@ data class BenderSpec(val takeUp: Rational, val gain: Rational)
 
 /** Bender values for every type/size, editable by the user. */
 class BenderTable(private val specs: Map<String, BenderSpec>) {
-    fun spec(type: ConduitType, size: String): BenderSpec? = specs[key(type, size)] ?: BenderDefaults.spec(type, size)
+    fun spec(type: ConduitType, size: TradeSize): BenderSpec? = specs[key(type, size)] ?: BenderDefaults.spec(type, size)
 
     companion object {
-        fun key(type: ConduitType, size: String) = "${type.name}:$size"
+        fun key(type: ConduitType, size: TradeSize) = "${type.code}:${size.label}"
         val DEFAULT = BenderTable(emptyMap())
     }
 }
@@ -47,19 +58,19 @@ class BenderTable(private val specs: Map<String, BenderSpec>) {
  * wear: the user should check these against their own bender and edit them in Settings.
  */
 object BenderDefaults {
-    private data class Row(val type: ConduitType, val size: String, val takeUp: Rational, val od: Double)
+    private data class Row(val type: ConduitType, val size: TradeSize, val takeUp: Rational, val od: Double)
 
     private val rows = listOf(
-        Row(ConduitType.EMT, "1/2", Rational.of(5), 0.706),
-        Row(ConduitType.EMT, "3/4", Rational.of(6), 0.922),
-        Row(ConduitType.EMT, "1", Rational.of(8), 1.163),
-        Row(ConduitType.EMT, "1-1/4", Rational.of(11), 1.510),
-        Row(ConduitType.IMC, "1/2", Rational.of(6), 0.815),
-        Row(ConduitType.IMC, "3/4", Rational.of(8), 1.029),
-        Row(ConduitType.IMC, "1", Rational.of(9), 1.290),
-        Row(ConduitType.RIGID, "1/2", Rational.of(6), 0.840),
-        Row(ConduitType.RIGID, "3/4", Rational.of(8), 1.050),
-        Row(ConduitType.RIGID, "1", Rational.of(9), 1.315),
+        Row(ConduitType.EMT, TradeSize.S_1_2, Rational.of(5), 0.706),
+        Row(ConduitType.EMT, TradeSize.S_3_4, Rational.of(6), 0.922),
+        Row(ConduitType.EMT, TradeSize.S_1, Rational.of(8), 1.163),
+        Row(ConduitType.EMT, TradeSize.S_1_1_4, Rational.of(11), 1.510),
+        Row(ConduitType.IMC, TradeSize.S_1_2, Rational.of(6), 0.815),
+        Row(ConduitType.IMC, TradeSize.S_3_4, Rational.of(8), 1.029),
+        Row(ConduitType.IMC, TradeSize.S_1, Rational.of(9), 1.290),
+        Row(ConduitType.RMC, TradeSize.S_1_2, Rational.of(6), 0.840),
+        Row(ConduitType.RMC, TradeSize.S_3_4, Rational.of(8), 1.050),
+        Row(ConduitType.RMC, TradeSize.S_1, Rational.of(9), 1.315),
     )
 
     /**
@@ -73,6 +84,6 @@ object BenderDefaults {
         return Rational.of(Math.round(gain * 8), 8)
     }
 
-    fun spec(type: ConduitType, size: String): BenderSpec? =
+    fun spec(type: ConduitType, size: TradeSize): BenderSpec? =
         rows.firstOrNull { it.type == type && it.size == size }?.let { BenderSpec(it.takeUp, gainFor(it.takeUp, it.od)) }
 }

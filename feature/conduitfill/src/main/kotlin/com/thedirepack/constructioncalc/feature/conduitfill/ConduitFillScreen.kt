@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conduitfill
 
+import com.thedirepack.constructioncalc.core.ui.components.ToggleRow
+
 import com.thedirepack.constructioncalc.feature.conduitfill.domain.toResults
 import com.thedirepack.constructioncalc.core.electrical.explanations
 import com.thedirepack.constructioncalc.core.ui.components.SegmentedChoice
@@ -154,7 +156,7 @@ private fun ConduitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) 
         )
         ToggleRow(
             title = "Nipple, 24 in. or shorter",
-            subtitle = "Between boxes or cabinets: 60% fill allowed (Table 1 Note 4)",
+            detail = "Between boxes or cabinets: 60% fill allowed (Table 1 Note 4)",
             checked = inputs.nipple,
             onCheckedChange = vm::setNipple,
         )
@@ -203,7 +205,7 @@ private fun ConductorsSection(inputs: ConduitFillInputs, vm: ConduitFillViewMode
                     if (group.insulation != BARE_CODE) {
                         ToggleRow(
                             title = "Carries current",
-                            subtitle = "Counts for derating. Off for grounds and neutrals that carry only unbalanced current (310.15(E), (F)).",
+                            detail = "Counts for derating. Off for grounds and neutrals that carry only unbalanced current (310.15(E), (F)).",
                             checked = group.currentCarrying,
                             onCheckedChange = { vm.setCurrentCarrying(index, it) },
                         )
@@ -251,24 +253,6 @@ private fun FitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) {
     }
 }
 
-@Composable
-private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Spacer(Modifier.width(12.dp))
-        Switch(checked = checked, onCheckedChange = null)
-    }
-}
 
 private val insulationCodes: List<String> = InsulationType.entries.map { it.code } + BARE_CODE
 
@@ -300,7 +284,7 @@ private fun DeratingSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel)
         )
         ToggleRow(
             title = "Rooftop, in sunlight",
-            subtitle = "Less than 3/4 in. above the roof: +33 °C (310.15(B)(2)); XHHW-2 is exempt",
+            detail = "Less than 3/4 in. above the roof: +33 °C (310.15(B)(2)); XHHW-2 is exempt",
             checked = inputs.rooftop,
             onCheckedChange = vm::setRooftop,
         )

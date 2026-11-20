@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conduitbending.domain
 
+import com.thedirepack.constructioncalc.core.electrical.ConduitType
+import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.math.Rational
 
 enum class BendType(val label: String) {
@@ -62,7 +64,7 @@ data class BendRequest(
     /** Space available for an offset, to check that it fits. */
     val space: Rational? = null,
     val conduit: ConduitType = ConduitType.EMT,
-    val conduitSize: String = "1/2",
+    val conduitSize: TradeSize = TradeSize.S_1_2,
     val backToBack: Boolean = false,
     val between: Rational? = null,
     val secondStub: Rational? = null,
@@ -216,11 +218,11 @@ object BendPlanner {
     private fun stub(r: BendRequest): BendPlan {
         val height = r.size ?: return empty(BendType.STUB_UP)
         val spec = r.bender.spec(r.conduit, r.conduitSize)
-            ?: return empty(BendType.STUB_UP, Issue(Severity.ERROR, "No bender values for ${r.conduit.label} ${sizeLabel(r.conduitSize)}. Add them in this tool's settings."))
+            ?: return empty(BendType.STUB_UP, Issue(Severity.ERROR, "No bender values for ${r.conduitSize.display} ${r.conduit.displayName}. Add them in this tool's settings."))
         val stub = Bends.stubUp(height, spec)
             ?: return empty(
                 BendType.STUB_UP,
-                Issue(Severity.ERROR, "A ${r.conduit.label} ${sizeLabel(r.conduitSize)} stub can't be shorter than the bender's take-up of ${spec.takeUp.toDouble().fmt()}\"."),
+                Issue(Severity.ERROR, "A ${r.conduitSize.display} ${r.conduit.displayName} stub can't be shorter than the bender's take-up of ${spec.takeUp.toDouble().fmt()}\"."),
             )
         val figures = mutableListOf(
             len("stub_mark", "Mark from the end of the stick", stub.mark, mark = true),

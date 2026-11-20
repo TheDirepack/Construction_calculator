@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop
 
+import com.thedirepack.constructioncalc.core.electrical.Table9Conduit
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorResistance
 import com.thedirepack.constructioncalc.core.electrical.Stranding
 import androidx.compose.foundation.layout.Arrangement
@@ -27,9 +29,7 @@ import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.ItemDraft
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
-import com.thedirepack.constructioncalc.feature.voltagedrop.domain.Conduit
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.Method
-import com.thedirepack.constructioncalc.feature.voltagedrop.domain.SystemType
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDrop
 
 private const val CUSTOM_VOLTAGE = 0
@@ -65,7 +65,7 @@ fun VoltageDropScreen(host: ToolHost) {
         ) {
             FormSection("Circuit") {
                 SegmentedChoice(
-                    options = SystemType.entries,
+                    options = AcPhases.entries,
                     selected = inputs.system,
                     onSelect = { s -> vm.update { it.copy(system = s) } },
                     label = "System",
@@ -136,7 +136,7 @@ fun VoltageDropScreen(host: ToolHost) {
                 )
                 if (inputs.method == Method.AC_TABLE_9) {
                     SegmentedChoice(
-                        options = Conduit.entries,
+                        options = Table9Conduit.entries,
                         selected = inputs.conduit,
                         onSelect = { c -> vm.update { it.copy(conduit = c) } },
                         label = "Conduit",

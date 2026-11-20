@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.vfdsizing
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.MotorFullLoadCurrent
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.model.ResultValue
@@ -10,7 +11,6 @@ import com.thedirepack.constructioncalc.core.ui.formatDecimal
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.LoadType
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.OutputBasis
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.RatingUnit
-import com.thedirepack.constructioncalc.feature.vfdsizing.domain.SupplyPhase
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdRequest
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdResult
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizing
@@ -59,7 +59,7 @@ internal fun vfdSizingOutput(inputs: VfdSizingInputs): VfdSizingOutput {
                 "input_current_basis",
                 when {
                     !result.inputBasisIsEstimate -> "Input current used (drive rating)"
-                    request.supplyPhase == SupplyPhase.SINGLE -> "Input current used (estimate = 2 × motor FLC, 1-phase)"
+                    request.supplyPhase == AcPhases.SINGLE -> "Input current used (estimate = 2 × motor FLC, 1-phase)"
                     else -> "Input current used (estimate = motor FLC)"
                 },
                 result.inputBasisAmps,
@@ -115,7 +115,7 @@ private fun notices(
     if (request.loadType == LoadType.CONSTANT_TORQUE) {
         add(Notice("Constant-torque loads at low speed can overheat a self-cooled motor; see 430.126 motor overtemperature protection and consider an inverter-duty motor.", NoticeLevel.INFO))
     }
-    if (request.supplyPhase == SupplyPhase.SINGLE) {
+    if (request.supplyPhase == AcPhases.SINGLE) {
         add(
             Notice(
                 "Guidance, not a code requirement: a three-phase drive on single-phase input is commonly sized about 2× the motor current " +
@@ -137,7 +137,7 @@ private fun notices(
                 NoticeLevel.WARNING,
             ),
         )
-        if (request.supplyPhase == SupplyPhase.SINGLE) {
+        if (request.supplyPhase == AcPhases.SINGLE) {
             add(Notice("Single-phase input draws more line current than three-phase for the same load (√3× or more), so the estimate uses 2 × the motor FLC. Enter the drive's rated input current for a code-based size.", NoticeLevel.WARNING))
         }
     }
@@ -183,7 +183,7 @@ private fun notices(
 
 private fun summary(request: VfdRequest, result: VfdResult): String = buildString {
     append(MotorFullLoadCurrent.label(request.hp)).append(" HP ").append(request.volts).append(" V, ")
-    append(if (request.supplyPhase == SupplyPhase.SINGLE) "1-phase" else "3-phase").append(" input: drive ")
+    append(if (request.supplyPhase == AcPhases.SINGLE) "1-phase" else "3-phase").append(" input: drive ")
     append(amps(result.minDriveOutputAmps)).append(", ")
     append(result.inputConductor?.text(request.material) ?: "oversize").append(" in, ")
     append(result.outputConductor?.text(request.material) ?: "oversize").append(" out")

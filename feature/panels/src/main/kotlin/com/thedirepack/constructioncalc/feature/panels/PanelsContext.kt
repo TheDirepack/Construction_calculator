@@ -76,21 +76,6 @@ internal fun GroupTag(group: CircuitGroup, modifier: Modifier = Modifier, full: 
     }
 }
 
-@Composable
-internal fun ToggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, detail: String? = null) {
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(value = checked, role = Role.Switch, onValueChange = onChange),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            if (detail != null) {
-                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        Switch(checked = checked, onCheckedChange = null, modifier = Modifier.padding(start = 12.dp))
-    }
-}
 
 /** A line of warning text with a mark, so it never relies on colour. */
 @Composable

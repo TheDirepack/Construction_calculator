@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorResistance
@@ -13,7 +14,6 @@ import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.core.ui.formatDecimal
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.Method
-import com.thedirepack.constructioncalc.feature.voltagedrop.domain.SystemType
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDrop
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropRequest
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropResult
@@ -102,7 +102,7 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
                 ),
             )
         }
-        if (request.system == SystemType.THREE_PHASE) {
+        if (request.system == AcPhases.THREE) {
             add(Notice("Three-phase: voltage is line-to-line.", NoticeLevel.INFO))
         }
         add(Notice("Ampacity, terminal temperature, derating and overcurrent protection are not checked.", NoticeLevel.INFO))
@@ -110,7 +110,7 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
 
     val summary = buildString {
         append(formatDecimal(request.volts, 1)).append(" V ")
-        append(if (request.system == SystemType.SINGLE_PHASE) "1-phase" else "3-phase").append(", ")
+        append(if (request.system == AcPhases.SINGLE) "1-phase" else "3-phase").append(", ")
         append(formatDecimal(request.amps, 2)).append(" A, ")
         append(settings.format(Quantity.feet(Rational.of(request.lengthFeet)))).append(" of ")
         append(sizeText(request, request.size)).append(": ")

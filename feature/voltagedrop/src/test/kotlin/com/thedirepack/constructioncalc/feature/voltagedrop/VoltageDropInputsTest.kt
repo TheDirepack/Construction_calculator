@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.Stranding
@@ -10,7 +11,6 @@ import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.model.stored
 import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.Method
-import com.thedirepack.constructioncalc.feature.voltagedrop.domain.SystemType
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -27,7 +27,7 @@ class VoltageDropInputsTest {
     )
 
     @Test fun savedInputsRoundTripAndDefaultsDecode() {
-        val custom = filled.copy(system = SystemType.THREE_PHASE, voltagePreset = 0, customVoltage = "400", material = "ALUMINUM", size = "2/0 AWG", parallelSets = 2)
+        val custom = filled.copy(system = AcPhases.THREE, voltagePreset = 0, customVoltage = "400", material = "ALUMINUM", size = "2/0 AWG", parallelSets = 2)
         assertEquals(custom, ToolInputs.decode<VoltageDropInputs>(ToolInputs.encode(custom)))
         // A file with no fields (or only unknown ones) still opens with defaults.
         assertEquals(VoltageDropInputs(), ToolInputs.decode<VoltageDropInputs>(JsonObject(emptyMap())))

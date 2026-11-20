@@ -1,13 +1,13 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop
 
+import com.thedirepack.constructioncalc.core.electrical.Table9Conduit
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.Stranding
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.measure.Dimension
 import com.thedirepack.constructioncalc.core.model.StoredQuantity
-import com.thedirepack.constructioncalc.feature.voltagedrop.domain.Conduit
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.Method
-import com.thedirepack.constructioncalc.feature.voltagedrop.domain.SystemType
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDrop
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropRequest
 import kotlinx.serialization.Serializable
@@ -15,7 +15,7 @@ import kotlinx.serialization.Serializable
 /** What a saved Voltage Drop item stores in `ProjectItem.inputs`. Never rename a field. */
 @Serializable
 data class VoltageDropInputs(
-    val system: SystemType = SystemType.SINGLE_PHASE,
+    val system: AcPhases = AcPhases.SINGLE,
     /** One of [VOLTAGE_PRESETS], or 0 to use [customVoltage]. */
     val voltagePreset: Int = 120,
     val customVoltage: String = "",
@@ -28,7 +28,7 @@ data class VoltageDropInputs(
     val size: String = ConductorSize.AWG_12.label,
     val parallelSets: Int = 1,
     val method: Method = Method.AC_TABLE_9,
-    val conduit: Conduit = Conduit.PVC,
+    val conduit: Table9Conduit = Table9Conduit.PVC,
     val powerFactor: String = "0.85",
     val targetPercent: String = "3",
     val stranding: Stranding = Stranding.STRANDED,

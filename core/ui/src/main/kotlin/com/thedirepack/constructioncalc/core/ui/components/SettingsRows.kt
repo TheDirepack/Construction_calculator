@@ -1,5 +1,11 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import androidx.compose.ui.semantics.Role
+
+import androidx.compose.foundation.selection.toggleable
+
+import androidx.compose.foundation.layout.heightIn
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -44,24 +50,33 @@ fun SettingsGroup(title: String, modifier: Modifier = Modifier, content: @Compos
     }
 }
 
+/** A labelled switch whose whole row toggles it (48 dp tall, read as a switch). The app's one switch row. */
 @Composable
-fun SwitchRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit, subtitle: String? = null) {
+fun ToggleRow(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    detail: String? = null,
+    modifier: Modifier = Modifier,
+) {
     Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable { onCheckedChange(!checked) }
-            .padding(horizontal = 24.dp, vertical = 10.dp),
+        modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
-            if (subtitle != null) {
-                Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (detail != null) {
+                Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, onCheckedChange = null, modifier = Modifier.padding(start = 12.dp))
     }
 }
+
+/** [ToggleRow] laid out for the Settings screen. */
+@Composable
+fun SwitchRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit, subtitle: String? = null) =
+    ToggleRow(title, checked, onCheckedChange, subtitle, Modifier.padding(horizontal = 24.dp, vertical = 4.dp))
 
 /** A setting with a few options, shown as a segmented row under its title. */
 @Composable

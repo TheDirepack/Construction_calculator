@@ -44,13 +44,13 @@ class MotorFullLoadCurrentTest {
     }
 
     @Test fun horsepowerListsFollowTheTable() {
-        val at230 = MotorFullLoadCurrent.horsepowers(MotorPhase.THREE, 230)
+        val at230 = MotorFullLoadCurrent.horsepowers(AcPhases.THREE, 230)
         assertEquals(0.5, at230.first(), 0.0)
         assertEquals(200.0, at230.last(), 0.0)
-        val at460 = MotorFullLoadCurrent.horsepowers(MotorPhase.THREE, 460)
+        val at460 = MotorFullLoadCurrent.horsepowers(AcPhases.THREE, 460)
         assertEquals(500.0, at460.last(), 0.0)
         assertEquals(27, at460.size)
-        assertEquals(12, MotorFullLoadCurrent.horsepowers(MotorPhase.SINGLE, 230).size)
+        assertEquals(12, MotorFullLoadCurrent.horsepowers(AcPhases.SINGLE, 230).size)
         assertTrue(at460.zipWithNext().all { (a, b) -> a < b })
     }
 
@@ -61,7 +61,7 @@ class MotorFullLoadCurrentTest {
     }
 
     @Test fun currentsRiseWithHorsepowerAtEachVoltage() {
-        for (phase in MotorPhase.entries) for (v in MotorFullLoadCurrent.voltages(phase)) {
+        for (phase in AcPhases.entries) for (v in MotorFullLoadCurrent.voltages(phase)) {
             val values = MotorFullLoadCurrent.horsepowers(phase, v).map { MotorFullLoadCurrent.amps(phase, it, v)!! }
             assertTrue("$phase $v V", values.zipWithNext().all { (a, b) -> a < b })
         }

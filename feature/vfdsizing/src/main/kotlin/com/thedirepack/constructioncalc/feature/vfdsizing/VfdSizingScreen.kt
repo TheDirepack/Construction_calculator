@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.vfdsizing
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
@@ -25,7 +26,6 @@ import com.thedirepack.constructioncalc.core.ui.tool.ItemDraft
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.LoadType
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.RatingUnit
-import com.thedirepack.constructioncalc.feature.vfdsizing.domain.SupplyPhase
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizing
 
 private val TERMINATIONS = listOf(60, 75)
@@ -103,7 +103,7 @@ fun VfdSizingScreen(host: ToolHost) {
 
             FormSection("Drive") {
                 SegmentedChoice(
-                    options = SupplyPhase.entries,
+                    options = listOf(AcPhases.THREE, AcPhases.SINGLE),
                     selected = inputs.supplyPhase,
                     onSelect = { p -> vm.update { it.copy(supplyPhase = p) } },
                     label = "Supply into the drive",

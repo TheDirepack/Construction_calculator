@@ -6,7 +6,9 @@ import com.thedirepack.constructioncalc.core.ui.toDecimalOrNull
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.BendRequest
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.BendType
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.BenderTable
-import com.thedirepack.constructioncalc.feature.conduitbending.domain.ConduitType
+import com.thedirepack.constructioncalc.core.electrical.ConduitType
+import com.thedirepack.constructioncalc.core.electrical.TradeSize
+import com.thedirepack.constructioncalc.feature.conduitbending.domain.Bendable
 import kotlinx.serialization.Serializable
 
 /**
@@ -32,13 +34,21 @@ data class ConduitBendingInputs(
     val distance: StoredQuantity? = null,
     /** Space available for an offset or rolling offset (optional check). */
     val space: StoredQuantity? = null,
-    val conduitType: String = ConduitType.EMT.name,
-    val conduitSize: String = "1/2",
+    /** A core [ConduitType.code]: the same conduit types a project run uses. */
+    val conduitType: String = ConduitType.EMT.code,
+    /** A [TradeSize.label], e.g. "3/4". */
+    val conduitSize: String = TradeSize.S_1_2.label,
     val backToBack: Boolean = false,
     val between: StoredQuantity? = null,
     val secondStub: StoredQuantity? = null,
 ) {
     val bendType get() = BendType.fromName(bend)
+
+    /** The conduit, limited to the types a hand bender handles. */
+    val conduit: ConduitType get() = Bendable.typeOrDefault(ConduitType.fromCode(conduitType))
+
+    /** The trade size, limited to the sizes with bender values for [conduit]. */
+    val tradeSize: TradeSize get() = Bendable.sizeOrNearest(conduit, TradeSize.fromLabel(conduitSize))
 
     /** The angle in degrees for the current bend, or null when a custom angle isn't a number. */
     fun angleDegrees(): Double? = when {
@@ -62,8 +72,8 @@ data class ConduitBendingInputs(
         angleDeg = angleDegrees(),
         distance = distance.rational(),
         space = space.rational(),
-        conduit = ConduitType.fromName(conduitType),
-        conduitSize = conduitSize,
+        conduit = conduit,
+        conduitSize = tradeSize,
         backToBack = backToBack,
         between = between.rational(),
         secondStub = secondStub.rational(),

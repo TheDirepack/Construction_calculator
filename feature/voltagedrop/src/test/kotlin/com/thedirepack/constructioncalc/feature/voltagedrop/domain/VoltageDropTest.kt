@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop.domain
 
+import com.thedirepack.constructioncalc.core.electrical.Table9Conduit
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.Stranding
@@ -14,7 +16,7 @@ import kotlin.math.sqrt
 class VoltageDropTest {
     /** 12 AWG solid Cu, 16 A, 100 ft one way, 120 V single-phase, DC (Table 8 uncoated solid = 1.93 Ω/kft). */
     private val dc12 = VoltageDropRequest(
-        system = SystemType.SINGLE_PHASE, volts = 120.0, material = ConductorMaterial.COPPER,
+        system = AcPhases.SINGLE, volts = 120.0, material = ConductorMaterial.COPPER,
         amps = 16.0, lengthFeet = 100.0, size = ConductorSize.AWG_12, method = Method.DC_TABLE_8,
         stranding = Stranding.SOLID,
     )
@@ -24,7 +26,7 @@ class VoltageDropTest {
         val r = VoltageDrop.calculate(dc12.copy(stranding = Stranding.STRANDED))!!
         assertEquals(6.336, r.dropVolts, 1e-9)
         assertEquals(5.28, r.percent, 1e-9)
-        assertEquals(Stranding.STRANDED, VoltageDropRequest(SystemType.SINGLE_PHASE, 120.0, ConductorMaterial.COPPER, 1.0, 1.0, ConductorSize.AWG_12).stranding)
+        assertEquals(Stranding.STRANDED, VoltageDropRequest(AcPhases.SINGLE, 120.0, ConductorMaterial.COPPER, 1.0, 1.0, ConductorSize.AWG_12).stranding)
     }
 
     @Test fun singlePhaseDcByHand() {
@@ -45,7 +47,7 @@ class VoltageDropTest {
     }
 
     @Test fun threePhaseUsesRootThree() {
-        val r = VoltageDrop.calculate(dc12.copy(system = SystemType.THREE_PHASE, volts = 208.0))!!
+        val r = VoltageDrop.calculate(dc12.copy(system = AcPhases.THREE, volts = 208.0))!!
         assertEquals(sqrt(3.0) * 16 * 100 * 1.93 / 1000, r.dropVolts, 1e-9)
         assertEquals(5.3485, r.dropVolts, 1e-3) // 1.73205 · 3.088
     }
@@ -60,9 +62,9 @@ class VoltageDropTest {
     @Test fun table9EffectiveImpedanceByHand() {
         // 4/0 Cu, steel conduit, PF 0.85: Z = 0.063·0.85 + 0.051·sin(acos 0.85) = 0.05355 + 0.026866 = 0.080416
         val request = VoltageDropRequest(
-            system = SystemType.THREE_PHASE, volts = 480.0, material = ConductorMaterial.COPPER,
+            system = AcPhases.THREE, volts = 480.0, material = ConductorMaterial.COPPER,
             amps = 100.0, lengthFeet = 200.0, size = ConductorSize.AWG_4_0,
-            method = Method.AC_TABLE_9, conduit = Conduit.STEEL, powerFactor = 0.85,
+            method = Method.AC_TABLE_9, conduit = Table9Conduit.STEEL, powerFactor = 0.85,
         )
         val r = VoltageDrop.calculate(request)!!
         assertEquals(0.080416, r.ohmsPerKft, 1e-5)
@@ -74,12 +76,12 @@ class VoltageDropTest {
 
     @Test fun table9At85MatchesPrintedEffectiveZ() {
         // 12 AWG Cu PVC: 2.0·0.85 + 0.054·0.5268 = 1.728 (Table 9 prints 1.7); Al PVC: 3.2·0.85 + 0.054·0.5268 = 2.748
-        assertEquals(1.728, VoltageDrop.impedancePerKft(ConductorSize.AWG_12, ConductorMaterial.COPPER, Method.AC_TABLE_9, Conduit.PVC, 0.85)!!, 0.01)
-        assertEquals(2.748, VoltageDrop.impedancePerKft(ConductorSize.AWG_12, ConductorMaterial.ALUMINUM, Method.AC_TABLE_9, Conduit.PVC, 0.85)!!, 0.01)
+        assertEquals(1.728, VoltageDrop.impedancePerKft(ConductorSize.AWG_12, ConductorMaterial.COPPER, Method.AC_TABLE_9, Table9Conduit.PVC, 0.85)!!, 0.01)
+        assertEquals(2.748, VoltageDrop.impedancePerKft(ConductorSize.AWG_12, ConductorMaterial.ALUMINUM, Method.AC_TABLE_9, Table9Conduit.PVC, 0.85)!!, 0.01)
     }
 
     @Test fun unityPowerFactorIgnoresReactance() {
-        val z = VoltageDrop.impedancePerKft(ConductorSize.AWG_1_0, ConductorMaterial.COPPER, Method.AC_TABLE_9, Conduit.ALUMINUM, 1.0)
+        val z = VoltageDrop.impedancePerKft(ConductorSize.AWG_1_0, ConductorMaterial.COPPER, Method.AC_TABLE_9, Table9Conduit.ALUMINUM, 1.0)
         assertEquals(0.13, z!!, 1e-12)
     }
 

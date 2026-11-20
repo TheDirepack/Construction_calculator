@@ -1,9 +1,9 @@
 package com.thedirepack.constructioncalc.feature.conversions
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.model.StoredQuantity
 import com.thedirepack.constructioncalc.feature.conversions.domain.ConversionCategory
-import com.thedirepack.constructioncalc.feature.conversions.domain.Phase
 import com.thedirepack.constructioncalc.feature.conversions.domain.PowerTerm
 import com.thedirepack.constructioncalc.feature.conversions.domain.UnitTable
 import kotlinx.serialization.Serializable
@@ -29,7 +29,7 @@ data class ConversionsInputs(
     val wireFrom: WireFrom = WireFrom.SIZE,
     /** A [com.thedirepack.constructioncalc.core.electrical.ConductorSize] label. */
     val wireSize: String = "12 AWG",
-    val phase: Phase = Phase.SINGLE,
+    val phase: AcPhases = AcPhases.SINGLE,
     val powerFrom: PowerTerm = PowerTerm.AMPS,
     val voltage: String = "240",
     val powerFactor: String = "1",

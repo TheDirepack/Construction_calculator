@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop.domain
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorImpedance
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorResistance
@@ -9,13 +10,6 @@ import com.thedirepack.constructioncalc.core.electrical.Table9Conduit
 import kotlinx.serialization.Serializable
 import kotlin.math.floor
 import kotlin.math.sqrt
-
-/** Circuit type. [factor] multiplies `I·L·Z` in the drop formula: 2 for single-phase, √3 for three-phase. */
-@Serializable
-enum class SystemType(val label: String, val factor: Double) {
-    SINGLE_PHASE("Single-phase", 2.0),
-    THREE_PHASE("Three-phase", sqrt(3.0)),
-}
 
 /** How the conductor impedance per 1000 ft is found. */
 @Serializable
@@ -27,17 +21,9 @@ enum class Method(val label: String) {
     DC_TABLE_8("DC resistance (Table 8 / K-factor)"),
 }
 
-/** Raceway type for [Method.AC_TABLE_9]. */
-@Serializable
-enum class Conduit(val label: String, val table: Table9Conduit) {
-    PVC("PVC", Table9Conduit.PVC),
-    ALUMINUM("Aluminum", Table9Conduit.ALUMINUM),
-    STEEL("Steel", Table9Conduit.STEEL),
-}
-
 /** Everything the calculation needs, in plain units (volts, amps, feet). */
 data class VoltageDropRequest(
-    val system: SystemType,
+    val system: AcPhases,
     val volts: Double,
     val material: ConductorMaterial,
     val amps: Double,
@@ -47,7 +33,7 @@ data class VoltageDropRequest(
     /** Identical conductors in parallel per phase. */
     val parallelSets: Int = 1,
     val method: Method = Method.AC_TABLE_9,
-    val conduit: Conduit = Conduit.PVC,
+    val conduit: Table9Conduit = Table9Conduit.PVC,
     val powerFactor: Double = 0.85,
     val targetPercent: Double = 3.0,
     /** Solid or stranded, for the DC method's Table 8 rows (18–8 AWG differ). */
@@ -103,12 +89,12 @@ object VoltageDrop {
         size: ConductorSize,
         material: ConductorMaterial,
         method: Method,
-        conduit: Conduit,
+        conduit: Table9Conduit,
         powerFactor: Double,
         stranding: Stranding = Stranding.STRANDED,
     ): Double? = when (method) {
         Method.DC_TABLE_8 -> ConductorResistance.ohmsPerKft(size, material, stranding)
-        Method.AC_TABLE_9 -> ConductorImpedance.row(size, material)?.effectiveZ(conduit.table, powerFactor)
+        Method.AC_TABLE_9 -> ConductorImpedance.row(size, material)?.effectiveZ(conduit, powerFactor)
     }
 
     /** Human-readable problems that stop a calculation. Empty when [request] can be calculated. */
@@ -143,12 +129,12 @@ object VoltageDrop {
         )
     }
 
-    fun dropVolts(system: SystemType, amps: Double, lengthFeet: Double, zPerKft: Double, sets: Int): Double =
-        system.factor * amps * lengthFeet * zPerKft / 1000.0 / sets
+    fun dropVolts(system: AcPhases, amps: Double, lengthFeet: Double, zPerKft: Double, sets: Int): Double =
+        system.dropFactor * amps * lengthFeet * zPerKft / 1000.0 / sets
 
     /** One-way feet at which the drop equals [targetPercent] of [volts]. */
-    fun maxLengthFeet(system: SystemType, volts: Double, amps: Double, zPerKft: Double, sets: Int, targetPercent: Double): Double =
-        targetPercent / 100.0 * volts * 1000.0 * sets / (system.factor * amps * zPerKft)
+    fun maxLengthFeet(system: AcPhases, volts: Double, amps: Double, zPerKft: Double, sets: Int, targetPercent: Double): Double =
+        targetPercent / 100.0 * volts * 1000.0 * sets / (system.dropFactor * amps * zPerKft)
 
     /**
      * The smallest size in the method's table that meets the target with every other input

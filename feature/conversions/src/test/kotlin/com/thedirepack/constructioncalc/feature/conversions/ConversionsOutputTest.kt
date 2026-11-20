@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.conversions
 
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
@@ -8,7 +9,6 @@ import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.model.stored
 import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import com.thedirepack.constructioncalc.feature.conversions.domain.ConversionCategory
-import com.thedirepack.constructioncalc.feature.conversions.domain.Phase
 import com.thedirepack.constructioncalc.feature.conversions.domain.PowerTerm
 import com.thedirepack.constructioncalc.feature.conversions.domain.UnitTable
 import kotlinx.serialization.json.JsonObject
@@ -27,7 +27,7 @@ class ConversionsOutputTest {
 
     @Test fun savedInputsRoundTripAndDefaultsDecode() {
         val custom = ConversionsInputs(
-            category = ConversionCategory.CURRENT_POWER, phase = Phase.THREE, powerFrom = PowerTerm.KW,
+            category = ConversionCategory.CURRENT_POWER, phase = AcPhases.THREE, powerFrom = PowerTerm.KW,
             value = "75", voltage = "480", powerFactor = "0.9", length = Quantity.inches(Rational.of(30)).stored(),
         )
         assertEquals(custom, ToolInputs.decode<ConversionsInputs>(ToolInputs.encode(custom)))
@@ -140,7 +140,7 @@ class ConversionsOutputTest {
     @Test fun currentPowerThreePhase() {
         val o = out(
             ConversionsInputs(
-                category = ConversionCategory.CURRENT_POWER, phase = Phase.THREE, powerFrom = PowerTerm.AMPS,
+                category = ConversionCategory.CURRENT_POWER, phase = AcPhases.THREE, powerFrom = PowerTerm.AMPS,
                 value = "100", voltage = "480", powerFactor = "0.9",
             ),
         )
@@ -155,7 +155,7 @@ class ConversionsOutputTest {
     }
 
     @Test fun currentPowerReverseAndErrors() {
-        val base = ConversionsInputs(category = ConversionCategory.CURRENT_POWER, phase = Phase.THREE, voltage = "480", powerFactor = "0.9")
+        val base = ConversionsInputs(category = ConversionCategory.CURRENT_POWER, phase = AcPhases.THREE, voltage = "480", powerFactor = "0.9")
         val reverse = out(base.copy(powerFrom = PowerTerm.KW, value = "74.8246"))
         assertEquals("100 A", reverse.results.first { it.key == "amps" }.text)
         val bad = out(base.copy(value = "100", powerFactor = "1.5"))

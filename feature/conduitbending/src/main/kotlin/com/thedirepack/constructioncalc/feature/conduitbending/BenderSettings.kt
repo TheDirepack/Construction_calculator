@@ -22,18 +22,19 @@ import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.BenderDefaults
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.BenderSpec
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.BenderTable
-import com.thedirepack.constructioncalc.feature.conduitbending.domain.ConduitType
-import com.thedirepack.constructioncalc.feature.conduitbending.domain.sizeLabel
+import com.thedirepack.constructioncalc.core.electrical.ConduitType
+import com.thedirepack.constructioncalc.core.electrical.TradeSize
+import com.thedirepack.constructioncalc.feature.conduitbending.domain.Bendable
 
 /** Reads and writes the user's bender values in this tool's settings store. */
 internal object BenderStore {
-    private fun takeUpKey(type: ConduitType, size: String) = "takeup:${type.name}:$size"
-    private fun gainKey(type: ConduitType, size: String) = "gain:${type.name}:$size"
+    private fun takeUpKey(type: ConduitType, size: TradeSize) = "takeup:${type.code}:${size.label}"
+    private fun gainKey(type: ConduitType, size: TradeSize) = "gain:${type.code}:${size.label}"
 
     /** The saved value, or the typical default when the user hasn't changed it. */
     fun load(store: ModuleSettings): BenderTable {
         val specs = buildMap {
-            for (type in ConduitType.entries) for (size in type.sizes) {
+            for (type in Bendable.types) for (size in Bendable.sizes(type)) {
                 val default = BenderDefaults.spec(type, size) ?: continue
                 put(
                     BenderTable.key(type, size),
@@ -47,14 +48,14 @@ internal object BenderStore {
         return BenderTable(specs)
     }
 
-    fun setTakeUp(store: ModuleSettings, type: ConduitType, size: String, value: Rational?) =
+    fun setTakeUp(store: ModuleSettings, type: ConduitType, size: TradeSize, value: Rational?) =
         write(store, takeUpKey(type, size), value, BenderDefaults.spec(type, size)?.takeUp)
 
-    fun setGain(store: ModuleSettings, type: ConduitType, size: String, value: Rational?) =
+    fun setGain(store: ModuleSettings, type: ConduitType, size: TradeSize, value: Rational?) =
         write(store, gainKey(type, size), value, BenderDefaults.spec(type, size)?.gain)
 
     fun reset(store: ModuleSettings) {
-        for (type in ConduitType.entries) for (size in type.sizes) {
+        for (type in Bendable.types) for (size in Bendable.sizes(type)) {
             setTakeUp(store, type, size, null)
             setGain(store, type, size, null)
         }
@@ -85,18 +86,18 @@ internal fun BenderSettingsPage() {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
     )
-    for (type in ConduitType.entries) {
-        SettingsGroup(type.label) {
+    for (type in Bendable.types) {
+        SettingsGroup(type.displayName) {
             Column(Modifier.padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (size in type.sizes) {
+                for (size in Bendable.sizes(type)) {
                     val spec = table.spec(type, size) ?: continue
                     MeasureField(
-                        label = "${sizeLabel(size)} ${type.label} take-up",
+                        label = "${size.display} ${type.displayName} take-up",
                         value = Quantity.inches(spec.takeUp),
                         onValueChange = { BenderStore.setTakeUp(store, type, size, it?.value) },
                     )
                     MeasureField(
-                        label = "${sizeLabel(size)} ${type.label} gain",
+                        label = "${size.display} ${type.displayName} gain",
                         value = Quantity.inches(spec.gain),
                         onValueChange = { BenderStore.setGain(store, type, size, it?.value) },
                     )
