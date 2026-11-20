@@ -30,11 +30,11 @@ inventory of features, never as a source of code, art or text.
 | Conduit Bending | **done** (v1) | Conduit (`com.conduit`) |
 | Conduit Fill | in progress | Conduit (`com.conduit`) |
 | Voltage Drop | **done** (v1, tables checked vs NEC 2023) | Southwire Voltage Drop (`com.southwire.voltageDrop`) |
-| Wire Pull Planner | planned | Southwire SIMpull (`com.simpull`) |
+| Wire Pull Planner | planned in detail: [plans/wire-pull-planner.md](plans/wire-pull-planner.md) | Southwire SIMpull (`com.simpull`) |
 | Partial Reel Length | **done** (v1) | Southwire Partial Reel (`com.southwire.partialReelCalculator`) |
 | Unit Conversions | in progress | Southwire Conversion (`com.southwire.conversion`) |
 | VFD Sizing | **done** (v1, tables checked vs NEC 2023) | Southwire VFD Sizing (`com.southwire.VFDSizingCalculator`) |
-| Well & Pump | planned | Well Drilling (`com.welldrilling`) |
+| Well & Pump | last (after everything else) | Well Drilling (`com.welldrilling`) |
 | Panels & Circuits | in progress (model + design engine done) | Original: panel schedules linked to runs, wire sizing |
 | Projects & Runs | **done** (core); linking flows next | Original to this app: links all of the above |
 
