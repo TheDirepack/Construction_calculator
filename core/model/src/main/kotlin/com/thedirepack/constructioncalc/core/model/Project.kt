@@ -69,7 +69,14 @@ data class Project(
     fun updateRun(runId: String, now: Long, change: (Run) -> Run) =
         copy(runs = runs.map { if (it.id == runId) change(it) else it }, updatedAt = now)
 
-    fun removeRun(runId: String, now: Long) = copy(runs = runs.filterNot { it.id == runId }, updatedAt = now)
+    /** Removes a run and unassigns it from every circuit that passed through it. */
+    fun removeRun(runId: String, now: Long) = copy(
+        runs = runs.filterNot { it.id == runId },
+        panels = panels.map { p ->
+            p.copy(circuits = p.circuits.map { c -> if (runId in c.runIds) c.copy(runIds = c.runIds - runId) else c })
+        },
+        updatedAt = now,
+    )
 
     fun moveRun(from: Int, to: Int, now: Long) = copy(runs = runs.moved(from, to), updatedAt = now)
 

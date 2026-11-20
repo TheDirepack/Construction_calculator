@@ -52,11 +52,14 @@ import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import com.thedirepack.constructioncalc.core.model.ProjectItem
 import com.thedirepack.constructioncalc.core.model.ProjectText
 import com.thedirepack.constructioncalc.core.model.Run
+import com.thedirepack.constructioncalc.core.model.design.ProjectAnalysis
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.components.ConfirmDialog
+import com.thedirepack.constructioncalc.core.ui.components.RacewayEditorSheet
 import com.thedirepack.constructioncalc.core.ui.components.ResultCard
 import com.thedirepack.constructioncalc.core.ui.components.TextInputDialog
 import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
+import com.thedirepack.constructioncalc.core.ui.components.racewaySummary
 import com.thedirepack.constructioncalc.core.ui.fractionText
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
@@ -74,6 +77,7 @@ private sealed interface Prompt {
     data object EditNote : Prompt
     data object AddRun : Prompt
     data class RenameRun(val run: Run) : Prompt
+    data class EditConduit(val run: Run) : Prompt
     data object DeleteProject : Prompt
     data class DeleteRun(val run: Run) : Prompt
 }
@@ -90,6 +94,10 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
     var openItem by remember { mutableStateOf<String?>(null) }
     val isActive = settings.activeProjectId == project.id
     val readOnly = project.archived
+    // Conduit runs show their circuit count and (when the size is Auto) the size the design picked.
+    val runDesigns = remember(project) {
+        if (project.runs.any { it.raceway != null }) ProjectAnalysis.analyze(project).runs else emptyMap()
+    }
 
     val toText = { ProjectText.render(project, tools::titleOf, header = settings.company.headerLines()) }
     val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ProjectCodec.MIME_TYPE)) { uri ->
@@ -204,6 +212,11 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
                         run = run,
                         readOnly = readOnly,
                         isTarget = isActive && settings.activeRunId == run.id,
+                        conduitSummary = run.raceway?.let { raceway ->
+                            val design = runDesigns[run.id]
+                            racewaySummary(raceway, settings, circuits = design?.circuits?.size, autoSize = design?.conduit?.tradeSize)
+                        },
+                        onEditConduit = { prompt = Prompt.EditConduit(run) },
                         onRename = { prompt = Prompt.RenameRun(run) },
                         onDelete = { prompt = Prompt.DeleteRun(run) },
                         onMakeTarget = { services.settings.setActiveTarget(project.id, run.id) },
@@ -267,6 +280,15 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
             services.projects.edit(project.id) { pr, now -> pr.updateRun(p.run.id, now) { it.copy(name = name) } }
             prompt = null
         }, { prompt = null })
+        is Prompt.EditConduit -> RacewayEditorSheet(
+            title = "Conduit for ${p.run.name}",
+            initial = p.run.raceway,
+            onSave = { raceway ->
+                services.projects.edit(project.id) { pr, now -> pr.updateRun(p.run.id, now) { it.copy(raceway = raceway) } }
+                prompt = null
+            },
+            onDismiss = { prompt = null },
+        )
         Prompt.DeleteProject -> ConfirmDialog(
             "Delete ${project.name}?",
             "This removes the project and everything saved in it from this device. Shared copies aren't affected.",
@@ -297,6 +319,8 @@ private fun RunHeader(
     run: Run,
     readOnly: Boolean,
     isTarget: Boolean,
+    conduitSummary: String?,
+    onEditConduit: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onMakeTarget: () -> Unit,
@@ -309,6 +333,9 @@ private fun RunHeader(
     ) {
         Column(Modifier.weight(1f)) {
             Text(run.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            if (conduitSummary != null) {
+                Text(fractionText(conduitSummary), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             if (isTarget) {
                 Text("New saves go here", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -321,6 +348,10 @@ private fun RunHeader(
                 if (!isTarget && !readOnly) DropdownMenuItem(text = { Text("Save new results here") }, onClick = { menu = false; onMakeTarget() })
                 DropdownMenuItem(text = { Text("Share run as text") }, onClick = { menu = false; onShare() })
                 if (!readOnly) {
+                    DropdownMenuItem(
+                        text = { Text(if (conduitSummary == null) "Add conduit…" else "Edit conduit…") },
+                        onClick = { menu = false; onEditConduit() },
+                    )
                     DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename() })
                     DropdownMenuItem(text = { Text("Delete run") }, onClick = { menu = false; onDelete() })
                 }

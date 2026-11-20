@@ -84,4 +84,12 @@ class ProjectAnalysisTest {
         assertEquals(35.0, p.phaseAmps.getValue(Phase.A), 1e-9)
         assertEquals(10200.0, p.totalVa, 1e-9)
     }
+
+    @Test fun removingARunUnassignsItFromCircuits() {
+        val run = Run(name = "R")
+        val c = Circuit(slot = 1, runIds = listOf(run.id))
+        val p = Project(name = "P", createdAt = 0, runs = listOf(run), panels = listOf(Panel(name = "LP", circuits = listOf(c))))
+        val after = p.removeRun(run.id, 1)
+        assertTrue(after.panels.single().circuits.single().runIds.isEmpty())
+    }
 }
