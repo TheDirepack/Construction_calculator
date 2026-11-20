@@ -27,7 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.thedirepack.constructioncalc.core.ui.tool.toolViewModel
 import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.ResultValue
@@ -59,9 +59,7 @@ import com.thedirepack.constructioncalc.feature.conduitbending.domain.Severity
 
 @Composable
 fun ConduitBendingScreen(host: ToolHost) {
-    val opened = host.openedItem?.takeIf { it.toolId == ConduitBendingTool.ID }
-    val vm: ConduitBendingViewModel = viewModel(key = "conduit-bending:${opened?.id}")
-    LaunchedEffect(opened) { opened?.let(vm::restore) }
+    val vm: ConduitBendingViewModel = toolViewModel(ConduitBendingTool.ID, host)
 
     val settings = rememberAppSettings()
     val store = LocalAppServices.current.settings.module(ConduitBendingTool.ID)

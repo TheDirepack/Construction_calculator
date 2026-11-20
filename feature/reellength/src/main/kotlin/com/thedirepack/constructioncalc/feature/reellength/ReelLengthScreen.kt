@@ -10,7 +10,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.thedirepack.constructioncalc.core.ui.tool.toolViewModel
 import com.thedirepack.constructioncalc.core.model.ToolInputs
 import com.thedirepack.constructioncalc.core.model.stored
 import com.thedirepack.constructioncalc.core.ui.components.FormSection
@@ -26,11 +26,7 @@ import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 
 @Composable
 fun ReelLengthScreen(host: ToolHost) {
-    val opened = host.openedItem
-    val vm: ReelLengthViewModel = viewModel(key = "reel-length:${opened?.id}")
-    LaunchedEffect(opened) {
-        opened?.takeIf { it.toolId == ReelLengthTool.ID }?.let(vm::restore)
-    }
+    val vm: ReelLengthViewModel = toolViewModel(ReelLengthTool.ID, host)
     val inputs = vm.inputs
     val settings = rememberAppSettings()
     val output = remember(inputs, settings) { reelLengthOutput(inputs, settings) }

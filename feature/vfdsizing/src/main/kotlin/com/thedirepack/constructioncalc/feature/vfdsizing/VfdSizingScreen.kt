@@ -11,7 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.thedirepack.constructioncalc.core.ui.tool.toolViewModel
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.MotorFullLoadCurrent
 import com.thedirepack.constructioncalc.core.model.ToolInputs
@@ -32,11 +32,7 @@ private val TERMINATIONS = listOf(60, 75)
 
 @Composable
 fun VfdSizingScreen(host: ToolHost) {
-    val opened = host.openedItem
-    val vm: VfdSizingViewModel = viewModel(key = "vfd-sizing:${opened?.id}")
-    LaunchedEffect(opened) {
-        opened?.takeIf { it.toolId == VfdSizingTool.ID }?.let(vm::restore)
-    }
+    val vm: VfdSizingViewModel = toolViewModel(VfdSizingTool.ID, host)
     val inputs = vm.inputs
     val output = remember(inputs) { vfdSizingOutput(inputs) }
     val results = output.results

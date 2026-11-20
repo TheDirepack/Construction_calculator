@@ -34,7 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.thedirepack.constructioncalc.core.ui.tool.toolViewModel
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.ConduitSize
 import com.thedirepack.constructioncalc.core.electrical.ConduitTable
@@ -58,9 +58,7 @@ import java.util.Locale
 
 @Composable
 fun ConduitFillScreen(host: ToolHost) {
-    val opened = host.openedItem?.takeIf { it.toolId == ConduitFillTool.ID }
-    val vm: ConduitFillViewModel = viewModel(key = "${ConduitFillTool.ID}:${opened?.id}")
-    LaunchedEffect(opened) { opened?.let(vm::restore) }
+    val vm: ConduitFillViewModel = toolViewModel(ConduitFillTool.ID, host)
 
     val inputs = vm.inputs
     val parsed = remember(inputs) { inputs.toRequest() }

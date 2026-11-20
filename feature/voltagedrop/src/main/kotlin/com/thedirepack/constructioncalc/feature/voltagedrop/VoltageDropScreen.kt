@@ -14,7 +14,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.thedirepack.constructioncalc.core.ui.tool.toolViewModel
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.model.ToolInputs
 import com.thedirepack.constructioncalc.core.model.ValueKind
@@ -36,11 +36,7 @@ private const val CUSTOM_VOLTAGE = 0
 
 @Composable
 fun VoltageDropScreen(host: ToolHost) {
-    val opened = host.openedItem
-    val vm: VoltageDropViewModel = viewModel(key = "voltage-drop:${opened?.id}")
-    LaunchedEffect(opened) {
-        opened?.takeIf { it.toolId == VoltageDropTool.ID }?.let(vm::restore)
-    }
+    val vm: VoltageDropViewModel = toolViewModel(VoltageDropTool.ID, host)
     val inputs = vm.inputs
     val settings = rememberAppSettings()
     val output = remember(inputs, settings) { voltageDropOutput(inputs, settings) }

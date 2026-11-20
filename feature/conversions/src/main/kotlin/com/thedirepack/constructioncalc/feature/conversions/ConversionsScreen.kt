@@ -11,7 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.thedirepack.constructioncalc.core.ui.tool.toolViewModel
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.model.ResultValue
@@ -37,11 +37,7 @@ private val SQ_IN_PER_MM2 = Rational.of(64516, 100)
 
 @Composable
 fun ConversionsScreen(host: ToolHost) {
-    val opened = host.openedItem
-    val vm: ConversionsViewModel = viewModel(key = "conversions:${opened?.id}")
-    LaunchedEffect(opened) {
-        opened?.takeIf { it.toolId == ConversionsTool.ID }?.let(vm::restore)
-    }
+    val vm: ConversionsViewModel = toolViewModel(ConversionsTool.ID, host)
     val inputs = vm.inputs
     val settings = rememberAppSettings()
     val output = remember(inputs, settings) { conversionsOutput(inputs, settings) }
