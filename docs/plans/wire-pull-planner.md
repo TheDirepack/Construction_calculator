@@ -62,9 +62,48 @@ data class Run(..., val raceway: Raceway?, val path: List<PathSegment> = emptyLi
 
 ## Engineering (core:electrical, pure, unit-tested)
 
-Sources: IEEE Std 1185 (cable installation), manufacturers' published pulling guides (e.g.
-Southwire, Polywater). Every formula and default is cited in KDoc. Values that are manufacturer
-guidance, not code, are labelled that way in the UI.
+Use IEEE Std 1185 and the engineering references below to verify the formulas before
+implementation. Cite formulas and defaults in KDoc. Label manufacturer limits with their
+source and applicability, and keep NEC raceway rules identified by edition and section.
+
+### Southwire references
+
+- **Maximum Sidewall Pressure for Electrical Conductors (2021), p. 1.** Verify all three
+  pressure equations, including use of bend exit tension and radius in feet. The flyer lists
+  500 lb/ft for its 14, 12 and 10 AWG single-conductor building wire and 1,000 lb/ft for its
+  8 AWG and larger building wire. It also lists limits for specified industrial and utility cable
+  families. [Sidewall pressure flyer](https://www.southwire.com/medias/SW-1003229-Maximum-Sidewall-Pressure-Flyer-LO.pdf?context=bWFzdGVyfHJvb3R8MjQwODY2fGFwcGxpY2F0aW9uL3BkZnxoMjkvaDg5Lzk2NzEwNjY4Nzc5ODIvU1ctMTAwMzIyOS1NYXhpbXVtLVNpZGV3YWxsLVByZXNzdXJlLUZseWVyLUxPLnBkZnw3OTk3MGEzMjgwODc0MmI5NWNiODY1MjZkODViZDE1Y2Q1MWI3N2U3MjNhNDU4MGYxOTQ3YTVmYmUyMjU4ZTYy)
+  [Supplied PDF](../research/southwire/SW-1003229-Maximum-Sidewall-Pressure-Flyer-LO.pdf)
+- **Maximum Pulling Tension for Electrical Conductors (2024), pp. 1–3.** Use the conductor
+  stress calculation and the copper and aluminum tables for worked checks. The flyer uses a
+  0.8 multiplier above three load-bearing conductors and covers cables rated up to 46 kV.
+  Take device ratings from their manufacturers.
+  [Pulling tension flyer](https://www.southwire.com/medias/2405-Maximum-Pulling-Tension-WEB.pdf?context=bWFzdGVyfHBkZnN8MTA2NDg2MnxhcHBsaWNhdGlvbi9wZGZ8aDhiL2hiNS85MjI1NjYzNTEyNjA2LzI0MDVfTWF4aW11bV9QdWxsaW5nX1RlbnNpb25fV0VCLnBkZnw0NmU3ZDRhNmY4NDliMmRhMzc2MmI4MDNiMzYxYzM1ZTI2MzhkYzUyOTRjOWI5NjNmZDhlNTU3NGUwN2ZlMmY4)
+  [Supplied PDF](../research/southwire/2405-Maximum-Pulling-Tension-WEB.pdf)
+- **SIMpull cable pull workbook.** The supplied file `SIMpull-Cable-Pull-Calculator-9.18.2020.xls`
+  has separate `Calc for 600V` and `Calc for Power Cable` worksheets. Use them as examples for
+  grouping conductors, setting the incoming tension and friction, starting another pull section,
+  and reviewing tension and pressure by segment. The 600 V sheet also shows how fill and reel data
+  can accompany a pull. Its dated tables and product assumptions need independent verification.
+  [Supplied workbook](../research/southwire/SIMpull-Cable-Pull-Calculator-9.18.2020.xls)
+- **Current web calculator.** Review the workflow for setting cable OD and weight, selecting which
+  cables carry tension, reversing pull direction, and reporting straight and bend lengths. Use
+  example outputs as comparisons only when the inputs, units and assumptions match.
+  [Re³ Cable Pull Calculator](https://www.southwire-cablepull.com/)
+
+### Workbook implementation map
+
+| Worksheets | Planned use |
+|---|---|
+| `Calc for 600V`, `Calc for Power Cable` | Identify the inputs, their units and the results that belong in a saved pull. |
+| `Tension Calc`, `Power Cable Tension Calc` | Trace how incoming tension carries through each straight and bend. Check geometry branches, inch-to-foot conversion, bend exit tension and sidewall pressure against published equations. |
+| `Reverse` and the two comparison sheets | Develop reference cases for reverse direction, pull-section resets and configuration changes. Record any differences between the workbook's two calculation paths before choosing expected values. |
+| `Conduit`, `Conductor`, `Reels` | Identify the required lookup fields. Take code data from the app's referenced NEC tables and equipment or cable ratings from the applicable product data. |
+
+The workbook contains the formula branches and data flow needed to start the Kotlin engine.
+Build independently derived tests for individual equations first, then compare segment-by-segment
+results with the workbook using the same inputs and assumptions. Review older product defaults
+and unsupported cable configurations before adding presets.
 
 | Item | Method |
 |---|---|
@@ -72,9 +111,9 @@ guidance, not code, are labelled that way in the UI.
 | **Weight correction factor W** | 1 cable: 1.<br>3 cables: triangular W = 1 / √(1 − (d/(D−d))²), cradled W = 1 + (4/3)(d/(D−d))².<br>4 or more cables: diamond/complex, 1 + 2(d/(D−d))².<br>Configuration is picked from the jam ratio D/d. |
 | **Straight section** | Horizontal: T₂ = T₁ + W·μ·w·L.<br>Inclined: T₂ = T₁ + w·L(sin θ ± W·μ·cos θ). |
 | **Bend** | Horizontal, exact: T₂ = T₁·cosh(Wμθ) + √(T₁² + (wR)²)·sinh(Wμθ).<br>Vertical: concave-up and concave-down forms.<br>Simplified e^(Wμθ) shown for reference. |
-| **Sidewall bearing pressure** | 1 cable: T/R.<br>3 triangular: W·T/(2R).<br>3 cradled: (3W − 2)·T/(3R).<br>R in feet → lb/ft. |
-| **Maximum tension** | Pulling eye: 0.008 lb/cmil copper, 0.006 lb/cmil aluminum, per conductor, × conductors (derated if more than 3).<br>Basket grip: lesser of that and 1000 lb.<br>User override. |
-| **Maximum SWBP** | Default by cable type (e.g. 1000 lb/ft building wire), user override, flagged as manufacturer guidance. |
+| **Sidewall bearing pressure** | One cable, including a multiconductor cable with a common jacket: T/R.<br>3 triangular: W·T/(2R).<br>3 cradled: (3W − 2)·T/(3R).<br>T is tension at the bend exit. R in feet gives lb/ft. |
+| **Maximum tension** | For the applicable Southwire pulling-eye calculation, use 0.008 lb/cmil for copper or 0.006 lb/cmil for the aluminum constructions covered by the flyer. For equal-size conductors carrying the pull, multiply by the number of conductors and apply 0.8 for counts above three. Compare against separately supplied ratings for the grip or eye, rope, swivel, puller and other limiting equipment. Show the lowest known rating and flag incomplete limits. |
+| **Maximum SWBP** | Use the applicable product rating or an explicit user value. A manufacturer preset needs a cable family, size range, unit and source. Keep pressure limits in lb/ft separate from tension limits in lb. |
 | **Jam ratio** | 1.05·D/d between 2.8 and 3.2 → jam warning; the 1.05 accounts for conduit ovality at bends. |
 | **Clearance** | Cradled-configuration clearance formula. Recommend ≥ 0.5 in (0.25 in minimum). |
 | **Coefficient of friction μ** | Presets by conduit (EMT, RMC, PVC…) and lubricant (none, wax, polymer), default 0.35 lubricated. User override. |
@@ -82,7 +121,7 @@ guidance, not code, are labelled that way in the UI.
 | **Bend radius default** | Chapter 9 Table 2 minimum radius (one-shot and full-shoe benders, and other bends), by trade size, as the default when a bend has no radius. Verify against the printed table. |
 | **Fill** | Reuses the shared fill check (the same core implementation as Conduit Fill). |
 
-**Both directions.** Each pull section is computed both ways. The tool recommends the lower-tension direction, or the one that keeps every limit, and notes when the end with the tight bend should be the pulling end.
+**Both directions.** Recalculate each section with its geometry and initial tension for each direction. Compare peak tension and peak SWBP against their own limits and identify the governing segment.
 
 ## Tool (feature/pullplanner)
 
@@ -95,7 +134,9 @@ guidance, not code, are labelled that way in the UI.
   - Reorder and delete.
   - A simple, static Canvas diagram of the route with no animation.
 - **Cables:** prefilled from the circuits in the run (ProjectAnalysis gives sizes and insulation), editable. You can also add cables without circuits: count × size × insulation, weight override.
-- **Settings:** μ preset, pulling device (eye or basket grip), max tension and SWBP overrides, slack per end. Tool defaults go on the tool's page in the one Settings screen; per-run values are saved with the run.
+- **Settings:** μ preset, incoming tension per pull section, pulling device and equipment ratings,
+  cable pressure rating, and slack per end. Save per-run values with the run and show any
+  manufacturer presets and overrides in the pull report.
 - **Results:**
   - tension at each point, both directions
   - peak SWBP per bend
@@ -124,6 +165,15 @@ guidance, not code, are labelled that way in the UI.
 ## Tests
 
 - **Formula unit tests** against worked examples from IEEE 1185 and manufacturer guides: straight, inclined, horizontal bend exact versus exponential, SWBP for 1 and 3 cables, W for the triangular and cradled configurations.
+- **Southwire reference checks:** the copper table on p. 2 of the tension flyer rounds 12 AWG
+  to 157 lb for three conductors and 167 lb for four. For the pressure formulas, use an exit
+  tension of 600 lb and a 2 ft radius. Expect 300 lb/ft for one cable, 195 lb/ft for three
+  triangular cables and 190 lb/ft for three cradled cables with W = 1.3 in both three-cable
+  cases. Check the 10-to-8 AWG building-wire preset boundary and cases where the device rating,
+  cable tension rating or bend pressure rating limits the pull.
+- **Workflow fixture:** build an original multi-segment example with a pull point, a nonzero
+  starting tension, an inclined straight, and bends of different radii. Compare both directions
+  with matched settings in the reference calculator, and preserve the assumptions with the fixture.
 - **Path math:** arc lengths, derived run length, splitting at pull points, degrees per section.
 - **Mapping Bending items to path bends.**
 - **Integration:** a project with circuits in a run → pull analysis uses their conductors; reverse direction gives a different tension; over-limit cases produce notices.

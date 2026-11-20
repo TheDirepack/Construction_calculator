@@ -27,10 +27,10 @@ inventory of features, never as a source of code, art or text.
 | Tool | Status | Reference app(s) |
 | --- | --- | --- |
 | Foot-Inch Calculator | **done** (on shared system) | ArchCalc (`evanwinograd.archcalc`) |
-| Conduit Bending | **done** (v1) | Conduit (`com.conduit`) |
-| Conduit Fill | in progress | Conduit (`com.conduit`) |
+| Conduit Bending | **done** (v1) | [Bending tool notes](tools/conduit-bending.md) |
+| Conduit Fill | in progress | [Southwire Conduit Fill](https://www.southwire.com/calculator-conduit) |
 | Voltage Drop | **done** (v1, tables checked vs NEC 2023) | Southwire Voltage Drop (`com.southwire.voltageDrop`) |
-| Wire Pull Planner | planned in detail: [plans/wire-pull-planner.md](plans/wire-pull-planner.md) | Southwire SIMpull (`com.simpull`) |
+| Wire Pull Planner | planned in detail: [plans/wire-pull-planner.md](plans/wire-pull-planner.md) | [Southwire Cable Pull](https://www.southwire-cablepull.com/) and SIMpull workbook |
 | Partial Reel Length | **done** (v1) | Southwire Partial Reel (`com.southwire.partialReelCalculator`) |
 | Unit Conversions | in progress | Southwire Conversion (`com.southwire.conversion`) |
 | VFD Sizing | **done** (v1, tables checked vs NEC 2023) | Southwire VFD Sizing (`com.southwire.VFDSizingCalculator`) |
@@ -77,6 +77,10 @@ Bending math for EMT, IMC and rigid conduit with hand benders and benders such a
 - Diagrams of each bend showing where every mark goes, measured from the end of the stick
 - Uses the Foot-Inch engine (`core/measure`) for all lengths and fractions
 
+Next: plan several bend groups on one conduit piece and several pieces in a project run. Show
+each piece's marks and developed length, then pass the route geometry and pull points to the
+[Wire Pull Planner](plans/wire-pull-planner.md).
+
 ## 3. Conduit Fill
 
 - NEC Chapter 9 Table 1 fill limits (53% for one wire, 31% for two, 40% for more)
@@ -84,6 +88,9 @@ Bending math for EMT, IMC and rigid conduit with hand benders and benders such a
 - Wire types (THHN/THWN-2, XHHW-2, RHH, USE…) and their areas (Table 5), mixed sizes, bare grounds (Table 8)
 - Output: % fill, the smallest conduit that works, and how many wires of one size fit (Annex C style)
 - Optional: jam ratio and nipple fill (60% for 24" or less)
+- Next: accept a measured or catalog cable outside diameter, save it as a named cable, and reuse
+  that cable in Wire Pull Planner and Reel Length. Keep raceway sizes and fill limits sourced
+  from the app's NEC tables. [Southwire Conduit Fill research](research/conduit.md)
 
 ## 4. Voltage Drop
 
@@ -96,7 +103,8 @@ Bending math for EMT, IMC and rigid conduit with hand benders and benders such a
 ## 5. Wire Pull Planner
 
 - Build a pull path from straight runs and bends (angle, radius) with elevation changes
-- Pulling tension for each segment (straight run: T = W·L·μ; bend: T_out = T_in·e^(μθ)) and sidewall bearing pressure in each bend
+- Pulling tension for each segment and sidewall bearing pressure in each bend, with the governing
+  limit and its source shown in the results
 - Inputs: conductors (size, count, weight per foot), conduit size and type, coefficient of friction (lubricant), and the cable's max tension
 - Pull from the other end to compare; set the tugger capacity; warnings when a limit is exceeded
 - Jam ratio and clearance checks
@@ -113,6 +121,18 @@ Bending math for EMT, IMC and rigid conduit with hand benders and benders such a
 - Length, area, volume, weight, temperature, pressure, power (HP ↔ kW), energy, speed
 - Electrical: kcmil ↔ mm², AWG ↔ mm² ↔ circular mils, amps ↔ kW/kVA (single- or three-phase, PF), Ω/kft ↔ Ω/km
 - Uses the same exact-fraction engine where it makes sense
+
+Further examples from the [Southwire calculator catalog](https://www.southwire.com/calculators):
+
+- **Building wire selection.** A standalone sizing workflow that can also start from a panel
+  circuit, using the load, wiring method and installation conditions already in the project.
+  [Building Wire Selector](https://www.southwire.com/calculators/re3%E2%84%A2-building-wire-selector-calculator)
+- **Copper and aluminum comparison.** Compare candidate conductors for the same circuit and
+  show the effects on ampacity, voltage drop and conduit fill.
+  [Conductor Conversion Calculator](https://www.southwire.com/calculators/re3-conversion-calculator)
+- **DC power conversion.** Extend the current and power calculator's single- and three-phase
+  AC modes with a DC mode for voltage, current and power.
+  [Power Conversion Calculator](https://www.southwire.com/calculators/power-conversion-calculator)
 
 ## 8. VFD Sizing
 

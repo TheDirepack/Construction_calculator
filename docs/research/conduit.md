@@ -13,6 +13,9 @@ Feature-inventory notes only; paraphrased, nothing copied.
 - https://play.google.com/store/apps/details?id=com.conduit : fetched but truncated; only the title was readable.
 - https://www.southwire.com/apps : vendor page (short description).
 - https://apps.apple.com/us/app/id509204523 : iOS listing of the same product (description, history, review themes). Android parity is **not verified**.
+- [Southwire Conduit Fill web calculator](https://www.southwire.com/calculator-conduit) shows
+  raceway type and trade size, conductor groups, measured diameter entry, fill, and a jam-ratio
+  explanation. The page links to a dedicated [Cable Pull Calculator](https://www.southwire-cablepull.com/).
 
 ## Feature inventory
 - Pick conduit type and trade size, enter the conductors, get fill percent against NEC limits.
@@ -39,3 +42,15 @@ Ours: `feature/conduitfill` + `docs/tools/conduit-fill.md`; `feature/conduitbend
 - "How many fit" and minimum size output, 60 % nipple rule, derating, all bending math, saved projects.
 
 **Suggested follow-up**: custom conductor OD (also helps multiconductor cables, a stated limit of ours).
+
+## Planned workflow
+
+- Let a conductor group use either a table entry or a named cable with its measured or catalog
+  outside diameter. Count a jacketed multiconductor cable as one item for fill and apply the
+  relevant NEC area rule for its shape.
+- Keep the conduit type and trade size tied to the app's NEC Chapter 9 Table 4 data. Show the
+  entered cable area, the applicable fill limit, unused area, and the smallest supported size
+  that fits.
+- Hand the selected raceway and cable groups to [Wire Pull Planner](../plans/wire-pull-planner.md)
+  and share the cable OD with Reel Length. Report a jam ratio only for a supported cable
+  configuration and state the calculation's assumptions.
