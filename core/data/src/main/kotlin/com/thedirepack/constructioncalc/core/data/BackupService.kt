@@ -53,6 +53,7 @@ class BackupService(
 
     /** Applies the chosen [sections] of [backup]. Projects merge or replace per [mode]. */
     fun restore(backup: BackupDocument, sections: BackupSections, mode: ProjectMergeMode): Report {
+        if (sections.settings) SettingsRepository.validateBackup(backup.settings, backup.toolSettings)
         val lines = mutableListOf<String>()
         if (sections.projects && backup.projects.isNotEmpty()) {
             when (mode) {

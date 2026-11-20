@@ -75,12 +75,27 @@ fun ReelLengthScreen(host: ToolHost) {
                     { q -> vm.update { it.copy(flange = q?.stored()) } },
                     supportingText = "Outside diameter of the flange",
                 )
-                MeasureField(
-                    "Drum (core) diameter",
-                    inputs.drum?.toQuantity(),
-                    { q -> vm.update { it.copy(drum = q?.stored()) } },
-                    supportingText = "The barrel the cable winds on",
+                SegmentedChoice(
+                    options = DrumMeasurement.entries,
+                    selected = inputs.drumMeasurement,
+                    onSelect = { method -> vm.update { it.copy(drumMeasurement = method) } },
+                    label = "Measure the core",
+                    optionLabel = { it.label },
                 )
+                when (inputs.drumMeasurement) {
+                    DrumMeasurement.DIAMETER -> MeasureField(
+                        "Drum (core) diameter",
+                        inputs.drum?.toQuantity(),
+                        { q -> vm.update { it.copy(drum = q?.stored()) } },
+                        supportingText = "Measure across the bare core through its center.",
+                    )
+                    DrumMeasurement.CIRCUMFERENCE -> MeasureField(
+                        "Drum (core) circumference",
+                        inputs.drumCircumference?.toQuantity(),
+                        { q -> vm.update { it.copy(drumCircumference = q?.stored()) } },
+                        supportingText = "Wrap a tape around the bare core. The app converts this to diameter.",
+                    )
+                }
                 MeasureField(
                     "Traverse",
                     inputs.traverse?.toQuantity(),

@@ -32,6 +32,21 @@ class ProjectCodecTest {
         assertEquals(project, ProjectCodec.decode(ProjectCodec.encode(project, exportedAt = 3_000)))
     }
 
+    @Test fun projectAndBackupPreserveClearedRatingsAndLegacyDefaults() {
+        val project = sample().copy(
+            panels = listOf(Panel(name = "LP", busAmps = null, circuits = listOf(Circuit(slot = 1, breakerAmps = null)))),
+        )
+        val encoded = ProjectCodec.encode(project)
+        assertEquals(project, ProjectCodec.decode(encoded))
+        val backup = BackupDocument(projects = listOf(project))
+        assertEquals(AppFile.Backup(backup), AppFileCodec.decode(AppFileCodec.encodeBackup(backup)))
+
+        val legacy = encoded.lineSequence().filterNot { "\"busAmps\": null" in it || "\"breakerAmps\": null" in it }.joinToString("\n")
+        val panel = ProjectCodec.decode(legacy).panels.single()
+        assertEquals(225, panel.busAmps)
+        assertEquals(20, panel.circuits.single().breakerAmps)
+    }
+
     @Test fun toolInputsRoundTripAndResultsKeepExactValues() {
         val decoded = ProjectCodec.decode(ProjectCodec.encode(sample()))
         val item = decoded.runs.first().items.first()

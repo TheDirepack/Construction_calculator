@@ -6,6 +6,8 @@ package com.thedirepack.constructioncalc.core.electrical
  * @property ocpdAmps the breaker or fuse protecting the conductors.
  * @property loadAmps total load current, if known (null: size to the OCPD only).
  * @property continuousAmps the part of [loadAmps] that is continuous (3 h or more), taken at 125%.
+ * @property terminalLoadAmps the largest per-phase load including the continuous multiplier,
+ *   when an unbalanced load has been calculated phase by phase.
  * @property insulation conductor insulation rating (e.g. 90 °C for THHN/THWN-2): the column
  *   correction and adjustment factors are applied to (310.15).
  * @property termination lowest terminal rating (usually 60 °C ≤ 100 A, 75 °C above, per 110.14(C)):
@@ -26,6 +28,7 @@ data class WireSizingRequest(
     val xhhw2: Boolean = false,
     val currentCarrying: Int = 3,
     val multipleCordReceptacles: Boolean = false,
+    val terminalLoadAmps: Double? = null,
 )
 
 /** The chosen size and every number that went into it, so the app can show its work. */
@@ -78,7 +81,7 @@ object ConductorSizing {
 
         val load = r.loadAmps
         val continuous = r.continuousAmps.coerceIn(0.0, load ?: r.continuousAmps)
-        val terminalLoad = load?.let { (it - continuous) + 1.25 * continuous }
+        val terminalLoad = r.terminalLoadAmps ?: load?.let { (it - continuous) + 1.25 * continuous }
         val first = if (r.material.isCopper) ConductorSize.AWG_14 else ConductorSize.AWG_12
 
         /** Why [size] is too small, or null if it works. */

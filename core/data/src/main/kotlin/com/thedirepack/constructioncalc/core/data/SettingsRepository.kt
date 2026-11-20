@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 import com.thedirepack.constructioncalc.core.measure.Precision
 import com.thedirepack.constructioncalc.core.measure.input.LengthDisplay
+import com.thedirepack.constructioncalc.core.model.ProjectFormatException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -184,7 +185,24 @@ class SettingsRepository(private val context: Context) {
         ),
     )
 
-    private companion object {
+    internal companion object {
+        fun validateBackup(settings: JsonObject?, toolSettings: Map<String, JsonObject>) {
+            val appKeys = listOf(
+                KEY_THEME, KEY_ANIMATIONS, KEY_PRECISION, KEY_DISPLAY, KEY_PROJECT, KEY_RUN,
+                KEY_CO_NAME, KEY_CO_PREPARED, KEY_CO_LICENSE, KEY_CO_PHONE, KEY_CO_EMAIL, KEY_CO_ADDRESS,
+            )
+            val badKey = appKeys.firstOrNull { settings?.get(it)?.let { value -> value !is JsonPrimitive } == true }
+            if (badKey != null) throw ProjectFormatException("The backup has a damaged app setting: $badKey.")
+            toolSettings.forEach { (tool, values) ->
+                values.forEach { (key, entry) ->
+                    val fields = entry as? JsonObject
+                    if (fields?.get("type") !is JsonPrimitive || fields["value"] !is JsonPrimitive) {
+                        throw ProjectFormatException("The backup has a damaged setting for $tool: $key.")
+                    }
+                }
+            }
+        }
+
         const val KEY_THEME = "theme"
         const val KEY_ANIMATIONS = "animations"
         const val KEY_PRECISION = "precision"

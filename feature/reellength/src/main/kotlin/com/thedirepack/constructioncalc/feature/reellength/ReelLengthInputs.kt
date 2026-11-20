@@ -7,12 +7,19 @@ import com.thedirepack.constructioncalc.core.model.StoredQuantity
 import com.thedirepack.constructioncalc.feature.reellength.domain.ReelLength
 import com.thedirepack.constructioncalc.feature.reellength.domain.ReelRequest
 import kotlinx.serialization.Serializable
+import kotlin.math.PI
 
 /** What the tool is working out. */
 @Serializable
 enum class ReelMode(val label: String) {
     REMAINING("Cable on reel"),
     CAPACITY("Reel capacity"),
+}
+
+@Serializable
+enum class DrumMeasurement(val label: String) {
+    DIAMETER("Diameter"),
+    CIRCUMFERENCE("Circumference"),
 }
 
 /** What a saved Reel Length item stores in `ProjectItem.inputs`. Never rename a field. */
@@ -32,6 +39,8 @@ data class ReelLengthInputs(
     /** Cable outside diameter, d. */
     val cableDiameter: StoredQuantity? = null,
     val packingFactor: String = "1",
+    val drumMeasurement: DrumMeasurement = DrumMeasurement.DIAMETER,
+    val drumCircumference: StoredQuantity? = null,
 ) {
     companion object {
         val DEFAULT_CLEARANCE: StoredQuantity = StoredQuantity.of(Quantity.inches(Rational.of(2)))
@@ -57,7 +66,10 @@ fun ReelLengthInputs.parse(): ParsedReel {
     }
 
     val f = inches(flange, "Flange diameter")
-    val d = inches(drum, "Drum diameter")
+    val d = when (drumMeasurement) {
+        DrumMeasurement.DIAMETER -> inches(drum, "Drum diameter")
+        DrumMeasurement.CIRCUMFERENCE -> inches(drumCircumference, "Drum circumference")?.div(PI)
+    }
     val w = inches(traverse, "Traverse")
     val x = if (mode == ReelMode.REMAINING) inches(distance, "Distance from flange edge") else inches(clearance, "Clearance")
     val od = inches(cableDiameter, "Cable diameter")

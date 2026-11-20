@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.model.CircuitKind
 import com.thedirepack.constructioncalc.core.model.Raceway
 import com.thedirepack.constructioncalc.core.model.Run
+import com.thedirepack.constructioncalc.core.model.design.FillStatus
 import com.thedirepack.constructioncalc.core.model.design.RunDesign
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.components.ConfirmDialog
@@ -190,8 +191,9 @@ private fun RunCard(
                         "${rd.currentCarrying} current-carrying conductors" + if (nipple) " (nipple: no derating)" else "",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    val area = "${rd.totalConductors} conductors, ${Wire.number(rd.totalAreaSqIn, 3)} sq in"
                     Text(
-                        "${rd.totalConductors} conductors, ${Wire.number(rd.totalAreaSqIn, 3)} sq in total",
+                        if (rd.fillStatus == FillStatus.INCOMPLETE) "Fill incomplete. Known conductors: $area" else "$area total",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     val fill = rd.fillPercent

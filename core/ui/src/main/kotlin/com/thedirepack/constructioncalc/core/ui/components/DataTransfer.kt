@@ -174,6 +174,7 @@ private fun RestoreBackupDialog(backup: BackupDocument, onFinished: (String, Str
     var toolData by remember { mutableStateOf(backup.toolData.isNotEmpty()) }
     var recents by remember { mutableStateOf(backup.recents.isNotEmpty()) }
     var mode by remember { mutableStateOf(ProjectMergeMode.MERGE) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -203,14 +204,17 @@ private fun RestoreBackupDialog(backup: BackupDocument, onFinished: (String, Str
                     style = MaterialTheme.typography.bodySmall,
                     color = if (mode == ProjectMergeMode.REPLACE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
             TextButton(
                 enabled = projects || settings || toolData || recents,
                 onClick = {
-                    val report = services.backup.restore(backup, BackupSections(projects, settings, toolData, recents), mode)
-                    onFinished(report.toString(), null)
+                    runCatching {
+                        services.backup.restore(backup, BackupSections(projects, settings, toolData, recents), mode)
+                    }.onSuccess { onFinished(it.toString(), null) }
+                        .onFailure { error = it.message ?: "The backup could not be restored." }
                 },
             ) { Text("Restore") }
         },

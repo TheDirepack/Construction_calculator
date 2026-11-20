@@ -43,6 +43,19 @@ class ReelLengthInputsTest {
         assertEquals(PI * 199.5 * 12, length, 1e-3)
     }
 
+    @Test fun drumCircumferenceAndDiameterYieldTheSameEstimateAndSurviveSave() {
+        val circumference = filled.copy(
+            drum = inches(9), // ignored while the circumference method is selected
+            drumMeasurement = DrumMeasurement.CIRCUMFERENCE,
+            drumCircumference = Quantity.inches(Rational.of(12 * PI)).stored(),
+        )
+        val restored = ToolInputs.decode<ReelLengthInputs>(ToolInputs.encode(circumference))!!
+        assertEquals(circumference, restored)
+        assertEquals(12.0, restored.parse().request!!.drumDiameter, 1e-9)
+        assertEquals(reelLengthOutput(filled, AppSettings()).results, reelLengthOutput(restored, AppSettings()).results)
+        assertEquals(listOf("Drum circumference"), circumference.copy(drumCircumference = null).parse().missing)
+    }
+
     @Test fun remainingResults() {
         val out = reelLengthOutput(filled, AppSettings())
         val byKey = out.results.associateBy { it.key }

@@ -82,7 +82,7 @@ fun ConduitFillScreen(host: ToolHost) {
                         toolId = ConduitFillTool.ID,
                         title = "Conduit fill: ${conduit.displayName}",
                         inputs = ToolInputs.encode(inputs),
-                        results = r.results,
+                        results = results,
                         summary = r.summary,
                     ),
                 )

@@ -15,6 +15,7 @@ import com.thedirepack.constructioncalc.core.model.Run
 import com.thedirepack.constructioncalc.core.model.stored
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -73,6 +74,50 @@ class ProjectAnalysisTest {
         assertEquals(ConductorSize.AWG_8, d.groundSize) // 250.122(B): 12 × (16510/6530 cmil) → 8 AWG
     }
 
+    @Test fun mixedRacewayDropAndUpsizingAreIndependentOfRunOrder() {
+        val length = Quantity.feet(Rational.of(75)).stored()
+        val emt = Run(name = "EMT", raceway = Raceway(ConduitType.EMT, length = length))
+        val pvc = Run(name = "PVC", raceway = Raceway(ConduitType.PVC_40, length = length))
+        val circuit = Circuit(slot = 1, loadVa = 1440.0, runIds = listOf(emt.id, pvc.id))
+        val panel = Panel(name = "LP", circuits = listOf(circuit))
+        val project = Project(name = "P", createdAt = 0, runs = listOf(emt, pvc), panels = listOf(panel))
+        fun analyze(p: Project, target: Double = 2.08) = ProjectAnalysis.analyze(p.copy(
+            design = p.design.copy(voltageDropTargetPercent = target),
+        )).circuits.getValue(circuit.id)
+        val forward = analyze(project)
+        val reversed = analyze(project.copy(panels = listOf(panel.copy(circuits = listOf(circuit.copy(runIds = circuit.runIds.reversed()))))))
+        assertEquals(forward.voltageDropPercent!!, reversed.voltageDropPercent!!, 1e-9)
+        assertEquals(ConductorSize.AWG_6, forward.size)
+        assertEquals(forward.size, reversed.size)
+        assertTrue(forward.voltageDropPercent <= 2.08)
+        val relaxed = analyze(project, target = 2.085)
+        // Equal lengths, with 8 AWG copper resistance 0.78 and average reactance (0.052 + 0.065) / 2.
+        val expectedPercent = 3.0 * (0.78 * 0.85 + 0.0585 * Math.sqrt(1 - 0.85 * 0.85))
+        assertEquals(ConductorSize.AWG_8, relaxed.size)
+        assertEquals(expectedPercent, relaxed.voltageDropPercent!!, 1e-9)
+
+        val withOverride = project.copy(panels = listOf(panel.copy(circuits = listOf(circuit.copy(length = length)))))
+        val withoutPvcLength = withOverride.copy(runs = listOf(emt, pvc.copy(raceway = Raceway(ConduitType.PVC_40))))
+        assertNull(analyze(withoutPvcLength).voltageDropVolts)
+        assertTrue(analyze(withoutPvcLength).notes.any { "mixed raceways" in it })
+    }
+
+    @Test fun fillIsIncompleteWhenAnAssignedCircuitCannotBeSized() {
+        val shared = Run(name = "Shared", raceway = Raceway(ConduitType.EMT))
+        val hot = Run(name = "Hot", raceway = Raceway(ConduitType.EMT, ambientC = 100.0))
+        val circuits = listOf(
+            Circuit(slot = 1, runIds = listOf(shared.id)),
+            Circuit(slot = 2, poles = 3, runIds = listOf(shared.id, hot.id)),
+        )
+        val project = Project(name = "P", createdAt = 0, runs = listOf(shared, hot), panels = listOf(Panel(name = "LP", circuits = circuits)))
+        val result = ProjectAnalysis.analyze(project).runs.getValue(shared.id)
+        assertEquals(FillStatus.INCOMPLETE, result.fillStatus)
+        assertEquals(3, result.totalConductors)
+        assertNull(result.fillPercent)
+        assertNull(result.smallestFitting)
+        assertTrue(result.notes.any { "no calculated conductor size" in it })
+    }
+
     @Test fun panelPhaseBalance() {
         val panel = Panel(
             name = "LP",
@@ -82,7 +127,7 @@ class ProjectAnalysisTest {
         val p = ProjectAnalysis.analyze(Project(name = "P", createdAt = 0, panels = listOf(panel))).panels.single()
         assertEquals(4200.0, p.phaseVa.getValue(Phase.A), 1e-9)
         assertEquals(3000.0, p.phaseVa.getValue(Phase.B), 1e-9)
-        assertEquals(35.0, p.phaseAmps.getValue(Phase.A), 1e-9)
+        assertEquals(10.0 + 9000.0 / (Math.sqrt(3.0) * 208), p.phaseAmps.getValue(Phase.A), 1e-9)
         assertEquals(10200.0, p.totalVa, 1e-9)
     }
 
@@ -131,10 +176,10 @@ class ProjectAnalysisTest {
         val d = design.circuits.getValue(feeder.id)
         assertEquals(30_000.0, d.loadVa!!, 1e-9)
         assertTrue(d.loadFromFedPanels)
-        assertEquals(30_000.0 / (Math.sqrt(3.0) * 208), d.amps!!, 1e-9)
+        assertEquals(100.0 + 18_000.0 / (Math.sqrt(3.0) * 208), d.amps!!, 1e-9)
         assertTrue(d.notes.any { it.startsWith("Feeder load from LP") })
-        // 125 % of the continuous part: 83.3 A + 0.25 × 33.3 A = 91.6 A at 75 °C terminals → 3 AWG (100 A).
-        assertEquals(ConductorSize.AWG_3, d.minimumSize)
+        // The busiest leg carries about 150 A, of which 100 A is continuous.
+        assertEquals(ConductorSize.AWG_2_0, d.minimumSize)
         // The upstream panel's totals include the subpanel.
         assertEquals(30_000.0, design.panels.first { it.panel.id == mdp.id }.totalVa, 1e-9)
         // An entered load on the feeder wins (the user may have applied demand factors).
@@ -142,6 +187,40 @@ class ProjectAnalysisTest {
         val e = ProjectAnalysis.analyze(entered).circuits.getValue(feeder.id)
         assertEquals(20_000.0, e.loadVa!!, 1e-9)
         assertFalse(e.loadFromFedPanels)
+    }
+
+    @Test fun unbalancedFeederMapsDownstreamPhaseToTheCorrespondingUpstreamPole() {
+        val feeder = Circuit(slot = 3, poles = 3, breakerAmps = 60)
+        val main = Panel(name = "Main", busAmps = 50, circuits = listOf(feeder))
+        val downstream = Panel(
+            name = "LP",
+            fedFrom = CircuitRef(main.id, feeder.id),
+            circuits = listOf(Circuit(slot = 1, loadVa = 7200.0)),
+        )
+        val project = Project(name = "P", createdAt = 0, panels = listOf(main, downstream))
+        val result = ProjectAnalysis.analyze(project)
+        assertEquals(60.0, result.circuits.getValue(feeder.id).amps!!, 1e-9)
+        val upstream = result.panels.first()
+        assertEquals(mapOf(Phase.A to 0.0, Phase.B to 60.0, Phase.C to 0.0), upstream.phaseAmps)
+        assertTrue(upstream.notes.any { "exceeds the 50 A bus" in it })
+    }
+
+    @Test fun feederTerminalLoadCanBeGovernedByADifferentPhaseThanPeakOperatingCurrent() {
+        val feeder = Circuit(slot = 1, poles = 3, breakerAmps = 60)
+        val main = Panel(name = "Main", circuits = listOf(feeder))
+        val downstream = Panel(
+            name = "LP",
+            fedFrom = CircuitRef(main.id, feeder.id),
+            circuits = listOf(
+                Circuit(slot = 1, loadVa = 7680.0),
+                Circuit(slot = 3, loadVa = 7200.0, continuous = true),
+            ),
+        )
+        val project = Project(name = "P", createdAt = 0, panels = listOf(main, downstream))
+        val result = ProjectAnalysis.analyze(project).circuits.getValue(feeder.id)
+        assertEquals(64.0, result.amps!!, 1e-9)
+        // Phase B requires 75 A at the terminals despite Phase A having the larger operating load.
+        assertEquals(ConductorSize.AWG_4, result.minimumSize)
     }
 
     @Test fun feedLoopsInADamagedFileDontHang() {

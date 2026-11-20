@@ -38,8 +38,11 @@ object ProjectCodec {
         coerceInputValues = true
     }
 
+    // Null can represent a deliberate clear on fields whose missing value has a non-null default.
+    internal val fileJson = Json(json) { explicitNulls = true }
+
     fun encode(project: Project, exportedAt: Long? = null): String =
-        json.encodeToString(ProjectDocument.serializer(), ProjectDocument(exportedAt = exportedAt, project = project))
+        fileJson.encodeToString(ProjectDocument.serializer(), ProjectDocument(exportedAt = exportedAt, project = project))
 
     fun decode(text: String): Project {
         val document = try {

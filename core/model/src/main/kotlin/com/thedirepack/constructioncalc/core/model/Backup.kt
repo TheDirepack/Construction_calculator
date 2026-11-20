@@ -65,7 +65,7 @@ object AppFileCodec {
     const val BACKUP_SUFFIX = ".backup.json"
 
     fun encodeBackup(backup: BackupDocument): String =
-        ProjectCodec.json.encodeToString(BackupDocument.serializer(), backup)
+        ProjectCodec.fileJson.encodeToString(BackupDocument.serializer(), backup)
 
     /** Decodes a project or backup file. Both are JSON; the `format` field says which. */
     fun decode(text: String): AppFile {
