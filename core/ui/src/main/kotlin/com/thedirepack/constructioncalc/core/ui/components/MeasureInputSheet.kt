@@ -60,14 +60,23 @@ fun MeasureInputSheet(
     val recents by LocalAppServices.current.recents.recents.collectAsStateWithLifecycle()
     var state by remember { mutableStateOf(CalcState(tokens = listOfNotNull(initial?.let { Token.Value(it) }))) }
     var problem by remember { mutableStateOf<String?>(null) }
+    val defaultsToInches = allowed.size == 1 && Dimension.LENGTH in allowed
+
+    fun fieldValue(value: Quantity, tokens: List<Token>): Quantity =
+        if (defaultsToInches && value.dimension == Dimension.NUMBER && tokens.singleOrNull() is Token.Literal) {
+            Quantity.inches(value.value)
+        } else {
+            value
+        }
 
     val handle: (Key) -> Boolean = handle@{ key ->
         problem = null
         val outcome = CalcInput.reduce(state, key)
         state = outcome.state
         val done = outcome.completed ?: return@handle outcome.accepted
-        if (done.result.dimension in allowed) {
-            onDone(done.result)
+        val result = fieldValue(done.result, done.expression)
+        if (result.dimension in allowed) {
+            onDone(result)
         } else {
             problem = "Needs ${allowed.joinToString(" or ") { it.name.lowercase() }}, got ${done.result.dimension.name.lowercase()}"
             state = state.copy(answer = null)
@@ -96,7 +105,10 @@ fun MeasureInputSheet(
                 textAlign = TextAlign.End,
                 modifier = Modifier.fillMaxWidth(),
             )
-            val preview = state.result
+            if (defaultsToInches) {
+                Text("A number without a unit is in inches.", style = MaterialTheme.typography.bodySmall)
+            }
+            val preview = state.result?.let { fieldValue(it, state.tokens) }
             Text(
                 when {
                     problem != null -> problem!!

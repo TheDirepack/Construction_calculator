@@ -99,6 +99,7 @@ fun ConduitBendingScreen(host: ToolHost) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            ConduitFields(inputs, vm::update)
             FormSection("Bend") {
                 ChoiceField(
                     label = "Bend type",
@@ -121,6 +122,36 @@ fun ConduitBendingScreen(host: ToolHost) {
 
             if (plan.marks.isNotEmpty()) MarkList(plan, settings)
         }
+    }
+}
+
+@Composable
+private fun ConduitFields(inputs: ConduitBendingInputs, update: ((ConduitBendingInputs) -> ConduitBendingInputs) -> Unit) {
+    val type = ConduitType.fromName(inputs.conduitType)
+    FormSection("Conduit") {
+        ChoiceField(
+            label = "Conduit type",
+            options = ConduitType.entries,
+            selected = type,
+            onSelect = { selected ->
+                update {
+                    it.copy(
+                        conduitType = selected.name,
+                        conduitSize = it.conduitSize.takeIf { size -> size in selected.sizes } ?: selected.sizes.first(),
+                    )
+                }
+            },
+            optionLabel = { it.label },
+            supportingText = type.raceway.fullName,
+        )
+        ChoiceField(
+            label = "Trade size",
+            options = type.sizes,
+            selected = inputs.conduitSize.takeIf { it in type.sizes } ?: type.sizes.first(),
+            onSelect = { size -> update { it.copy(conduitSize = size) } },
+            optionLabel = ::sizeLabel,
+            supportingText = "Sizes with hand-bender profiles",
+        )
     }
 }
 
@@ -160,23 +191,6 @@ private fun BendInputs(inputs: ConduitBendingInputs, update: ((ConduitBendingInp
                 DistanceField("Distance to the near edge of the obstruction", inputs, update)
             }
             BendType.STUB_UP -> {
-                ChoiceField(
-                    label = "Conduit type",
-                    options = ConduitType.entries,
-                    selected = ConduitType.fromName(inputs.conduitType),
-                    onSelect = { t ->
-                        update { it.copy(conduitType = t.name, conduitSize = if (it.conduitSize in t.sizes) it.conduitSize else t.sizes.first()) }
-                    },
-                    optionLabel = { it.label },
-                )
-                val sizes = ConduitType.fromName(inputs.conduitType).sizes
-                ChoiceField(
-                    label = "Trade size",
-                    options = sizes,
-                    selected = inputs.conduitSize.takeIf { it in sizes } ?: sizes.first(),
-                    onSelect = { s -> update { it.copy(conduitSize = s) } },
-                    optionLabel = { sizeLabel(it) },
-                )
                 MeasureField("Stub height (to the back of the bend)", inputs.stubHeight?.toQuantity(), { q -> update { it.copy(stubHeight = q?.stored()) } })
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Back-to-back 90s", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
