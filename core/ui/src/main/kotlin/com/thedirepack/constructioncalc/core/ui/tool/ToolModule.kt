@@ -86,8 +86,12 @@ interface ToolHost {
      */
     fun saveToProject(draft: ItemDraft)
 
-    /** Offers [results] to every other tool's input fields ("use a value from…"). */
-    fun publish(results: List<ResultValue>, context: String = "")
+    /**
+     * Offers [results] to every other tool's input fields ("use a value from…"). Call it whenever the
+     * results change: the shell waits until they settle (so typing "125" doesn't offer 1 and 12 too).
+     * Pass [immediate] for a deliberate, finished calculation (e.g. pressing `=`).
+     */
+    fun publish(results: List<ResultValue>, context: String = "", immediate: Boolean = false)
 
     /**
      * Opens the app's Settings: this tool's page if it [ToolModule.hasSettings], otherwise the

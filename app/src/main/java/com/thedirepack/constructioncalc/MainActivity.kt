@@ -25,7 +25,8 @@ import com.thedirepack.constructioncalc.shell.AppShell
 import com.thedirepack.constructioncalc.shell.ToolRegistry
 import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -33,8 +34,13 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
-    /** Project or backup files opened with / shared to the app, for the shell to confirm. */
-    private val imports = MutableSharedFlow<Result<AppFile>>(extraBufferCapacity = 4)
+    /**
+     * Project or backup files opened with / shared to the app, for the shell to confirm. A channel,
+     * not a SharedFlow: a file read before the shell starts collecting (cold start from "open with")
+     * waits in the buffer instead of being dropped.
+     */
+    private val imports = Channel<Result<AppFile>>(Channel.BUFFERED)
+    private val importFlow = imports.receiveAsFlow()
 
     /** Scales every Compose animation: 1 normally, 0 when the user turns animations off. */
     private val motion = object : MotionDurationScale {
@@ -62,7 +68,7 @@ class MainActivity : ComponentActivity() {
             }
             ConstructionCalcTheme(darkTheme = dark) {
                 CompositionLocalProvider(LocalAppServices provides services, LocalTools provides ToolRegistry.all) {
-                    AppShell(imports = imports)
+                    AppShell(imports = importFlow)
                 }
             }
         }
@@ -86,7 +92,7 @@ class MainActivity : ComponentActivity() {
             else -> null
         } ?: return
         lifecycleScope.launch {
-            imports.emit(runCatching { withContext(Dispatchers.IO) { ProjectSharing.readAppFile(this@MainActivity, uri) } })
+            imports.send(runCatching { withContext(Dispatchers.IO) { ProjectSharing.readAppFile(this@MainActivity, uri) } })
         }
     }
 }

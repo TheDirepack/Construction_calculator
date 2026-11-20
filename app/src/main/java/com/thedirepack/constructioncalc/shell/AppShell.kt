@@ -30,6 +30,9 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -41,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thedirepack.constructioncalc.core.data.ProjectSharing
 import com.thedirepack.constructioncalc.core.model.AppFile
+import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import com.thedirepack.constructioncalc.core.model.ProjectItem
 import com.thedirepack.constructioncalc.core.model.RecentResult
 import com.thedirepack.constructioncalc.core.model.ResultValue
@@ -54,6 +58,8 @@ import com.thedirepack.constructioncalc.core.ui.tool.ToolCategory
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 import com.thedirepack.constructioncalc.core.ui.tool.ToolModule
 import com.thedirepack.constructioncalc.feature.projects.ProjectsTool
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 
@@ -66,6 +72,40 @@ sealed interface Destination {
     data class Settings(val toolId: String? = null) : Destination
 }
 
+/** How long a tool's results must stay unchanged before they're offered to other tools. */
+private const val PUBLISH_SETTLE_MS = 1_200L
+
+private const val SEP = '\u0001'
+
+/** Saves the back stack as strings (a saved item travels as its JSON). */
+private val StackSaver = listSaver<SnapshotStateList<Destination>, String>(
+    save = { stack ->
+        stack.map { d ->
+            when (d) {
+                is Destination.Tool -> "T" + d.toolId + SEP + (d.item?.let { ProjectCodec.json.encodeToString(ProjectItem.serializer(), it) } ?: "")
+                is Destination.Settings -> "S" + (d.toolId ?: "")
+            }
+        }
+    },
+    restore = { saved ->
+        val restored = saved.mapNotNull { s ->
+            when (s.firstOrNull()) {
+                'T' -> {
+                    val body = s.drop(1)
+                    val toolId = body.substringBefore(SEP)
+                    val itemJson = body.substringAfter(SEP, "")
+                    val item = itemJson.takeIf { it.isNotEmpty() }
+                        ?.let { runCatching { ProjectCodec.json.decodeFromString(ProjectItem.serializer(), it) }.getOrNull() }
+                    Destination.Tool(toolId, item)
+                }
+                'S' -> Destination.Settings(s.drop(1).ifEmpty { null })
+                else -> null
+            }
+        }.ifEmpty { listOf(Destination.Tool(ToolRegistry.default.id)) }
+        mutableStateListOf(*restored.toTypedArray())
+    },
+)
+
 @Composable
 fun AppShell(imports: Flow<Result<AppFile>>) {
     val services = LocalAppServices.current
@@ -73,7 +113,10 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
     val scope = rememberCoroutineScope()
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val snackbar = remember { SnackbarHostState() }
-    val stack = remember { mutableStateListOf<Destination>(Destination.Tool(ToolRegistry.default.id)) }
+    // Saveable, so rotation, a dark-mode switch or process death keep the user where they were.
+    val stack = rememberSaveable(saver = StackSaver) { mutableStateListOf<Destination>(Destination.Tool(ToolRegistry.default.id)) }
+    // Tools publish on every input change; only the value that settles is offered to other tools.
+    val publishJobs = remember { mutableMapOf<String, Job>() }
     var pendingSave by remember { mutableStateOf<Pair<ItemDraft, ProjectItem?>?>(null) }
     var pendingImport by remember { mutableStateOf<AppFile?>(null) }
 
@@ -126,9 +169,20 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
                                 },
                                 onBack = ::pop,
                                 onSave = { pendingSave = it to current.item },
-                                onPublish = { results, ctx ->
-                                    val now = services.clock()
-                                    services.recents.publish(results.map { RecentResult(it, tool.id, tool.title, ctx, now) })
+                                onPublish = { results, ctx, immediate ->
+                                    publishJobs.remove(tool.id)?.cancel()
+                                    val publish = {
+                                        val now = services.clock()
+                                        services.recents.publish(results.map { RecentResult(it, tool.id, tool.title, ctx, now) })
+                                    }
+                                    if (immediate) {
+                                        publish()
+                                    } else {
+                                        publishJobs[tool.id] = scope.launch {
+                                            delay(PUBLISH_SETTLE_MS)
+                                            publish()
+                                        }
+                                    }
                                 },
                                 onOpenSettings = { push(Destination.Settings(tool.id.takeIf { tool.hasSettings })) },
                                 onShareText = { subject, text ->
@@ -194,7 +248,7 @@ private class ShellHost(
     private val onOpenProject: (String?) -> Unit,
     private val onBack: () -> Unit,
     private val onSave: (ItemDraft) -> Unit,
-    private val onPublish: (List<ResultValue>, String) -> Unit,
+    private val onPublish: (List<ResultValue>, String, Boolean) -> Unit,
     private val onOpenSettings: () -> Unit,
     private val onShareText: (String, String) -> Unit,
     private val onMessage: (String) -> Unit,
@@ -204,7 +258,7 @@ private class ShellHost(
     override fun openProject(projectId: String?) = onOpenProject(projectId)
     override fun back() = onBack()
     override fun saveToProject(draft: ItemDraft) = onSave(draft)
-    override fun publish(results: List<ResultValue>, context: String) = onPublish(results, context)
+    override fun publish(results: List<ResultValue>, context: String, immediate: Boolean) = onPublish(results, context, immediate)
     override fun openSettings() = onOpenSettings()
     override fun shareText(subject: String, text: String) = onShareText(subject, text)
     override fun showMessage(message: String) = onMessage(message)

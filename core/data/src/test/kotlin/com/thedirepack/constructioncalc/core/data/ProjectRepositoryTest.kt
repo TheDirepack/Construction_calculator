@@ -20,7 +20,7 @@ class ProjectRepositoryTest {
     }
 
     private var now = 1_000L
-    private val repo = ProjectRepository(MemoryStore(), CoroutineScope(Dispatchers.Unconfined)) { now++ }
+    private val repo = ProjectRepository(MemoryStore(), CoroutineScope(Dispatchers.Unconfined), clock = { now++ })
 
     @Test fun archivedProjectsAreReadOnlyUntilUnarchived() {
         val project = repo.create("Job")

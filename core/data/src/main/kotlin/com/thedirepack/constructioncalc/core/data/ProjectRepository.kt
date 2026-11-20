@@ -3,11 +3,13 @@ package com.thedirepack.constructioncalc.core.data
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.ProjectItem
 import com.thedirepack.constructioncalc.core.model.Run
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -16,22 +18,30 @@ import kotlinx.coroutines.sync.withLock
 /**
  * All projects, kept in memory and written through to [store]. Every edit goes through [edit],
  * which applies a pure function from :core:model and persists the result.
+ *
+ * Writes are "sync this project id" jobs: each one takes the write lock and then saves whatever the
+ * in-memory state holds for that id *at that moment* (or deletes the file if the project is gone).
+ * Jobs may run in any order, but the last one always writes the latest state, so a slow write can
+ * never overwrite a newer one, and delete-then-restore can never leave the file deleted.
  */
 class ProjectRepository(
     private val store: ProjectStore,
     private val scope: CoroutineScope,
     private val clock: () -> Long,
+    /** Where file reads and writes run (tests pass one that reorders tasks). */
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val state = MutableStateFlow<List<Project>>(emptyList())
     private val _loaded = MutableStateFlow(false)
     private val writeLock = Mutex()
+    private val pendingWrites = MutableStateFlow(0)
 
     /** Most recently updated first. */
     val projects: StateFlow<List<Project>> = state.asStateFlow()
     val loaded: StateFlow<Boolean> = _loaded.asStateFlow()
 
     init {
-        scope.launch(Dispatchers.IO) {
+        scope.launch(io) {
             val all = store.loadAll()
             state.update { current -> (current + all).distinctBy { it.id }.sortedByDescending { it.updatedAt } }
             _loaded.value = true
@@ -77,7 +87,7 @@ class ProjectRepository(
 
     private fun deleteUnchecked(projectId: String) {
         state.update { list -> list.filterNot { it.id == projectId } }
-        scope.launch(Dispatchers.IO) { writeLock.withLock { store.delete(projectId) } }
+        sync(projectId)
     }
 
     /**
@@ -105,7 +115,7 @@ class ProjectRepository(
     fun deleteAll() {
         val ids = state.value.map { it.id }
         state.value = emptyList()
-        scope.launch(Dispatchers.IO) { writeLock.withLock { ids.forEach(store::delete) } }
+        ids.forEach(::sync)
     }
 
     /** Convenience for the common "Save to project" flow. Returns the saved item, or null if the target is gone or archived. */
@@ -130,6 +140,26 @@ class ProjectRepository(
         state.update { list ->
             (listOf(project) + list.filterNot { it.id == project.id }).sortedByDescending { it.updatedAt }
         }
-        scope.launch(Dispatchers.IO) { writeLock.withLock { store.save(project) } }
+        sync(project.id)
+    }
+
+    /** Makes the file for [projectId] match the in-memory state, whenever this job gets the lock. */
+    private fun sync(projectId: String) {
+        pendingWrites.update { it + 1 }
+        scope.launch(io) {
+            try {
+                writeLock.withLock {
+                    val latest = get(projectId)
+                    if (latest == null) store.delete(projectId) else store.save(latest)
+                }
+            } finally {
+                pendingWrites.update { it - 1 }
+            }
+        }
+    }
+
+    /** Suspends until every write started so far has reached the store. */
+    suspend fun flush() {
+        pendingWrites.first { it == 0 }
     }
 }

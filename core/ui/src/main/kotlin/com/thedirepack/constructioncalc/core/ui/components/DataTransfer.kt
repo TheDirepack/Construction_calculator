@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -109,6 +110,10 @@ fun rememberBackupExporter(onMessage: (String) -> Unit): BackupExporter {
  */
 @Composable
 fun ImportFileDialog(file: AppFile, onFinished: (message: String, openProjectId: String?) -> Unit, onDismiss: () -> Unit) {
+    // Opening a file can start the app; wait until saved projects are loaded so "already have it"
+    // checks and merges see them (otherwise an import could silently overwrite a local project).
+    val loaded by LocalAppServices.current.projects.loaded.collectAsStateWithLifecycle()
+    if (!loaded) return
     when (file) {
         is AppFile.SingleProject -> ImportProjectDialog(file.project, onFinished, onDismiss)
         is AppFile.Backup -> RestoreBackupDialog(file.backup, onFinished, onDismiss)
@@ -118,7 +123,8 @@ fun ImportFileDialog(file: AppFile, onFinished: (message: String, openProjectId:
 @Composable
 private fun ImportProjectDialog(project: Project, onFinished: (String, String?) -> Unit, onDismiss: () -> Unit) {
     val services = LocalAppServices.current
-    val existing = remember(project.id) { services.projects.get(project.id) }
+    val all by services.projects.projects.collectAsStateWithLifecycle()
+    val existing = all.firstOrNull { it.id == project.id }
     val info = "${project.runs.size} runs · ${project.itemCount} items · updated ${formatDate(project.updatedAt)}"
     AlertDialog(
         onDismissRequest = onDismiss,

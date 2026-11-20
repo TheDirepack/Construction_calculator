@@ -90,7 +90,7 @@ fun FootInchScreen(host: ToolHost) {
     val press = rememberKeyPress { key ->
         val outcome = viewModel.onKey(key, settings)
         outcome.completed?.let { calc ->
-            host.publish(listOf(viewModel.resultValue(calc, settings)), context = viewModel.formatExpression(calc.expression, settings))
+            host.publish(listOf(viewModel.resultValue(calc, settings)), context = viewModel.formatExpression(calc.expression, settings), immediate = true)
         }
         outcome.accepted
     }
