@@ -1,0 +1,9 @@
+com.thedirepack.constructioncalc.feature.conversions-pngs-0 /home/max/.t3/projects/construction-calculator/feature/conversions/build/generated/res/pngs/debug
+com.thedirepack.constructioncalc.feature.conversions-updated_navigation_xml-1 /home/max/.t3/projects/construction-calculator/feature/conversions/build/generated/updated_navigation_xml/debug
+com.thedirepack.constructioncalc.feature.conversions-mergeDebugResources-2 /home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/incremental/debug/mergeDebugResources/merged.dir
+com.thedirepack.constructioncalc.feature.conversions-mergeDebugResources-3 /home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/incremental/debug/mergeDebugResources/stripped.dir
+com.thedirepack.constructioncalc.feature.conversions-debug-4 /home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/merged_res/debug/mergeDebugResources
+com.thedirepack.constructioncalc.feature.conversions-debug-5 /home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/packaged_res/debug/packageDebugResources
+com.thedirepack.constructioncalc.feature.conversions-debug-6 /home/max/.t3/projects/construction-calculator/feature/conversions/src/debug/res
+com.thedirepack.constructioncalc.feature.conversions-main-7 /home/max/.t3/projects/construction-calculator/feature/conversions/src/main/res
+gradleHome-0 /home/max/.gradle

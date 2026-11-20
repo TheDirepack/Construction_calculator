@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-11-20T16:17:56.520Z" hostname="maxtop" time="0.006">
+  <properties/>
+  <testcase name="nearestHorsepowerSnapsToTheTable" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.0"/>
+  <testcase name="knownDriveInputCurrentReplacesTheApproximation" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.0"/>
+  <testcase name="unavailableCombinationsAreProblems" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.001"/>
+  <testcase name="kilowattsConvertToStandardHorsepower" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.0"/>
+  <testcase name="nameplateFlaDrivesTheDriveRatingAndOverload" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.001"/>
+  <testcase name="singleLargeConductorBeforeParallel" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.0"/>
+  <testcase name="sixtyDegreeColumnNeedsLargerConductor" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.0"/>
+  <testcase name="largeMotorsUseParallelSets" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.003"/>
+  <testcase name="twentyFiveHp460RoundsProtectionUp" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.0"/>
+  <testcase name="tenHp230Volt" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.0"/>
+  <testcase name="singlePhaseInputGivesDriveGuidance" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.001"/>
+  <testcase name="tenHp460VoltThreePhase" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.0"/>
+  <testcase name="aluminumUsesItsOwnColumn" classname="com.thedirepack.constructioncalc.feature.vfdsizing.domain.VfdSizingTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

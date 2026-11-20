@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" tests="12" skipped="0" failures="0" errors="0" timestamp="2026-11-20T16:14:58.870Z" hostname="maxtop" time="0.003">
+  <properties/>
+  <testcase name="packingFactorScalesTheResult" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.0"/>
+  <testcase name="capacityUsesClearanceTheSameWay" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.0"/>
+  <testcase name="cableWiderThanTraverse" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.0"/>
+  <testcase name="smallerCableHoldsMoreAndLengthScalesWithInverseSquare" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.0"/>
+  <testcase name="validRequestHasNoProblems" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.001"/>
+  <testcase name="cableDiameterMustBePositive" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.0"/>
+  <testcase name="cableDepthIsExactForFractionalInches" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.0"/>
+  <testcase name="distanceTooLarge" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.0"/>
+  <testcase name="partialReelByHand" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.0"/>
+  <testcase name="fullReelToTheFlangeEdge" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.0"/>
+  <testcase name="otherInvalidInputs" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.0"/>
+  <testcase name="flangeNotLargerThanDrum" classname="com.thedirepack.constructioncalc.feature.reellength.domain.ReelLengthTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

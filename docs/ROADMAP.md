@@ -1,0 +1,145 @@
+# Roadmap
+
+The app is a single multi-mode toolbox for field electricians and builders. Each mode is a
+**tool module** (`:feature:<name>`) registered in `:app` → `ToolRegistry`; see
+[ARCHITECTURE.md](ARCHITECTURE.md) for how tools share the calculator engine, values, projects and
+settings.
+
+## Foundations (v0.2, done)
+
+- Multi-module build with convention plugins; pure-Kotlin engine (`:core:measure`), model
+  (`:core:model`) and electrical tables (`:core:electrical`)
+- Tool API (`ToolModule` / `ToolHost`): one drawer, one look, one back stack
+- Projects → runs → items from any tool; saved as one readable JSON file per project (`Name.project.json`); full backups as `….backup.json`;
+  share as attachment + text (email/messages), save via file picker, open/import from other apps;
+  no permissions
+- Values flow between tools: every finished result is published; every length field is the
+  feet-inch calculator and offers recent results and active-project results by kind
+- One Settings screen: General (theme, animations on/off), Measurements (Auto/ft-in/in, precision),
+  and a page per tool that has options (opened directly from inside that tool)
+
+Feature references for each future tool are in [`docs/research/`](research/). They are written
+from the public Play Store listings and from inspecting the reference apps. We use them only as an
+inventory of features, never as a source of code, art or text.
+
+## Status
+
+| Tool | Status | Reference app(s) |
+| --- | --- | --- |
+| Foot-Inch Calculator | **done** (on shared system) | ArchCalc (`evanwinograd.archcalc`) |
+| Conduit Bending | **done** (v1) | Conduit (`com.conduit`) |
+| Conduit Fill | in progress | Conduit (`com.conduit`) |
+| Voltage Drop | **done** (v1, tables checked vs NEC 2023) | Southwire Voltage Drop (`com.southwire.voltageDrop`) |
+| Wire Pull Planner | planned | Southwire SIMpull (`com.simpull`) |
+| Partial Reel Length | **done** (v1) | Southwire Partial Reel (`com.southwire.partialReelCalculator`) |
+| Unit Conversions | in progress | Southwire Conversion (`com.southwire.conversion`) |
+| VFD Sizing | **done** (v1, tables checked vs NEC 2023) | Southwire VFD Sizing (`com.southwire.VFDSizingCalculator`) |
+| Well & Pump | planned | Well Drilling (`com.welldrilling`) |
+| Projects & Runs | **done** (core); linking flows next | Original to this app: links all of the above |
+
+## 1. Foot-Inch Calculator (done: v0.1)
+
+- Exact fraction math (no floating-point drift), with feet `'` and inches `"` keys and one-tap fraction keys laid out like tape marks (eighths, then odd sixteenths)
+- Results rounded to 1/2 through 1/64, with an "≈" marker and a note saying which way it rounded
+- Auto display: inches in gives inches out, feet in gives feet-inches out (the most common complaint about ArchCalc)
+- Dimensions are tracked: ft × ft → sq ft, × ft → cu ft, ft ÷ ft → a plain count
+- Live preview while typing, history (saved), tap to copy, a feet-and-inches or inches-only display
+- Conversions: total inches, decimal feet and inches, mm, m, sq in, sq yd, m², cu yd, gallons, m³
+
+Next for this tool:
+- [ ] Memory keys (M+, M−, MR) and an "Ans" key
+- [ ] Parentheses
+- [ ] Metric entry (mm, cm, m) alongside imperial
+- [ ] √ and x² (for diagonals and squaring up), plus a right-triangle helper (rise, run, diagonal, angle)
+- [ ] Stair, rafter and pitch helpers
+- [ ] Circle helpers (circumference and area from a diameter)
+- [ ] Edit an earlier part of the expression, not only the end
+- [ ] Landscape and tablet layout
+- [ ] Calculation **tape** showing each step's running total, where you can tap any line to edit it, swipe to delete it, and long-press to name it (ArchCalc's best history feature)
+- [ ] **Series / layout marks**: multiples of the answer plus an offset, for spacing studs, balusters and joists
+- [ ] Saved values / favorites, plus a picker to drop a saved, copied or clipboard value into any input
+- [ ] **Material outputs**: show an area or volume as sheets, bags or yards of concrete, using material units the user defines
+- [ ] Separate input precision (which fraction keys appear) from output precision (rounding)
+- [ ] PDF/text export of a calculation (this becomes part of Projects & Runs)
+- [ ] Architectural notation (`2-03-08`) as an optional output
+- [ ] Optional key sounds and colour-blind-safe key shapes
+
+## 2. Conduit Bending
+
+Bending math for EMT, IMC and rigid conduit with hand benders and benders such as the 555 and Chicago.
+- Offsets: a chosen angle (10°, 22.5°, 30°, 45°, 60°) and offset height give the mark spacing (multiplier, i.e. cosecant), the shrink, and where to put the first mark
+- Rolling offsets (the true offset from rise and roll), plus parallel/concentric offsets
+- 3-point and 4-point saddles: center mark, outer marks and shrink
+- 90° stub-ups and back-to-back 90s with the bender's take-up/deduct for each conduit size
+- Kicks, and offsets into boxes
+- A bender profile: the user enters their own bender's take-ups, gains and the location of its star or arrow mark
+- Diagrams of each bend showing where every mark goes, measured from the end of the stick
+- Uses the Foot-Inch engine (`core/measure`) for all lengths and fractions
+
+## 3. Conduit Fill
+
+- NEC Chapter 9 Table 1 fill limits (53% for one wire, 31% for two, 40% for more)
+- Conduit types (EMT, IMC, RMC, PVC 40/80, FMC, LFMC, ENT) and their trade sizes (Table 4)
+- Wire types (THHN/THWN-2, XHHW-2, RHH, USE…) and their areas (Table 5), mixed sizes, bare grounds (Table 8)
+- Output: % fill, the smallest conduit that works, and how many wires of one size fit (Annex C style)
+- Optional: jam ratio and nipple fill (60% for 24" or less)
+
+## 4. Voltage Drop
+
+- Single-phase or three-phase, copper or aluminum, a choice of conduit type (PVC, aluminum or steel when using AC impedance tables)
+- Inputs: voltage, load amps, one-way length, wire size, number of parallel sets, power factor
+- Outputs: volts dropped, % drop, voltage at the load, and the smallest wire size that keeps drop under X%
+- Methods: the simple K-factor formula (2·K·I·L / CM, or √3 for three-phase) and NEC Chapter 9 Table 9 impedance
+- Max distance for a given wire, load and % drop
+
+## 5. Wire Pull Planner
+
+- Build a pull path from straight runs and bends (angle, radius) with elevation changes
+- Pulling tension for each segment (straight run: T = W·L·μ; bend: T_out = T_in·e^(μθ)) and sidewall bearing pressure in each bend
+- Inputs: conductors (size, count, weight per foot), conduit size and type, coefficient of friction (lubricant), and the cable's max tension
+- Pull from the other end to compare; set the tugger capacity; warnings when a limit is exceeded
+- Jam ratio and clearance checks
+- Exports a pull report (see Projects & Runs)
+
+## 6. Partial Reel Length
+
+- Estimate the cable left on a reel from the flange diameter, drum (core) diameter, traverse width, the height of the cable layers (or their distance below the flange edge), and the cable OD
+- Also work backwards: how big a reel a given length needs
+- Presets for common reel sizes
+
+## 7. Unit Conversions
+
+- Length, area, volume, weight, temperature, pressure, power (HP ↔ kW), energy, speed
+- Electrical: kcmil ↔ mm², AWG ↔ mm² ↔ circular mils, amps ↔ kW/kVA (single- or three-phase, PF), Ω/kft ↔ Ω/km
+- Uses the same exact-fraction engine where it makes sense
+
+## 8. VFD Sizing
+
+- Pick a drive from the motor's HP/kW, voltage, phase and FLA (NEC Table 430.248/430.250)
+- Constant- or variable-torque loads, single-phase input derating, altitude and temperature derating
+- Outputs: the drive's current rating needed, input and output conductors, OCPD guidance
+
+## 9. Well & Pump
+
+To be scoped once the reference research for `com.welldrilling` is done. That app's actual function
+still needs confirming; it likely covers well volume, grout and gravel-pack volume, pump sizing and
+total dynamic head.
+
+## 10. Projects & Runs (linking everything together)
+
+The main thing this app adds over single-purpose calculators:
+- A **Project** holds **Runs**, for example "Panel A → RTU-3".
+- A run collects linked calculations: feet-inch takeoffs → total length → conduit bends along the run → conduit fill → voltage drop for the run length → pull tension along the bends → wire from the reel.
+- Values flow between tools: a length worked out in Foot-Inch can feed Voltage Drop and Pull Planner without retyping it.
+- Each tool's screen gets an "Add to run" action, and a run shows every step and its result.
+- Sharing: export a run or project as a readable summary (text or PDF) and as a file that someone else's copy of the app can import. Later: a share link.
+- Storage: Room database; the shared measurement types live in `core/`.
+
+## Architecture notes
+
+- `core/math`: `Rational`, the exact fractions everything uses
+- `core/measure`: quantities with dimensions, the measurement parser, the expression evaluator, and formatting
+- `feature/<tool>`: one package per tool (screen, ViewModel, pure input/logic classes)
+- `ui/`: app shell, theme, shared composables (`fractionText`)
+- Engine code stays pure Kotlin with JVM unit tests; UI is Jetpack Compose + Material 3
+- When a second tool lands: move `core/` into its own Gradle module and add Navigation Compose

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.thedirepack.constructioncalc.core.electrical.StandardOcpdTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-11-20T16:36:43.390Z" hostname="maxtop" time="0.001">
+  <properties/>
+  <testcase name="nextUpRoundsToTheNextStandardSize" classname="com.thedirepack.constructioncalc.core.electrical.StandardOcpdTest" time="0.0"/>
+  <testcase name="table240_6A" classname="com.thedirepack.constructioncalc.core.electrical.StandardOcpdTest" time="0.001"/>
+  <testcase name="nextDown" classname="com.thedirepack.constructioncalc.core.electrical.StandardOcpdTest" time="0.0"/>
+  <testcase name="fuseOnlyRatings" classname="com.thedirepack.constructioncalc.core.electrical.StandardOcpdTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

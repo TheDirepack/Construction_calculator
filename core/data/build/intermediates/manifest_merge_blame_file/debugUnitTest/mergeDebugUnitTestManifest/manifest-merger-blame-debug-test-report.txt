@@ -1,0 +1,143 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.thedirepack.constructioncalc.core.data.test" >
+4
+5    <uses-sdk
+5-->/home/max/.t3/projects/construction-calculator/core/data/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest3553701958210072983.xml:5:5-74
+6        android:minSdkVersion="26"
+6-->/home/max/.t3/projects/construction-calculator/core/data/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest3553701958210072983.xml:5:15-41
+7        android:targetSdkVersion="37" />
+7-->/home/max/.t3/projects/construction-calculator/core/data/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest3553701958210072983.xml:5:42-71
+8
+9    <instrumentation
+9-->/home/max/.t3/projects/construction-calculator/core/data/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest3553701958210072983.xml:9:5-11:97
+10        android:name="androidx.test.runner.AndroidJUnitRunner"
+10-->/home/max/.t3/projects/construction-calculator/core/data/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest3553701958210072983.xml:9:22-76
+11        android:label="Tests for com.thedirepack.constructioncalc.core.data.test"
+11-->/home/max/.t3/projects/construction-calculator/core/data/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest3553701958210072983.xml:11:22-95
+12        android:targetPackage="com.thedirepack.constructioncalc.core.data.test" />
+12-->/home/max/.t3/projects/construction-calculator/core/data/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest3553701958210072983.xml:10:22-93
+13
+14    <permission
+14-->[androidx.core:core:1.19.1] /home/max/.gradle/caches/9.9.2/transforms/5bdcd710bf4d7cb879092fc86ea4ef49/transformed/core-1.19.1/AndroidManifest.xml:22:5-24:47
+15        android:name="com.thedirepack.constructioncalc.core.data.test.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+15-->[androidx.core:core:1.19.1] /home/max/.gradle/caches/9.9.2/transforms/5bdcd710bf4d7cb879092fc86ea4ef49/transformed/core-1.19.1/AndroidManifest.xml:23:9-81
+16        android:protectionLevel="signature" />
+16-->[androidx.core:core:1.19.1] /home/max/.gradle/caches/9.9.2/transforms/5bdcd710bf4d7cb879092fc86ea4ef49/transformed/core-1.19.1/AndroidManifest.xml:24:9-44
+17
+18    <uses-permission android:name="com.thedirepack.constructioncalc.core.data.test.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+18-->[androidx.core:core:1.19.1] /home/max/.gradle/caches/9.9.2/transforms/5bdcd710bf4d7cb879092fc86ea4ef49/transformed/core-1.19.1/AndroidManifest.xml:26:5-97
+18-->[androidx.core:core:1.19.1] /home/max/.gradle/caches/9.9.2/transforms/5bdcd710bf4d7cb879092fc86ea4ef49/transformed/core-1.19.1/AndroidManifest.xml:26:22-94
+19
+20    <application
+20-->/home/max/.t3/projects/construction-calculator/core/data/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest3553701958210072983.xml:7:5-46
+21        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+21-->[androidx.core:core:1.19.1] /home/max/.gradle/caches/9.9.2/transforms/5bdcd710bf4d7cb879092fc86ea4ef49/transformed/core-1.19.1/AndroidManifest.xml:28:18-86
+22        android:debuggable="true" > <!-- Shares project files with other apps (email, messages, Drive) without any storage permission. -->
+22-->/home/max/.t3/projects/construction-calculator/core/data/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest3553701958210072983.xml:7:18-43
+23        <provider
+23-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:10:9-18:20
+24            android:name="androidx.core.content.FileProvider"
+24-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:11:13-62
+25            android:authorities="com.thedirepack.constructioncalc.core.data.test.files"
+25-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:12:13-57
+26            android:exported="false"
+26-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:13:13-37
+27            android:grantUriPermissions="true" >
+27-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:14:13-47
+28            <meta-data
+28-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:15:13-17:56
+29                android:name="android.support.FILE_PROVIDER_PATHS"
+29-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:16:17-67
+30                android:resource="@xml/shared_paths" />
+30-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:17:17-53
+31        </provider>
+32
+33        <activity
+33-->[androidx.compose.ui:ui-tooling-android:1.13.0] /home/max/.gradle/caches/9.9.2/transforms/a865e2263ecf8f3c55bf5a08182d4b73/transformed/ui-tooling/AndroidManifest.xml:23:9-25:39
+34            android:name="androidx.compose.ui.tooling.PreviewActivity"
+34-->[androidx.compose.ui:ui-tooling-android:1.13.0] /home/max/.gradle/caches/9.9.2/transforms/a865e2263ecf8f3c55bf5a08182d4b73/transformed/ui-tooling/AndroidManifest.xml:24:13-71
+35            android:exported="true" />
+35-->[androidx.compose.ui:ui-tooling-android:1.13.0] /home/max/.gradle/caches/9.9.2/transforms/a865e2263ecf8f3c55bf5a08182d4b73/transformed/ui-tooling/AndroidManifest.xml:25:13-36
+36
+37        <provider
+37-->[androidx.emoji2:emoji2:1.7.0] /home/max/.gradle/caches/9.9.2/transforms/2a0ec83f2c86d2a42ac863b9af1a3260/transformed/emoji2-1.7.0/AndroidManifest.xml:24:9-32:20
+38            android:name="androidx.startup.InitializationProvider"
+38-->[androidx.emoji2:emoji2:1.7.0] /home/max/.gradle/caches/9.9.2/transforms/2a0ec83f2c86d2a42ac863b9af1a3260/transformed/emoji2-1.7.0/AndroidManifest.xml:25:13-67
+39            android:authorities="com.thedirepack.constructioncalc.core.data.test.androidx-startup"
+39-->[androidx.emoji2:emoji2:1.7.0] /home/max/.gradle/caches/9.9.2/transforms/2a0ec83f2c86d2a42ac863b9af1a3260/transformed/emoji2-1.7.0/AndroidManifest.xml:26:13-68
+40            android:exported="false" >
+40-->[androidx.emoji2:emoji2:1.7.0] /home/max/.gradle/caches/9.9.2/transforms/2a0ec83f2c86d2a42ac863b9af1a3260/transformed/emoji2-1.7.0/AndroidManifest.xml:27:13-37
+41            <meta-data
+41-->[androidx.emoji2:emoji2:1.7.0] /home/max/.gradle/caches/9.9.2/transforms/2a0ec83f2c86d2a42ac863b9af1a3260/transformed/emoji2-1.7.0/AndroidManifest.xml:29:13-31:52
+42                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+42-->[androidx.emoji2:emoji2:1.7.0] /home/max/.gradle/caches/9.9.2/transforms/2a0ec83f2c86d2a42ac863b9af1a3260/transformed/emoji2-1.7.0/AndroidManifest.xml:30:17-75
+43                android:value="androidx.startup" />
+43-->[androidx.emoji2:emoji2:1.7.0] /home/max/.gradle/caches/9.9.2/transforms/2a0ec83f2c86d2a42ac863b9af1a3260/transformed/emoji2-1.7.0/AndroidManifest.xml:31:17-49
+44            <meta-data
+44-->[androidx.lifecycle:lifecycle-process:2.10.0] /home/max/.gradle/caches/9.9.2/transforms/2dc28d5ef0ad9eb3e8e0ac4a08141fd3/transformed/lifecycle-process-2.10.0/AndroidManifest.xml:29:13-31:52
+45                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+45-->[androidx.lifecycle:lifecycle-process:2.10.0] /home/max/.gradle/caches/9.9.2/transforms/2dc28d5ef0ad9eb3e8e0ac4a08141fd3/transformed/lifecycle-process-2.10.0/AndroidManifest.xml:30:17-78
+46                android:value="androidx.startup" />
+46-->[androidx.lifecycle:lifecycle-process:2.10.0] /home/max/.gradle/caches/9.9.2/transforms/2dc28d5ef0ad9eb3e8e0ac4a08141fd3/transformed/lifecycle-process-2.10.0/AndroidManifest.xml:31:17-49
+47            <meta-data
+47-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:29:13-31:52
+48                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+48-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:30:17-85
+49                android:value="androidx.startup" />
+49-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:31:17-49
+50        </provider>
+51
+52        <uses-library
+52-->[androidx.window:window:1.5.0] /home/max/.gradle/caches/9.9.2/transforms/71f77255ff8a8f79e2c3ed6b2800a922/transformed/window-1.5.0/AndroidManifest.xml:23:9-25:40
+53            android:name="androidx.window.extensions"
+53-->[androidx.window:window:1.5.0] /home/max/.gradle/caches/9.9.2/transforms/71f77255ff8a8f79e2c3ed6b2800a922/transformed/window-1.5.0/AndroidManifest.xml:24:13-54
+54            android:required="false" />
+54-->[androidx.window:window:1.5.0] /home/max/.gradle/caches/9.9.2/transforms/71f77255ff8a8f79e2c3ed6b2800a922/transformed/window-1.5.0/AndroidManifest.xml:25:13-37
+55        <uses-library
+55-->[androidx.window:window:1.5.0] /home/max/.gradle/caches/9.9.2/transforms/71f77255ff8a8f79e2c3ed6b2800a922/transformed/window-1.5.0/AndroidManifest.xml:26:9-28:40
+56            android:name="androidx.window.sidecar"
+56-->[androidx.window:window:1.5.0] /home/max/.gradle/caches/9.9.2/transforms/71f77255ff8a8f79e2c3ed6b2800a922/transformed/window-1.5.0/AndroidManifest.xml:27:13-51
+57            android:required="false" />
+57-->[androidx.window:window:1.5.0] /home/max/.gradle/caches/9.9.2/transforms/71f77255ff8a8f79e2c3ed6b2800a922/transformed/window-1.5.0/AndroidManifest.xml:28:13-37
+58
+59        <receiver
+59-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:34:9-52:20
+60            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+60-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:35:13-76
+61            android:directBootAware="false"
+61-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:36:13-44
+62            android:enabled="true"
+62-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:37:13-35
+63            android:exported="true"
+63-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:38:13-36
+64            android:permission="android.permission.DUMP" >
+64-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:39:13-57
+65            <intent-filter>
+65-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:40:13-42:29
+66                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+66-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:41:17-91
+66-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:41:25-88
+67            </intent-filter>
+68            <intent-filter>
+68-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:43:13-45:29
+69                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+69-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:44:17-85
+69-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:44:25-82
+70            </intent-filter>
+71            <intent-filter>
+71-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:46:13-48:29
+72                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+72-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:47:17-88
+72-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:47:25-85
+73            </intent-filter>
+74            <intent-filter>
+74-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:49:13-51:29
+75                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+75-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:50:17-95
+75-->[androidx.profileinstaller:profileinstaller:1.4.0] /home/max/.gradle/caches/9.9.2/transforms/846a6732b51c2521e973bc2537f08419/transformed/profileinstaller-1.4.0/AndroidManifest.xml:50:25-92
+76            </intent-filter>
+77        </receiver>
+78    </application>
+79
+80</manifest>

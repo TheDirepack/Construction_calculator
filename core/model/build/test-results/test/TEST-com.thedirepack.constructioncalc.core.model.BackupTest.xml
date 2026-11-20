@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.thedirepack.constructioncalc.core.model.BackupTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-11-20T16:37:24.308Z" hostname="maxtop" time="0.152">
+  <properties/>
+  <testcase name="backupRoundTripsAndIsDetected" classname="com.thedirepack.constructioncalc.core.model.BackupTest" time="0.126"/>
+  <testcase name="fileNames" classname="com.thedirepack.constructioncalc.core.model.BackupTest" time="0.015"/>
+  <testcase name="mergePlanAddsNewUpdatesOlderKeepsNewer" classname="com.thedirepack.constructioncalc.core.model.BackupTest" time="0.001"/>
+  <testcase name="singleProjectFilesAreDetected" classname="com.thedirepack.constructioncalc.core.model.BackupTest" time="0.003"/>
+  <testcase name="otherJsonIsRejected" classname="com.thedirepack.constructioncalc.core.model.BackupTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

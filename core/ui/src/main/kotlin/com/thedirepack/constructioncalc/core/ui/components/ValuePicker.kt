@@ -1,0 +1,106 @@
+package com.thedirepack.constructioncalc.core.ui.components
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.thedirepack.constructioncalc.core.model.ResultValue
+import com.thedirepack.constructioncalc.core.model.ValueKind
+import com.thedirepack.constructioncalc.core.ui.fractionText
+import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
+import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
+import com.thedirepack.constructioncalc.core.ui.tool.LocalTools
+import com.thedirepack.constructioncalc.core.ui.tool.titleOf
+
+private data class PickRow(val value: ResultValue, val source: String)
+
+/**
+ * Lists values of the given [kinds] from recent calculations in any tool and from the active
+ * project, so results flow between tools without retyping.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ValuePickerSheet(
+    title: String,
+    kinds: Set<ValueKind>,
+    onPick: (ResultValue) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val services = LocalAppServices.current
+    val tools = LocalTools.current
+    val settings = rememberAppSettings()
+    val recents by services.recents.recents.collectAsStateWithLifecycle()
+    val projects by services.projects.projects.collectAsStateWithLifecycle()
+    val project = projects.firstOrNull { it.id == settings.activeProjectId && !it.archived }
+
+    val recentRows = remember(recents, kinds) {
+        recents.filter { it.value.kind in kinds }.map {
+            PickRow(it.value, listOf(it.toolTitle, it.context).filter(String::isNotBlank).joinToString(" · "))
+        }
+    }
+    val projectRows = remember(project, kinds) {
+        project?.allResults().orEmpty().filter { it.value.kind in kinds }.map {
+            PickRow(it.value, "${it.run.name} › ${it.item.title} · ${tools.titleOf(it.item.toolId)}")
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Text(
+            "Use a value for “$title”",
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(horizontal = 24.dp),
+        )
+        LazyColumn(Modifier.navigationBarsPadding().padding(bottom = 16.dp)) {
+            if (recentRows.isEmpty() && projectRows.isEmpty()) {
+                item {
+                    Text(
+                        "No matching values yet. Results from other tools appear here after you calculate them.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(24.dp),
+                    )
+                }
+            }
+            if (recentRows.isNotEmpty()) {
+                item { SectionLabel("Recent") }
+                items(recentRows) { PickItem(it) { onPick(it.value) } }
+            }
+            if (projectRows.isNotEmpty()) {
+                item { SectionLabel("In ${project?.name}") }
+                items(projectRows) { PickItem(it) { onPick(it.value) } }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) = Text(
+    text,
+    style = MaterialTheme.typography.labelLarge,
+    color = MaterialTheme.colorScheme.primary,
+    modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp),
+)
+
+@Composable
+private fun PickItem(row: PickRow, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 10.dp)) {
+        Text(fractionText(row.value.text), style = MaterialTheme.typography.titleMedium)
+        Text(
+            "${row.value.label} — ${row.source}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}

@@ -1,0 +1,16 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /home/max/.t3/projects/construction-calculator/feature/reellength/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest12993036315054428153.xml:2:13-83
+INJECTED from /home/max/.t3/projects/construction-calculator/feature/reellength/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest12993036315054428153.xml:2:13-83
+	package
+		INJECTED from /home/max/.t3/projects/construction-calculator/feature/reellength/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest12993036315054428153.xml
+	xmlns:android
+		ADDED from /home/max/.t3/projects/construction-calculator/feature/reellength/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest12993036315054428153.xml:2:23-81
+uses-sdk
+INJECTED from /home/max/.t3/projects/construction-calculator/feature/reellength/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest12993036315054428153.xml reason: use-sdk injection requested
+INJECTED from /home/max/.t3/projects/construction-calculator/feature/reellength/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest12993036315054428153.xml
+INJECTED from /home/max/.t3/projects/construction-calculator/feature/reellength/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest12993036315054428153.xml
+	android:targetSdkVersion
+		INJECTED from /home/max/.t3/projects/construction-calculator/feature/reellength/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest12993036315054428153.xml
+	android:minSdkVersion
+		INJECTED from /home/max/.t3/projects/construction-calculator/feature/reellength/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest12993036315054428153.xml

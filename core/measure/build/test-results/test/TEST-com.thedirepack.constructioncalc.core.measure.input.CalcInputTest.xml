@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-11-20T15:50:21.251Z" hostname="maxtop" time="0.023">
+  <properties/>
+  <testcase name="operatorReplacementAndUnaryMinus" classname="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" time="0.004"/>
+  <testcase name="buildsTokens" classname="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" time="0.007"/>
+  <testcase name="prefersInches" classname="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" time="0.002"/>
+  <testcase name="fractionKeyBuildsMeasurements" classname="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" time="0.005"/>
+  <testcase name="recallReplacesOperandOrAppends" classname="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" time="0.001"/>
+  <testcase name="rejectsInvalidKeys" classname="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" time="0.0"/>
+  <testcase name="errorOnEqualsKeepsInput" classname="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" time="0.001"/>
+  <testcase name="backspace" classname="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" time="0.001"/>
+  <testcase name="fractionKeyReplacesExistingFraction" classname="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" time="0.0"/>
+  <testcase name="baseForFraction" classname="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" time="0.001"/>
+  <testcase name="equalsProducesAnswerAndCalculation" classname="com.thedirepack.constructioncalc.core.measure.input.CalcInputTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

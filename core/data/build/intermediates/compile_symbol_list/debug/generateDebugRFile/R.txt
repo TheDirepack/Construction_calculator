@@ -1,0 +1,1 @@
+int xml shared_paths 0x0

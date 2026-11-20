@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.thedirepack.constructioncalc.feature.vfdsizing.VfdSizingInputsTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-11-20T16:17:56.426Z" hostname="maxtop" time="0.09">
+  <properties/>
+  <testcase name="incompleteFormHasNoResults" classname="com.thedirepack.constructioncalc.feature.vfdsizing.VfdSizingInputsTest" time="0.014"/>
+  <testcase name="badNumbersAreProblems" classname="com.thedirepack.constructioncalc.feature.vfdsizing.VfdSizingInputsTest" time="0.001"/>
+  <testcase name="outputPublishesTypedResults" classname="com.thedirepack.constructioncalc.feature.vfdsizing.VfdSizingInputsTest" time="0.046"/>
+  <testcase name="savedInputsRoundTripAndDefaultsDecode" classname="com.thedirepack.constructioncalc.feature.vfdsizing.VfdSizingInputsTest" time="0.023"/>
+  <testcase name="kilowattEntryConvertsAndNeedsAValue" classname="com.thedirepack.constructioncalc.feature.vfdsizing.VfdSizingInputsTest" time="0.001"/>
+  <testcase name="singlePhaseAddsGuidanceWithAWarning" classname="com.thedirepack.constructioncalc.feature.vfdsizing.VfdSizingInputsTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

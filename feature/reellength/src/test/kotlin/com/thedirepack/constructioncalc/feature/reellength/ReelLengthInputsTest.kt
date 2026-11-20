@@ -1,0 +1,71 @@
+package com.thedirepack.constructioncalc.feature.reellength
+
+import com.thedirepack.constructioncalc.core.data.AppSettings
+import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.model.ToolInputs
+import com.thedirepack.constructioncalc.core.model.ValueKind
+import com.thedirepack.constructioncalc.core.model.stored
+import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
+import kotlinx.serialization.json.JsonObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import kotlin.math.PI
+
+class ReelLengthInputsTest {
+    private fun inches(n: Long) = Quantity.inches(Rational.of(n)).stored()
+
+    private val filled = ReelLengthInputs(
+        flange = inches(30), drum = inches(12), traverse = inches(18), distance = inches(3), cableDiameter = inches(1),
+    )
+
+    @Test fun savedInputsRoundTripAndDefaultsDecode() {
+        val custom = filled.copy(mode = ReelMode.CAPACITY, packingFactor = "0.9", clearance = inches(3))
+        assertEquals(custom, ToolInputs.decode<ReelLengthInputs>(ToolInputs.encode(custom)))
+        assertEquals(ReelLengthInputs(), ToolInputs.decode<ReelLengthInputs>(JsonObject(emptyMap())))
+        assertEquals(Rational.of(2), ReelLengthInputs().clearance!!.toQuantity().value)
+    }
+
+    @Test fun incompleteFormIsMissingNotError() {
+        val parsed = ReelLengthInputs().parse()
+        assertNull(parsed.request)
+        assertEquals(listOf("Flange diameter", "Drum diameter", "Traverse", "Distance from flange edge", "Cable diameter"), parsed.missing)
+        assertTrue(parsed.problems.isEmpty())
+        assertTrue(reelLengthOutput(ReelLengthInputs(), AppSettings()).notices.isEmpty())
+    }
+
+    @Test fun capacityModeUsesTheClearanceNotX() {
+        val capacity = filled.copy(mode = ReelMode.CAPACITY, distance = null)
+        assertEquals(2.0, capacity.parse().request!!.topClearance, 0.0)
+        val length = reelLengthOutput(capacity, AppSettings()).results.first { it.key == "length" }.rational!!.toDouble()
+        assertEquals(PI * 199.5 * 12, length, 1e-3)
+    }
+
+    @Test fun remainingResults() {
+        val out = reelLengthOutput(filled, AppSettings())
+        val byKey = out.results.associateBy { it.key }
+        assertEquals(listOf("length", "length_feet", "wound_depth", "layers", "turns_per_layer"), out.results.map { it.key })
+        assertEquals(ValueKind.LENGTH, byKey.getValue("length").kind)
+        assertEquals(PI * 162 * 12, byKey.getValue("length").rational!!.toDouble(), 1e-3)
+        assertEquals("509 ft", byKey.getValue("length_feet").text)
+        assertEquals(Rational.of(6), byKey.getValue("wound_depth").rational)
+        assertEquals(Rational.of(6), byKey.getValue("layers").rational)
+        assertEquals(Rational.of(18), byKey.getValue("turns_per_layer").rational)
+        assertTrue(out.notices.none { it.level == NoticeLevel.ERROR })
+    }
+
+    @Test fun feetFormatting() {
+        assertEquals("1,235 ft", formatFeet(1234.6))
+        assertEquals("45.5 ft", formatFeet(45.46))
+    }
+
+    @Test fun badInputsAreErrors() {
+        val tooDeep = reelLengthOutput(filled.copy(distance = inches(10)), AppSettings())
+        assertTrue(tooDeep.results.isEmpty())
+        assertEquals(NoticeLevel.ERROR, tooDeep.notices.single().level)
+        assertEquals(listOf("Packing factor isn't a number."), filled.copy(packingFactor = "1.2.3").parse().problems)
+        assertTrue(filled.copy(cableDiameter = inches(0)).parse().problems.isNotEmpty())
+    }
+}

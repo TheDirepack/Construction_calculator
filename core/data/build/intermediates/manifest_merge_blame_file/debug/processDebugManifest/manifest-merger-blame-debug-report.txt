@@ -1,0 +1,32 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.thedirepack.constructioncalc.core.data" >
+4
+5    <uses-sdk android:minSdkVersion="26" />
+5-->INJECTED
+5-->INJECTED
+6
+7    <application>
+7-->/home/max/.t3/projects/construction-calculator/core/data/src/main/AndroidManifest.xml:3:5-14:19
+8
+9        <!-- Shares project files with other apps (email, messages, Drive) without any storage permission. -->
+10        <provider
+10-->/home/max/.t3/projects/construction-calculator/core/data/src/main/AndroidManifest.xml:5:9-13:20
+11            android:name="androidx.core.content.FileProvider"
+11-->/home/max/.t3/projects/construction-calculator/core/data/src/main/AndroidManifest.xml:6:13-62
+12            android:authorities="${applicationId}.files"
+12-->/home/max/.t3/projects/construction-calculator/core/data/src/main/AndroidManifest.xml:7:13-57
+13            android:exported="false"
+13-->/home/max/.t3/projects/construction-calculator/core/data/src/main/AndroidManifest.xml:8:13-37
+14            android:grantUriPermissions="true" >
+14-->/home/max/.t3/projects/construction-calculator/core/data/src/main/AndroidManifest.xml:9:13-47
+15            <meta-data
+15-->/home/max/.t3/projects/construction-calculator/core/data/src/main/AndroidManifest.xml:10:13-12:56
+16                android:name="android.support.FILE_PROVIDER_PATHS"
+16-->/home/max/.t3/projects/construction-calculator/core/data/src/main/AndroidManifest.xml:11:17-67
+17                android:resource="@xml/shared_paths" />
+17-->/home/max/.t3/projects/construction-calculator/core/data/src/main/AndroidManifest.xml:12:17-53
+18        </provider>
+19    </application>
+20
+21</manifest>

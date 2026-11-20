@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Gradle wrapper for agents and scripts: picks the JDK and serializes builds with a lock, so
+# several agents working in this checkout never run Gradle at the same time (this machine is
+# memory-constrained). Usage: scripts/gw :feature:voltagedrop:testDebugUnitTest
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ -z "${JAVA_HOME:-}" || ! -x "${JAVA_HOME}/bin/javac" ]]; then
+  JDK="$(ls -d "$HOME"/.local/share/jdks/jdk-21* 2>/dev/null | head -1 || true)"
+  [[ -n "$JDK" ]] && export JAVA_HOME="$JDK"
+fi
+mkdir -p "$ROOT/.gradle"
+exec flock "$ROOT/.gradle/agent-build.lock" "$ROOT/gradlew" -p "$ROOT" --console=plain "$@"
