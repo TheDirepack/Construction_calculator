@@ -4,7 +4,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
+import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
+import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
 import com.thedirepack.constructioncalc.core.electrical.ConduitTable
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
@@ -43,7 +45,8 @@ class ConduitFillViewModel : ViewModel() {
 
     fun setInsulation(index: Int, code: String) = updateGroup(index) { g ->
         val size = ConductorSize.fromLabel(g.size) ?: ConductorSize.AWG_12
-        g.copy(insulation = code, size = sizeFor(code, size).label)
+        // Bare conductors are grounds: never current-carrying. Switching back to insulated restores it.
+        g.copy(insulation = code, size = sizeFor(code, size).label, currentCarrying = code != BARE_CODE)
     }
 
     fun setSize(index: Int, size: ConductorSize) = updateGroup(index) { it.copy(size = size.label) }
@@ -62,6 +65,16 @@ class ConduitFillViewModel : ViewModel() {
     }
 
     fun setFitSize(size: ConductorSize) = update { it.copy(fitSize = size.label) }
+
+    fun setCurrentCarrying(index: Int, value: Boolean) = updateGroup(index) { it.copy(currentCarrying = value) }
+
+    fun setAmbient(text: String) = update { it.copy(ambientC = text.filter { c -> c.isDigit() || c == '.' || c == '-' }.take(6)) }
+
+    fun setRooftop(value: Boolean) = update { it.copy(rooftop = value) }
+
+    fun setMaterial(material: ConductorMaterial) = update { it.copy(material = material.name) }
+
+    fun setTermination(rating: TemperatureRating) = update { it.copy(termination = rating.celsius) }
 
     private fun updateGroup(index: Int, change: (ConductorGroupInput) -> ConductorGroupInput) = update { i ->
         if (index !in i.groups.indices) i else i.copy(groups = i.groups.mapIndexed { n, g -> if (n == index) change(g) else g })

@@ -1,6 +1,11 @@
 package com.thedirepack.constructioncalc.feature.conduitfill
 
 import com.thedirepack.constructioncalc.core.electrical.BareConductorArea
+import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
+import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
+import com.thedirepack.constructioncalc.feature.conduitfill.domain.DeratingGroup
+import com.thedirepack.constructioncalc.feature.conduitfill.domain.DeratingResult
+import com.thedirepack.constructioncalc.feature.conduitfill.domain.FillDerating
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.ConduitTable
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
@@ -23,6 +28,8 @@ data class ConductorGroupInput(
     val insulation: String = InsulationType.THHN.code,
     /** A [ConductorSize.label], e.g. "12 AWG". */
     val size: String = ConductorSize.AWG_12.label,
+    /** Counts toward the current-carrying total for derating (grounds and bare conductors never do). */
+    val currentCarrying: Boolean = true,
 )
 
 /** What a saved Conduit Fill item stores. Every field has a default so a partly filled item still decodes. */
@@ -36,12 +43,37 @@ data class ConduitFillInputs(
     val nipple: Boolean = false,
     val groups: List<ConductorGroupInput> = listOf(
         ConductorGroupInput(count = "3"),
-        ConductorGroupInput(count = "1", insulation = BARE_CODE),
+        ConductorGroupInput(count = "1", insulation = BARE_CODE, currentCarrying = false),
     ),
     /** The wire used for the "how many fit" count. */
     val fitInsulation: String = InsulationType.THHN.code,
     val fitSize: String = ConductorSize.AWG_12.label,
-)
+    // Derating
+    val ambientC: String = "30",
+    /** In direct sunlight less than 3/4 in. above a roof (310.15(B)(2)). */
+    val rooftop: Boolean = false,
+    /** A [ConductorMaterial] name. */
+    val material: String = ConductorMaterial.COPPER.name,
+    /** Lowest terminal temperature rating, °C (110.14(C)). */
+    val termination: Int = 75,
+) {
+    /** Derating inputs, or null while the ambient temperature isn't a number. */
+    fun deratingGroups(): List<DeratingGroup> = groups.mapNotNull { g ->
+        val count = g.count.trim().toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
+        val size = ConductorSize.fromLabel(g.size) ?: return@mapNotNull null
+        val insulation = if (g.insulation == BARE_CODE) null else InsulationType.fromCode(g.insulation) ?: return@mapNotNull null
+        DeratingGroup(count, size, insulation, g.currentCarrying && insulation != null)
+    }
+
+    val conductorMaterial: ConductorMaterial get() = ConductorMaterial.entries.firstOrNull { it.name == material } ?: ConductorMaterial.COPPER
+
+    val terminationRating: TemperatureRating get() = TemperatureRating.fromCelsius(termination) ?: TemperatureRating.C75
+
+    fun derating(): DeratingResult? {
+        val ambient = ambientC.trim().replace(',', '.').toDoubleOrNull() ?: return null
+        return FillDerating.compute(deratingGroups(), ambient, rooftop, conductorMaterial, terminationRating, nipple)
+    }
+}
 
 /** [inputs] turned into a calculable request, or the reasons it can't be. */
 data class ParsedFill(val request: FillRequest?, val problems: List<String>)

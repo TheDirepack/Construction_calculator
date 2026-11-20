@@ -1,5 +1,11 @@
 package com.thedirepack.constructioncalc.feature.conduitfill
 
+import com.thedirepack.constructioncalc.feature.conduitfill.domain.toResults
+import com.thedirepack.constructioncalc.feature.conduitfill.domain.explanations
+import com.thedirepack.constructioncalc.core.ui.components.SegmentedChoice
+import com.thedirepack.constructioncalc.core.model.ValueKind
+import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
+import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -57,7 +63,9 @@ fun ConduitFillScreen(host: ToolHost) {
     val inputs = vm.inputs
     val parsed = remember(inputs) { inputs.toRequest() }
     val report = remember(parsed) { parsed.request?.let { ConduitFillReport.build(it) } }
-    val results = report?.results.orEmpty()
+    val derating = remember(inputs) { inputs.derating() }
+    val deratingResults = remember(derating) { derating?.toResults().orEmpty() }
+    val results = report?.results.orEmpty() + deratingResults
 
     LaunchedEffect(results) {
         if (report != null) host.publish(results, context = report.summary)
@@ -92,6 +100,7 @@ fun ConduitFillScreen(host: ToolHost) {
             ConduitSection(inputs, vm)
             ConductorsSection(inputs, vm)
             FitSection(inputs, vm)
+            DeratingSection(inputs, vm)
 
             val notices = if (parsed.problems.isNotEmpty()) {
                 parsed.problems.map { Notice(it, NoticeLevel.ERROR) }
@@ -99,9 +108,16 @@ fun ConduitFillScreen(host: ToolHost) {
                 report?.notices.orEmpty().map { Notice(it.text, it.severity.toLevel()) }
             }
             ResultCard(
-                results = results,
+                results = report?.results.orEmpty(),
                 notices = notices,
                 emptyText = if (parsed.problems.isEmpty()) "Enter a count above 0 for at least one conductor to see the fill." else "Fix the inputs above to see the fill.",
+            )
+            Text("Ampacity derating", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            ResultCard(
+                results = deratingResults,
+                notices = derating?.let { d -> (d.explanations() + d.notes).map { Notice(it, NoticeLevel.INFO) } }
+                    ?: listOf(Notice("Enter the ambient temperature to see derating.", NoticeLevel.ERROR)),
+                emptyText = "Mark at least one insulated group as current-carrying to see derating.",
             )
         }
     }
@@ -184,6 +200,14 @@ private fun ConductorsSection(inputs: ConduitFillInputs, vm: ConduitFillViewMode
                         optionLabel = ::insulationLabel,
                         supportingText = if (group.insulation == BARE_CODE) "Bare equipment grounding conductor (Table 8, stranded)" else null,
                     )
+                    if (group.insulation != BARE_CODE) {
+                        ToggleRow(
+                            title = "Carries current",
+                            subtitle = "Counts for derating. Off for grounds and neutrals that carry only unbalanced current (310.15(E), (F)).",
+                            checked = group.currentCarrying,
+                            onCheckedChange = { vm.setCurrentCarrying(index, it) },
+                        )
+                    }
                 }
             }
         }
@@ -257,3 +281,42 @@ private fun tradeSizeLabel(size: ConduitSize) = "${size.tradeSize.display} (metr
 private fun sizeLabel(size: ConductorSize) = size.label.replace("/0", "∕0")
 
 private fun fmt(value: Double, decimals: Int) = String.format(Locale.US, "%.${decimals}f", value)
+
+@Composable
+private fun DeratingSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) {
+    FormSection("Derating conditions") {
+        NumberField(
+            label = "Ambient temperature",
+            value = inputs.ambientC,
+            onValueChange = vm::setAmbient,
+            unit = "°C",
+            allowNegative = true,
+            pickKinds = setOf(ValueKind.TEMPERATURE),
+            onPick = { picked ->
+                // Shared temperatures are °F; convert to °C for the NEC tables.
+                picked.rational?.toDouble()?.let { f -> vm.setAmbient(fmt((f - 32) * 5 / 9, 1)) }
+            },
+            supportingText = "NEC tables are based on 30 °C (86 °F)",
+        )
+        ToggleRow(
+            title = "Rooftop, in sunlight",
+            subtitle = "Less than 3/4 in. above the roof: +33 °C (310.15(B)(2)); XHHW-2 is exempt",
+            checked = inputs.rooftop,
+            onCheckedChange = vm::setRooftop,
+        )
+        ChoiceField(
+            label = "Conductor material",
+            options = ConductorMaterial.entries,
+            selected = inputs.conductorMaterial,
+            onSelect = vm::setMaterial,
+            optionLabel = { it.label },
+        )
+        SegmentedChoice(
+            label = "Terminal temperature rating (110.14(C))",
+            options = TemperatureRating.entries,
+            selected = inputs.terminationRating,
+            onSelect = vm::setTermination,
+            optionLabel = { it.label },
+        )
+    }
+}
