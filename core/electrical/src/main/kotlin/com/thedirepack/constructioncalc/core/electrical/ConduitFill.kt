@@ -1,18 +1,10 @@
-package com.thedirepack.constructioncalc.feature.conduitfill.domain
+package com.thedirepack.constructioncalc.core.electrical
 
-import com.thedirepack.constructioncalc.core.electrical.BareConductorArea
-import com.thedirepack.constructioncalc.core.electrical.ConductorDimensions
-import com.thedirepack.constructioncalc.core.electrical.ConductorSize
-import com.thedirepack.constructioncalc.core.electrical.ConduitSize
-import com.thedirepack.constructioncalc.core.electrical.ConduitTable
-import com.thedirepack.constructioncalc.core.electrical.ConduitType
-import com.thedirepack.constructioncalc.core.electrical.InsulatedConductorArea
-import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import kotlin.math.abs
 import kotlin.math.floor
 
 /** One kind of conductor: an insulated wire from NEC Table 5, or a bare one from Table 8. */
-sealed interface ConductorSpec {
+sealed interface FillConductor {
     val size: ConductorSize
 
     /** Table 5 or Table 8 area and diameter, or null if the NEC has no row for this combination. */
@@ -24,13 +16,13 @@ sealed interface ConductorSpec {
     /** "12 AWG THHN" or "6 AWG bare": for tight spaces such as a result label. */
     val shortLabel: String
 
-    data class Insulated(val type: InsulationType, override val size: ConductorSize) : ConductorSpec {
+    data class Insulated(val type: InsulationType, override val size: ConductorSize) : FillConductor {
         override val dimensions get() = InsulatedConductorArea.dimensions(type, size)
         override val label get() = "${size.label} ${type.label}"
         override val shortLabel get() = "${size.label} ${type.code}"
     }
 
-    data class Bare(override val size: ConductorSize, val solid: Boolean = false) : ConductorSpec {
+    data class Bare(override val size: ConductorSize, val solid: Boolean = false) : FillConductor {
         override val dimensions get() = BareConductorArea.dimensions(size, solid)
         override val label get() = "${size.label} bare"
         override val shortLabel get() = label
@@ -38,7 +30,7 @@ sealed interface ConductorSpec {
 }
 
 /** [count] identical conductors. */
-data class ConductorGroup(val count: Int, val spec: ConductorSpec)
+data class ConductorGroup(val count: Int, val spec: FillConductor)
 
 /** Result of checking a set of conductors against one conduit. */
 data class FillAnalysis(

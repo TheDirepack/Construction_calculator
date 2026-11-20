@@ -5,6 +5,9 @@ import com.thedirepack.constructioncalc.core.electrical.ConductorCountAdjustment
 import com.thedirepack.constructioncalc.core.electrical.ConductorImpedance
 import com.thedirepack.constructioncalc.core.electrical.ConductorResistance
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
+import com.thedirepack.constructioncalc.core.electrical.FillConductor
+import com.thedirepack.constructioncalc.core.electrical.ConduitFill
+import com.thedirepack.constructioncalc.core.electrical.ConductorGroup
 import com.thedirepack.constructioncalc.core.electrical.ConductorSizing
 import com.thedirepack.constructioncalc.core.electrical.ConduitSize
 import com.thedirepack.constructioncalc.core.electrical.ConduitTable
@@ -443,20 +446,24 @@ object ProjectAnalysis {
         val total = entries.sumOf { it.count }
         val area = entries.sumOf { it.count * it.areaEach }
         val raceway = run.raceway
-        val limit = when {
-            raceway?.nipple == true -> 60
-            total == 1 -> 53
-            total == 2 -> 31
-            else -> 40
+        // The same Chapter 9 fill check as the Conduit Fill tool, Note 7 rounding included.
+        val nipple = raceway?.nipple == true
+        val groups = entries.map { ConductorGroup(it.count, FillConductor.Insulated(it.insulation, it.size)) }
+        val limit = ConduitFill.limitPercent(total, nipple)
+        val smallest = raceway?.takeIf { !incomplete && total > 0 }?.let { ConduitFill.minimumConduit(it.conduitType, groups, nipple) }
+        val chosen = raceway?.tradeSize?.let { ConduitTable.find(raceway.conduitType, it) }
+        if (raceway?.tradeSize != null && chosen == null) {
+            notes += warn("${raceway.conduitType.displayName} has no ${raceway.tradeSize.display} size in Table 4; using the smallest that fits.")
         }
-        val smallest = raceway?.takeIf { !incomplete && total > 0 }?.let { r ->
-            ConduitTable.sizes(r.conduitType).firstOrNull { it.allowedAreaSqIn(limit) >= area - 1e-9 }
-        }
-        val conduit = raceway?.let { r -> r.tradeSize?.let { ConduitTable.find(r.conduitType, it) } ?: smallest }
-        val fill = conduit?.takeUnless { incomplete || total == 0 }?.let { 100.0 * area / it.area100SqIn }
+        val conduit = chosen ?: smallest
+        val analysis = conduit?.takeUnless { incomplete || total == 0 }?.let { ConduitFill.analyze(it, groups, nipple) }
+        val fill = analysis?.percentFill
+        val over = analysis != null && !analysis.withinLimit
         if (raceway == null && members.isNotEmpty()) notes += warn("Set the conduit for this run to check fill.")
-        if (conduit != null && fill != null && fill > limit + 1e-9) {
-            notes += warn("Over ${limit}% fill (${fmt(fill)}%). Smallest that fits: ${smallest?.displayName ?: "none in Table 4"}.")
+        if (over) {
+            notes += warn("Over ${limit}% fill (${fmt(fill!!)}%). Smallest that fits: ${smallest?.displayName ?: "none in Table 4"}.")
+        } else if (analysis?.permittedByNote7 == true) {
+            notes += info("Fits only by Chapter 9 Table 1 Note 7 rounding (all conductors the same size).")
         }
         if (raceway != null && !incomplete && smallest == null && area > 0) notes += warn("Too many conductors for any ${raceway.conduitType.displayName}.")
         val insulation = project.design.conductor
@@ -474,7 +481,7 @@ object ProjectAnalysis {
             area <= 0.0 -> FillStatus.EMPTY
             raceway == null -> FillStatus.NO_CONDUIT
             smallest == null && raceway.tradeSize == null -> FillStatus.TOO_MANY_FOR_ANY_SIZE
-            fill != null && fill > limit + 1e-9 -> FillStatus.OVER
+            over -> FillStatus.OVER
             conduit == null -> FillStatus.TOO_MANY_FOR_ANY_SIZE
             else -> FillStatus.OK
         }
@@ -497,5 +504,5 @@ object ProjectAnalysis {
         return PanelDesign(panel, phaseVa, phaseVa.values.sum(), phaseAmps, PanelLayout.conflicts(panel), notes)
     }
 
-    private fun fmt(v: Double) = String.format(java.util.Locale.US, "%.1f", v).removeSuffix(".0")
+    private fun fmt(v: Double) = com.thedirepack.constructioncalc.core.measure.Decimals.trim(v, 1)
 }

@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conduitfill.domain
 
+import com.thedirepack.constructioncalc.core.electrical.ConductorGroup
+import com.thedirepack.constructioncalc.core.electrical.FillConductor
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.ConduitTable
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
@@ -16,13 +18,13 @@ import org.junit.Test
 
 class ConduitFillReportTest {
     private fun conduit(type: ConduitType, size: TradeSize) = ConduitTable.find(type, size)!!
-    private fun thhn(size: ConductorSize) = ConductorSpec.Insulated(InsulationType.THHN, size)
+    private fun thhn(size: ConductorSize) = FillConductor.Insulated(InsulationType.THHN, size)
     private fun request(
         trade: TradeSize,
-        vararg groups: Pair<Int, ConductorSpec>,
+        vararg groups: Pair<Int, FillConductor>,
         type: ConduitType = ConduitType.EMT,
         nipple: Boolean = false,
-        fit: ConductorSpec? = null,
+        fit: FillConductor? = null,
     ) = FillRequest(conduit(type, trade), nipple, groups.map { ConductorGroup(it.first, it.second) }, fit)
 
     private fun ConduitFillReport.value(key: String): ResultValue = results.first { it.key == key }
@@ -40,7 +42,7 @@ class ConduitFillReportTest {
             request(
                 TradeSize.S_3_4,
                 3 to thhn(ConductorSize.AWG_12),
-                1 to ConductorSpec.Bare(ConductorSize.AWG_12),
+                1 to FillConductor.Bare(ConductorSize.AWG_12),
                 fit = thhn(ConductorSize.AWG_12),
             ),
         )!!

@@ -6,7 +6,7 @@ import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.model.ProjectItem
 import com.thedirepack.constructioncalc.core.model.ToolInputs
-import com.thedirepack.constructioncalc.feature.conduitfill.domain.ConductorSpec
+import com.thedirepack.constructioncalc.core.electrical.FillConductor
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -37,7 +37,7 @@ class ConduitFillInputsTest {
         val request = parsed.request!!
         assertEquals("3/4\" EMT", request.conduit.displayName)
         assertEquals(listOf(3, 1), request.groups.map { it.count })
-        assertTrue(request.groups[1].spec is ConductorSpec.Bare)
+        assertTrue(request.groups[1].spec is FillConductor.Bare)
         assertNotNull(request.fit)
     }
 

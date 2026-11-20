@@ -98,11 +98,7 @@ object ConductorSizing {
             }
             val small = SmallConductorLimit.maxOcpd(size, r.material)
             if (small != null && r.ocpdAmps > small) return "Small-conductor protection limit (240.4(D))"
-            val protects = usable >= r.ocpdAmps - 1e-9 || (
-                !r.multipleCordReceptacles && r.ocpdAmps <= 800 &&
-                    StandardOcpd.ratings.none { it.toDouble() == usable } &&
-                    (StandardOcpd.nextUp(usable) ?: Int.MAX_VALUE) >= r.ocpdAmps
-                )
+            val protects = r.ocpdAmps <= (ConductorProtection.maxStandardOcpd(usable, r.multipleCordReceptacles) ?: 0)
             return if (protects) null else "Overcurrent protection: ampacity vs ${r.ocpdAmps} A OCPD (240.4)"
         }
 
@@ -130,5 +126,5 @@ object ConductorSizing {
         )
     }
 
-    private fun fmt(v: Double) = if (v == v.toLong().toDouble()) v.toLong().toString() else String.format(java.util.Locale.US, "%.1f", v)
+    private fun fmt(v: Double) = com.thedirepack.constructioncalc.core.measure.Decimals.trim(v, 1)
 }

@@ -278,7 +278,4 @@ object BendPlanner {
 }
 
 /** A short decimal: up to 3 places, no trailing zeros. */
-internal fun Double.fmt(): String {
-    val text = String.format(java.util.Locale.US, "%.3f", this).trimEnd('0').trimEnd('.')
-    return if (text == "-0") "0" else text
-}
+internal fun Double.fmt(): String = com.thedirepack.constructioncalc.core.measure.Decimals.trim(this, 3)

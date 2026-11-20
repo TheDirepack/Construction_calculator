@@ -3,17 +3,17 @@ package com.thedirepack.constructioncalc.feature.conduitfill
 import com.thedirepack.constructioncalc.core.electrical.BareConductorArea
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
-import com.thedirepack.constructioncalc.feature.conduitfill.domain.DeratingGroup
-import com.thedirepack.constructioncalc.feature.conduitfill.domain.DeratingResult
-import com.thedirepack.constructioncalc.feature.conduitfill.domain.FillDerating
+import com.thedirepack.constructioncalc.core.electrical.DeratingGroup
+import com.thedirepack.constructioncalc.core.electrical.DeratingResult
+import com.thedirepack.constructioncalc.core.electrical.FillDerating
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.ConduitTable
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.InsulatedConductorArea
 import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
-import com.thedirepack.constructioncalc.feature.conduitfill.domain.ConductorGroup
-import com.thedirepack.constructioncalc.feature.conduitfill.domain.ConductorSpec
+import com.thedirepack.constructioncalc.core.electrical.ConductorGroup
+import com.thedirepack.constructioncalc.core.electrical.FillConductor
 import com.thedirepack.constructioncalc.feature.conduitfill.domain.FillRequest
 import kotlinx.serialization.Serializable
 
@@ -79,12 +79,12 @@ data class ConduitFillInputs(
 data class ParsedFill(val request: FillRequest?, val problems: List<String>)
 
 /** The wire for an insulation [code] and size [sizeLabel], or null when the NEC tables have no such row. */
-fun conductorSpec(code: String, sizeLabel: String): ConductorSpec? {
+fun conductorSpec(code: String, sizeLabel: String): FillConductor? {
     val size = ConductorSize.fromLabel(sizeLabel) ?: return null
     val spec = if (code == BARE_CODE) {
-        ConductorSpec.Bare(size)
+        FillConductor.Bare(size)
     } else {
-        ConductorSpec.Insulated(InsulationType.fromCode(code) ?: return null, size)
+        FillConductor.Insulated(InsulationType.fromCode(code) ?: return null, size)
     }
     return spec.takeIf { it.dimensions != null }
 }

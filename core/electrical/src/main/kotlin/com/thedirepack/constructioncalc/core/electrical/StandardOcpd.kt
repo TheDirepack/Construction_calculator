@@ -28,3 +28,29 @@ object StandardOcpd {
     fun nextDown(amps: Double, fuse: Boolean = false): Int? =
         ratings(fuse).lastOrNull { it <= amps + 1e-9 }
 }
+
+/**
+ * NEC 2023 240.4: the largest standard overcurrent device that may protect conductors of a given
+ * ampacity. One rule for the whole app (wire sizing, conduit fill derating).
+ */
+object ConductorProtection {
+    /**
+     * 240.4(B): the conductor's ampacity if that is a standard rating, otherwise the standard rating
+     * just below it or (next size up) the one just above it, as long as that is 800 A or less and the
+     * circuit isn't a multi-outlet branch circuit for cord-and-plug loads (240.4(B)(1)). The 240.4(D)
+     * small-conductor limits are not applied here; see [maxOcpd].
+     */
+    fun maxStandardOcpd(ampacity: Double, multipleCordReceptacles: Boolean = false): Int? {
+        val atOrBelow = StandardOcpd.nextDown(ampacity)
+        val isStandard = StandardOcpd.ratings.any { kotlin.math.abs(it - ampacity) < 1e-9 }
+        val nextUp = if (multipleCordReceptacles || isStandard) null else StandardOcpd.nextUp(ampacity)?.takeIf { it <= 800 }
+        return listOfNotNull(atOrBelow, nextUp).maxOrNull()
+    }
+
+    /** [maxStandardOcpd] capped by the 240.4(D) small-conductor limits. */
+    fun maxOcpd(ampacity: Double, size: ConductorSize, material: ConductorMaterial, multipleCordReceptacles: Boolean = false): Int? {
+        val candidate = maxStandardOcpd(ampacity, multipleCordReceptacles) ?: return null
+        val limit = SmallConductorLimit.maxOcpd(size, material) ?: return candidate
+        return minOf(candidate, limit)
+    }
+}

@@ -1,7 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conduitfill
 
 import com.thedirepack.constructioncalc.feature.conduitfill.domain.toResults
-import com.thedirepack.constructioncalc.feature.conduitfill.domain.explanations
+import com.thedirepack.constructioncalc.core.electrical.explanations
 import com.thedirepack.constructioncalc.core.ui.components.SegmentedChoice
 import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
@@ -280,7 +280,7 @@ private fun tradeSizeLabel(size: ConduitSize) = "${size.tradeSize.display} (metr
 // "1/0 AWG" would be typeset as the fraction 1⁄0 by the shared fraction formatter; a division slash avoids that.
 private fun sizeLabel(size: ConductorSize) = size.label.replace("/0", "∕0")
 
-private fun fmt(value: Double, decimals: Int) = String.format(Locale.US, "%.${decimals}f", value)
+private fun fmt(value: Double, decimals: Int) = com.thedirepack.constructioncalc.core.measure.Decimals.fixed(value, decimals)
 
 @Composable
 private fun DeratingSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) {

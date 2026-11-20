@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conduitfill.domain
 
+import com.thedirepack.constructioncalc.core.electrical.FillDerating
+import com.thedirepack.constructioncalc.core.electrical.DeratingGroup
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.InsulationType

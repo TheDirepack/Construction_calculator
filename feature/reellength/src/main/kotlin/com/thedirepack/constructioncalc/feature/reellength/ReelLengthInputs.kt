@@ -82,6 +82,5 @@ fun ReelLengthInputs.parse(): ParsedReel {
     return ParsedReel(if (problems.isEmpty()) request else null, emptyList(), problems)
 }
 
-/** Accepts `,` or `.` as the decimal mark. Null if it isn't a finite number. */
-internal fun parseNumber(text: String): Double? =
-    text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
+/** Accepts what people type; see [com.thedirepack.constructioncalc.core.measure.Decimals.parse]. */
+internal fun parseNumber(text: String): Double? = com.thedirepack.constructioncalc.core.measure.Decimals.parse(text)

@@ -40,8 +40,7 @@ object Wire {
     fun amps(value: Double): String = number(value, 1) + " A"
 
     /** At most [decimals] places, no trailing zeros. */
-    fun number(value: Double, decimals: Int = 1): String =
-        String.format(Locale.US, "%.${decimals}f", value).let { if (decimals > 0) it.trimEnd('0').trimEnd('.') else it }
+    fun number(value: Double, decimals: Int = 1): String = com.thedirepack.constructioncalc.core.measure.Decimals.trim(value, decimals)
 
     fun percent(value: Double): String = number(value, 1) + "%"
 }

@@ -1,12 +1,5 @@
-package com.thedirepack.constructioncalc.feature.conduitfill.domain
+package com.thedirepack.constructioncalc.core.electrical
 
-import com.thedirepack.constructioncalc.core.electrical.ConductorSize
-import com.thedirepack.constructioncalc.core.electrical.ConduitSize
-import com.thedirepack.constructioncalc.core.electrical.ConduitTable
-import com.thedirepack.constructioncalc.core.electrical.ConduitType
-import com.thedirepack.constructioncalc.core.electrical.InsulatedConductorArea
-import com.thedirepack.constructioncalc.core.electrical.InsulationType
-import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -17,7 +10,7 @@ import org.junit.Test
 class ConduitFillTest {
     private fun conduit(type: ConduitType, size: TradeSize): ConduitSize = ConduitTable.find(type, size)!!
     private fun emt(size: TradeSize) = conduit(ConduitType.EMT, size)
-    private fun wire(type: InsulationType, size: ConductorSize) = ConductorSpec.Insulated(type, size)
+    private fun wire(type: InsulationType, size: ConductorSize) = FillConductor.Insulated(type, size)
     private fun thhn(size: ConductorSize) = wire(InsulationType.THHN, size)
     private fun area(type: InsulationType, size: ConductorSize) = InsulatedConductorArea.area(type, size)!!
 
@@ -174,11 +167,11 @@ class ConduitFillTest {
 
     // ---- analysis ---------------------------------------------------------------------------------------
 
-    private fun groups(vararg g: Pair<Int, ConductorSpec>) = g.map { ConductorGroup(it.first, it.second) }
+    private fun groups(vararg g: Pair<Int, FillConductor>) = g.map { ConductorGroup(it.first, it.second) }
 
     @Test fun mixedCircuitAnalysis() {
         // 3 x 12 AWG THHN plus a bare 12 AWG ground in 3/4" EMT.
-        val groups = groups(3 to thhn(ConductorSize.AWG_12), 1 to ConductorSpec.Bare(ConductorSize.AWG_12))
+        val groups = groups(3 to thhn(ConductorSize.AWG_12), 1 to FillConductor.Bare(ConductorSize.AWG_12))
         val a = ConduitFill.analyze(emt(TradeSize.S_3_4), groups)
         assertEquals(4, a.conductorCount)
         assertEquals(3 * 0.0133 + 0.006, a.totalAreaSqIn, 1e-12)
@@ -254,7 +247,7 @@ class ConduitFillTest {
 
     @Test fun bareGroundsCountTowardFill() {
         // Table 1 Note 3 and Note 8: a bare 6 AWG ground uses its Table 8 area (0.027).
-        val bare = ConductorSpec.Bare(ConductorSize.AWG_6)
+        val bare = FillConductor.Bare(ConductorSize.AWG_6)
         assertEquals(0.027, bare.dimensions!!.areaSqIn, 1e-12)
         assertEquals("6 AWG bare", bare.label)
         assertEquals(0.027 * 2, ConduitFill.totalArea(groups(2 to bare)), 1e-12)

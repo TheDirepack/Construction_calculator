@@ -1,5 +1,10 @@
 package com.thedirepack.constructioncalc.feature.conduitfill.domain
 
+import com.thedirepack.constructioncalc.core.electrical.ConduitFill
+import com.thedirepack.constructioncalc.core.electrical.FillAnalysis
+import com.thedirepack.constructioncalc.core.electrical.JamCheck
+import com.thedirepack.constructioncalc.core.electrical.ConductorGroup
+import com.thedirepack.constructioncalc.core.electrical.FillConductor
 import com.thedirepack.constructioncalc.core.electrical.ConduitSize
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.model.ResultValue
@@ -19,7 +24,7 @@ data class FillRequest(
     val nipple: Boolean,
     val groups: List<ConductorGroup>,
     /** The single conductor type/size for the "how many fit" count, or null to skip it. */
-    val fit: ConductorSpec? = null,
+    val fit: FillConductor? = null,
 )
 
 /** The finished calculation: values for projects and other tools, plus notices to show. */
@@ -144,6 +149,6 @@ data class ConduitFillReport(
         private fun decimalResult(key: String, label: String, kind: ValueKind, value: Double, scale: Int, text: String) =
             ResultValue(key, label, kind, Rational.of(BigDecimal(value).setScale(scale, RoundingMode.HALF_UP)).toString(), text)
 
-        private fun fmt(x: Double, decimals: Int) = String.format(Locale.US, "%.${decimals}f", x)
+        private fun fmt(x: Double, decimals: Int) = com.thedirepack.constructioncalc.core.measure.Decimals.fixed(x, decimals)
     }
 }

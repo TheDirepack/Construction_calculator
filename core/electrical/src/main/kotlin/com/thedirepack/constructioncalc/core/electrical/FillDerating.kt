@@ -1,14 +1,7 @@
-package com.thedirepack.constructioncalc.feature.conduitfill.domain
+package com.thedirepack.constructioncalc.core.electrical
 
-import com.thedirepack.constructioncalc.core.electrical.Ampacity
-import com.thedirepack.constructioncalc.core.electrical.AmbientCorrection
-import com.thedirepack.constructioncalc.core.electrical.ConductorCountAdjustment
-import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
-import com.thedirepack.constructioncalc.core.electrical.ConductorSize
-import com.thedirepack.constructioncalc.core.electrical.InsulationType
-import com.thedirepack.constructioncalc.core.electrical.SmallConductorLimit
-import com.thedirepack.constructioncalc.core.electrical.StandardOcpd
-import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
+import com.thedirepack.constructioncalc.core.measure.Decimals
+
 
 /** A conductor group as the derating needs it. [insulation] null means bare (never current-carrying). */
 data class DeratingGroup(
@@ -95,39 +88,8 @@ object FillDerating {
     }
 
     /** Largest standard OCPD for [ampacity]: itself if standard, else the next standard up (240.4(B)), capped by 240.4(D). */
-    fun maxOcpd(ampacity: Double, size: ConductorSize, material: ConductorMaterial): Int? {
-        val standard = StandardOcpd.ratings
-        val atOrBelow = standard.lastOrNull { it <= ampacity + 1e-9 }
-        val nextUp = if (standard.none { it.toDouble() == ampacity } && ampacity <= 800) StandardOcpd.nextUp(ampacity) else null
-        val candidate = listOfNotNull(atOrBelow, nextUp?.takeIf { it <= 800 }).maxOrNull() ?: return null
-        val limit = SmallConductorLimit.maxOcpd(size, material) ?: return candidate
-        return minOf(candidate, limit)
-    }
-}
-
-/** Derating as values other tools and projects can use. */
-fun DeratingResult.toResults(): List<com.thedirepack.constructioncalc.core.model.ResultValue> = buildList {
-    add(
-        com.thedirepack.constructioncalc.core.model.ResultValue.number(
-            "derate_ccc", "Current-carrying conductors",
-            com.thedirepack.constructioncalc.core.model.ValueKind.NUMBER,
-            currentCarrying.toDouble(),
-            "$currentCarrying (×${trim(adjustmentFactor)})",
-        ),
-    )
-    rows.forEachIndexed { i, row ->
-        val usable = row.usable ?: return@forEachIndexed
-        val g = row.group
-        add(
-            com.thedirepack.constructioncalc.core.model.ResultValue.number(
-                "derate_$i",
-                "${g.count} × ${g.size.label} ${g.insulation?.code.orEmpty()} derated",
-                com.thedirepack.constructioncalc.core.model.ValueKind.CURRENT,
-                kotlin.math.round(usable * 10) / 10.0,
-                "${trim(usable)} A" + (row.maxOcpd?.let { " · max $it A OCPD" } ?: ""),
-            ),
-        )
-    }
+    fun maxOcpd(ampacity: Double, size: ConductorSize, material: ConductorMaterial): Int? =
+        ConductorProtection.maxOcpd(ampacity, size, material)
 }
 
 /** One line per group showing the arithmetic, e.g. `12 AWG THHN: 30 A × 0.96 (36 °C) × 0.8 = 23 A`. */
@@ -137,17 +99,12 @@ fun DeratingResult.explanations(adjustmentLabel: Boolean = true): List<String> =
     when {
         row.insulationRating == null -> "$name: not rated in Table 310.16."
         row.tableAmpacity == null -> "$name: no ${row.insulationRating.label} ampacity in Table 310.16."
-        row.ambientFactor == null -> "$name: too hot at ${trim(row.ambientC)} °C for ${row.insulationRating.label} insulation."
+        row.ambientFactor == null -> "$name: too hot at ${Decimals.trim(row.ambientC)} °C for ${row.insulationRating.label} insulation."
         else -> buildString {
-            append("$name: ${row.tableAmpacity} A (${row.insulationRating.label}) × ${trim(row.ambientFactor)} (${trim(row.ambientC)} °C)")
-            if (adjustmentLabel) append(" × ${trim(adjustmentFactor)}")
-            append(" = ${trim(row.adjusted!!)} A")
-            if (row.usable != null && row.usable < row.adjusted - 1e-9) append(", limited to ${trim(row.usable)} A by terminals")
+            append("$name: ${row.tableAmpacity} A (${row.insulationRating.label}) × ${Decimals.trim(row.ambientFactor)} (${Decimals.trim(row.ambientC)} °C)")
+            if (adjustmentLabel) append(" × ${Decimals.trim(adjustmentFactor)}")
+            append(" = ${Decimals.trim(row.adjusted!!)} A")
+            if (row.usable != null && row.usable < row.adjusted - 1e-9) append(", limited to ${Decimals.trim(row.usable)} A by terminals")
         }
     }
-}
-
-private fun trim(v: Double): String {
-    val r = kotlin.math.round(v * 100) / 100.0
-    return if (r == kotlin.math.floor(r)) r.toLong().toString() else r.toString()
 }

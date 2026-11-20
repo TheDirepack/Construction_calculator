@@ -231,4 +231,26 @@ class ProjectAnalysisTest {
         val loop = Project(name = "P", createdAt = 0, panels = listOf(pa.copy(fedFrom = CircuitRef(pb.id, b.id)), pb))
         ProjectAnalysis.analyze(loop) // must return
     }
+
+    @Test fun runFillUsesTheSameNote7RoundingAsConduitFill() {
+        // The engine's run fill must be exactly the Conduit Fill tool's check (Note 7 rounding included).
+        val run = Run(name = "Home run", raceway = Raceway(ConduitType.EMT, tradeSize = TradeSize.S_1_1_4))
+        val c = (0 until 15).map { Circuit(slot = 1 + 2 * it, poles = 1, breakerAmps = 20, neutral = true, runIds = listOf(run.id)) }
+        val panel = Panel(name = "LP", spaces = 42, circuits = c)
+        val design = ProjectAnalysis.analyze(Project(name = "P", createdAt = 0, runs = listOf(run), panels = listOf(panel)))
+        val r = design.runs.getValue(run.id)
+        val analysis = com.thedirepack.constructioncalc.core.electrical.ConduitFill.analyze(
+            r.conduit!!,
+            r.entries.map { com.thedirepack.constructioncalc.core.electrical.ConductorGroup(it.count, com.thedirepack.constructioncalc.core.electrical.FillConductor.Insulated(it.insulation, it.size)) },
+        )
+        assertEquals(analysis.percentFill, r.fillPercent!!, 1e-9)
+        assertEquals(!analysis.withinLimit, r.fillStatus == FillStatus.OVER)
+    }
+
+    @Test fun aTradeSizeTheTypeDoesntHaveIsReported() {
+        val run = Run(name = "R", raceway = Raceway(ConduitType.PVC_EB, tradeSize = TradeSize.S_1_2))
+        val c = Circuit(slot = 1, breakerAmps = 20, runIds = listOf(run.id))
+        val r = ProjectAnalysis.analyze(Project(name = "P", createdAt = 0, runs = listOf(run), panels = listOf(Panel(name = "LP", circuits = listOf(c))))).runs.getValue(run.id)
+        assertTrue(r.notes.any { it.isWarning && "no 1/2\"" in it.text })
+    }
 }

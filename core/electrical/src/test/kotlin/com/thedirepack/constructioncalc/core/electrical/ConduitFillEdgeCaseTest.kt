@@ -1,12 +1,5 @@
-package com.thedirepack.constructioncalc.feature.conduitfill.domain
+package com.thedirepack.constructioncalc.core.electrical
 
-import com.thedirepack.constructioncalc.core.electrical.BareConductorArea
-import com.thedirepack.constructioncalc.core.electrical.ConductorSize
-import com.thedirepack.constructioncalc.core.electrical.ConduitTable
-import com.thedirepack.constructioncalc.core.electrical.ConduitType
-import com.thedirepack.constructioncalc.core.electrical.InsulatedConductorArea
-import com.thedirepack.constructioncalc.core.electrical.InsulationType
-import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -16,8 +9,8 @@ import org.junit.Test
 
 class ConduitFillEdgeCaseTest {
 
-    private fun thhn(size: ConductorSize) = ConductorSpec.Insulated(InsulationType.THHN, size)
-    private fun bare(size: ConductorSize) = ConductorSpec.Bare(size)
+    private fun thhn(size: ConductorSize) = FillConductor.Insulated(InsulationType.THHN, size)
+    private fun bare(size: ConductorSize) = FillConductor.Bare(size)
 
     @Test
     fun limitPercentsFollowTable1() {
