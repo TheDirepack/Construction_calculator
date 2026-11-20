@@ -8,5 +8,8 @@ if [[ -z "${JAVA_HOME:-}" || ! -x "${JAVA_HOME}/bin/javac" ]]; then
   JDK="$(ls -d "$HOME"/.local/share/jdks/jdk-21* 2>/dev/null | head -1 || true)"
   [[ -n "$JDK" ]] && export JAVA_HOME="$JDK"
 fi
+if [[ -z "${ANDROID_HOME:-}" && -d "$HOME/Android/Sdk" ]]; then
+  export ANDROID_HOME="$HOME/Android/Sdk"
+fi
 mkdir -p "$ROOT/.gradle"
 exec flock "$ROOT/.gradle/agent-build.lock" "$ROOT/gradlew" -p "$ROOT" --console=plain "$@"
