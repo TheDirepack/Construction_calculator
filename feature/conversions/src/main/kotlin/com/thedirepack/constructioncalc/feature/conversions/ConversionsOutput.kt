@@ -157,8 +157,8 @@ private fun currentPowerOutput(inputs: ConversionsInputs): ConversionsOutput {
         if (volts == null) add("Voltage")
         if (pf == null) add("Power factor")
     }
-    if (missing.isNotEmpty() || value == null || volts == null || pf == null) {
-        return if (inputs.value.isBlank() || missing.isNotEmpty()) empty(Notice("Still needed: " + missing.joinToString(", ") + ".")) else empty()
+    if (value == null || volts == null || pf == null) {
+        return empty(Notice("Still needed: " + missing.joinToString(", ") + "."))
     }
     val problems = CurrentPower.problems(value, volts, pf)
     if (problems.isNotEmpty()) return empty(*problems.map { Notice(it, NoticeLevel.ERROR) }.toTypedArray())
