@@ -6,6 +6,7 @@ import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.Circuit
+import com.thedirepack.constructioncalc.core.model.CircuitRef
 import com.thedirepack.constructioncalc.core.model.Panel
 import com.thedirepack.constructioncalc.core.model.PanelSystem
 import com.thedirepack.constructioncalc.core.model.Project
@@ -91,5 +92,64 @@ class ProjectAnalysisTest {
         val p = Project(name = "P", createdAt = 0, runs = listOf(run), panels = listOf(Panel(name = "LP", circuits = listOf(c))))
         val after = p.removeRun(run.id, 1)
         assertTrue(after.panels.single().circuits.single().runIds.isEmpty())
+    }
+
+    @Test fun rooftopAdderBelongsToTheRooftopRunOnly() {
+        // Indoor run at 40 °C plus a rooftop run at 30 °C outdoors: the hottest is the roof, 30 + 33 = 63 °C,
+        // not 40 + 33 = 73 °C.
+        val indoor = Run(name = "Boiler room", raceway = Raceway(ConduitType.EMT, ambientC = 40.0))
+        val roof = Run(name = "Roof", raceway = Raceway(ConduitType.EMT, ambientC = 30.0, rooftop = true))
+        val c = Circuit(slot = 1, breakerAmps = 20, runIds = listOf(indoor.id, roof.id))
+        val project = Project(name = "P", createdAt = 0, runs = listOf(indoor, roof), panels = listOf(Panel(name = "LP", circuits = listOf(c))))
+        val d = ProjectAnalysis.analyze(project).circuits.getValue(c.id)
+        assertEquals(63.0, d.sizing!!.effectiveAmbientC, 0.0)
+        assertTrue(d.notes.any { "Roof" in it && "33" in it })
+    }
+
+    @Test fun aCoolerRunAmbientIsHonoredLikeTheRunsTabShowsIt() {
+        val vault = Run(name = "Underground", raceway = Raceway(ConduitType.PVC_40, ambientC = 20.0))
+        val c = Circuit(slot = 1, breakerAmps = 20, runIds = listOf(vault.id))
+        val project = Project(name = "P", createdAt = 0, runs = listOf(vault), panels = listOf(Panel(name = "LP", circuits = listOf(c))))
+        val design = ProjectAnalysis.analyze(project)
+        assertEquals(20.0, design.circuits.getValue(c.id).sizing!!.effectiveAmbientC, 0.0)
+        assertEquals(design.runs.getValue(vault.id).ambientC, design.circuits.getValue(c.id).sizing!!.effectiveAmbientC, 0.0)
+    }
+
+    @Test fun feederCarriesTheLoadOfThePanelItFeeds() {
+        // MDP feeds LP through a 3-pole 100 A breaker with no load of its own.
+        val feeder = Circuit(slot = 1, poles = 3, breakerAmps = 100, neutral = true)
+        val mdp = Panel(name = "MDP", circuits = listOf(feeder))
+        val lp = Panel(
+            name = "LP",
+            fedFrom = CircuitRef(mdp.id, feeder.id),
+            circuits = listOf(
+                Circuit(slot = 1, loadVa = 12_000.0, continuous = true),
+                Circuit(slot = 2, poles = 3, breakerAmps = 50, loadVa = 18_000.0),
+            ),
+        )
+        val design = ProjectAnalysis.analyze(Project(name = "P", createdAt = 0, panels = listOf(mdp, lp)))
+        val d = design.circuits.getValue(feeder.id)
+        assertEquals(30_000.0, d.loadVa!!, 1e-9)
+        assertTrue(d.loadFromFedPanels)
+        assertEquals(30_000.0 / (Math.sqrt(3.0) * 208), d.amps!!, 1e-9)
+        assertTrue(d.notes.any { it.startsWith("Feeder load from LP") })
+        // 125 % of the continuous part: 83.3 A + 0.25 × 33.3 A = 91.6 A at 75 °C terminals → 3 AWG (100 A).
+        assertEquals(ConductorSize.AWG_3, d.minimumSize)
+        // The upstream panel's totals include the subpanel.
+        assertEquals(30_000.0, design.panels.first { it.panel.id == mdp.id }.totalVa, 1e-9)
+        // An entered load on the feeder wins (the user may have applied demand factors).
+        val entered = Project(name = "P", createdAt = 0, panels = listOf(mdp.copy(circuits = listOf(feeder.copy(loadVa = 20_000.0))), lp))
+        val e = ProjectAnalysis.analyze(entered).circuits.getValue(feeder.id)
+        assertEquals(20_000.0, e.loadVa!!, 1e-9)
+        assertFalse(e.loadFromFedPanels)
+    }
+
+    @Test fun feedLoopsInADamagedFileDontHang() {
+        val a = Circuit(slot = 1, poles = 3, breakerAmps = 100)
+        val b = Circuit(slot = 1, poles = 3, breakerAmps = 100)
+        val pa = Panel(name = "A", circuits = listOf(a))
+        val pb = Panel(name = "B", circuits = listOf(b), fedFrom = CircuitRef(pa.id, a.id))
+        val loop = Project(name = "P", createdAt = 0, panels = listOf(pa.copy(fedFrom = CircuitRef(pb.id, b.id)), pb))
+        ProjectAnalysis.analyze(loop) // must return
     }
 }

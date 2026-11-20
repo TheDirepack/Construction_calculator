@@ -245,6 +245,8 @@ internal fun CircuitSheet(
                             supportingText = vaValue?.let {
                                 val amps = LoadMath.amps(panel.system, draft.poles, it)
                                 if (loadUnit == LoadUnit.VA) "= ${Wire.amps(amps)} at ${voltsText(panel, draft.poles)}" else "= ${Wire.va(it)} at ${voltsText(panel, draft.poles)}"
+                            } ?: design?.takeIf { it.loadFromFedPanels }?.loadVa?.let {
+                                "Empty: sized for the panels it feeds, ${Wire.va(it)} connected."
                             } ?: "Needed to check voltage drop and phase balance.",
                         )
                         ToggleRow("Continuous load", draft.continuous, { draft = draft.copy(continuous = it) }, "On for 3 hours or more: wire and breaker sized at 125%.")

@@ -104,14 +104,18 @@ fun Project.changePanelSystem(panelId: String, system: PanelSystem, now: Long): 
         }
     }
 
-/** A copy of a panel (new ids throughout) placed right after the original. It isn't fed from anything. */
+/**
+ * A copy of a panel (new ids throughout) placed right after the original. It isn't fed from anything,
+ * and its circuits aren't in any conduit run: sharing the original's conduits would silently double
+ * their conductor count (derating, fill and wire sizes would all change).
+ */
 fun Project.duplicatePanel(panelId: String, now: Long): Project {
     val original = panel(panelId) ?: return this
     val copy = original.copy(
         id = newId(),
         name = "${original.name} (copy)",
         fedFrom = null,
-        circuits = original.circuits.map { it.copy(id = newId()) },
+        circuits = original.circuits.map { it.copy(id = newId(), runIds = emptyList()) },
     )
     val index = panels.indexOfFirst { it.id == panelId }
     return copy(panels = panels.toMutableList().apply { add(index + 1, copy) }, updatedAt = now)

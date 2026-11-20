@@ -29,7 +29,14 @@ data class CircuitDesign(
     val panel: Panel,
     val circuit: Circuit,
     val conductor: ConductorSpec,
-    /** Load current from the circuit's VA, if given. */
+    /**
+     * Load the circuit is sized for, VA: its own [Circuit.loadVa], or, for a feeder with no load
+     * entered, the connected load of the panels it feeds ([loadFromFedPanels]).
+     */
+    val loadVa: Double?,
+    /** True when [loadVa] was rolled up from the panels this circuit feeds. */
+    val loadFromFedPanels: Boolean,
+    /** Load current from [loadVa], if known. */
     val amps: Double?,
     /** Current-carrying conductors in the most crowded run it passes through (310.15(C)(1)). */
     val currentCarrying: Int,
@@ -105,8 +112,40 @@ object ProjectAnalysis {
     private const val POWER_FACTOR = 0.85
     private const val MAX_VD_UPSIZE_STEPS = 8
 
+    /** A circuit's load: total VA and the part of it that is continuous. */
+    private data class Load(val va: Double, val continuousVa: Double, val fromFed: Boolean)
+
+    /**
+     * Every LOAD circuit's load. A feeder (a circuit some panel is fed from) with no VA of its own
+     * carries the connected load of the panels it feeds, recursively; loops in a damaged file are cut.
+     */
+    private fun loads(project: Project): Map<String, Load> {
+        val result = mutableMapOf<String, Load?>()
+        val visiting = mutableSetOf<String>()
+        fun panelLoad(panel: Panel, load: (Circuit) -> Load?): Load {
+            val parts = panel.circuits.filter { it.kind == CircuitKind.LOAD }.mapNotNull(load)
+            return Load(parts.sumOf { it.va }, parts.sumOf { it.continuousVa }, fromFed = true)
+        }
+        fun load(c: Circuit): Load? {
+            if (c.id in result) return result[c.id]
+            if (!visiting.add(c.id)) return null // loop
+            val own = c.loadVa?.let { Load(it, if (c.continuous) it else 0.0, fromFed = false) }
+            val fed = project.panels.filter { it.fedFrom?.circuitId == c.id }
+            val value = own ?: fed.takeIf { it.isNotEmpty() }?.let { panels ->
+                val parts = panels.map { panelLoad(it, ::load) }
+                Load(parts.sumOf { it.va }, parts.sumOf { it.continuousVa }, fromFed = true)
+            }
+            visiting.remove(c.id)
+            result[c.id] = value
+            return value
+        }
+        project.panels.forEach { p -> p.circuits.filter { it.kind == CircuitKind.LOAD }.forEach { load(it) } }
+        return result.mapNotNull { (id, l) -> l?.let { id to it } }.toMap()
+    }
+
     fun analyze(project: Project): ProjectDesign {
         val runsById = project.runs.associateBy { it.id }
+        val loads = loads(project)
         val allCircuits = project.panels.flatMap { p -> p.circuits.map { p to it } }
             .filter { (_, c) -> c.kind != CircuitKind.SPACE }
 
@@ -121,19 +160,21 @@ object ProjectAnalysis {
         }
 
         // 2. Circuits.
-        val circuits = allCircuits.associate { (panel, c) -> c.id to designCircuit(project, panel, c, runsById, runCcc) }
+        val circuits = allCircuits.associate { (panel, c) -> c.id to designCircuit(project, panel, c, runsById, runCcc, loads[c.id]) }
 
         // 3. Runs.
         val runs = project.runs.associate { run -> run.id to designRun(project, run, allCircuits, circuits, runCcc.getValue(run.id)) }
 
         // 4. Panels.
-        val panels = project.panels.map { designPanel(it) }
+        val panels = project.panels.map { designPanel(it, loads) }
         return ProjectDesign(panels, circuits, runs)
     }
 
     /** Load current for [c]'s VA in [panel], or null. */
-    fun amps(panel: Panel, c: Circuit): Double? {
-        val va = c.loadVa ?: return null
+    fun amps(panel: Panel, c: Circuit): Double? = c.loadVa?.let { amps(panel, c, it) }
+
+    /** Current for [va] on a circuit shaped like [c] in [panel]. */
+    fun amps(panel: Panel, c: Circuit, va: Double): Double {
         val system = panel.system
         return when {
             c.poles <= 1 -> va / (system.lineToNeutral ?: system.lineToLine)
@@ -148,28 +189,40 @@ object ProjectAnalysis {
         c: Circuit,
         runsById: Map<String, Run>,
         runCcc: Map<String, Int>,
+        load: Load?,
     ): CircuitDesign {
         val spec = c.conductor ?: project.design.conductor
         val notes = mutableListOf<String>()
-        val amps = amps(panel, c)
+        val amps = load?.let { amps(panel, c, it.va) }
+        val continuousAmps = load?.let { amps(panel, c, it.continuousVa) } ?: 0.0
+        if (load?.fromFed == true) {
+            val names = project.panels.filter { it.fedFrom?.circuitId == c.id }.joinToString { it.name }
+            notes += "Feeder load from $names: ${fmt(load.va)} VA connected, ${fmt(load.continuousVa)} VA of it continuous (no demand factors applied)."
+        }
         val runs = c.runIds.mapNotNull { runsById[it] }
         val ownCcc = CurrentCarryingConductors.count(c.poles, c.neutral, panel.system.supply, c.nonlinear)
         // Nipples (≤ 24") aren't subject to count adjustment (310.15(C)(1)(b)).
         val ccc = (runs.filter { it.raceway?.nipple != true }.mapNotNull { runCcc[it.id] } + ownCcc).max()
-        val ambient = (runs.map { it.raceway?.ambientC ?: project.design.ambientC } + project.design.ambientC).max()
-        val rooftop = runs.any { it.raceway?.rooftop == true }
+        // Each run's own ambient (or the project default) plus its own rooftop adder; the hottest run governs.
+        val xhhw2 = spec.insulation == InsulationType.XHHW
+        val ambient = if (runs.isEmpty()) project.design.ambientC else runs.maxOf { runAmbient(project, it, xhhw2) }
+        val hottest = runs.maxByOrNull { runAmbient(project, it, xhhw2) }
+        if (hottest?.raceway?.rooftop == true && !xhhw2) {
+            notes += "${hottest.name} is on a rooftop: +${AmbientCorrection.ROOFTOP_ADDER_C.toInt()} °C adder (310.15(B)(2))."
+        }
         val length = c.length?.toQuantity()?.value?.toDouble()
             ?: runs.takeIf { it.isNotEmpty() && it.all { r -> r.raceway?.length != null } }
                 ?.sumOf { it.raceway!!.length!!.toQuantity().value.toDouble() }
         if (c.length == null && runs.any { it.raceway?.length == null }) notes += "Some runs have no length; voltage drop not checked."
 
+        val fromFed = load?.fromFed == true
         if (c.kind != CircuitKind.LOAD) {
-            return CircuitDesign(panel, c, spec, amps, ccc, null, null, null, null, length, null, null, notes)
+            return CircuitDesign(panel, c, spec, load?.va, fromFed, amps, ccc, null, null, null, null, length, null, null, notes)
         }
         val breaker = c.breakerAmps
         if (breaker == null) {
             notes += "Set a breaker size to size the wire."
-            return CircuitDesign(panel, c, spec, amps, ccc, null, null, null, null, length, null, null, notes)
+            return CircuitDesign(panel, c, spec, load?.va, fromFed, amps, ccc, null, null, null, null, length, null, null, notes)
         }
 
         val sizing = ConductorSizing.minimumSize(
@@ -177,12 +230,12 @@ object ProjectAnalysis {
                 ocpdAmps = breaker,
                 material = spec.material,
                 loadAmps = amps,
-                continuousAmps = if (c.continuous) amps ?: 0.0 else 0.0,
+                continuousAmps = continuousAmps,
                 insulation = spec.insulationRating,
                 termination = spec.terminationRating,
-                ambientC = ambient,
-                rooftopUnder3_4In = rooftop,
-                xhhw2 = spec.insulation == InsulationType.XHHW,
+                ambientC = ambient, // already includes any rooftop adder
+                rooftopUnder3_4In = false,
+                xhhw2 = xhhw2,
                 currentCarrying = ccc,
                 multipleCordReceptacles = c.multipleCordReceptacles,
             ),
@@ -217,8 +270,12 @@ object ProjectAnalysis {
         } else {
             null
         }
-        return CircuitDesign(panel, c, spec, amps, ccc, sizing, minimum, size, ground, length, vd?.first, vd?.second, notes)
+        return CircuitDesign(panel, c, spec, load?.va, fromFed, amps, ccc, sizing, minimum, size, ground, length, vd?.first, vd?.second, notes)
     }
+
+    /** A run's effective ambient: its own temperature or the project default, plus its rooftop adder. */
+    fun runAmbient(project: Project, run: Run, xhhw2: Boolean): Double =
+        AmbientCorrection.effectiveAmbient(run.raceway?.ambientC ?: project.design.ambientC, run.raceway?.rooftop == true, xhhw2)
 
     /** (volts, percent) for one-way [lengthInches]. */
     private fun voltageDrop(
@@ -295,11 +352,7 @@ object ProjectAnalysis {
         }
         if (raceway != null && smallest == null && area > 0) notes += "Too many conductors for any ${raceway.conduitType.displayName}."
         val insulation = project.design.conductor
-        val ambient = AmbientCorrection.effectiveAmbient(
-            raceway?.ambientC ?: project.design.ambientC,
-            raceway?.rooftop == true,
-            insulation.insulation == InsulationType.XHHW,
-        )
+        val ambient = runAmbient(project, run, insulation.insulation == InsulationType.XHHW)
         val ambientFactor = AmbientCorrection.factor(ambient, insulation.insulationRating)
         val adjustment = if (raceway?.nipple == true) 1.0 else ConductorCountAdjustment.factor(ccc)
         if (adjustment < 1.0) {
@@ -319,11 +372,11 @@ object ProjectAnalysis {
         return RunDesign(run, members, ccc, adjustment, ambient, ambientFactor, status, entries, total, area, limit, conduit, fill, smallest, notes)
     }
 
-    private fun designPanel(panel: Panel): PanelDesign {
+    private fun designPanel(panel: Panel, loads: Map<String, Load>): PanelDesign {
         val phases = panel.system.phases
         val va = mutableMapOf<Phase, Double>()
         panel.circuits.filter { it.kind == CircuitKind.LOAD }.forEach { c ->
-            val load = c.loadVa ?: return@forEach
+            val load = loads[c.id]?.va ?: return@forEach
             val ps = PanelLayout.phasesOf(c, phases)
             ps.forEach { va[it] = (va[it] ?: 0.0) + load / ps.size }
         }

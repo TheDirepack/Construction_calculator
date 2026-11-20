@@ -2,6 +2,7 @@ package com.thedirepack.constructioncalc.feature.panels.domain
 
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.Circuit
+import com.thedirepack.constructioncalc.core.model.design.CircuitDesign
 import com.thedirepack.constructioncalc.core.model.CircuitKind
 import com.thedirepack.constructioncalc.core.model.Panel
 import com.thedirepack.constructioncalc.core.model.Project
@@ -31,9 +32,15 @@ object PanelFacts {
     fun phaseText(circuit: Circuit, phases: Int): String =
         PanelLayout.phasesOf(circuit, phases).joinToString(",")
 
-    /** Load in a circuit's own phases is its connected VA; spare and space circuits have none. */
-    fun loadText(circuit: Circuit): String? =
-        circuit.loadVa?.takeIf { circuit.kind == CircuitKind.LOAD }?.let(Wire::va)
+    /**
+     * A circuit's load: its connected VA, or for a feeder with no VA of its own the load of the
+     * panels it feeds (from the design, marked "fed"). Spare and space circuits have none.
+     */
+    fun loadText(circuit: Circuit, design: CircuitDesign? = null): String? {
+        if (circuit.kind != CircuitKind.LOAD) return null
+        val va = design?.loadVa ?: circuit.loadVa ?: return null
+        return Wire.va(va) + if (design?.loadFromFedPanels == true) " (fed)" else ""
+    }
 }
 
 /** The plain-text panel schedule shared by "Share as text". */
@@ -152,7 +159,7 @@ object ScheduleText {
             c.description.isBlank() -> "(no description)"
             else -> c.description.trim()
         }
-        PanelFacts.loadText(c)?.let(parts::add)
+        PanelFacts.loadText(c, d)?.let(parts::add)
         d?.let(Wire::text)?.let(parts::add)
         d?.voltageDropPercent?.let { parts += "VD ${Wire.percent(it)}" }
         val groups = c.groupIds.mapNotNull(groupNames::get)

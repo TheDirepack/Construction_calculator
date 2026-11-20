@@ -140,7 +140,7 @@ private fun CircuitCell(ctx: PanelsContext, panel: Panel, c: Circuit, rowSpan: I
     val target = ctx.project.design.voltageDropTargetPercent
     val vdWarn = d?.voltageDropPercent?.takeIf { it > target + 1e-9 }
     val title = if (isSpace) "space" else ScheduleLayout.breakerText(c)
-    val load = PanelFacts.loadText(c)
+    val load = PanelFacts.loadText(c, d)
     val description = when {
         c.kind == CircuitKind.SPARE -> "Spare" + c.description.takeIf { it.isNotBlank() }?.let { " – ${it.trim()}" }.orEmpty()
         c.description.isBlank() -> if (isSpace) "" else "(no description)"

@@ -22,6 +22,19 @@ Code: `feature/panels` (screens), `feature/panels/.../domain` (pure logic + test
 - **Groups** tab: create, rename, recolour (named colours), delete; each group lists its circuits across panels with total load.
 - **Design** tab: the project's `DesignDefaults` (conductor material, insulation, temperature columns, ambient, voltage-drop target, upsize for voltage drop).
 
+## Feeders and subpanels
+
+A panel's *fed from* links it to a circuit in another panel. If that feeder circuit has no load of
+its own, the design engine sizes it for the connected load of every panel it feeds (recursively,
+continuous loads at 125 %, no demand factors), shows it on the schedule as "VA (fed)", and counts it
+in the upstream panel's phase totals. Enter a load on the feeder to override it (e.g. after demand
+factors). Duplicating a panel copies its circuits without their conduit runs.
+
+## Temperature
+
+Each conduit run's ambient (or the project default when blank) plus its own rooftop adder gives the
+run's effective ambient; a circuit is sized for the hottest run it passes through.
+
 ## Export
 
 *Share panel schedule (PDF)*: letter size, one panel per page, company header (`CompanyProfile.headerLines()`), project, panel facts, two-column schedule with wire sizes, totals and date, made with `android.graphics.pdf.PdfDocument` and shared with `ProjectSharing.shareFileIntent`. *Share as text*: a plain-text schedule through `host.shareText`. Both are in the share menu and on the Panels tab, for one panel or all.

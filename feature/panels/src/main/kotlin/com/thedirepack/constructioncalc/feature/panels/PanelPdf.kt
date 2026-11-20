@@ -180,7 +180,7 @@ internal object PanelPdf {
                 else -> c.description
             }
             val wireText = d?.let(Wire::text).orEmpty()
-            val vaText = if (c.kind == CircuitKind.LOAD) c.loadVa?.let { Wire.number(it, 0) }.orEmpty() else ""
+            val vaText = if (c.kind == CircuitKind.LOAD) (d?.loadVa ?: c.loadVa)?.let { Wire.number(it, 0) }.orEmpty() else ""
             val brkText = if (c.kind == CircuitKind.SPACE) "" else ScheduleLayout.breakerText(c)
             val dx = if (leftSide) lDesc else rDesc
             val wx = if (leftSide) lWire else rWire

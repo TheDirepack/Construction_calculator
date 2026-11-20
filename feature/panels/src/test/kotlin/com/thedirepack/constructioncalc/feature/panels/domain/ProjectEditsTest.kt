@@ -117,10 +117,13 @@ class ProjectEditsTest {
     }
 
     @Test fun duplicatingAPanelGivesNewIds() {
-        val c = Circuit(slot = 1, description = "Lights")
+        val c = Circuit(slot = 1, description = "Lights", runIds = listOf("home-run"))
         val a = Panel(name = "LP-1", circuits = listOf(c))
         val b = Panel(name = "LP-2")
         val r = project(a, b).duplicatePanel(a.id, now = 1)
+        // The copy doesn't share the original's conduits (that would double their conductor count).
+        assertEquals(emptyList<String>(), r.panels[1].circuits.single().runIds)
+        assertEquals(listOf("home-run"), r.panels[0].circuits.single().runIds)
         assertEquals(listOf("LP-1", "LP-1 (copy)", "LP-2"), r.panels.map { it.name })
         val copy = r.panels[1]
         assertNotEquals(a.id, copy.id)
