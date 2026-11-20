@@ -167,8 +167,8 @@ object BendPlanner {
         val figures = listOf(
             len("outer_from_center", "Outer marks from center", s.outerDistance),
             ratio("multiplier", "Multiplier (outer marks ÷ height)", s.multiplier),
-            len("shrink", "Shrink (field constant ${s.shrinkPerInch}\" per inch)", s.shrink),
-            len("shrink_ideal", "Shrink, ideal geometry (reference)", s.idealShrink),
+            len("shrink", "Shrink to the center mark (${s.shrinkPerInch}\" per inch)", s.shrink),
+            len("shrink_ideal", "Total shrink, whole saddle (geometry)", s.idealShrink),
             angle("center_angle", "Center bend", s.centerAngleDeg),
             angle("outer_angle", "Outer bends", s.outerAngleDeg),
         )
@@ -181,8 +181,8 @@ object BendPlanner {
             if (s.nearMark != null && s.nearMark.signum < 0) {
                 add(Issue(Severity.ERROR, "The obstruction is too close to the end of the stick: the near outer mark would fall ${(-s.nearMark.toDouble()).fmt()}\" before the end. Start with a longer piece or reverse the stick."))
             }
-            add(Issue(Severity.INFO, "Outer marks use the usual field multiplier (2.5 for 45°/22.5°, 2 for 60°/30°), bent at the center angle and half that angle either side. Shrink uses the common field figure and the center mark moves by half of it. Pure geometry gives roughly twice that shrink, so make a test bend if length matters."))
-            if (r.distance != null) add(Issue(Severity.INFO, "Center mark = distance to the obstruction's center + half the shrink."))
+            add(Issue(Severity.INFO, "Outer marks use the usual field multiplier (2.5 for 45°/22.5°, 2 for 60°/30°), bent at the center angle and half that angle either side. The field shrink (${s.shrinkPerInch}\" per inch of height) is what the conduit loses up to the center bend; the whole saddle loses about twice that."))
+            if (r.distance != null) add(Issue(Severity.INFO, "Center mark = distance to the obstruction's center + the shrink."))
         }
         return BendPlan(BendType.SADDLE_3, figures, marks, r.distance != null, issues)
     }

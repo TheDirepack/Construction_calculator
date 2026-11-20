@@ -338,5 +338,5 @@ object ProjectAnalysis {
         return PanelDesign(panel, phaseVa, phaseVa.values.sum(), phaseAmps, PanelLayout.conflicts(panel), notes)
     }
 
-    private fun fmt(v: Double) = String.format("%.1f", v).removeSuffix(".0")
+    private fun fmt(v: Double) = String.format(java.util.Locale.US, "%.1f", v).removeSuffix(".0")
 }

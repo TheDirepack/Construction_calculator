@@ -115,9 +115,10 @@ class BendsTest {
         assertRat(r(3, 4), s.shrink) // 30° offset constant 1/4" per inch
     }
 
-    @Test fun saddleCenterMarkMovesByHalfTheShrink() {
+    @Test fun saddleCenterMarkAddsTheFieldShrink() {
+        // 2" saddle, 3/16" per inch: center mark = 30 + 3/8.
         val s = Bends.saddle3(r(2), 45.0, distanceToCenter = r(30))!!
-        assertRat(r(30) + r(3, 16), s.centerMark)
+        assertRat(r(30) + r(3, 8), s.centerMark)
         assertRat(s.centerMark!! - r(5), s.nearMark)
         assertRat(s.centerMark + r(5), s.farMark)
     }
@@ -274,5 +275,18 @@ class BendsTest {
         )
         assertTrue(plan.figures.any { it.key == "second_from_back" && it.value == r(30) })
         assertTrue(plan.figures.any { it.key == "cut_length" })
+    }
+
+    @Test fun saddleCenterMarkMatchesGeometry() {
+        // Ideal bends: the conduit up to the center bend is longer than the floor distance by
+        // height × (csc − cot) of the outer angle = height × tan(outer/2). The field figure must agree
+        // to within 1/32" per inch, and the whole saddle's ideal shrink is twice that.
+        for ((center, outer) in listOf(45.0 to 22.5, 60.0 to 30.0)) {
+            val h = 4.0
+            val s = Bends.saddle3(r(4), center, distanceToCenter = r(0))!!
+            val geometry = h * tan(Math.toRadians(outer / 2))
+            assertEquals(geometry, s.centerMark!!.toDouble(), h / 32)
+            assertEquals(2 * geometry, s.idealShrink.toDouble(), 1e-6)
+        }
     }
 }

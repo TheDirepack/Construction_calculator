@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CalcInputTest {
@@ -127,5 +128,19 @@ class CalcInputTest {
         val chained = press("96\"-55\"=*2")
         assertEquals(true, (chained.tokens.first() as Token.Value).preferInches)
         assertEquals(true, CalcInput.prefersInches(chained.tokens))
+    }
+
+    @Test fun typingOverARecalledValueReplacesIt() {
+        // A length field opens with its current value; typing a new number must replace it.
+        val q = Quantity.inches(Rational.of(30))
+        val start = CalcState(tokens = listOf(Token.Value(q)))
+        val typed = CalcInput.reduce(start, Key.Char('7'))
+        assertTrue(typed.accepted)
+        assertEquals(listOf(Token.Literal("7")), typed.state.tokens)
+        val fraction = CalcInput.reduce(start, Key.Fraction(1, 2))
+        assertEquals(listOf(Token.Literal("1/2\"")), fraction.state.tokens)
+        // Operators still continue from the value.
+        val plus = CalcInput.reduce(start, Key.Op(Operator.ADD))
+        assertEquals(listOf(Token.Value(q), Token.Op(Operator.ADD)), plus.state.tokens)
     }
 }

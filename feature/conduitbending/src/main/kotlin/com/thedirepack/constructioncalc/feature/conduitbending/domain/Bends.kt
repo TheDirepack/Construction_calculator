@@ -84,9 +84,12 @@ object Bends {
      *
      * @property multiplier 2.5 for 45°/22.5° and 2 for 60°/30° (the usual field values); other
      *   angles use the exact cosecant of the outer angle.
-     * @property shrink the field shrink (the outer angle's offset constant, 3/16" per inch at 22.5°).
-     * @property idealShrink pure geometry for two legs of depth [height]: 2·height·tan(outer/2).
-     * @property centerMark distance to the obstruction's center + shrink/2 (null without a distance).
+     * @property shrink the field shrink: the outer angle's offset constant × height (3/16" per inch at
+     *   22.5°). It is how much the conduit shortens from the end of the stick up to the center bend,
+     *   which is why it is added to the distance to get the center mark (geometry: height·tan(outer/2)).
+     * @property idealShrink pure geometry for the whole saddle (both legs): 2·height·tan(outer/2),
+     *   about twice [shrink]. Matters for what lies past the saddle, not for the center mark.
+     * @property centerMark distance to the obstruction's center + [shrink] (null without a distance).
      */
     data class Saddle3Result(
         val height: Rational,
@@ -114,7 +117,7 @@ object Bends {
         val shrink = height * perInch
         val ideal = height * BendMath.tidy(2 * BendMath.tanHalf(outer))
         val outerDistance = height * multiplier
-        val center = distanceToCenter?.let { it + shrink / Rational.of(2) }
+        val center = distanceToCenter?.let { it + shrink }
         return Saddle3Result(
             height, centerAngleDeg, outer, multiplier, outerDistance, perInch, shrink, ideal,
             center, center?.let { it - outerDistance }, center?.let { it + outerDistance },

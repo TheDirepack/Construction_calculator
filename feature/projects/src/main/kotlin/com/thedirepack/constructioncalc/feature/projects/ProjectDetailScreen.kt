@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.projects
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -121,7 +122,11 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
             },
         actions = {
             IconButton(onClick = {
-                context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value.company.headerLines()))
+                try {
+                    context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value.company.headerLines()))
+                } catch (_: ActivityNotFoundException) {
+                    host.showMessage("No app available to share with")
+                }
             }) {
                 Icon(painterResource(R.drawable.ic_share), contentDescription = "Share project")
             }

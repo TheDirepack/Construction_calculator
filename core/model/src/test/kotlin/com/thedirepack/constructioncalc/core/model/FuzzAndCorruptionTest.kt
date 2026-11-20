@@ -150,4 +150,25 @@ class FuzzAndCorruptionTest {
         assertEquals(Dimension.LENGTH, mult.dimension)
         assertTrue(mult.value.numerator > java.math.BigInteger.valueOf(Long.MAX_VALUE))
     }
+
+    @Test
+    fun malformedStoredLengthsMakeTheFileDamagedInsteadOfCrashingLater() {
+        val good = Project.create("Job", 1L).let { p ->
+            p.updateRun(p.runs.first().id, 2L) {
+                it.copy(raceway = Raceway(length = Quantity.inches(Rational.of(120)).stored()))
+            }
+        }
+        val json = ProjectCodec.encode(good)
+        assertEquals(good, ProjectCodec.decode(json))
+        for (bad in listOf("abc", "1/0", "", "1/2/3")) {
+            val broken = json.replace("\"exact\": \"120\"", "\"exact\": \"$bad\"")
+            assertTrue("payload should change for $bad", broken != json)
+            assertThrows(ProjectFormatException::class.java) { ProjectCodec.decode(broken) }
+            // A saved tool input with a bad length simply doesn't restore.
+            assertEquals(null, ToolInputs.decode<StoredQuantity>(kotlinx.serialization.json.buildJsonObject {
+                put("exact", kotlinx.serialization.json.JsonPrimitive(bad))
+                put("dimension", kotlinx.serialization.json.JsonPrimitive("LENGTH"))
+            }))
+        }
+    }
 }

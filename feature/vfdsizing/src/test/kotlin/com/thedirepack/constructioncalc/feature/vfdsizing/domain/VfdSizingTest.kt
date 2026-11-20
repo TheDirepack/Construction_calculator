@@ -129,4 +129,21 @@ class VfdSizingTest {
         assertEquals(10.0, VfdSizing.nearestHorsepower(10.0, 230), 0.0)
         assertEquals(15.0, VfdSizing.nearestHorsepower(12.0, 460), 0.0)
     }
+
+    @Test fun singlePhaseInputEstimateIsTwiceTheMotorFlc() {
+        val three = calc(VfdRequest(hp = 3.0, volts = 230))
+        val single = calc(VfdRequest(hp = 3.0, volts = 230, supplyPhase = SupplyPhase.SINGLE))
+        assertEquals(9.6, three.inputBasisAmps, 1e-9)
+        assertEquals(19.2, single.inputBasisAmps, 1e-9)
+        assertTrue(single.inputAmpacityRequired > three.inputAmpacityRequired)
+        // A drive input rating always wins over the estimate.
+        val rated = calc(VfdRequest(hp = 3.0, volts = 230, supplyPhase = SupplyPhase.SINGLE, driveInputAmps = 15.0))
+        assertEquals(15.0, rated.inputBasisAmps, 1e-9)
+    }
+
+    @Test fun conductorTextNamesEveryMaterial() {
+        val choice = ConductorChoice(com.thedirepack.constructioncalc.core.electrical.ConductorSize.AWG_10, 1, 35)
+        assertEquals("10 AWG Cu coated", choice.text(com.thedirepack.constructioncalc.core.electrical.ConductorMaterial.COATED_COPPER))
+        assertEquals("10 AWG CCA", choice.text(com.thedirepack.constructioncalc.core.electrical.ConductorMaterial.COPPER_CLAD_ALUMINUM))
+    }
 }

@@ -89,7 +89,11 @@ object CalcInput {
                 if (!MeasureLiteral.isValidPrefix(text)) return rejected(state)
                 tokens.dropLast(1) + Token.Literal(text)
             }
-            is Token.Value -> return rejected(state)
+            // Typing over a recalled value (or a field's current value) replaces it, like recall replaces a literal.
+            is Token.Value -> {
+                if (!MeasureLiteral.isValidPrefix(c.toString())) return rejected(state)
+                tokens.dropLast(1) + Token.Literal(c.toString())
+            }
             is Token.Op, null -> {
                 if (!MeasureLiteral.isValidPrefix(c.toString())) return rejected(state)
                 tokens + Token.Literal(c.toString())
@@ -147,7 +151,7 @@ object CalcInput {
         val tokens = if (state.answer != null) emptyList() else state.tokens
         val fraction = "$numerator/$denominator${MeasureLiteral.INCH}"
         val newTokens = when (val last = tokens.lastOrNull()) {
-            is Token.Value -> return rejected(state)
+            is Token.Value -> tokens.dropLast(1) + Token.Literal(fraction)
             is Token.Literal -> {
                 val text = baseForFraction(last.text) + fraction
                 if (!MeasureLiteral.isValidPrefix(text)) return rejected(state)

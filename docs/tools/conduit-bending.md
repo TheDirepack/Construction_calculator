@@ -12,7 +12,7 @@ All lengths are exact inches (`Rational`); trig results are rounded to 10 decima
 |---|---|
 | Offset (depth d, angle θ) | spacing = d·csc θ; shrink = d·tan(θ/2) (exact); field shrink = d × printed constant; first mark = distance + shrink; second mark = first + spacing |
 | Rolling offset (rise, roll) | true offset = √(rise²+roll²), then the offset outputs on it |
-| 3-point saddle (height H, center 45° or 60°) | outer marks = H × 2.5 (45°/22.5°) or H × 2 (60°/30°) from the center; shrink = H × the outer angle's offset constant (3/16"/in at 22.5°, 1/4"/in at 30°); center mark = distance + shrink/2; "ideal" shrink 2·H·tan(outer/2) shown for reference |
+| 3-point saddle (height H, center 45° or 60°) | outer marks = H × 2.5 (45°/22.5°) or H × 2 (60°/30°) from the center; shrink = H × the outer angle's offset constant (3/16"/in at 22.5°, 1/4"/in at 30°), which is what the conduit loses up to the center bend (geometry: H·tan(outer/2)); center mark = distance + shrink; the whole saddle's shrink, 2·H·tan(outer/2), is shown too |
 | 4-point saddle (H, width W, θ) | marks 1, 2 = 1 + spacing, 3 = 2 + W, 4 = 3 + spacing; total shrink = 2 × offset shrink; first mark = distance + offset shrink |
 | 90° stub-up | mark = stub height − take-up (error if shorter than the take-up) |
 | Back-to-back 90s | second mark = distance between backs, measured from the back of the first bend; cut length = stub1 + between + stub2 − 2 × gain |
@@ -37,8 +37,9 @@ rigid 3-1/4, 4-1/4, 4-7/8. Gain only affects the back-to-back cut length.
 
 - The distance convention for offsets (first mark = distance + shrink) fits a distance measured on
   the finished run past the offset. If your distance already lands on the first bend, ignore the shrink.
-- The 3-point saddle uses the common field shrink figure, which is about half of the pure-geometry
-  value for two ideal offset legs. Both are shown; make a test bend if length matters.
+- The 3-point saddle's field shrink (3/16"/in at 45°, 1/4"/in at 60°) is the shrink up to the center
+  bend and matches the geometry to within 1/32" per inch; the whole saddle shrinks about twice that.
+  (Before 2026-11-20 the center mark wrongly added only half the field shrink.)
 - Rolling offsets give the true offset and marks only (no rotation angle for the bender).
 - Bender star/arrow positions, parallel/concentric offsets and offsets into boxes are not covered.
 - Nothing here accounts for conduit springback, bender wear or bending radius limits (NEC 358/344).

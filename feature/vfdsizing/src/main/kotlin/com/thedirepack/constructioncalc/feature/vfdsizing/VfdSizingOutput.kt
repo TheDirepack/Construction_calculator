@@ -57,7 +57,11 @@ internal fun vfdSizingOutput(inputs: VfdSizingInputs): VfdSizingOutput {
         add(
             currentResult(
                 "input_current_basis",
-                if (result.inputBasisIsEstimate) "Input current used (estimate = motor FLC)" else "Input current used (drive rating)",
+                when {
+                    !result.inputBasisIsEstimate -> "Input current used (drive rating)"
+                    request.supplyPhase == SupplyPhase.SINGLE -> "Input current used (estimate = 2 × motor FLC, 1-phase)"
+                    else -> "Input current used (estimate = motor FLC)"
+                },
                 result.inputBasisAmps,
             ),
         )
@@ -134,7 +138,7 @@ private fun notices(
             ),
         )
         if (request.supplyPhase == SupplyPhase.SINGLE) {
-            add(Notice("A single-phase input draws more line current than three-phase for the same load (about 1.7×), so the estimate is low.", NoticeLevel.WARNING))
+            add(Notice("Single-phase input draws more line current than three-phase for the same load (√3× or more), so the estimate uses 2 × the motor FLC. Enter the drive's rated input current for a code-based size.", NoticeLevel.WARNING))
         }
     }
     add(

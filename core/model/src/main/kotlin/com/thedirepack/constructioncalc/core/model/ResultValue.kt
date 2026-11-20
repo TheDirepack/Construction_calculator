@@ -89,10 +89,22 @@ data class ResultValue(
     }
 }
 
-/** A [Quantity] in a serializable form, for tools' saved inputs. */
+/**
+ * A [Quantity] in a serializable form, for tools' saved inputs.
+ *
+ * [exact] is validated on construction, so a damaged or hand-edited file ("abc", "1/0") fails to
+ * load as "damaged" instead of crashing later wherever the length is used.
+ */
 @Serializable
 data class StoredQuantity(val exact: String, val dimension: Dimension) {
-    fun toQuantity() = Quantity(Rational.parse(exact), dimension)
+    @kotlinx.serialization.Transient
+    private val value: Rational = try {
+        Rational.parse(exact)
+    } catch (e: RuntimeException) { // NumberFormatException, ArithmeticException (zero denominator)
+        throw IllegalArgumentException("Not an exact number: $exact", e)
+    }
+
+    fun toQuantity() = Quantity(value, dimension)
 
     companion object {
         fun of(q: Quantity) = StoredQuantity(q.value.toString(), q.dimension)

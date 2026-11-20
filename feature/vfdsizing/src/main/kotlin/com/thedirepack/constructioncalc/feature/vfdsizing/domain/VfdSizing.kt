@@ -47,7 +47,7 @@ data class ConductorChoice(val size: ConductorSize, val sets: Int, val ampacityE
     val totalAmpacity: Int get() = sets * ampacityEach
 
     fun text(material: ConductorMaterial): String {
-        val metal = if (material == ConductorMaterial.COPPER) "Cu" else "Al"
+        val metal = material.shortLabel // "Cu", "Cu coated", "Al", "CCA"
         return if (sets == 1) "${size.label} $metal" else "$sets × ${size.label} $metal per phase"
     }
 }
@@ -99,6 +99,12 @@ object VfdSizing {
     const val OVERLOAD_FACTOR = 1.25
     /** Rule of thumb only, not a code requirement. */
     const val SINGLE_PHASE_DRIVE_MULTIPLIER = 2.0
+    /**
+     * With no drive input rating, a single-phase supply's input current is estimated at this many
+     * times the motor's three-phase FLC: √3 from the power balance, rounded up to 2 for the
+     * rectifier's poor input power factor. Conservative; the drive's rating replaces it.
+     */
+    const val SINGLE_PHASE_INPUT_ESTIMATE_FACTOR = 2.0
     /** Parallel sets considered when one conductor isn't enough. */
     const val MAX_SETS = 6
     /** 310.10(G): parallel conductors are 1/0 AWG or larger. */
@@ -135,7 +141,8 @@ object VfdSizing {
         val fla = request.nameplateFla
         val minOutput = fla ?: flc
         val inputEstimate = request.driveInputAmps == null
-        val inputBasis = request.driveInputAmps ?: flc
+        val inputBasis = request.driveInputAmps
+            ?: if (request.supplyPhase == SupplyPhase.SINGLE) flc * SINGLE_PHASE_INPUT_ESTIMATE_FACTOR else flc
         val inputRequired = inputBasis * CONDUCTOR_FACTOR
         val outputRequired = flc * CONDUCTOR_FACTOR
         val breakerCalc = flc * BREAKER_FACTOR
