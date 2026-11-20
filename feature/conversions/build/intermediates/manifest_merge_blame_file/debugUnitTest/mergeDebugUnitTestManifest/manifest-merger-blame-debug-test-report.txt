@@ -3,20 +3,20 @@
 3    package="com.thedirepack.constructioncalc.feature.conversions.test" >
 4
 5    <uses-sdk
-5-->/home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest15514511075459697889.xml:5:5-74
+5-->/home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest2781512339017380493.xml:5:5-74
 6        android:minSdkVersion="26"
-6-->/home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest15514511075459697889.xml:5:15-41
+6-->/home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest2781512339017380493.xml:5:15-41
 7        android:targetSdkVersion="37" />
-7-->/home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest15514511075459697889.xml:5:42-71
+7-->/home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest2781512339017380493.xml:5:42-71
 8
 9    <instrumentation
-9-->/home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest15514511075459697889.xml:9:5-11:107
+9-->/home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest2781512339017380493.xml:9:5-11:107
 10        android:name="androidx.test.runner.AndroidJUnitRunner"
-10-->/home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest15514511075459697889.xml:9:22-76
+10-->/home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest2781512339017380493.xml:9:22-76
 11        android:label="Tests for com.thedirepack.constructioncalc.feature.conversions.test"
-11-->/home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest15514511075459697889.xml:11:22-105
+11-->/home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest2781512339017380493.xml:11:22-105
 12        android:targetPackage="com.thedirepack.constructioncalc.feature.conversions.test" />
-12-->/home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest15514511075459697889.xml:10:22-103
+12-->/home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest2781512339017380493.xml:10:22-103
 13
 14    <permission
 14-->[androidx.core:core:1.19.1] /home/max/.gradle/caches/9.9.2/transforms/5bdcd710bf4d7cb879092fc86ea4ef49/transformed/core-1.19.1/AndroidManifest.xml:22:5-24:47
@@ -30,27 +30,27 @@
 18-->[androidx.core:core:1.19.1] /home/max/.gradle/caches/9.9.2/transforms/5bdcd710bf4d7cb879092fc86ea4ef49/transformed/core-1.19.1/AndroidManifest.xml:26:22-94
 19
 20    <application
-20-->/home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest15514511075459697889.xml:7:5-46
+20-->/home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest2781512339017380493.xml:7:5-46
 21        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
 21-->[androidx.core:core:1.19.1] /home/max/.gradle/caches/9.9.2/transforms/5bdcd710bf4d7cb879092fc86ea4ef49/transformed/core-1.19.1/AndroidManifest.xml:28:18-86
 22        android:debuggable="true" > <!-- Shares project files with other apps (email, messages, Drive) without any storage permission. -->
-22-->/home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest15514511075459697889.xml:7:18-43
+22-->/home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/conversions/build/intermediates/tmp/manifest/test/debug/tempFile1ProcessTestManifest2781512339017380493.xml:7:18-43
 23        <provider
-23-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:10:9-18:20
+23-->[:core:data] /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:10:9-18:20
 24            android:name="androidx.core.content.FileProvider"
-24-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:11:13-62
+24-->[:core:data] /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:11:13-62
 25            android:authorities="com.thedirepack.constructioncalc.feature.conversions.test.files"
-25-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:12:13-57
+25-->[:core:data] /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:12:13-57
 26            android:exported="false"
-26-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:13:13-37
+26-->[:core:data] /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:13:13-37
 27            android:grantUriPermissions="true" >
-27-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:14:13-47
+27-->[:core:data] /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:14:13-47
 28            <meta-data
-28-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:15:13-17:56
+28-->[:core:data] /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:15:13-17:56
 29                android:name="android.support.FILE_PROVIDER_PATHS"
-29-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:16:17-67
+29-->[:core:data] /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:16:17-67
 30                android:resource="@xml/shared_paths" />
-30-->[:core:data] /home/max/.t3/projects/construction-calculator/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:17:17-53
+30-->[:core:data] /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/core/data/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:17:17-53
 31        </provider>
 32
 33        <activity

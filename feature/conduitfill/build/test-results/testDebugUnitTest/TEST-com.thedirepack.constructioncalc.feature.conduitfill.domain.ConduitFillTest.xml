@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.thedirepack.constructioncalc.feature.conduitfill.domain.ConduitFillTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-11-20T17:12:24.974Z" hostname="maxtop" time="0.002">
+  <properties/>
+  <testcase name="annexCReferenceCountsMatchNEC" classname="com.thedirepack.constructioncalc.feature.conduitfill.domain.ConduitFillTest" time="0.001"/>
+  <testcase name="jamCheckCalculatesRatioAndIdentifiesJamRange" classname="com.thedirepack.constructioncalc.feature.conduitfill.domain.ConduitFillTest" time="0.0"/>
+  <testcase name="minimumConduitFindsSmallestTradeSize" classname="com.thedirepack.constructioncalc.feature.conduitfill.domain.ConduitFillTest" time="0.0"/>
+  <testcase name="analysisHandlesSingleConductorTwoConductorsAndMixed" classname="com.thedirepack.constructioncalc.feature.conduitfill.domain.ConduitFillTest" time="0.001"/>
+  <testcase name="note7RoundingFollowsNEC" classname="com.thedirepack.constructioncalc.feature.conduitfill.domain.ConduitFillTest" time="0.0"/>
+  <testcase name="limitPercentsFollowTable1" classname="com.thedirepack.constructioncalc.feature.conduitfill.domain.ConduitFillTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

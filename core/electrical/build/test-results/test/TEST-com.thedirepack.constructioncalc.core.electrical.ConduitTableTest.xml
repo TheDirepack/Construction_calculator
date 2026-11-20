@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.thedirepack.constructioncalc.core.electrical.ConduitTableTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-11-20T16:36:43.366Z" hostname="maxtop" time="0.007">
+<testsuite name="com.thedirepack.constructioncalc.core.electrical.ConduitTableTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-11-20T17:59:16.699Z" hostname="maxtop" time="0.005">
   <properties/>
   <testcase name="otherMetalAndFlexibleTypes" classname="com.thedirepack.constructioncalc.core.electrical.ConduitTableTest" time="0.002"/>
   <testcase name="lookupsAndDisplay" classname="com.thedirepack.constructioncalc.core.electrical.ConduitTableTest" time="0.001"/>
   <testcase name="metricDesignators" classname="com.thedirepack.constructioncalc.core.electrical.ConduitTableTest" time="0.0"/>
   <testcase name="emtMatchesTable4" classname="com.thedirepack.constructioncalc.core.electrical.ConduitTableTest" time="0.0"/>
   <testcase name="plasticTypes" classname="com.thedirepack.constructioncalc.core.electrical.ConduitTableTest" time="0.0"/>
-  <testcase name="everyRowIsInternallyConsistent" classname="com.thedirepack.constructioncalc.core.electrical.ConduitTableTest" time="0.004"/>
+  <testcase name="everyRowIsInternallyConsistent" classname="com.thedirepack.constructioncalc.core.electrical.ConduitTableTest" time="0.002"/>
   <testcase name="publishedPercentColumns" classname="com.thedirepack.constructioncalc.core.electrical.ConduitTableTest" time="0.0"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>

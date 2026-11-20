@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.thedirepack.constructioncalc.feature.footinch.FootInchDataTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-11-20T17:17:30.993Z" hostname="maxtop" time="0.09">
+  <properties/>
+  <testcase name="draftItemCreatesExportableProjectItem" classname="com.thedirepack.constructioncalc.feature.footinch.FootInchDataTest" time="0.072"/>
+  <testcase name="calcInputKeypadSequenceComputesCorrectFootInchMath" classname="com.thedirepack.constructioncalc.feature.footinch.FootInchDataTest" time="0.011"/>
+  <testcase name="defaultInputsRoundTripAndDecodeEmptyJson" classname="com.thedirepack.constructioncalc.feature.footinch.FootInchDataTest" time="0.0"/>
+  <testcase name="footInchHistoryBackupSerialization" classname="com.thedirepack.constructioncalc.feature.footinch.FootInchDataTest" time="0.002"/>
+  <testcase name="savedTokensRoundTripWithExactFractions" classname="com.thedirepack.constructioncalc.feature.footinch.FootInchDataTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

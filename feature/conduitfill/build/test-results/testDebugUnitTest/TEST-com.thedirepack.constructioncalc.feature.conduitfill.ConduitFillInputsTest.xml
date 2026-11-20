@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillInputsTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-11-20T17:12:24.877Z" hostname="maxtop" time="0.094">
+  <properties/>
+  <testcase name="unlistedConductorSizeForInsulationReportsProblem" classname="com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillInputsTest" time="0.031"/>
+  <testcase name="invalidConductorCountsReportProblems" classname="com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillInputsTest" time="0.011"/>
+  <testcase name="validInputsProduceValidFillRequestAndReport" classname="com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillInputsTest" time="0.02"/>
+  <testcase name="emptyOrZeroGroupsIgnoredGracefully" classname="com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillInputsTest" time="0.001"/>
+  <testcase name="corruptOrInvalidConduitTypeReportsProblem" classname="com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillInputsTest" time="0.002"/>
+  <testcase name="defaultInputsRoundTripAndEmptyJsonDecodes" classname="com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillInputsTest" time="0.025"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

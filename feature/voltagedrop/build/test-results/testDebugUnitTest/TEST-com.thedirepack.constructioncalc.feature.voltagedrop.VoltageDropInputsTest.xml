@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-11-20T16:11:48.542Z" hostname="maxtop" time="0.093">
+<testsuite name="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-11-20T17:04:08.213Z" hostname="maxtop" time="0.176">
   <properties/>
-  <testcase name="table9NoticeNamesTheConduit" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.048"/>
-  <testcase name="unsupportedSizeIsAnErrorNotice" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.0"/>
-  <testcase name="viewModelMovesToNearestListedSize" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.013"/>
-  <testcase name="badNumbersAreProblems" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.001"/>
-  <testcase name="outputHasEveryResultWithKinds" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.001"/>
-  <testcase name="savedInputsRoundTripAndDefaultsDecode" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.023"/>
+  <testcase name="table9NoticeNamesTheConduit" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.09"/>
+  <testcase name="unsupportedSizeIsAnErrorNotice" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.001"/>
+  <testcase name="viewModelMovesToNearestListedSize" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.03"/>
+  <testcase name="badNumbersAreProblems" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.002"/>
+  <testcase name="outputHasEveryResultWithKinds" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.005"/>
+  <testcase name="savedInputsRoundTripAndDefaultsDecode" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.037"/>
   <testcase name="incompleteFormIsMissingNotError" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.0"/>
   <testcase name="parallelSetsShowInMinimumSize" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.001"/>
-  <testcase name="parsesToRequest" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.001"/>
+  <testcase name="parsesToRequest" classname="com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropInputsTest" time="0.0"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>
 </testsuite>

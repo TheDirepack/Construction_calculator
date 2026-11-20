@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.thedirepack.constructioncalc.feature.projects.test.projects-mergeDebugUnitTestResources-33:/values-v30/values-v30.xml",
+            "map": [
+                {
+                    "source": "/home/max/.gradle/caches/9.9.2/transforms/40ee9b6e894b91b89c4b15e5ff820f48/transformed/material3/res/values-v30/values-v30.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "72",
+                        "endOffsets": "123"
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -1,9 +1,9 @@
-com.thedirepack.constructioncalc.feature.voltagedrop-pngs-0 /home/max/.t3/projects/construction-calculator/feature/voltagedrop/build/generated/res/pngs/debug
-com.thedirepack.constructioncalc.feature.voltagedrop-updated_navigation_xml-1 /home/max/.t3/projects/construction-calculator/feature/voltagedrop/build/generated/updated_navigation_xml/debug
-com.thedirepack.constructioncalc.feature.voltagedrop-mergeDebugResources-2 /home/max/.t3/projects/construction-calculator/feature/voltagedrop/build/intermediates/incremental/debug/mergeDebugResources/merged.dir
-com.thedirepack.constructioncalc.feature.voltagedrop-mergeDebugResources-3 /home/max/.t3/projects/construction-calculator/feature/voltagedrop/build/intermediates/incremental/debug/mergeDebugResources/stripped.dir
-com.thedirepack.constructioncalc.feature.voltagedrop-debug-4 /home/max/.t3/projects/construction-calculator/feature/voltagedrop/build/intermediates/merged_res/debug/mergeDebugResources
-com.thedirepack.constructioncalc.feature.voltagedrop-debug-5 /home/max/.t3/projects/construction-calculator/feature/voltagedrop/build/intermediates/packaged_res/debug/packageDebugResources
-com.thedirepack.constructioncalc.feature.voltagedrop-debug-6 /home/max/.t3/projects/construction-calculator/feature/voltagedrop/src/debug/res
-com.thedirepack.constructioncalc.feature.voltagedrop-main-7 /home/max/.t3/projects/construction-calculator/feature/voltagedrop/src/main/res
+com.thedirepack.constructioncalc.feature.voltagedrop-pngs-0 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/voltagedrop/build/generated/res/pngs/debug
+com.thedirepack.constructioncalc.feature.voltagedrop-updated_navigation_xml-1 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/voltagedrop/build/generated/updated_navigation_xml/debug
+com.thedirepack.constructioncalc.feature.voltagedrop-mergeDebugResources-2 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/voltagedrop/build/intermediates/incremental/debug/mergeDebugResources/merged.dir
+com.thedirepack.constructioncalc.feature.voltagedrop-mergeDebugResources-3 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/voltagedrop/build/intermediates/incremental/debug/mergeDebugResources/stripped.dir
+com.thedirepack.constructioncalc.feature.voltagedrop-debug-4 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/voltagedrop/build/intermediates/merged_res/debug/mergeDebugResources
+com.thedirepack.constructioncalc.feature.voltagedrop-debug-5 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/voltagedrop/build/intermediates/packaged_res/debug/packageDebugResources
+com.thedirepack.constructioncalc.feature.voltagedrop-debug-6 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/voltagedrop/src/debug/res
+com.thedirepack.constructioncalc.feature.voltagedrop-main-7 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/voltagedrop/src/main/res
 gradleHome-0 /home/max/.gradle

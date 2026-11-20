@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" tests="16" skipped="0" failures="0" errors="0" timestamp="2026-11-20T16:11:48.638Z" hostname="maxtop" time="0.036">
+<testsuite name="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" tests="16" skipped="0" failures="0" errors="0" timestamp="2026-11-20T17:04:08.394Z" hostname="maxtop" time="0.007">
   <properties/>
   <testcase name="supportedSizeLists" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
-  <testcase name="smallestSizeNullWhenNothingFits" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
+  <testcase name="smallestSizeNullWhenNothingFits" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.001"/>
   <testcase name="table9At85MatchesPrintedEffectiveZ" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
   <testcase name="maxLengthIsConsistentWithDrop" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
-  <testcase name="dropFallsAsSizeGrows" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.017"/>
-  <testcase name="invalidInputsAreReported" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
-  <testcase name="threePhaseUsesRootThree" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.001"/>
+  <testcase name="dropFallsAsSizeGrows" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.002"/>
+  <testcase name="invalidInputsAreReported" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.001"/>
+  <testcase name="threePhaseUsesRootThree" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
   <testcase name="maxLengthRoundsDownToSixtyFourths" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
-  <testcase name="parallelSetsDivideTheDrop" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.001"/>
-  <testcase name="sizesNotInTheTableAreRejected" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.002"/>
-  <testcase name="smallestSizeMeetsTargetAndSmallerDoesNot" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.007"/>
-  <testcase name="unityPowerFactorIgnoresReactance" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.002"/>
-  <testcase name="table9EffectiveImpedanceByHand" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.001"/>
-  <testcase name="singlePhaseDcByHand" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.001"/>
+  <testcase name="parallelSetsDivideTheDrop" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
+  <testcase name="sizesNotInTheTableAreRejected" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.001"/>
+  <testcase name="smallestSizeMeetsTargetAndSmallerDoesNot" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
+  <testcase name="unityPowerFactorIgnoresReactance" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.001"/>
+  <testcase name="table9EffectiveImpedanceByHand" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
+  <testcase name="singlePhaseDcByHand" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
   <testcase name="strandedIsTheDefaultAndUsesTheStrandedRow" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
   <testcase name="aluminumDropsMoreThanCopper" classname="com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropTest" time="0.0"/>
   <system-out><![CDATA[]]></system-out>

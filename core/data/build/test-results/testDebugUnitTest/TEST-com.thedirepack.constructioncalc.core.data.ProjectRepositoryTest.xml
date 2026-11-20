@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.thedirepack.constructioncalc.core.data.ProjectRepositoryTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-11-20T16:30:42.207Z" hostname="maxtop" time="0.224">
+<testsuite name="com.thedirepack.constructioncalc.core.data.ProjectRepositoryTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-11-20T17:59:42.041Z" hostname="maxtop" time="0.036">
   <properties/>
-  <testcase name="archivedProjectsAreReadOnlyUntilUnarchived" classname="com.thedirepack.constructioncalc.core.data.ProjectRepositoryTest" time="0.163"/>
-  <testcase name="duplicateOfArchivedIsEditable" classname="com.thedirepack.constructioncalc.core.data.ProjectRepositoryTest" time="0.057"/>
+  <testcase name="archivedProjectsAreReadOnlyUntilUnarchived" classname="com.thedirepack.constructioncalc.core.data.ProjectRepositoryTest" time="0.034"/>
+  <testcase name="duplicateOfArchivedIsEditable" classname="com.thedirepack.constructioncalc.core.data.ProjectRepositoryTest" time="0.002"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>
 </testsuite>

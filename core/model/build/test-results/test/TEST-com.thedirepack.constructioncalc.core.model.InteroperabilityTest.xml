@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.thedirepack.constructioncalc.core.model.InteroperabilityTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-11-20T17:40:41.435Z" hostname="maxtop" time="0.005">
+  <properties/>
+  <testcase name="allResultsIndexedProperlyAcrossRunsInProject" classname="com.thedirepack.constructioncalc.core.model.InteroperabilityTest" time="0.004"/>
+  <testcase name="measurementResultsExchangedBetweenToolsLosslessly" classname="com.thedirepack.constructioncalc.core.model.InteroperabilityTest" time="0.001"/>
+  <testcase name="nonMeasureKindsKeepExactNumericsWithoutCreatingQuantity" classname="com.thedirepack.constructioncalc.core.model.InteroperabilityTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

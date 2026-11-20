@@ -1,0 +1,20 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.thedirepack.constructioncalc.feature.conduitfill.test.conduitfill-mergeDebugUnitTestResources-33:/values-v34/values-v34.xml",
+            "map": [
+                {
+                    "source": "/home/max/.gradle/caches/9.9.2/transforms/40ee9b6e894b91b89c4b15e5ff820f48/transformed/material3/res/values-v34/values-v34.xml",
+                    "from": {
+                        "startLines": "2,47",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,4020",
+                        "endLines": "46,91",
+                        "endColumns": "12,12",
+                        "endOffsets": "4015,8006"
+                    }
+                }
+            ]
+        }
+    ]
+}

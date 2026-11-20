@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.thedirepack.constructioncalc.core.electrical.ElectricalDeepBoundaryTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-11-20T17:59:16.629Z" hostname="maxtop" time="0.039">
+  <properties/>
+  <testcase name="equipmentGroundingConductorProportionalUpsizeComprehensive" classname="com.thedirepack.constructioncalc.core.electrical.ElectricalDeepBoundaryTest" time="0.013"/>
+  <testcase name="extremeAmbientTemperatureCutoffsHandledCleanly" classname="com.thedirepack.constructioncalc.core.electrical.ElectricalDeepBoundaryTest" time="0.013"/>
+  <testcase name="massiveBundlingDeratingScalesConductorsSafely" classname="com.thedirepack.constructioncalc.core.electrical.ElectricalDeepBoundaryTest" time="0.008"/>
+  <testcase name="mixedContinuousAndNonContinuousLoadsFollowArticle210_19" classname="com.thedirepack.constructioncalc.core.electrical.ElectricalDeepBoundaryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

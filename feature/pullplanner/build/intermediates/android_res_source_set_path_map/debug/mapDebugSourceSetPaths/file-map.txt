@@ -1,0 +1,9 @@
+com.thedirepack.constructioncalc.feature.pullplanner-pngs-0 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/pullplanner/build/generated/res/pngs/debug
+com.thedirepack.constructioncalc.feature.pullplanner-updated_navigation_xml-1 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/pullplanner/build/generated/updated_navigation_xml/debug
+com.thedirepack.constructioncalc.feature.pullplanner-mergeDebugResources-2 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/pullplanner/build/intermediates/incremental/debug/mergeDebugResources/merged.dir
+com.thedirepack.constructioncalc.feature.pullplanner-mergeDebugResources-3 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/pullplanner/build/intermediates/incremental/debug/mergeDebugResources/stripped.dir
+com.thedirepack.constructioncalc.feature.pullplanner-debug-4 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/pullplanner/build/intermediates/merged_res/debug/mergeDebugResources
+com.thedirepack.constructioncalc.feature.pullplanner-debug-5 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/pullplanner/build/intermediates/packaged_res/debug/packageDebugResources
+com.thedirepack.constructioncalc.feature.pullplanner-debug-6 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/pullplanner/src/debug/res
+com.thedirepack.constructioncalc.feature.pullplanner-main-7 /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/pullplanner/src/main/res
+gradleHome-0 /home/max/.gradle

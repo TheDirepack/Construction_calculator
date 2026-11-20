@@ -1,0 +1,16 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/wellpump/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest4515417782968400634.xml:2:13-83
+INJECTED from /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/wellpump/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest4515417782968400634.xml:2:13-83
+	package
+		INJECTED from /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/wellpump/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest4515417782968400634.xml
+	xmlns:android
+		ADDED from /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/wellpump/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest4515417782968400634.xml:2:23-81
+uses-sdk
+INJECTED from /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/wellpump/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest4515417782968400634.xml reason: use-sdk injection requested
+INJECTED from /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/wellpump/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest4515417782968400634.xml
+INJECTED from /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/wellpump/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest4515417782968400634.xml
+	android:targetSdkVersion
+		INJECTED from /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/wellpump/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest4515417782968400634.xml
+	android:minSdkVersion
+		INJECTED from /home/max/.t3/worktrees/construction-calculator/t3-6450b5b5/feature/wellpump/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest4515417782968400634.xml
