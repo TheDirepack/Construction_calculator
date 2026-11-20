@@ -1,6 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conversions.domain
 
 import com.thedirepack.constructioncalc.core.math.Rational
+import java.math.BigDecimal
 import java.math.MathContext
 import java.math.RoundingMode
 
@@ -13,8 +14,9 @@ object NumberText {
      */
     fun significant(value: Rational, digits: Int = 7): String {
         if (value.isZero) return "0"
-        val rounded = value.toBigDecimal(60).round(MathContext(digits, RoundingMode.HALF_UP)).stripTrailingZeros()
-        if (rounded.signum() == 0) return "0"
+        val rounded = BigDecimal(value.numerator)
+            .divide(BigDecimal(value.denominator), MathContext(digits, RoundingMode.HALF_UP))
+            .stripTrailingZeros()
         val leadingDigitExponent = rounded.precision() - rounded.scale() - 1
         val text = if (leadingDigitExponent in -5..11) rounded.toPlainString() else rounded.toString()
         return if (text.startsWith("-")) "−" + text.substring(1) else text

@@ -69,8 +69,14 @@ data class Circuit(
     val conductor: ConductorSpec? = null,
     val note: String = "",
 ) {
+    init {
+        // A circuit may extend past its current panel after a resize.
+        require(slot in 1..Panel.MAX_SPACES) { "Invalid circuit position: $slot" }
+        require(poles in 1..3) { "Invalid circuit pole count: $poles" }
+    }
+
     /** Positions this breaker occupies. */
-    val slots: List<Int> get() = (0 until poles.coerceIn(1, 3)).map { slot + 2 * it }
+    val slots: List<Int> get() = (0 until poles).map { slot + 2 * it }
 }
 
 /** Conductor choice for a circuit or a project default. */
@@ -99,7 +105,15 @@ data class Panel(
     val fedFrom: CircuitRef? = null,
     val note: String = "",
     val circuits: List<Circuit> = emptyList(),
-)
+) {
+    init {
+        require(spaces in 1..MAX_SPACES) { "Invalid panel space count: $spaces" }
+    }
+
+    companion object {
+        const val MAX_SPACES = 120
+    }
+}
 
 @Serializable
 data class CircuitRef(val panelId: String, val circuitId: String)

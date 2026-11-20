@@ -7,7 +7,6 @@ import com.thedirepack.constructioncalc.feature.conversions.domain.Phase
 import com.thedirepack.constructioncalc.feature.conversions.domain.PowerTerm
 import com.thedirepack.constructioncalc.feature.conversions.domain.UnitTable
 import kotlinx.serialization.Serializable
-import java.math.BigDecimal
 
 /** What is typed into the wire-size converter. */
 @Serializable
@@ -43,6 +42,6 @@ data class ConversionsInputs(
 /** Exact value of what a user typed; accepts `,` or `.` and `−`. Null if blank or not a number. */
 internal fun parseRational(text: String): Rational? {
     val clean = text.trim().replace(',', '.').replace('−', '-')
-    if (clean.isEmpty()) return null
-    return runCatching { Rational.of(BigDecimal(clean)) }.getOrNull()
+    if (clean.isEmpty() || '/' in clean) return null
+    return runCatching { Rational.parse(clean) }.getOrNull()
 }

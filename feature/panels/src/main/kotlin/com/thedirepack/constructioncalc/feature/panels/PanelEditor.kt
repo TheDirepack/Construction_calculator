@@ -57,7 +57,6 @@ private data class SheetTarget(val circuit: Circuit, val isNew: Boolean)
 
 private val COMMON_SPACES = listOf(12, 18, 20, 24, 30, 42, 54, 60, 84)
 private const val CUSTOM_SPACES = -1
-private const val MAX_SPACES = 120
 
 /** One panel: its schedule with totals, and its settings. */
 @Composable
@@ -259,9 +258,9 @@ private fun PanelSettings(ctx: PanelsContext, panel: Panel) {
 
     if (customSpaces) {
         TextInputDialog("Number of spaces", panel.spaces.toString(), "Set", { text ->
-            text.toIntOrNull()?.takeIf { it in 2..MAX_SPACES }?.let { n -> update { it.copy(spaces = n) } }
-                ?: ctx.host.showMessage("Enter a number from 2 to $MAX_SPACES")
+            text.toIntOrNull()?.takeIf { it in 2..Panel.MAX_SPACES }?.let { n -> update { it.copy(spaces = n) } }
+                ?: ctx.host.showMessage("Enter a number from 2 to ${Panel.MAX_SPACES}")
             customSpaces = false
-        }, { customSpaces = false }, label = "Spaces (2–$MAX_SPACES)")
+        }, { customSpaces = false }, label = "Spaces (2–${Panel.MAX_SPACES})")
     }
 }
