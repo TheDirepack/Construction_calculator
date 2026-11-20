@@ -13,7 +13,8 @@ contract for building a tool.
                      feet-inch parsing, the expression evaluator, formatting, and the keypad
                      input state machine (CalcInput). The calculator brain, reusable by any tool.
 :core:electrical     Pure Kotlin. NEC tables and electrical formulas shared by the electrical tools.
-:core:model          Pure Kotlin + kotlinx.serialization. Project → Run → ProjectItem, ResultValue
+:core:model          Pure Kotlin + kotlinx.serialization. Project → Run → ProjectItem, panels/circuits,
+                     the design engine (design/), ResultValue
                      (the unit of exchange between tools), the project and backup file formats (plain JSON), text export.
 :core:data           Android. AppServices: SettingsRepository (app-wide plus per-tool settings),
                      ProjectRepository (one JSON file per project), RecentResultsRepository, BackupService,
@@ -48,6 +49,10 @@ Features never depend on each other. They share data through `ResultValue`s, not
   pick the run saves go to, export any project, create one, or manage projects. The active
   project is app-wide (`AppSettings.activeProjectId/activeRunId`): it's where Save goes and whose
   results the value picker offers.
+- **Electrical design lives in the project.** `Project.panels/groups/design` and `Run.raceway`
+  link panels → circuits → conduit runs. `ProjectAnalysis.analyze(project)` (pure, tested) turns
+  that into wire sizes, grounds, voltage drop, fill and phase balance; any tool can call it.
+- **Company profile** (Settings › Company) heads exports: use `AppSettings.company.headerLines()`.
 - **Save/load everything.** Two file types, both plain pretty-printed JSON, told apart by
   their `format` field (`AppFileCodec`):
   - `Name.project.json`: one project (`ProjectCodec`). Importing one that already exists asks

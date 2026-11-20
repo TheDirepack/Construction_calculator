@@ -7,7 +7,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.PI
 
-/** Spot checks against NEC Chapter 9, Tables 5 and 8 as printed. */
+/**
+ * Spot checks against NEC 2023 Chapter 9, Table 5 (printed pp. 70-720 to 70-723) and Table 8 (p. 70-725), as printed.
+ * Every area and diameter in the tables was read from the book.
+ */
 class InsulatedConductorAreaTest {
     private fun area(t: InsulationType, s: ConductorSize) = InsulatedConductorArea.area(t, s)!!
 
@@ -57,6 +60,39 @@ class InsulatedConductorAreaTest {
         assertEquals(0.0556, area(InsulationType.RHH_NO_COVERING, ConductorSize.AWG_8), 1e-9)
         assertEquals(0.0726, area(InsulationType.RHH_NO_COVERING, ConductorSize.AWG_6), 1e-9)
         assertEquals(0.3117, area(InsulationType.RHH_NO_COVERING, ConductorSize.AWG_3_0), 1e-9)
+    }
+
+    @Test fun diametersMatchTable5() {
+        // Approximate Diameter column, in.
+        fun d(t: InsulationType, s: ConductorSize) = InsulatedConductorArea.diameter(t, s)!!
+        assertEquals(0.111, d(InsulationType.THHN, ConductorSize.AWG_14), 1e-9)
+        assertEquals(0.164, d(InsulationType.THHN, ConductorSize.AWG_10), 1e-9)
+        assertEquals(0.446, d(InsulationType.THHN, ConductorSize.AWG_1), 1e-9)
+        assertEquals(0.642, d(InsulationType.THHN, ConductorSize.AWG_4_0), 1e-9)
+        assertEquals(1.310, d(InsulationType.THHN, ConductorSize.KCMIL_1000), 1e-9)
+        assertEquals(0.304, d(InsulationType.THW, ConductorSize.AWG_6), 1e-9)
+        assertEquals(1.882, d(InsulationType.THW, ConductorSize.KCMIL_2000), 1e-9)
+        assertEquals(0.193, d(InsulationType.RHH_COVERED, ConductorSize.AWG_14), 1e-9)
+        assertEquals(2.072, d(InsulationType.RHH_COVERED, ConductorSize.KCMIL_2000), 1e-9)
+        assertEquals(0.163, d(InsulationType.RHH_NO_COVERING, ConductorSize.AWG_14), 1e-9)
+        assertEquals(0.266, d(InsulationType.RHH_NO_COVERING, ConductorSize.AWG_8), 1e-9)
+        assertEquals(0.084, d(InsulationType.TFN, ConductorSize.AWG_18), 1e-9)
+    }
+
+    @Test fun everyFamilyHasTheRowsTheBookPrints() {
+        // Row counts: THHN/THWN 14 AWG to 1000 kcmil; the others 14 AWG to 2000 kcmil; RHH* (no covering) 14 to 8 AWG
+        // with its own values, then the THW rows from 6 AWG up.
+        assertEquals(24, InsulatedConductorArea.sizes(InsulationType.THHN).size)
+        assertEquals(28, InsulatedConductorArea.sizes(InsulationType.XHHW).size)
+        assertEquals(28, InsulatedConductorArea.sizes(InsulationType.THW).size)
+        assertEquals(28, InsulatedConductorArea.sizes(InsulationType.TW).size)
+        assertEquals(28, InsulatedConductorArea.sizes(InsulationType.RHH_COVERED).size)
+        assertEquals(28, InsulatedConductorArea.sizes(InsulationType.RHH_NO_COVERING).size)
+        // RHH covered (the larger rows): 6 to 1 AWG.
+        assertEquals(0.1041, area(InsulationType.RHH_COVERED, ConductorSize.AWG_6), 1e-9)
+        assertEquals(0.2660, area(InsulationType.RHH_COVERED, ConductorSize.AWG_1), 1e-9)
+        assertEquals(0.0437, area(InsulationType.RHH_COVERED, ConductorSize.AWG_10), 1e-9)
+        assertEquals(0.0835, area(InsulationType.RHH_COVERED, ConductorSize.AWG_8), 1e-9)
     }
 
     @Test fun tfnSmallSizes() {
@@ -125,6 +161,16 @@ class InsulatedConductorAreaTest {
         assertEquals(0.092, BareConductorArea.diameter(ConductorSize.AWG_12)!!, 1e-9)
         assertEquals(0.528, BareConductorArea.diameter(ConductorSize.AWG_4_0)!!, 1e-9)
         assertEquals(30, BareConductorArea.sizes.size)
+        // The rest of Table 8's "Overall" columns, spot checked.
+        assertEquals(0.046, BareConductorArea.diameter(ConductorSize.AWG_18)!!, 1e-9)
+        assertEquals(0.040, BareConductorArea.diameter(ConductorSize.AWG_18, solid = true)!!, 1e-9)
+        assertEquals(0.128, BareConductorArea.diameter(ConductorSize.AWG_8, solid = true)!!, 1e-9)
+        assertEquals(0.184, BareConductorArea.diameter(ConductorSize.AWG_6)!!, 1e-9)
+        assertEquals(0.575, BareConductorArea.diameter(ConductorSize.KCMIL_250)!!, 1e-9)
+        assertEquals(1.289, BareConductorArea.diameter(ConductorSize.KCMIL_1250)!!, 1e-9)
+        assertEquals(1.632, BareConductorArea.diameter(ConductorSize.KCMIL_2000)!!, 1e-9)
+        assertEquals(0.782, BareConductorArea.area(ConductorSize.KCMIL_750)!!, 1e-9)
+        assertEquals(1.566, BareConductorArea.area(ConductorSize.KCMIL_1500)!!, 1e-9)
     }
 
     @Test fun bareAreaFollowsDiameterForLargerSizes() {

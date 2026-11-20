@@ -1,2 +1,0 @@
-com.thedirepack.constructioncalc.core.data
-xml shared_paths

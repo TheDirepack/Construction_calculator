@@ -1,1 +1,0 @@
-com.thedirepack.constructioncalc.feature.voltagedrop

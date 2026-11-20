@@ -1,10 +1,12 @@
 package com.thedirepack.constructioncalc.feature.conduitfill.domain
 
 import com.thedirepack.constructioncalc.core.electrical.ConduitSize
+import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ValueKind
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.util.Locale
-import kotlin.math.round
 
 /** How serious a [ReportNotice] is. The screen maps these to its own notice styles. */
 enum class ReportSeverity { INFO, WARNING, ERROR }
@@ -50,18 +52,18 @@ data class ConduitFillReport(
             val jam = ConduitFill.jamCheck(conduit, active)
 
             val results = buildList {
-                add(ResultValue.number(KEY_PERCENT, "Conduit fill", ValueKind.PERCENT, round2(a.percentFill), "${fmt(a.percentFill, 1)}%"))
-                add(ResultValue.number(KEY_LIMIT, "Fill limit (Table 1)", ValueKind.PERCENT, a.limitPercent.toDouble(), "${a.limitPercent}%"))
-                add(areaResult(KEY_CONDUCTOR_AREA, "Conductor area", a.totalAreaSqIn))
-                add(areaResult(KEY_ALLOWED_AREA, "Allowed area", a.allowedAreaSqIn))
+                add(decimalResult(KEY_PERCENT, "Conduit fill", ValueKind.PERCENT, a.percentFill, 2, "${fmt(a.percentFill, 1)}%"))
+                add(ResultValue.number(KEY_LIMIT, "Fill limit (Table 1)", ValueKind.PERCENT, Rational.of(a.limitPercent.toLong()), "${a.limitPercent}%"))
+                add(decimalResult(KEY_CONDUCTOR_AREA, "Conductor area", ValueKind.AREA, a.totalAreaSqIn, 4, "${fmt(a.totalAreaSqIn, 4)} in²"))
+                add(decimalResult(KEY_ALLOWED_AREA, "Allowed area", ValueKind.AREA, a.allowedAreaSqIn, 4, "${fmt(a.allowedAreaSqIn, 4)} in²"))
                 add(ResultValue.text(KEY_MIN_CONDUIT, "Smallest ${conduit.type.displayName}", minimum?.displayName ?: "None fits"))
                 if (maxCount != null) {
                     add(
                         ResultValue.number(
                             KEY_MAX_COUNT,
-                            "Most ${request.fit.label} in ${conduit.displayName}",
+                            "Most ${request.fit.shortLabel} in ${conduit.displayName}",
                             ValueKind.NUMBER,
-                            maxCount.toDouble(),
+                            Rational.of(maxCount.toLong()),
                             maxCount.toString(),
                         ),
                     )
@@ -88,7 +90,7 @@ data class ConduitFillReport(
                     )
                 }
                 if (maxCount != null && maxCount == 0) {
-                    add(ReportNotice("Not even one ${request.fit.label} fits in ${conduit.displayName}.", ReportSeverity.WARNING))
+                    add(ReportNotice("Not even one ${request.fit.shortLabel} fits in ${conduit.displayName}.", ReportSeverity.WARNING))
                 }
                 if (jam != null) {
                     val r = fmt(jam.ratio, 2)
@@ -109,14 +111,14 @@ data class ConduitFillReport(
                     add(
                         ReportNotice(
                             "Nipple fill (60%) applies only to nipples 24 in. (600 mm) or shorter between boxes, cabinets or similar " +
-                                "enclosures. Table 1 Note 4 also waives the 310.15(B)(3)(a) adjustment factors for them.",
+                                "enclosures. Table 1 Note 4 also waives the 310.15(C)(1) adjustment factors for them.",
                         ),
                     )
                 }
                 add(
                     ReportNotice(
-                        "Areas: NEC Chapter 9 Table 4 (conduit), Table 5 (insulated wire, approximate), Table 8 (bare wire) and the " +
-                            "Table 1 limits, using values from the NEC 2017 and 2020 tables. Check the edition your jurisdiction has adopted.",
+                        "Areas: NEC 2023 Chapter 9 Table 4 (conduit), Table 5 (insulated wire, approximate), Table 8 (bare wire) and the " +
+                            "Table 1 limits. Check the edition your jurisdiction has adopted.",
                     ),
                 )
                 add(
@@ -138,11 +140,9 @@ data class ConduitFillReport(
             return ConduitFillReport(a, minimum, maxCount, jam, results, notices, summary)
         }
 
-        private fun areaResult(key: String, label: String, sqIn: Double) =
-            ResultValue.number(key, label, ValueKind.NUMBER, round4(sqIn), "${fmt(sqIn, 4)} in²")
-
-        private fun round2(x: Double) = round(x * 100.0) / 100.0
-        private fun round4(x: Double) = round(x * 10_000.0) / 10_000.0
+        /** [value] rounded to [scale] decimals as an exact rational, so no binary-double noise is stored. */
+        private fun decimalResult(key: String, label: String, kind: ValueKind, value: Double, scale: Int, text: String) =
+            ResultValue(key, label, kind, Rational.of(BigDecimal(value).setScale(scale, RoundingMode.HALF_UP)).toString(), text)
 
         private fun fmt(x: Double, decimals: Int) = String.format(Locale.US, "%.${decimals}f", x)
     }

@@ -21,14 +21,19 @@ sealed interface ConductorSpec {
     /** "12 AWG THHN / THWN / THWN-2" or "6 AWG bare". */
     val label: String
 
+    /** "12 AWG THHN" or "6 AWG bare": for tight spaces such as a result label. */
+    val shortLabel: String
+
     data class Insulated(val type: InsulationType, override val size: ConductorSize) : ConductorSpec {
         override val dimensions get() = InsulatedConductorArea.dimensions(type, size)
         override val label get() = "${size.label} ${type.label}"
+        override val shortLabel get() = "${size.label} ${type.code}"
     }
 
     data class Bare(override val size: ConductorSize, val solid: Boolean = false) : ConductorSpec {
         override val dimensions get() = BareConductorArea.dimensions(size, solid)
         override val label get() = "${size.label} bare"
+        override val shortLabel get() = label
     }
 }
 

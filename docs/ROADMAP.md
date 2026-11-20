@@ -35,6 +35,7 @@ inventory of features, never as a source of code, art or text.
 | Unit Conversions | in progress | Southwire Conversion (`com.southwire.conversion`) |
 | VFD Sizing | **done** (v1, tables checked vs NEC 2023) | Southwire VFD Sizing (`com.southwire.VFDSizingCalculator`) |
 | Well & Pump | planned | Well Drilling (`com.welldrilling`) |
+| Panels & Circuits | in progress (model + design engine done) | Original: panel schedules linked to runs, wire sizing |
 | Projects & Runs | **done** (core); linking flows next | Original to this app: links all of the above |
 
 ## 1. Foot-Inch Calculator (done: v0.1)
@@ -143,3 +144,28 @@ The main thing this app adds over single-purpose calculators:
 - `ui/`: app shell, theme, shared composables (`fractionText`)
 - Engine code stays pure Kotlin with JVM unit tests; UI is Jetpack Compose + Material 3
 - When a second tool lands: move `core/` into its own Gradle module and add Navigation Compose
+
+## Panels & Circuits (integrated electrical design)
+
+Panels, circuits and conduit runs live in the project and are linked:
+- **Panels:** spaces, voltage system (120/240 1φ, 208Y/120, 480Y/277, 240/480 Δ), bus, main or MLO,
+  fed-from circuit. Standard odd/even numbering with phase rotation; multi-pole breakers; spares and
+  spaces; per-phase load, imbalance and bus/main checks.
+- **Circuits:** breaker, poles, label, load (VA or A), continuous, neutral, nonlinear, groups
+  ("Kitchen", "RTU-3") across panels, and the **runs** they pass through.
+- **Runs** are conduit runs: conduit type and size (or auto), length (from Bending, Foot-Inch or any
+  result), ambient temperature, rooftop exposure, nipple. Bends, fill and pull results saved to a run
+  belong to it.
+- **Design engine** (`core/model/design/ProjectAnalysis`, NEC 2023, tables checked against the
+  book):
+  - counts current-carrying conductors per run (310.15(E)/(F)) and derates (Table 310.15(C)(1))
+  - corrects for ambient temperature (Table 310.15(B)(1)(1)) with the rooftop adder (310.15(B)(2))
+  - sizes each circuit for its breaker and continuous load: 210.19(A), 110.14(C) terminations,
+    240.4(B)/(D)
+  - checks voltage drop over the run length (Table 9) and upsizes to the target
+  - sizes the EGC (Table 250.122, upsized per 250.122(B))
+  - computes conduit fill and the smallest conduit (Chapter 9 Tables 1, 4, 5)
+- **Exports:** panel schedule PDF and text, headed with the company profile.
+
+Next: feeder and service load calculations (Article 220), demand factors, available fault current,
+series ratings, and selective coordination notes.

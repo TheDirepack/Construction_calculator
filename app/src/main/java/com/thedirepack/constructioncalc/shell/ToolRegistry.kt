@@ -5,6 +5,7 @@ import com.thedirepack.constructioncalc.feature.conduitbending.ConduitBendingToo
 import com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillTool
 import com.thedirepack.constructioncalc.feature.conversions.ConversionsTool
 import com.thedirepack.constructioncalc.feature.footinch.FootInchTool
+import com.thedirepack.constructioncalc.feature.panels.PanelsTool
 import com.thedirepack.constructioncalc.feature.projects.ProjectsTool
 import com.thedirepack.constructioncalc.feature.pullplanner.PullPlannerTool
 import com.thedirepack.constructioncalc.feature.reellength.ReelLengthTool
@@ -17,6 +18,7 @@ object ToolRegistry {
     val all: List<ToolModule> = listOf(
         ProjectsTool,
         FootInchTool,
+        PanelsTool,
         ConduitBendingTool,
         ConduitFillTool,
         VoltageDropTool,

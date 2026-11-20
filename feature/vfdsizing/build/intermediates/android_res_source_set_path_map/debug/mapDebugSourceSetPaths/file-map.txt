@@ -1,9 +1,0 @@
-com.thedirepack.constructioncalc.feature.vfdsizing-pngs-0 /home/max/.t3/projects/construction-calculator/feature/vfdsizing/build/generated/res/pngs/debug
-com.thedirepack.constructioncalc.feature.vfdsizing-updated_navigation_xml-1 /home/max/.t3/projects/construction-calculator/feature/vfdsizing/build/generated/updated_navigation_xml/debug
-com.thedirepack.constructioncalc.feature.vfdsizing-mergeDebugResources-2 /home/max/.t3/projects/construction-calculator/feature/vfdsizing/build/intermediates/incremental/debug/mergeDebugResources/merged.dir
-com.thedirepack.constructioncalc.feature.vfdsizing-mergeDebugResources-3 /home/max/.t3/projects/construction-calculator/feature/vfdsizing/build/intermediates/incremental/debug/mergeDebugResources/stripped.dir
-com.thedirepack.constructioncalc.feature.vfdsizing-debug-4 /home/max/.t3/projects/construction-calculator/feature/vfdsizing/build/intermediates/merged_res/debug/mergeDebugResources
-com.thedirepack.constructioncalc.feature.vfdsizing-debug-5 /home/max/.t3/projects/construction-calculator/feature/vfdsizing/build/intermediates/packaged_res/debug/packageDebugResources
-com.thedirepack.constructioncalc.feature.vfdsizing-debug-6 /home/max/.t3/projects/construction-calculator/feature/vfdsizing/src/debug/res
-com.thedirepack.constructioncalc.feature.vfdsizing-main-7 /home/max/.t3/projects/construction-calculator/feature/vfdsizing/src/main/res
-gradleHome-0 /home/max/.gradle

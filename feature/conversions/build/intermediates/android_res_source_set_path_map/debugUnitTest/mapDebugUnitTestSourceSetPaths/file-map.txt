@@ -1,4 +1,0 @@
-com.thedirepack.constructioncalc.feature.conversions.test.conversions-mergeDebugUnitTestResources-0 /home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/incremental/debugUnitTest/mergeDebugUnitTestResources/merged.dir
-com.thedirepack.constructioncalc.feature.conversions.test.conversions-mergeDebugUnitTestResources-1 /home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/incremental/debugUnitTest/mergeDebugUnitTestResources/stripped.dir
-com.thedirepack.constructioncalc.feature.conversions.test.conversions-debugUnitTest-2 /home/max/.t3/projects/construction-calculator/feature/conversions/build/intermediates/merged_res/debugUnitTest/mergeDebugUnitTestResources
-gradleHome-0 /home/max/.gradle

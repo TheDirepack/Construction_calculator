@@ -25,13 +25,20 @@ object ProjectSharing {
     /** MIME types accepted when opening a file; the content is validated by [ProjectCodec]. */
     val OPEN_MIME_TYPES = arrayOf(ProjectCodec.MIME_TYPE, "application/octet-stream", "text/plain", "*/*")
 
-    fun shareIntent(context: Context, project: Project, now: Long, toolTitle: (String) -> String): Intent =
+    /** [header]: company lines for the text body (`AppSettings.company.headerLines()`). */
+    fun shareIntent(
+        context: Context,
+        project: Project,
+        now: Long,
+        toolTitle: (String) -> String,
+        header: List<String> = emptyList(),
+    ): Intent =
         fileShareIntent(
             context,
             fileName = ProjectCodec.fileName(project),
             content = ProjectCodec.encode(project, exportedAt = now),
             subject = project.name,
-            body = ProjectText.render(project, toolTitle),
+            body = ProjectText.render(project, toolTitle, header = header),
         )
 
     /** Shares a backup file (everything, or a subset such as all projects). */
@@ -45,16 +52,30 @@ object ProjectSharing {
         return fileShareIntent(context, fileName, AppFileCodec.encodeBackup(backup), fileName.substringBefore('.'), body)
     }
 
-    private fun fileShareIntent(context: Context, fileName: String, content: String, subject: String, body: String): Intent {
+    private fun fileShareIntent(context: Context, fileName: String, content: String, subject: String, body: String): Intent =
+        shareFileIntent(context, fileName, ProjectCodec.MIME_TYPE, subject, body) { it.write(content.toByteArray()) }
+
+    /**
+     * Shares any generated file (PDF schedule, CSV…) with no permissions: [write] fills a cache
+     * file that is offered through the FileProvider.
+     */
+    fun shareFileIntent(
+        context: Context,
+        fileName: String,
+        mimeType: String,
+        subject: String,
+        body: String,
+        write: (java.io.OutputStream) -> Unit,
+    ): Intent {
         val dir = File(context.cacheDir, "shared").apply {
             mkdirs()
             listFiles()?.forEach { it.delete() } // only keep the file being shared
         }
         val file = File(dir, fileName)
-        file.writeText(content)
+        file.outputStream().use(write)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
         val send = Intent(Intent.ACTION_SEND).apply {
-            type = ProjectCodec.MIME_TYPE
+            type = mimeType
             putExtra(Intent.EXTRA_STREAM, uri)
             putExtra(Intent.EXTRA_SUBJECT, subject)
             putExtra(Intent.EXTRA_TEXT, body)

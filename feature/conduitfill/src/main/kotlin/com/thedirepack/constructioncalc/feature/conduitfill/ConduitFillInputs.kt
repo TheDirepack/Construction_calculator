@@ -25,10 +25,7 @@ data class ConductorGroupInput(
     val size: String = ConductorSize.AWG_12.label,
 )
 
-/**
- * What a saved Conduit Fill item stores. Every field has a default so older and newer files decode.
- * Never rename or repurpose a field: add new ones.
- */
+/** What a saved Conduit Fill item stores. Every field has a default so a partly filled item still decodes. */
 @Serializable
 data class ConduitFillInputs(
     /** A [ConduitType.code]. */
@@ -77,7 +74,7 @@ fun ConduitFillInputs.toRequest(): ParsedFill {
     val type = ConduitType.fromCode(conduitType)
     val trade = TradeSize.fromLabel(tradeSize)
     val conduit = if (type == null) {
-        problems += "This saved item uses a conduit type this version doesn't know ($conduitType)."
+        problems += "Unknown conduit type \"$conduitType\"."
         null
     } else {
         trade?.let { ConduitTable.find(type, it) }.also {

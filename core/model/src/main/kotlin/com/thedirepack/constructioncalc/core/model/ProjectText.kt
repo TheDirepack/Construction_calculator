@@ -7,8 +7,18 @@ import java.time.format.DateTimeFormatter
 /** Plain-text rendering of a project, for sharing by text message or email body. */
 object ProjectText {
 
-    fun render(project: Project, toolTitle: (String) -> String = { it }, zone: ZoneId = ZoneId.systemDefault()): String =
+    /** [header]: company lines printed above the project (see CompanyProfile.headerLines). */
+    fun render(
+        project: Project,
+        toolTitle: (String) -> String = { it },
+        zone: ZoneId = ZoneId.systemDefault(),
+        header: List<String> = emptyList(),
+    ): String =
         buildString {
+            if (header.isNotEmpty()) {
+                header.forEach(::appendLine)
+                appendLine()
+            }
             appendLine(project.name)
             if (project.note.isNotBlank()) appendLine(project.note.trim())
             project.runs.forEach { run ->

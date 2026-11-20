@@ -91,7 +91,7 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
     val isActive = settings.activeProjectId == project.id
     val readOnly = project.archived
 
-    val toText = { ProjectText.render(project, tools::titleOf) }
+    val toText = { ProjectText.render(project, tools::titleOf, header = settings.company.headerLines()) }
     val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ProjectCodec.MIME_TYPE)) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -113,7 +113,7 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
             },
         actions = {
             IconButton(onClick = {
-                context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf))
+                context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value.company.headerLines()))
             }) {
                 Icon(painterResource(R.drawable.ic_share), contentDescription = "Share project")
             }

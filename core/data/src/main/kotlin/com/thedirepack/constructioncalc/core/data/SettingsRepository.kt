@@ -22,6 +22,28 @@ import kotlinx.serialization.json.put
 
 enum class ThemeMode(val label: String) { SYSTEM("System"), LIGHT("Light"), DARK("Dark") }
 
+/** Who prepared the work: printed on shared projects, panel schedules and other exports. */
+data class CompanyProfile(
+    val name: String = "",
+    val preparedBy: String = "",
+    val license: String = "",
+    val phone: String = "",
+    val email: String = "",
+    val address: String = "",
+) {
+    val isEmpty: Boolean get() = listOf(name, preparedBy, license, phone, email, address).all { it.isBlank() }
+
+    /** Header lines for exports, skipping blanks: "Acme Electric · Lic. #123", "Prepared by …". */
+    fun headerLines(): List<String> = buildList {
+        val first = listOf(name, license.takeIf { it.isNotBlank() }?.let { "Lic. $it" }.orEmpty()).filter { it.isNotBlank() }
+        if (first.isNotEmpty()) add(first.joinToString(" · "))
+        val contact = listOf(phone, email).filter { it.isNotBlank() }
+        if (contact.isNotEmpty()) add(contact.joinToString(" · "))
+        if (address.isNotBlank()) add(address.trim())
+        if (preparedBy.isNotBlank()) add("Prepared by ${preparedBy.trim()}")
+    }
+}
+
 /**
  * App-wide preferences: the single source for the one Settings screen. Every tool shows lengths
  * with these, so the app behaves as one system. Tools keep their own extra options in
@@ -38,6 +60,7 @@ data class AppSettings(
     /** Where "Save to project" goes by default. */
     val activeProjectId: String? = null,
     val activeRunId: String? = null,
+    val company: CompanyProfile = CompanyProfile(),
 )
 
 class SettingsRepository(private val context: Context) {
@@ -48,6 +71,8 @@ class SettingsRepository(private val context: Context) {
     fun setThemeMode(mode: ThemeMode) = save { it.copy(themeMode = mode) }
 
     fun setAnimations(enabled: Boolean) = save { it.copy(animations = enabled) }
+
+    fun setCompany(company: CompanyProfile) = save { it.copy(company = company) }
 
     /** A tool's own settings store, e.g. `module("foot-inch")`. */
     fun module(toolId: String): ModuleSettings = synchronized(modules) {
@@ -72,6 +97,12 @@ class SettingsRepository(private val context: Context) {
             put(KEY_DISPLAY, s.lengthDisplay.name)
             s.activeProjectId?.let { put(KEY_PROJECT, it) }
             s.activeRunId?.let { put(KEY_RUN, it) }
+            put(KEY_CO_NAME, s.company.name)
+            put(KEY_CO_PREPARED, s.company.preparedBy)
+            put(KEY_CO_LICENSE, s.company.license)
+            put(KEY_CO_PHONE, s.company.phone)
+            put(KEY_CO_EMAIL, s.company.email)
+            put(KEY_CO_ADDRESS, s.company.address)
         }
     }
 
@@ -85,6 +116,14 @@ class SettingsRepository(private val context: Context) {
             lengthDisplay = str(KEY_DISPLAY)?.let { n -> LengthDisplay.entries.firstOrNull { it.name == n } } ?: current.lengthDisplay,
             activeProjectId = str(KEY_PROJECT) ?: current.activeProjectId,
             activeRunId = str(KEY_RUN) ?: current.activeRunId,
+            company = CompanyProfile(
+                name = str(KEY_CO_NAME) ?: current.company.name,
+                preparedBy = str(KEY_CO_PREPARED) ?: current.company.preparedBy,
+                license = str(KEY_CO_LICENSE) ?: current.company.license,
+                phone = str(KEY_CO_PHONE) ?: current.company.phone,
+                email = str(KEY_CO_EMAIL) ?: current.company.email,
+                address = str(KEY_CO_ADDRESS) ?: current.company.address,
+            ),
         )
     }
 
@@ -115,6 +154,12 @@ class SettingsRepository(private val context: Context) {
             putString(KEY_DISPLAY, s.lengthDisplay.name)
             putString(KEY_PROJECT, s.activeProjectId)
             putString(KEY_RUN, s.activeRunId)
+            putString(KEY_CO_NAME, s.company.name)
+            putString(KEY_CO_PREPARED, s.company.preparedBy)
+            putString(KEY_CO_LICENSE, s.company.license)
+            putString(KEY_CO_PHONE, s.company.phone)
+            putString(KEY_CO_EMAIL, s.company.email)
+            putString(KEY_CO_ADDRESS, s.company.address)
         }
     }
 
@@ -129,6 +174,14 @@ class SettingsRepository(private val context: Context) {
             ?: LengthDisplay.AUTO,
         activeProjectId = prefs.getString(KEY_PROJECT, null),
         activeRunId = prefs.getString(KEY_RUN, null),
+        company = CompanyProfile(
+            name = prefs.getString(KEY_CO_NAME, null).orEmpty(),
+            preparedBy = prefs.getString(KEY_CO_PREPARED, null).orEmpty(),
+            license = prefs.getString(KEY_CO_LICENSE, null).orEmpty(),
+            phone = prefs.getString(KEY_CO_PHONE, null).orEmpty(),
+            email = prefs.getString(KEY_CO_EMAIL, null).orEmpty(),
+            address = prefs.getString(KEY_CO_ADDRESS, null).orEmpty(),
+        ),
     )
 
     private companion object {
@@ -139,6 +192,12 @@ class SettingsRepository(private val context: Context) {
         const val KEY_PROJECT = "active_project"
         const val KEY_RUN = "active_run"
         const val KEY_MODULES = "module_ids"
+        const val KEY_CO_NAME = "company_name"
+        const val KEY_CO_PREPARED = "company_prepared_by"
+        const val KEY_CO_LICENSE = "company_license"
+        const val KEY_CO_PHONE = "company_phone"
+        const val KEY_CO_EMAIL = "company_email"
+        const val KEY_CO_ADDRESS = "company_address"
     }
 }
 

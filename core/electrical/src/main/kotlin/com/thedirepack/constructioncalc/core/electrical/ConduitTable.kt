@@ -1,6 +1,7 @@
 package com.thedirepack.constructioncalc.core.electrical
 
 import com.thedirepack.constructioncalc.core.electrical.TradeSize.*
+import kotlin.math.PI
 import kotlin.math.round
 
 /**
@@ -85,23 +86,31 @@ data class ConduitSize(
     /**
      * Usable area at [percent] of the cross-section, in square inches, rounded to three decimals
      * like the published columns of Table 4 (40%, 31%, 53%, 60%). Annex C and the usual hand
-     * calculation compare against these printed values, so this does the same.
+     * calculation compare against these printed values, so this reproduces them.
+     *
+     * The book computes them from the unrounded cross-section (pi/4 x diameter squared), not from the
+     * printed 100% area: for 1" EMT the 60% column is 0.519, where 0.864 x 0.6 would round to 0.518.
+     * A few cells of the book itself were rounded the other way (IMC 5" and 6", RMC 3"), so a value
+     * can differ from the printed column by 0.001 in² there.
      */
-    fun allowedAreaSqIn(percent: Int): Double = round(area100SqIn * percent * 10.0) / 1000.0
+    fun allowedAreaSqIn(percent: Int): Double {
+        val exact = PI / 4.0 * internalDiameterIn * internalDiameterIn
+        return round(exact * percent * 10.0) / 1000.0
+    }
 }
 
 /**
- * Conduit and tubing dimensions: NEC (NFPA 70) Chapter 9, Table 4 "Dimensions and Percent Area of
- * Conduit and Tubing", columns Nominal Internal Diameter and Total Area 100%.
+ * Conduit and tubing dimensions: NEC (NFPA 70) 2023 Chapter 9, Table 4 "Dimensions and Percent Area of
+ * Conduit and Tubing" (printed pages 70-716 to 70-720), columns Nominal Internal Diameter and Total
+ * Area 100%. Every row was checked against the printed 2023 table.
  *
- * Values are the NEC 2020 Table 4 figures, cross-checked against the printed 2017 table (they agree
- * for every row here). Each type lists only the trade sizes the NEC table gives for it. Not
- * included: LFNC-A and LFNC-C, and the 3/8" sizes where the NEC shows no entry.
+ * Each type lists only the trade sizes the NEC table gives for it (PVC Type EB from 2" only, and so
+ * on). Not included: LFNC-A and LFNC-C, and EMT 5" and 6" (see the note on the EMT rows).
  *
- * Shared by Conduit Fill and the Wire Pull Planner; the internal diameter is what a pull needs.
+ * Shared by Conduit Fill, the Wire Pull Planner and Panel Design; the internal diameter is what a pull needs.
  */
 object ConduitTable {
-    /** Ascending by size. Empty never: every [ConduitType] has rows. */
+    /** Ascending by size. Never empty: every [ConduitType] has rows. */
     fun sizes(type: ConduitType): List<ConduitSize> = byType.getValue(type)
 
     fun tradeSizes(type: ConduitType): List<TradeSize> = sizes(type).map { it.tradeSize }
@@ -128,7 +137,9 @@ object ConduitTable {
 
     private val byType: Map<ConduitType, List<ConduitSize>> = run {
         mapOf(
-            // Article 358
+            // Article 358. The 2023 Table 4 also prints 5" and 6" rows, but they are copies of the RMC rows and
+            // disagree with Annex C.1 (whose 5" and 6" columns need roughly 22.2 and 31.3 sq in), so they
+            // are left out until the true EMT dimensions are confirmed.
             ConduitType.EMT to rows(
                 ConduitType.EMT,
                 row(S_1_2, 0.622, 0.304), row(S_3_4, 0.824, 0.533), row(S_1, 1.049, 0.864),
@@ -150,7 +161,7 @@ object ConduitTable {
                 row(S_1_2, 0.660, 0.342), row(S_3_4, 0.864, 0.586), row(S_1, 1.105, 0.959),
                 row(S_1_1_4, 1.448, 1.647), row(S_1_1_2, 1.683, 2.225), row(S_2, 2.150, 3.630),
                 row(S_2_1_2, 2.557, 5.135), row(S_3, 3.176, 7.922), row(S_3_1_2, 3.671, 10.584),
-                row(S_4, 4.166, 13.631),
+                row(S_4, 4.166, 13.631), row(S_5, 5.210, 21.32), row(S_6, 6.258, 30.76),
             ),
             // Articles 352 and 353 (the NEC prints HDPE with Schedule 40)
             ConduitType.PVC_40 to rows(

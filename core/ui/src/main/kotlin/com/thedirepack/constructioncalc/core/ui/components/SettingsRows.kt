@@ -8,8 +8,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -103,6 +106,46 @@ fun GeneralSettings() {
             subtitle = "Turn off to make sheets and transitions instant.",
         )
     }
+}
+
+/** Company details printed on shared projects, panel schedules and other exports. */
+@Composable
+fun CompanySettings() {
+    val repo = LocalAppServices.current.settings
+    val company = rememberAppSettings().company
+    SettingsGroup("Company") {
+        Text(
+            "Shown at the top of shared projects and panel schedules. Leave blank to omit.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 24.dp),
+        )
+        TextSettingRow("Company name", company.name) { repo.setCompany(company.copy(name = it)) }
+        TextSettingRow("Prepared by", company.preparedBy) { repo.setCompany(company.copy(preparedBy = it)) }
+        TextSettingRow("License #", company.license) { repo.setCompany(company.copy(license = it)) }
+        TextSettingRow("Phone", company.phone, KeyboardType.Phone) { repo.setCompany(company.copy(phone = it)) }
+        TextSettingRow("Email", company.email, KeyboardType.Email) { repo.setCompany(company.copy(email = it)) }
+        TextSettingRow("Address", company.address, singleLine = false) { repo.setCompany(company.copy(address = it)) }
+    }
+}
+
+/** A text setting, saved as you type. */
+@Composable
+fun TextSettingRow(
+    label: String,
+    value: String,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    singleLine: Boolean = true,
+    onChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label) },
+        singleLine = singleLine,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
+    )
 }
 
 /** How lengths look in every tool. */

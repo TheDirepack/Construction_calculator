@@ -45,6 +45,7 @@ dependencies {
     // Tools. Add new tool modules here and in ToolRegistry.
     implementation(project(":feature:projects"))
     implementation(project(":feature:footinch"))
+    implementation(project(":feature:panels"))
     implementation(project(":feature:conduitbending"))
     implementation(project(":feature:conduitfill"))
     implementation(project(":feature:voltagedrop"))

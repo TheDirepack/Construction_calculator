@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.core.electrical
 
+import kotlin.math.abs
+
 /**
  * Insulation families that share a row in NEC Chapter 9 Table 5 "Dimensions of Insulated Conductors
  * and Fixture Wires". [code] is stable and safe to store in saved files.
@@ -32,10 +34,10 @@ data class ConductorDimensions(val areaSqIn: Double, val diameterIn: Double)
  * Insulated conductor dimensions: NEC (NFPA 70) Chapter 9, Table 5, columns "Approximate Area, in.²"
  * and "Approximate Diameter, in.".
  *
- * Values are the Table 5 figures as printed in the NEC (2017 text, identical in the 2020 reference
- * tables used to cross-check). Table 5 values are worst-case for round concentric-lay-stranded
- * conductors and group solid with stranded. Compact conductors (Table 5A), fixture wires, and the
- * TFE/FEP/PFA/Z families are not included.
+ * Values are the Table 5 figures as printed in the NEC 2023 (printed pages 70-720 to 70-723); every
+ * area and diameter here was checked against the printed table. Table 5 values are worst-case for
+ * round concentric-lay-stranded conductors and group solid with stranded. Compact conductors
+ * (Table 5A), fixture wires, and the TFE/FEP/PFA/Z families are not included.
  */
 object InsulatedConductorArea {
     /** Sizes that have a Table 5 row for [type], smallest first. */
@@ -53,7 +55,9 @@ object InsulatedConductorArea {
     fun nearestSize(type: InsulationType, size: ConductorSize): ConductorSize {
         val available = sizes(type)
         if (size in available) return size
-        return available.minByOrNull { Math.abs(it.circularMils - size.circularMils) } ?: available.first()
+        return available.minWithOrNull(
+            compareBy<ConductorSize> { abs(it.circularMils - size.circularMils) }.thenByDescending { it.circularMils },
+        ) ?: available.first()
     }
 
     // Built from consecutive sizes starting at [first], so a table is two aligned arrays.
@@ -146,8 +150,8 @@ object InsulatedConductorArea {
 }
 
 /**
- * Bare conductor dimensions: NEC (NFPA 70) Chapter 9, Table 8 "Conductor Properties", columns
- * "Overall" Diameter and Area. Table 1 Note 8 permits these for bare conductors (for example an
+ * Bare conductor dimensions: NEC (NFPA 70) 2023 Chapter 9, Table 8 "Conductor Properties" (printed
+ * page 70-725), columns "Overall" Diameter and Area. Every value was checked against the book. Table 1 Note 8 permits these for bare conductors (for example an
  * equipment grounding conductor installed without insulation).
  *
  * The NEC prints areas to three decimals, so small sizes are coarse (12 AWG stranded is 0.006 in²).
