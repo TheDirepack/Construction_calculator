@@ -22,18 +22,19 @@ import com.thedirepack.constructioncalc.core.model.design.PullResult
 import com.thedirepack.constructioncalc.core.model.design.PullText
 import com.thedirepack.constructioncalc.core.model.stored
 import com.thedirepack.constructioncalc.core.model.withRaceway
+import com.thedirepack.constructioncalc.core.model.DEFAULT_INCOMING_LB
 import com.thedirepack.constructioncalc.core.model.withRunPath
 
 /** The planner's options from its Settings page, used for runs that have no pull settings yet. */
 data class PullDefaults(
     val friction: FrictionPreset = FrictionPreset.LUBRICATED,
     val slackPerEndFeet: Double = 0.0,
-    val incomingTension: Double = 0.0,
+    val incomingTension: Double = DEFAULT_INCOMING_LB,
 ) {
     fun setup(fromCircuits: Boolean = true) = PullSetup(
         friction = friction,
         slackPerEnd = slackPerEndFeet.takeIf { it > 0.0 }?.let { Quantity.feet(Rational.of(it)).stored() },
-        incomingTension = if (incomingTension > 0.0) listOf(incomingTension) else emptyList(),
+        incomingTension = listOf(incomingTension),
         cablesFromCircuits = fromCircuits,
     )
 }

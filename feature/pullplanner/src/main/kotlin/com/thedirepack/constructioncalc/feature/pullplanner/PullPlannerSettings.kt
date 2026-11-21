@@ -12,6 +12,7 @@ import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.ui.components.ChoiceRow
 import com.thedirepack.constructioncalc.core.ui.components.SettingsGroup
 import com.thedirepack.constructioncalc.core.ui.components.TextSettingRow
+import com.thedirepack.constructioncalc.core.model.DEFAULT_INCOMING_LB
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 import com.thedirepack.constructioncalc.feature.pullplanner.domain.PullDefaults
 
@@ -23,7 +24,7 @@ private const val KEY_INCOMING = "default_incoming_lb"
 internal fun ModuleSettings.pullDefaults() = PullDefaults(
     friction = FrictionPreset.entries.firstOrNull { it.name == getString(KEY_FRICTION, "") } ?: FrictionPreset.LUBRICATED,
     slackPerEndFeet = Decimals.parse(getString(KEY_SLACK, ""))?.takeIf { it >= 0 } ?: 0.0,
-    incomingTension = Decimals.parse(getString(KEY_INCOMING, ""))?.takeIf { it >= 0 } ?: 0.0,
+    incomingTension = Decimals.parse(getString(KEY_INCOMING, ""))?.takeIf { it >= 0 } ?: DEFAULT_INCOMING_LB,
 )
 
 @Composable

@@ -68,7 +68,7 @@ data class EquipmentRating(val name: String, val pounds: Double? = null) {
  * @property configuration cable configuration for W and sidewall pressure; null picks it from the
  *   cable count and D/d (PullFormulas.configuration).
  * @property incomingTension pounds entering each pull section (index 0 is the first section, from
- *   the run's start), e.g. back tension from the reel; missing sections use 0.
+ *   the run's start), e.g. back tension from the reel; missing sections use [DEFAULT_INCOMING_LB].
  * @property pressureLimit the cable's maximum sidewall pressure, lb/ft; null uses the labelled
  *   building-wire preset.
  * @property slackPerEnd cable left at each end of the run for terminations.
@@ -97,12 +97,18 @@ data class PullSetup(
 
     val coefficient: Double get() = frictionOverride ?: friction.coefficient
 
-    fun incoming(section: Int): Double = incomingTension.getOrNull(section) ?: 0.0
+    fun incoming(section: Int): Double = incomingTension.getOrNull(section) ?: DEFAULT_INCOMING_LB
 
     fun withIncoming(section: Int, pounds: Double): PullSetup {
         val list = incomingTension.toMutableList()
-        while (list.size <= section) list += 0.0
+        while (list.size <= section) list += DEFAULT_INCOMING_LB
         list[section] = pounds
         return copy(incomingTension = list)
     }
 }
+
+/**
+ * Tension assumed entering a pull section when none is entered: back tension from the reel and feed.
+ * 25 lb, the default in Southwire's SIMpull workbook; adjustable per section and in Settings.
+ */
+const val DEFAULT_INCOMING_LB = 25.0

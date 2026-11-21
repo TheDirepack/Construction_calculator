@@ -46,7 +46,9 @@ object PullFormulas {
      * - single cable: W = 1
      * - triangular: W = 1 / √(1 − x²)
      * - cradled: W = 1 + (4/3) x²
-     * - four or more (diamond / complex): W = 1 + 2 x²
+     * - four or more (diamond / complex): W = 1 + 2 x², but never below [COMPLEX_MIN_W] (1.4). In roomy
+     *   conduit the formula drops toward 1, while Southwire's SIMpull workbook uses a fixed 1.4 for
+     *   four or more cables; the larger value is used so tension isn't understated.
      *
      * Two cables are treated as triangular (the pair bears on the wall like the lower two of a
      * triangle): an assumption, stated in the pull report. Null when the cables can't fit (D ≤ d, or
@@ -60,7 +62,7 @@ object PullFormulas {
             CableConfiguration.SINGLE -> 1.0
             CableConfiguration.TRIANGULAR -> if (x >= 1.0) null else 1.0 / sqrt(1.0 - x * x)
             CableConfiguration.CRADLED -> 1.0 + 4.0 / 3.0 * x * x
-            CableConfiguration.COMPLEX -> 1.0 + 2.0 * x * x
+            CableConfiguration.COMPLEX -> maxOf(1.0 + 2.0 * x * x, COMPLEX_MIN_W)
         }
     }
 
@@ -78,6 +80,9 @@ object PullFormulas {
         cableOd > 0 && conduitId / cableOd < CRADLED_MIN_RATIO -> CableConfiguration.TRIANGULAR
         else -> CableConfiguration.CRADLED
     }
+
+    /** Minimum W for four or more cables: the fixed value Southwire's SIMpull workbook uses. */
+    const val COMPLEX_MIN_W = 1.4
 
     /** D/d below which three cables can't lie cradled (IEEE 1185). */
     const val CRADLED_MIN_RATIO = 2.5

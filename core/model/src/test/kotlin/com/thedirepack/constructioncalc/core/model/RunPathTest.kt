@@ -220,4 +220,13 @@ class WithRacewayTest {
         val p4 = p3.withRaceway(runId, p3.run(runId)!!.raceway!!.copy(length = Quantity.inches(Rational.of(5L)).stored()), 5)
         assertEquals(240.0, p4.run(runId)!!.raceway!!.length!!.toQuantity().value.toDouble(), 1e-6)
     }
+
+    /** Pull sections with no entered tension start at the SIMpull workbook's 25 lb. */
+    @Test fun incomingTensionDefaultsTo25Pounds() {
+        val setup = PullSetup()
+        org.junit.Assert.assertEquals(DEFAULT_INCOMING_LB, setup.incoming(0), 0.0)
+        org.junit.Assert.assertEquals(25.0, setup.incoming(3), 0.0)
+        val edited = setup.withIncoming(2, 80.0)
+        org.junit.Assert.assertEquals(listOf(25.0, 25.0, 80.0), edited.incomingTension)
+    }
 }

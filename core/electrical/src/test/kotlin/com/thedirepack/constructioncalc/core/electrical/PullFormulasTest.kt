@@ -199,4 +199,12 @@ class PullFormulasTest {
         assertEquals(68.57, simpull[0].first, 0.01)
         assertEquals(797.29, simpull[7].second, 0.01)
     }
+
+    /** Four or more cables never get W below the SIMpull workbook's fixed 1.4 (roomy conduit). */
+    @Test fun complexConfigurationHasAMinimumW() {
+        // x = 0.5 / (4.0 − 0.5) = 0.143 → 1 + 2x² = 1.04, floored to 1.4.
+        org.junit.Assert.assertEquals(1.4, PullFormulas.weightCorrection(CableConfiguration.COMPLEX, 4.0, 0.5)!!, 1e-12)
+        // x = 0.5 / (1.5 − 0.5) = 0.5 → 1 + 2x² = 1.5, above the floor.
+        org.junit.Assert.assertEquals(1.5, PullFormulas.weightCorrection(CableConfiguration.COMPLEX, 1.5, 0.5)!!, 1e-12)
+    }
 }
