@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import kotlin.math.PI
 
 class ReelLengthInputsTest {
@@ -88,6 +89,20 @@ class ReelLengthInputsTest {
     @Test fun feetFormatting() {
         assertEquals("1,235 ft", formatFeet(1234.6))
         assertEquals("45.5 ft", formatFeet(45.46))
+    }
+
+    @Test fun metricShowsMetersAndMillimeters() {
+        val metric = AppSettings(unitSystem = UnitSystem.METRIC)
+        val out = reelLengthOutput(filled, metric)
+        val byKey = out.results.associateBy { it.key }
+        assertEquals("155 m", byKey.getValue("length_feet").text)
+        assertEquals("Cable remaining (meters)", byKey.getValue("length_feet").label)
+        // exact stays in inches
+        assertEquals(PI * 162 * 12, byKey.getValue("length").rational!!.toDouble(), 1e-3)
+        assertEquals("152 mm", byKey.getValue("wound_depth").text)
+        assertTrue(out.summary.contains("mm flange"))
+        assertEquals("30.5 m", formatRunLength(100.0, metric))
+        assertEquals("12.2 m", formatRunLength(40.0, metric))
     }
 
     @Test fun badInputsAreErrors() {

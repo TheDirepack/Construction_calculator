@@ -2,6 +2,7 @@ package com.thedirepack.constructioncalc.feature.reellength
 
 import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ValueKind
@@ -9,6 +10,7 @@ import com.thedirepack.constructioncalc.core.ui.components.Notice
 import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.core.ui.formatDecimal
+import com.thedirepack.constructioncalc.core.ui.isMetric
 import com.thedirepack.constructioncalc.feature.reellength.domain.ReelLength
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -25,6 +27,13 @@ internal data class ReelLengthOutput(
 /** "1,234 ft" (one decimal below 100 ft). */
 internal fun formatFeet(feet: Double): String =
     String.format(Locale.US, if (feet < 100) "%,.1f ft" else "%,.0f ft", feet)
+
+/** A run length given in feet, in the user's system: `1,235 ft` or `376 m` (one decimal under 100). */
+internal fun formatRunLength(feet: Double, settings: AppSettings): String =
+    if (settings.isMetric) {
+        val meters = Measure.RUN_LENGTH.fromBase(feet, settings.unitSystem)
+        String.format(Locale.US, if (meters < 100) "%,.1f m" else "%,.0f m", meters)
+    } else formatFeet(feet)
 
 /** A double as an exact Rational, rounded to 4 decimals so saved values stay short. */
 private fun exact(value: Double): Rational = Rational.of(BigDecimal(value).setScale(4, RoundingMode.HALF_UP))
@@ -48,7 +57,7 @@ internal fun reelLengthOutput(inputs: ReelLengthInputs, settings: AppSettings): 
             val q = Quantity.inches(exact(kotlin.math.abs(it)))
             ResultValue.of("spare_after_pull", if (it >= 0) "Left after the pull" else "Short for the pull", q, settings.format(q))
         },
-        ResultValue.text("length_feet", "$lengthLabel (feet)", formatFeet(result.lengthFeet)),
+        ResultValue.text("length_feet", "$lengthLabel (${if (settings.isMetric) "meters" else "feet"})", formatRunLength(result.lengthFeet, settings)),
         ResultValue.of("wound_depth", "Wound depth", depthQuantity, settings.format(depthQuantity)),
         ResultValue.number("layers", "Layers", ValueKind.NUMBER, exact(result.layers), formatDecimal(result.layers, 1)),
         ResultValue.number(
@@ -87,7 +96,7 @@ internal fun reelLengthOutput(inputs: ReelLengthInputs, settings: AppSettings): 
     }
 
     val summary = buildString {
-        append(lengthLabel).append(' ').append(formatFeet(result.lengthFeet)).append(": ")
+        append(lengthLabel).append(' ').append(formatRunLength(result.lengthFeet, settings)).append(": ")
         append(settings.format(Quantity.inches(exact(request.flangeDiameter)))).append(" flange, ")
         append(settings.format(Quantity.inches(exact(request.drumDiameter)))).append(" drum, ")
         append(settings.format(Quantity.inches(exact(request.traverse)))).append(" traverse, ")

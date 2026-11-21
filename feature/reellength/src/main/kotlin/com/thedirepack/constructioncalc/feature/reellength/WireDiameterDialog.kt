@@ -16,7 +16,11 @@ import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.InsulatedConductorArea
 import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.data.AppSettings
+import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.ui.conductorSizeLabel
+import com.thedirepack.constructioncalc.core.ui.show
 import com.thedirepack.constructioncalc.core.ui.components.ChoiceField
 
 /**
@@ -24,7 +28,7 @@ import com.thedirepack.constructioncalc.core.ui.components.ChoiceField
  * Chapter 9 Table 5 (the same table Conduit Fill uses), so the reel estimate doesn't need a caliper.
  */
 @Composable
-internal fun WireDiameterDialog(onPick: (Quantity) -> Unit, onDismiss: () -> Unit) {
+internal fun WireDiameterDialog(settings: AppSettings, onPick: (Quantity) -> Unit, onDismiss: () -> Unit) {
     var type by remember { mutableStateOf(InsulationType.THHN) }
     var size by remember { mutableStateOf(ConductorSize.AWG_4_0) }
     val sizes = InsulatedConductorArea.sizes(type)
@@ -36,9 +40,9 @@ internal fun WireDiameterDialog(onPick: (Quantity) -> Unit, onDismiss: () -> Uni
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ChoiceField("Insulation", InsulationType.entries, type, { type = it }, optionLabel = { it.label })
-                ChoiceField("Size", sizes, chosen, { size = it }, optionLabel = { it.label })
+                ChoiceField("Size", sizes, chosen, { size = it }, optionLabel = { settings.conductorSizeLabel(it) })
                 Text(
-                    diameter?.let { "Approximate outside diameter ${it} in (NEC ${CodeRule.CONDUCTOR_DIMENSIONS.cite}). For a multiconductor cable, enter its own OD instead." }
+                    diameter?.let { "Approximate outside diameter ${settings.show(Measure.SMALL_LENGTH, it)} (NEC ${CodeRule.CONDUCTOR_DIMENSIONS.cite}). For a multiconductor cable, enter its own OD instead." }
                         ?: "${CodeRule.CONDUCTOR_DIMENSIONS.cite} has no diameter for this wire.",
                 )
             }

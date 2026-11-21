@@ -123,6 +123,7 @@ fun ReelLengthScreen(host: ToolHost) {
                 TextButton(onClick = { pickingWire = true }) { Text("From a wire size (NEC ${CodeRule.CONDUCTOR_DIMENSIONS.cite})…") }
                 if (pickingWire) {
                     WireDiameterDialog(
+                        settings = settings,
                         onPick = { q ->
                             vm.update { it.copy(cableDiameter = q.stored()) }
                             pickingWire = false
