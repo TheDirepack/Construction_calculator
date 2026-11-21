@@ -1,5 +1,9 @@
 package com.thedirepack.constructioncalc.core.data
 
+import com.thedirepack.constructioncalc.core.measure.MeasureFormat
+
+import com.thedirepack.constructioncalc.core.measure.LengthFormat
+
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
@@ -31,15 +35,21 @@ object ProjectSharing {
         project: Project,
         now: Long,
         toolTitle: (String) -> String,
-        header: List<String> = emptyList(),
-    ): Intent =
-        fileShareIntent(
+        settings: AppSettings,
+    ): Intent {
+        // The message text follows the user's units; the attached file always holds base units.
+        val format = LengthFormat(settings.unitSystem, settings.precision, settings.lengthDisplay.resolve(null), settings.metricDisplay, settings.metricResolution)
+        return fileShareIntent(
             context,
             fileName = ProjectCodec.fileName(project),
             content = ProjectCodec.encode(project, exportedAt = now),
             subject = project.name,
-            body = ProjectText.render(project, toolTitle, header = header),
+            body = ProjectText.render(
+                project, toolTitle, header = settings.company.headerLines(),
+                length = { MeasureFormat.primary(it, format) }, units = settings.unitSystem,
+            ),
         )
+    }
 
     /** Shares a backup file (everything, or a subset such as all projects). */
     fun shareBackupIntent(context: Context, backup: BackupDocument, fileName: String, toolTitle: (String) -> String): Intent {

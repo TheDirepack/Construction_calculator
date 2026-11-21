@@ -108,7 +108,7 @@ fun ProjectSwitcher(onOpenProject: (String?) -> Unit, onMessage: (String) -> Uni
                         IconButton(onClick = {
                             open = false
                             try {
-                                context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value.company.headerLines()))
+                                context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value))
                             } catch (_: ActivityNotFoundException) {
                                 onMessage("No app available to share with")
                             }

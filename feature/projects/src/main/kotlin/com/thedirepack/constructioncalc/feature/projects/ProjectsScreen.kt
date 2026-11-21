@@ -83,7 +83,7 @@ private fun ProjectListScreen(projects: List<Project>, host: ToolHost, onOpen: (
     var showArchive by rememberSaveable { mutableStateOf(false) }
     val share: (Project) -> Unit = { project ->
         try {
-            context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value.company.headerLines()))
+            context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value))
         } catch (_: ActivityNotFoundException) {
             host.showMessage("No app available to share with")
         }

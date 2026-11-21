@@ -131,7 +131,7 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
         actions = {
             IconButton(onClick = {
                 try {
-                    context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value.company.headerLines()))
+                    context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value))
                 } catch (_: ActivityNotFoundException) {
                     host.showMessage("No app available to share with")
                 }
