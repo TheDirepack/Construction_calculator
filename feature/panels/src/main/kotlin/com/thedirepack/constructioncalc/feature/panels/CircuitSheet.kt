@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import androidx.compose.material3.OutlinedButton
@@ -263,7 +264,7 @@ internal fun CircuitSheet(
                             "Multiple cord-and-plug receptacles",
                             draft.multipleCordReceptacles,
                             { draft = draft.copy(multipleCordReceptacles = it) },
-                            "Affects the minimum wire size (NEC 210.19).",
+                            "Affects the minimum wire size (NEC ${CodeRule.BRANCH_CONDUCTOR_SIZE.cite}).",
                         )
                     }
                 }
@@ -438,7 +439,7 @@ internal fun ConductorFields(spec: ConductorSpec, onChange: (ConductorSpec) -> U
         spec.terminationRating,
         { onChange(spec.copy(terminationRating = it)) },
         optionLabel = { it.label },
-        supportingText = "Equipment terminals are usually 75 °C (NEC 110.14(C)).",
+        supportingText = "Equipment terminals are usually 75 °C (NEC ${CodeRule.TERMINATION_TEMPERATURE.cite}).",
     )
 }
 

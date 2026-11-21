@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -101,7 +102,7 @@ fun RacewayEditorSheet(
             )
             ToggleRow(
                 title = "Rooftop",
-                detail = "In sunlight less than 3/4\" above a roof (adds a temperature adder, NEC 310.15(B)(2)).",
+                detail = "In sunlight less than 3/4\" above a roof (adds a temperature adder, NEC ${CodeRule.ROOFTOP_ADDER.cite}).",
                 checked = draft.rooftop,
                 onCheckedChange = { draft = draft.copy(rooftop = it) },
             )

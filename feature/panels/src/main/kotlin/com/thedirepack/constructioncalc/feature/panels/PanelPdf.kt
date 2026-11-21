@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -241,7 +242,7 @@ internal object PanelPdf {
         }
         val foot = paint(7f, gray = true)
         canvas.drawText(
-            "Wire: conductors in the cable or conduit (phases + neutral) and G = equipment grounding conductor. Sized per NEC 2023; verify before installing.",
+            "Wire: conductors in the cable or conduit (phases + neutral) and G = equipment grounding conductor. Sized per ${Code.label}; verify before installing.",
             MARGIN, PAGE_H - MARGIN + 6f, foot,
         )
         val pageText = "Construction Calc · $date · page $pageNumber of $pageCount"

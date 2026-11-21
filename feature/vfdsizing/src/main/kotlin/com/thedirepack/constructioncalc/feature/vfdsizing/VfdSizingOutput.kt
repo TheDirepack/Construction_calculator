@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.vfdsizing
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.MotorFullLoadCurrent
 import com.thedirepack.constructioncalc.core.math.Rational
@@ -47,7 +49,7 @@ internal fun vfdSizingOutput(inputs: VfdSizingInputs): VfdSizingOutput {
 
     val results = buildList {
         add(currentResult("min_drive_output", "Min. drive output current ($duty)", result.minDriveOutputAmps))
-        add(currentResult("table_flc", "Motor FLC, Table 430.250", result.tableFlc))
+        add(currentResult("table_flc", "Motor FLC, ${CodeRule.MOTOR_FLC_THREE_PHASE.cite}", result.tableFlc))
         result.nameplatePercentOfTable?.let { add(percentResult("nameplate_pct_of_table", "Nameplate FLA vs. table FLC", it)) }
         result.overloadMaxAmps?.let { add(currentResult("overload_max", "Overload setting, max (125 % of FLA)", it)) }
         result.singlePhaseDriveGuidanceAmps?.let {
@@ -77,7 +79,7 @@ internal fun vfdSizingOutput(inputs: VfdSizingInputs): VfdSizingOutput {
     return VfdSizingOutput(results, notices(inputs, parsed.convertedHp, request, result, errors), summary(request, result))
 }
 
-private const val BEYOND_TABLE = "Larger than Table 310.16 allows"
+private val BEYOND_TABLE = "Larger than ${CodeRule.AMPACITY_TABLE.cite} allows"
 private const val BEYOND_OCPD = "Above 6000 A"
 
 private fun notices(
@@ -96,8 +98,8 @@ private fun notices(
     // Code vs. guidance.
     add(
         Notice(
-            "Code: motor full-load current is $hpText HP at ${request.volts} V from NEC 2023 Table 430.250 (three-phase induction motor). " +
-                "Conductors and short-circuit protection use this table value, not the nameplate (430.6(A)(1)).",
+            "Code: motor full-load current is $hpText HP at ${request.volts} V from ${Code.label} ${CodeRule.MOTOR_FLC_THREE_PHASE.cite} (three-phase induction motor). " +
+                "Conductors and short-circuit protection use this table value, not the nameplate (${CodeRule.MOTOR_TABLE_FLC.cite}).",
         ),
     )
     if (result.outputBasis == OutputBasis.TABLE_FLC) {
@@ -113,7 +115,7 @@ private fun notices(
         ),
     )
     if (request.loadType == LoadType.CONSTANT_TORQUE) {
-        add(Notice("Constant-torque loads at low speed can overheat a self-cooled motor; see 430.126 motor overtemperature protection and consider an inverter-duty motor.", NoticeLevel.INFO))
+        add(Notice("Constant-torque loads at low speed can overheat a self-cooled motor; see ${CodeRule.MOTOR_OVERTEMPERATURE.cite} motor overtemperature protection and consider an inverter-duty motor.", NoticeLevel.INFO))
     }
     if (request.supplyPhase == AcPhases.SINGLE) {
         add(
@@ -133,7 +135,7 @@ private fun notices(
         add(
             Notice(
                 "Drive input current not entered: 125 % of the motor's table FLC is used as an approximation. " +
-                    "430.122(A) requires 125 % of the drive's rated input current, so enter it from the drive's nameplate or manual for a code-based size.",
+                    "${CodeRule.DRIVE_INPUT_CONDUCTORS.cite} requires 125 % of the drive's rated input current, so enter it from the drive's nameplate or manual for a code-based size.",
                 NoticeLevel.WARNING,
             ),
         )
@@ -143,29 +145,29 @@ private fun notices(
     }
     add(
         Notice(
-            "Output conductors (drive to motor) are 125 % of the table FLC per 430.122(B). If the drive is listed and marked " +
+            "Output conductors (drive to motor) are 125 % of the table FLC per ${CodeRule.DRIVE_OUTPUT_CONDUCTORS.cite}. If the drive is listed and marked " +
                 "“Suitable for Output Motor Conductor Protection,” the larger of that and the drive's marked minimum conductor size applies instead.",
         ),
     )
     listOfNotNull(result.inputConductor?.takeIf { it.sets > 1 }, result.outputConductor?.takeIf { it.sets > 1 }).firstOrNull()?.let {
-        add(Notice("Parallel sets assume equal current sharing, each 1/0 AWG or larger (310.10(G)).", NoticeLevel.INFO))
+        add(Notice("Parallel sets assume equal current sharing, each 1/0 AWG or larger (${CodeRule.PARALLEL_CONDUCTORS.cite}).", NoticeLevel.INFO))
     }
     if (result.inputConductor == null || result.outputConductor == null) {
         add(Notice("The required ampacity is beyond ${VfdSizing.MAX_SETS} parallel 2000 kcmil conductors. Split the load or use a larger system.", NoticeLevel.ERROR))
     }
     add(
         Notice(
-            "Ampacity from NEC 2023 Table 310.16 (${request.material.label.lowercase()}, ${request.termination.label} column, 30 °C ambient, not more than three " +
-                "current-carrying conductors). Ambient and conductor-count adjustment factors are not applied, and 110.14(C) termination limits are applied only through the column you chose.",
+            "Ampacity from ${Code.label} ${CodeRule.AMPACITY_TABLE.cite} (${request.material.label.lowercase()}, ${request.termination.label} column, 30 °C ambient, not more than three " +
+                "current-carrying conductors). Ambient and conductor-count adjustment factors are not applied, and ${CodeRule.TERMINATION_TEMPERATURE.cite} termination limits are applied only through the column you chose.",
         ),
     )
 
     // Protection.
     add(
         Notice(
-            "Short-circuit/ground-fault maximums are Table 430.52(C)(1): 250 % of FLC for an inverse-time breaker and 175 % for a time-delay fuse, " +
-                "rounded up to the next standard rating in 240.6(A) (430.52(C)(1)(a)). Where the drive's manufacturer marks or lists a maximum device size or type, " +
-                "that takes precedence and must not be exceeded (430.130(A)(2)). The device must also be at least the drive's input current.",
+            "Short-circuit/ground-fault maximums are ${CodeRule.MOTOR_BRANCH_PROTECTION.cite}: 250 % of FLC for an inverse-time breaker and 175 % for a time-delay fuse, " +
+                "rounded up to the next standard rating in ${CodeRule.STANDARD_OCPD.cite} (${CodeRule.MOTOR_NEXT_HIGHER_RATING.cite}). Where the drive's manufacturer marks or lists a maximum device size or type, " +
+                "that takes precedence and must not be exceeded (${CodeRule.DRIVE_SHORT_CIRCUIT.cite}). The device must also be at least the drive's input current.",
             NoticeLevel.WARNING,
         ),
     )
@@ -175,8 +177,8 @@ private fun notices(
     }
     add(
         Notice(
-            "Overload: the drive's electronic overload usually serves (430.124(A)). When set from the nameplate, 125 % of FLA applies to motors with service factor 1.15 or more " +
-                "or marked temperature rise of 40 °C or less, otherwise 115 % (430.32(A)(1)). Edition: NEC 2023 (NFPA 70); your jurisdiction may use another.",
+            "Overload: the drive's electronic overload usually serves (${CodeRule.DRIVE_OVERLOAD.cite}). When set from the nameplate, 125 % of FLA applies to motors with service factor 1.15 or more " +
+                "or marked temperature rise of 40 °C or less, otherwise 115 % (${CodeRule.MOTOR_OVERLOAD.cite}). Edition: ${Code.label} (NFPA 70); your jurisdiction may use another.",
         ),
     )
 }

@@ -112,7 +112,7 @@ class ConduitFillReportTest {
     @Test fun note7PermissionIsExplained() {
         val report = ConduitFillReport.build(request(TradeSize.S_1_1_4, 45 to thhn(ConductorSize.AWG_12)))!!
         assertTrue(report.analysis.permittedByNote7)
-        assertTrue(report.has("Note 7", ReportSeverity.INFO))
+        assertTrue(report.has("Note (7)", ReportSeverity.INFO))
         assertTrue(report.notices.none { it.severity == ReportSeverity.ERROR })
     }
 

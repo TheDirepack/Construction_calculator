@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conversions
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.math.Rational
@@ -144,7 +146,7 @@ private fun wireSizeOutput(inputs: ConversionsInputs): ConversionsOutput {
         if (inputs.wireFrom != WireFrom.SIZE) {
             add(Notice("Nearest size is the smallest AWG/kcmil with at least the entered area (within 0.1%). Metric sizes like 10 mm² aren't AWG; ampacity isn't checked."))
         }
-        add(Notice("Sizes and circular mils: NEC 2023 Chapter 9 Table 8. mm² = circular mils × π/4 × 0.0254²."))
+        add(Notice("Sizes and circular mils: ${Code.label} ${CodeRule.CONDUCTOR_PROPERTIES.cite}. mm² = circular mils × π/4 × 0.0254²."))
     }
     val summary = if (size == null) "Wire area ${NumberText.significant(Rational.of(result.squareMillimeters), 4)} mm²"
     else "${size.label} = ${NumberText.significant(Rational.of(size.circularMils.toLong()), 6)} cmil = ${NumberText.significant(Rational.of(size.squareMillimeters), 4)} mm²"

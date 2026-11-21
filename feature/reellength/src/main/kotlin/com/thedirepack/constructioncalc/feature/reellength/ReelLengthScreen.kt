@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.reellength
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
@@ -119,7 +120,7 @@ fun ReelLengthScreen(host: ToolHost) {
                     inputs.cableDiameter?.toQuantity(),
                     { q -> vm.update { it.copy(cableDiameter = q?.stored()) } },
                 )
-                TextButton(onClick = { pickingWire = true }) { Text("From a wire size (NEC Table 5)…") }
+                TextButton(onClick = { pickingWire = true }) { Text("From a wire size (NEC ${CodeRule.CONDUCTOR_DIMENSIONS.cite})…") }
                 if (pickingWire) {
                     WireDiameterDialog(
                         onPick = { q ->

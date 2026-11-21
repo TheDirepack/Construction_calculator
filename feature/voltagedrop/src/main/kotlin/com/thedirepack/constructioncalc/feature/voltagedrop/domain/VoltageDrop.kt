@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop.domain
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorImpedance
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
@@ -15,10 +16,10 @@ import kotlin.math.sqrt
 @Serializable
 enum class Method(val label: String) {
     /** NEC Chapter 9 Table 9: effective impedance `Z = R·PF + X·sin(acos PF)`. */
-    AC_TABLE_9("NEC Table 9 (AC impedance)"),
+    AC_TABLE_9("NEC ${CodeRule.AC_IMPEDANCE.cite} (AC impedance)"),
 
     /** NEC Chapter 9 Table 8: DC resistance at 75 °C, the same thing a K-factor formula approximates. */
-    DC_TABLE_8("DC resistance (Table 8 / K-factor)"),
+    DC_TABLE_8("DC resistance (${CodeRule.CONDUCTOR_PROPERTIES.cite} / K-factor)"),
 }
 
 /** Everything the calculation needs, in plain units (volts, amps, feet). */
@@ -108,7 +109,7 @@ object VoltageDrop {
             add("Power factor must be above 0 and at most 1.")
         }
         if (impedancePerKft(request.size, request.material, request.method, request.conduit, request.powerFactor.coerceIn(0.01, 1.0), request.stranding) == null) {
-            val table = if (request.method == Method.AC_TABLE_9) "NEC Table 9" else "NEC Table 8"
+            val table = if (request.method == Method.AC_TABLE_9) "NEC ${CodeRule.AC_IMPEDANCE.cite}" else "NEC ${CodeRule.CONDUCTOR_PROPERTIES.cite}"
             add("$table has no ${request.size.label} ${request.material.label.lowercase()} entry. Pick another size or method.")
         }
     }

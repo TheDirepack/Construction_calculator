@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.core.electrical
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+
 /**
  * Inputs for choosing the minimum conductor for one circuit.
  *
@@ -66,7 +68,7 @@ object ConductorSizing {
         val r = request
         val notes = mutableListOf<String>()
         val ambient = AmbientCorrection.effectiveAmbient(r.ambientC, r.rooftopUnder3_4In, r.xhhw2)
-        if (ambient != r.ambientC) notes += "Rooftop: +${AmbientCorrection.ROOFTOP_ADDER_C.toInt()} °C adder (310.15(B)(2))."
+        if (ambient != r.ambientC) notes += "Rooftop: +${AmbientCorrection.ROOFTOP_ADDER_C.toInt()} °C adder (${CodeRule.ROOFTOP_ADDER.cite})."
         val ambientFactor = AmbientCorrection.factor(ambient, r.insulation)
         val adjustment = ConductorCountAdjustment.factor(r.currentCarrying)
         val terminationColumn = if (r.termination.celsius < r.insulation.celsius) r.termination else r.insulation
@@ -75,7 +77,7 @@ object ConductorSizing {
             return WireSizingResult(
                 null, ambient, null, adjustment, null, null, null,
                 "Too hot",
-                notes + "No ${r.insulation.label} correction factor at ${ambient.toInt()} °C (Table 310.15(B)(1)(1)).",
+                notes + "No ${r.insulation.label} correction factor at ${ambient.toInt()} °C (${CodeRule.AMBIENT_CORRECTION.cite}).",
             )
         }
 
@@ -86,20 +88,20 @@ object ConductorSizing {
 
         /** Why [size] is too small, or null if it works. */
         fun failure(size: ConductorSize): String? {
-            val table = Ampacity.of(size, r.material, r.insulation)?.toDouble() ?: return "Not in Table 310.16"
-            val termination = Ampacity.of(size, r.material, terminationColumn) ?: return "Not in Table 310.16"
+            val table = Ampacity.of(size, r.material, r.insulation)?.toDouble() ?: return "Not in ${CodeRule.AMPACITY_TABLE.cite}"
+            val termination = Ampacity.of(size, r.material, terminationColumn) ?: return "Not in ${CodeRule.AMPACITY_TABLE.cite}"
             val adjusted = table * ambientFactor * adjustment
             val usable = minOf(adjusted, termination.toDouble())
             if (terminalLoad != null && termination < terminalLoad - 1e-9) {
-                return "Load at ${terminationColumn.label} terminals: 125% continuous + noncontinuous (210.19(A)(1)(a), 110.14(C))"
+                return "Load at ${terminationColumn.label} terminals: 125% continuous + noncontinuous (${CodeRule.BRANCH_CONDUCTOR_CONTINUOUS.cite}, ${CodeRule.TERMINATION_TEMPERATURE.cite})"
             }
             if (load != null && adjusted < load - 1e-9) {
-                return "Load after temperature and conductor-count derating (210.19(A)(1)(b), 310.15)"
+                return "Load after temperature and conductor-count derating (${CodeRule.BRANCH_CONDUCTOR_ADJUSTED.cite}, ${CodeRule.AMPACITY.cite})"
             }
             val small = SmallConductorLimit.maxOcpd(size, r.material)
-            if (small != null && r.ocpdAmps > small) return "Small-conductor protection limit (240.4(D))"
+            if (small != null && r.ocpdAmps > small) return "Small-conductor protection limit (${CodeRule.SMALL_CONDUCTORS.cite})"
             val protects = r.ocpdAmps <= (ConductorProtection.maxStandardOcpd(usable, r.multipleCordReceptacles) ?: 0)
-            return if (protects) null else "Overcurrent protection: ampacity vs ${r.ocpdAmps} A OCPD (240.4)"
+            return if (protects) null else "Overcurrent protection: ampacity vs ${r.ocpdAmps} A OCPD (${CodeRule.CONDUCTOR_PROTECTION.cite})"
         }
 
         var lastFailure = "Smallest size considered"
@@ -113,16 +115,16 @@ object ConductorSizing {
             val termination = Ampacity.of(size, r.material, terminationColumn)!!
             val adjusted = table * ambientFactor * adjustment
             val usable = minOf(adjusted, termination.toDouble())
-            if (adjustment < 1.0) notes += "${r.currentCarrying} current-carrying conductors: ×$adjustment (Table 310.15(C)(1))."
-            if (ambientFactor != 1.0) notes += "${fmt(ambient)} °C ambient: ×$ambientFactor (Table 310.15(B)(1)(1))."
+            if (adjustment < 1.0) notes += "${r.currentCarrying} current-carrying conductors: ×$adjustment (${CodeRule.CONDUCTOR_COUNT_ADJUSTMENT.cite})."
+            if (ambientFactor != 1.0) notes += "${fmt(ambient)} °C ambient: ×$ambientFactor (${CodeRule.AMBIENT_CORRECTION.cite})."
             SmallConductorLimit.conditions(size, r.material)?.let(notes::add)
-            if (usable < r.ocpdAmps) notes += "Ampacity ${fmt(usable)} A is below the ${r.ocpdAmps} A OCPD; allowed by 240.4(B) next size up."
+            if (usable < r.ocpdAmps) notes += "Ampacity ${fmt(usable)} A is below the ${r.ocpdAmps} A OCPD; allowed by ${CodeRule.NEXT_SIZE_UP.cite} next size up."
             return WireSizingResult(size, ambient, ambientFactor, adjustment, adjusted, termination, usable, lastFailure, notes)
         }
         return WireSizingResult(
             null, ambient, ambientFactor, adjustment, null, null, null,
             "Larger than 2000 kcmil",
-            notes + "No single conductor is large enough; use parallel sets (310.10(G)).",
+            notes + "No single conductor is large enough; use parallel sets (${CodeRule.PARALLEL_CONDUCTORS.cite}).",
         )
     }
 

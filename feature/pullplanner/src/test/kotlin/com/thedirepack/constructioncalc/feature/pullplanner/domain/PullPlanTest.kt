@@ -79,7 +79,7 @@ class PullPlanTest {
         val text = { q: Quantity -> "${q.value}in" }
         assertEquals("Straight 1200in", PullReport.describe(path[0], ConduitType.EMT, TradeSize.S_1, text))
         assertEquals("Straight 240in, up 30°", PullReport.describe(path[3], ConduitType.EMT, TradeSize.S_1, text))
-        assertEquals("Bend 90°, R 23/4in (Table 2)", PullReport.describe(path[1], ConduitType.EMT, TradeSize.S_1, text))
+        assertEquals("Bend 90°, R 23/4in (Chapter 9 Table 2)", PullReport.describe(path[1], ConduitType.EMT, TradeSize.S_1, text))
         assertTrue(PullReport.describe(path[4], ConduitType.EMT, null, text).contains("once the size is known"))
         assertEquals("Pull point JB", PullReport.describe(path[2], null, null, text))
     }

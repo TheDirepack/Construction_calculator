@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.vfdsizing
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
@@ -65,7 +66,7 @@ fun VfdSizingInputs.parse(): ParsedInputs {
                     value == null || value <= 0 -> { problems += "Motor kW must be a number above zero."; null }
                     else -> VfdSizing.horsepowerForKw(value, volts)
                         ?.also { convertedHp = it }
-                        ?: run { problems += "No Table 430.250 rating covers $kw kW at $volts V."; null }
+                        ?: run { problems += "No ${CodeRule.MOTOR_FLC_THREE_PHASE.cite} rating covers $kw kW at $volts V."; null }
                 }
             }
         }

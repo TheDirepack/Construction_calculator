@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.core.electrical
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.measure.Decimals
 
 
@@ -64,11 +65,11 @@ object FillDerating {
         val adjustment = if (nipple) 1.0 else ConductorCountAdjustment.factor(ccc)
         val notes = mutableListOf<String>()
         notes += when {
-            nipple -> "Nipple 24 in. or shorter: no adjustment for conductor count (310.15(C)(1)(b))."
-            adjustment < 1.0 -> "$ccc current-carrying conductors: ×$adjustment (Table 310.15(C)(1))."
+            nipple -> "Nipple 24 in. or shorter: no adjustment for conductor count (${CodeRule.SHORT_RACEWAY_ADJUSTMENT.cite})."
+            adjustment < 1.0 -> "$ccc current-carrying conductors: ×$adjustment (${CodeRule.CONDUCTOR_COUNT_ADJUSTMENT.cite})."
             else -> "$ccc current-carrying conductors: no count adjustment (3 or fewer)."
         }
-        if (rooftop) notes += "Rooftop in sunlight under 3/4 in.: +33 °C (310.15(B)(2)); XHHW-2 is exempt."
+        if (rooftop) notes += "Rooftop in sunlight under 3/4 in.: +33 °C (${CodeRule.ROOFTOP_ADDER.cite}); XHHW-2 is exempt."
 
         val rows = groups.filter { it.insulation != null && it.currentCarrying }.map { g ->
             val rating = insulationRating(g.insulation!!)
@@ -81,9 +82,9 @@ object FillDerating {
             val usable = if (adjusted != null && termAmps != null) minOf(adjusted, termAmps.toDouble()) else adjusted
             DeratingRow(g, rating, table, ambient, factor, adjusted, usable, usable?.let { maxOcpd(it, g.size, material) })
         }
-        if (rows.any { it.insulationRating == null }) notes += "Fixture wire (TFN) isn't rated in Table 310.16."
-        if (rows.any { it.insulationRating != null && it.ambientFactor == null }) notes += "Too hot for some insulation: no correction factor in Table 310.15(B)(1)(1)."
-        notes += "Ampacities from Table 310.16 (30 °C basis), ${material.label.lowercase()}; terminals limited to ${termination.label} (110.14(C))."
+        if (rows.any { it.insulationRating == null }) notes += "Fixture wire (TFN) isn't rated in ${CodeRule.AMPACITY_TABLE.cite}."
+        if (rows.any { it.insulationRating != null && it.ambientFactor == null }) notes += "Too hot for some insulation: no correction factor in ${CodeRule.AMBIENT_CORRECTION.cite}."
+        notes += "Ampacities from ${CodeRule.AMPACITY_TABLE.cite} (30 °C basis), ${material.label.lowercase()}; terminals limited to ${termination.label} (${CodeRule.TERMINATION_TEMPERATURE.cite})."
         return DeratingResult(ccc, adjustment, rows, notes)
     }
 
@@ -97,8 +98,8 @@ fun DeratingResult.explanations(adjustmentLabel: Boolean = true): List<String> =
     val g = row.group
     val name = "${g.size.label} ${g.insulation?.code.orEmpty()}"
     when {
-        row.insulationRating == null -> "$name: not rated in Table 310.16."
-        row.tableAmpacity == null -> "$name: no ${row.insulationRating.label} ampacity in Table 310.16."
+        row.insulationRating == null -> "$name: not rated in ${CodeRule.AMPACITY_TABLE.cite}."
+        row.tableAmpacity == null -> "$name: no ${row.insulationRating.label} ampacity in ${CodeRule.AMPACITY_TABLE.cite}."
         row.ambientFactor == null -> "$name: too hot at ${Decimals.trim(row.ambientC)} °C for ${row.insulationRating.label} insulation."
         else -> buildString {
             append("$name: ${row.tableAmpacity} A (${row.insulationRating.label}) × ${Decimals.trim(row.ambientFactor)} (${Decimals.trim(row.ambientC)} °C)")

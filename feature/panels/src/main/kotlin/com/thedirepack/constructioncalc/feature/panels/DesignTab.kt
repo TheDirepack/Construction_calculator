@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.LaunchedEffect
 import com.thedirepack.constructioncalc.core.ui.components.ToggleRow
@@ -94,8 +96,8 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
             }
         }
         Text(
-            "Sizing follows NEC 2023: Table 310.16 ampacity, 310.15 ambient and conductor-count adjustment, 110.14(C) terminals, " +
-                "240.4 protection, Chapter 9 Tables 1, 4, 5 and 9. It guides fieldwork and doesn't replace a code check.",
+            "Sizing follows ${Code.label}: ${CodeRule.AMPACITY_TABLE.cite} ampacity, ${CodeRule.AMPACITY.cite} ambient and conductor-count adjustment, ${CodeRule.TERMINATION_TEMPERATURE.cite} terminals, " +
+                "${CodeRule.CONDUCTOR_PROTECTION.cite} protection, ${CodeRule.FILL_PERCENT.cite}, ${CodeRule.CONDUIT_DIMENSIONS.cite}, ${CodeRule.CONDUCTOR_DIMENSIONS.cite} and ${CodeRule.AC_IMPEDANCE.cite}. It guides fieldwork and doesn't replace a code check.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.conduitfill
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.BareConductorArea
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
@@ -110,7 +111,7 @@ fun ConduitFillInputs.toRequest(): ParsedFill {
         null
     } else {
         trade?.let { ConduitTable.find(type, it) }.also {
-            if (it == null) problems += "${type.displayName} has no ${tradeSize}\" trade size in NEC Table 4."
+            if (it == null) problems += "${type.displayName} has no ${tradeSize}\" trade size in NEC ${CodeRule.CONDUIT_DIMENSIONS.cite}."
         }
     }
 

@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.core.model.design
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.CableConfiguration
 import com.thedirepack.constructioncalc.core.electrical.CableWeight
 import com.thedirepack.constructioncalc.core.electrical.ConductorGroup
@@ -173,7 +175,7 @@ object PullAnalysis {
         if (raceway == null) notes += warn("Set the run's conduit to plan a pull.")
         else if (conduit == null) notes += warn("Pick the conduit size (or assign circuits so the design picks one).")
         if (count == 0) notes += warn("Add cables: assign circuits to the run in Panels, or add cables here.")
-        if (conductors.any { it.diameterIn == null }) notes += warn("Enter a diameter for cables with no Table 5 row.")
+        if (conductors.any { it.diameterIn == null }) notes += warn("Enter a diameter for cables with no ${CodeRule.CONDUCTOR_DIMENSIONS.cite} row.")
 
         val configuration = setup.configuration ?: if (id != null && od != null) PullFormulas.configuration(count, id, od) else PullFormulas.configuration(count, 0.0, 0.0)
         val w = if (id != null && od != null) PullFormulas.weightCorrection(configuration, id, od) else if (configuration == CableConfiguration.SINGLE) 1.0 else null
@@ -188,7 +190,7 @@ object PullAnalysis {
         if (conduit != null && count > 0) {
             val groups = conductors.map { ConductorGroup(it.count, FillConductor.Insulated(it.insulation, it.size)) }
             val fill = ConduitFill.analyze(conduit, groups, raceway?.nipple == true)
-            if (!fill.withinLimit) notes += warn("Fill ${fmt(fill.percentFill, 1)}% is over the ${fill.limitPercent}% limit (NEC Chapter 9 Table 1).")
+            if (!fill.withinLimit) notes += warn("Fill ${fmt(fill.percentFill, 1)}% is over the ${fill.limitPercent}% limit (NEC ${CodeRule.FILL_PERCENT.cite}).")
         }
 
         val path = run.path
@@ -197,7 +199,7 @@ object PullAnalysis {
         sectionDegrees.forEachIndexed { i, deg ->
             if (deg > RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS + 1e-9) {
                 val where = if (sectionDegrees.size == 1) "The path has" else "Pull section ${i + 1} has"
-                notes += warn("$where ${fmt(deg, 1)}° of bends: over 360° between pull points (NEC 2023 $section).")
+                notes += warn("$where ${fmt(deg, 1)}° of bends: over 360° between pull points (${Code.label} $section).")
             }
         }
 
@@ -206,7 +208,7 @@ object PullAnalysis {
         val canPull = path.isNotEmpty() && w != null && count > 0 && conduit != null
         if (path.isEmpty()) notes += info("Add the run's path (straights, bends, pull points) to calculate tension.")
         val missingRadius = path.any { it is PathSegment.Bend && it.radius == null } && size == null
-        if (missingRadius) notes += warn("Bends without a radius need the conduit size for the Table 2 radius.")
+        if (missingRadius) notes += warn("Bends without a radius need the conduit size for the ${CodeRule.BEND_RADIUS.cite} radius.")
         val forward = if (canPull && !missingRadius) pass(path, PullDirection.FORWARD, setup, raceway!!.conduitType, size, weight, mu, w!!, configuration, notes) else null
         val reverse = if (canPull && !missingRadius) pass(path, PullDirection.REVERSE, setup, raceway!!.conduitType, size, weight, mu, w!!, configuration, null) else null
 
@@ -244,9 +246,9 @@ object PullAnalysis {
             if (count == 2) notes += info("Two cables use the triangular W and sidewall pressure forms (an assumption).")
             if (count >= 4) notes += info("Four or more cables: W = 1 + 2(d/(D−d))² and the cradled sidewall pressure form (an assumption; the Southwire workbook uses W = 1.4 for this case).")
         }
-        if (conductors.any { it.weightEstimated }) notes += info("Cable weight is estimated from NEC Table 5 and Table 8 areas and typical material densities. Enter catalog weights for a final plan.")
+        if (conductors.any { it.weightEstimated }) notes += info("Cable weight is estimated from NEC ${CodeRule.CONDUCTOR_DIMENSIONS.cite} and ${CodeRule.CONDUCTOR_PROPERTIES.cite} areas and typical material densities. Enter catalog weights for a final plan.")
         if (path.any { it is PathSegment.Bend && it.radius == null } && size != null) {
-            notes += info("Bends without a radius use the NEC Chapter 9 Table 2 minimum (${RacewayBends.column(raceway?.conduitType ?: ConduitType.EMT).label.lowercase()} column).")
+            notes += info("Bends without a radius use the NEC ${CodeRule.BEND_RADIUS.cite} minimum (${RacewayBends.column(raceway?.conduitType ?: ConduitType.EMT).label.lowercase()} column).")
         }
         if (path.any { it is PathSegment.Bend && it.plane != BendPlane.HORIZONTAL }) {
             notes += info("Vertical bends assume the tension holds the cable against the inside of the bend.")
@@ -268,7 +270,7 @@ object PullAnalysis {
     fun fitNotes(conduitId: Double, cableOd: Double, count: Int): List<DesignNote> = buildList {
         val jam = PullFormulas.jamRatio(conduitId, cableOd)
         if (count == 3 && PullFormulas.inJamRange(jam)) {
-            add(warn("Jam ratio ${fmt(jam, 2)} (1.05 × D/d) is between 2.8 and 3.2: three cables can jam in a bend (NEC Chapter 9 Table 1 Informational Note No. 2; IEEE 1185)."))
+            add(warn("Jam ratio ${fmt(jam, 2)} (1.05 × D/d) is between 2.8 and 3.2: three cables can jam in a bend (NEC ${CodeRule.JAM_RATIO.cite}; IEEE 1185)."))
         }
         val clearance = PullFormulas.clearance(count, conduitId, cableOd)
         when {

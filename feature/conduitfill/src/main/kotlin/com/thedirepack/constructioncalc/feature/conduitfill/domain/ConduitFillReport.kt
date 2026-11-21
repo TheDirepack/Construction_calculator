@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conduitfill.domain
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.ConduitFill
 import com.thedirepack.constructioncalc.core.electrical.FillAnalysis
 import com.thedirepack.constructioncalc.core.electrical.JamCheck
@@ -58,7 +60,7 @@ data class ConduitFillReport(
 
             val results = buildList {
                 add(decimalResult(KEY_PERCENT, "Conduit fill", ValueKind.PERCENT, a.percentFill, 2, "${fmt(a.percentFill, 1)}%"))
-                add(ResultValue.number(KEY_LIMIT, "Fill limit (Table 1)", ValueKind.PERCENT, Rational.of(a.limitPercent.toLong()), "${a.limitPercent}%"))
+                add(ResultValue.number(KEY_LIMIT, "Fill limit (${CodeRule.FILL_PERCENT.cite})", ValueKind.PERCENT, Rational.of(a.limitPercent.toLong()), "${a.limitPercent}%"))
                 add(decimalResult(KEY_CONDUCTOR_AREA, "Conductor area", ValueKind.AREA, a.totalAreaSqIn, 4, "${fmt(a.totalAreaSqIn, 4)} in²"))
                 add(decimalResult(KEY_ALLOWED_AREA, "Allowed area", ValueKind.AREA, a.allowedAreaSqIn, 4, "${fmt(a.allowedAreaSqIn, 4)} in²"))
                 add(ResultValue.text(KEY_MIN_CONDUIT, "Smallest ${conduit.type.displayName}", minimum?.displayName ?: "None fits"))
@@ -90,7 +92,7 @@ data class ConduitFillReport(
                     add(
                         ReportNotice(
                             "Fill is ${fmt(a.percentFill, 1)}%, a hair over ${a.limitPercent}%, but allowed: " +
-                                "Table 1 Note 7 rounds a count up when the decimal is 0.8 or more and all conductors are the same size.",
+                                "${CodeRule.FILL_ROUNDING.cite} rounds a count up when the decimal is 0.8 or more and all conductors are the same size.",
                         ),
                     )
                 }
@@ -104,7 +106,7 @@ data class ConduitFillReport(
                         add(
                             ReportNotice(
                                 "Jam ratio $r (conduit inside diameter / $of outside diameter) is between 2.8 and 3.2. " +
-                                    "Three conductors can jam when pulled, so consider another size or an offset pull plan (Table 1 Informational Note 2).",
+                                    "Three conductors can jam when pulled, so consider another size or an offset pull plan (${CodeRule.JAM_RATIO.cite}).",
                                 ReportSeverity.WARNING,
                             ),
                         )
@@ -116,26 +118,26 @@ data class ConduitFillReport(
                     add(
                         ReportNotice(
                             "Nipple fill (60%) applies only to nipples 24 in. (600 mm) or shorter between boxes, cabinets or similar " +
-                                "enclosures. Table 1 Note 4 also waives the 310.15(C)(1) adjustment factors for them.",
+                                "enclosures. ${CodeRule.FILL_NIPPLES.cite} also waives the ${CodeRule.CONDUCTOR_COUNT_ADJUSTMENT.cite} adjustment factors for them.",
                         ),
                     )
                 }
                 add(
                     ReportNotice(
-                        "Areas: NEC 2023 Chapter 9 Table 4 (conduit), Table 5 (insulated wire, approximate), Table 8 (bare wire) and the " +
-                            "Table 1 limits. Check the edition your jurisdiction has adopted.",
+                        "Areas: ${Code.label} ${CodeRule.CONDUIT_DIMENSIONS.cite} (conduit), ${CodeRule.CONDUCTOR_DIMENSIONS.cite} (insulated wire, approximate), ${CodeRule.CONDUCTOR_PROPERTIES.cite} (bare wire) and the " +
+                            "${CodeRule.FILL_PERCENT.cite} limits. Check the edition your jurisdiction has adopted.",
                     ),
                 )
                 add(
                     ReportNotice(
-                        "Equipment grounding conductors, bare or insulated, count toward fill (Table 1 Note 3). Compact conductors " +
-                            "(Table 5A), multiconductor cables and fixture wires aren't included: use their actual dimensions.",
+                        "Equipment grounding conductors, bare or insulated, count toward fill (${CodeRule.FILL_GROUNDING_CONDUCTORS.cite}). Compact conductors " +
+                            "(${CodeRule.COMPACT_CONDUCTOR_DIMENSIONS.cite}), multiconductor cables and fixture wires aren't included: use their actual dimensions.",
                     ),
                 )
                 add(
                     ReportNotice(
                         "Not covered: conductor derating for more than 3 current-carrying conductors or ambient temperature " +
-                            "(310.15), ampacity, pull length and bends, or box fill.",
+                            "(${CodeRule.AMPACITY.cite}), ampacity, pull length and bends, or box fill.",
                     ),
                 )
             }

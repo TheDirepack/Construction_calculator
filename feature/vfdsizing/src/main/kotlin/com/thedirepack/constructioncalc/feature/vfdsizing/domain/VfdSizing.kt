@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.vfdsizing.domain
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.Ampacity
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
@@ -129,7 +130,7 @@ object VfdSizing {
     fun problems(request: VfdRequest): List<String> = buildList {
         if (request.volts !in MOTOR_VOLTAGES) add("Voltage ${request.volts} V isn't supported.")
         else if (MotorFullLoadCurrent.threePhase(request.hp, request.volts) == null) {
-            add("Table 430.250 has no ${MotorFullLoadCurrent.label(request.hp)} HP value at ${request.volts} V.")
+            add("${CodeRule.MOTOR_FLC_THREE_PHASE.cite} has no ${MotorFullLoadCurrent.label(request.hp)} HP value at ${request.volts} V.")
         }
         request.nameplateFla?.let { if (!(it > 0)) add("Nameplate FLA must be more than zero.") }
         request.driveInputAmps?.let { if (!(it > 0)) add("Drive input current must be more than zero.") }

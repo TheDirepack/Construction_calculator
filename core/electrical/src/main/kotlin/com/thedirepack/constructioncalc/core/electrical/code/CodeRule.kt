@@ -54,6 +54,7 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
     MOTOR_OVERLOAD("Motor overload protection, continuous-duty motors over 1 hp"),
     MOTOR_BRANCH_PROTECTION("Maximum rating of motor branch-circuit short-circuit and ground-fault devices", isTable = true),
     MOTOR_NEXT_HIGHER_RATING("Motor short-circuit device: next higher standard rating allowed"),
+    MOTOR_OVERTEMPERATURE("Motor overtemperature protection"),
     MOTOR_FLC_SINGLE_PHASE("Full-load current, single-phase AC motors", isTable = true),
     MOTOR_FLC_THREE_PHASE("Full-load current, three-phase AC induction motors", isTable = true),
     DRIVE_INPUT_CONDUCTORS("Power conversion equipment: input conductors at 125% of rated input"),
