@@ -1,5 +1,11 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.measure.MetricResolution
+
+import com.thedirepack.constructioncalc.core.measure.MetricDisplay
+
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
+
 import androidx.compose.ui.semantics.Role
 
 import androidx.compose.foundation.selection.toggleable
@@ -170,38 +176,77 @@ fun MeasurementSettings() {
     val settings = rememberAppSettings()
     SettingsGroup("Measurements") {
         ChoiceRow(
-            "Show lengths as",
-            LengthDisplay.entries,
-            settings.lengthDisplay,
-            repo::setLengthDisplay,
+            "Units",
+            UnitSystem.entries,
+            settings.unitSystem,
+            repo::setUnitSystem,
             { it.label },
-            subtitle = "Feet & inches, inches only, or Auto: inches when you entered inches. Applies to every tool.",
+            subtitle = "Every tool shows and asks for lengths, temperatures, weights and forces in this system. Saved values are never changed, so you can switch back at any time.",
         )
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Fraction precision", style = MaterialTheme.typography.bodyLarge)
-            Text(
-                "Lengths are rounded to the nearest fraction of an inch.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        if (settings.unitSystem == UnitSystem.METRIC) {
+            ChoiceRow(
+                "Show lengths in",
+                MetricDisplay.entries,
+                settings.metricDisplay,
+                repo::setMetricDisplay,
+                { it.label },
+                subtitle = "Auto shows millimeters under 1 m and meters from there.",
             )
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Precision.entries.forEach { p ->
-                    FilterChip(
-                        selected = p == settings.precision,
-                        onClick = { repo.setPrecision(p) },
-                        label = { Text(fractionText(p.label + "\"")) },
-                    )
+            ChoiceRow(
+                "Round lengths to",
+                MetricResolution.entries,
+                settings.metricResolution,
+                repo::setMetricResolution,
+                { it.label },
+            )
+        } else {
+            ChoiceRow(
+                "Show lengths as",
+                LengthDisplay.entries,
+                settings.lengthDisplay,
+                repo::setLengthDisplay,
+                { it.label },
+                subtitle = "Feet & inches, inches only, or Auto: inches when you entered inches. Applies to every tool.",
+            )
+            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Fraction precision", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Lengths are rounded to the nearest fraction of an inch.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Precision.entries.forEach { p ->
+                        FilterChip(
+                            selected = p == settings.precision,
+                            onClick = { repo.setPrecision(p) },
+                            label = { Text(fractionText(p.label + "\"")) },
+                        )
+                    }
                 }
             }
         }
     }
 }
 
-/** Quick Auto / ft-in / in switch for the app-wide length display (also in Settings). */
+/**
+ * Quick switch for the app-wide length display (also in Settings): Auto / ft-in / in, or in
+ * metric Auto / mm / cm / m.
+ */
 @Composable
 fun LengthDisplayToggle(modifier: Modifier = Modifier) {
     val repo = LocalAppServices.current.settings
     val settings = rememberAppSettings()
+    if (settings.unitSystem == UnitSystem.METRIC) {
+        SegmentedChoice(
+            options = MetricDisplay.entries,
+            selected = settings.metricDisplay,
+            onSelect = repo::setMetricDisplay,
+            optionLabel = { if (it == MetricDisplay.AUTO) "Auto" else it.label },
+            modifier = modifier,
+        )
+        return
+    }
     SegmentedChoice(
         options = LengthDisplay.entries,
         selected = settings.lengthDisplay,

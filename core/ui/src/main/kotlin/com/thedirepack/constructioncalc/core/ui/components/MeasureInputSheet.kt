@@ -1,5 +1,11 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.ui.lengthFormat
+
+import com.thedirepack.constructioncalc.core.ui.isMetric
+
+import com.thedirepack.constructioncalc.core.measure.Units
+
 import com.thedirepack.constructioncalc.core.model.ValueKind
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -62,11 +68,13 @@ fun MeasureInputSheet(
     var state by remember { mutableStateOf(CalcState(tokens = listOfNotNull(initial?.let { Token.Value(it) }))) }
     var problem by remember { mutableStateOf<String?>(null) }
     var picking by remember { mutableStateOf(false) }
-    val defaultsToInches = allowed.size == 1 && Dimension.LENGTH in allowed
+    val lengthOnly = allowed.size == 1 && Dimension.LENGTH in allowed
+    val metric = settings.isMetric
 
+    // A bare number in a length-only field is in the system's small unit: inches, or millimeters in metric.
     fun fieldValue(value: Quantity, tokens: List<Token>): Quantity =
-        if (defaultsToInches && value.dimension == Dimension.NUMBER && tokens.singleOrNull() is Token.Literal) {
-            Quantity.inches(value.value)
+        if (lengthOnly && value.dimension == Dimension.NUMBER && tokens.singleOrNull() is Token.Literal) {
+            Quantity.inches(if (metric) value.value / Units.MM_PER_INCH else value.value)
         } else {
             value
         }
@@ -103,15 +111,17 @@ fun MeasureInputSheet(
                     Icon(painterResource(R.drawable.ic_backspace), contentDescription = "Backspace")
                 }
             }
-            val style = settings.lengthStyle(CalcInput.prefersInches(state.tokens))
             Text(
-                fractionText(ExpressionText.format(state.tokens, settings.precision, style).ifEmpty { " " }),
+                fractionText(ExpressionText.format(state.tokens, settings.lengthFormat(CalcInput.prefersInches(state.tokens))).ifEmpty { " " }),
                 style = MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.End,
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (defaultsToInches) {
-                Text("A number without a unit is in inches.", style = MaterialTheme.typography.bodySmall)
+            if (lengthOnly) {
+                Text(
+                    if (metric) "A number without a unit is in millimeters." else "A number without a unit is in inches.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             val preview = state.result?.let { fieldValue(it, state.tokens) }
             Text(
@@ -138,9 +148,11 @@ fun MeasureInputSheet(
                 }
             }
             Spacer(Modifier.height(8.dp))
-            FractionPad(settings.precision, onKey = press)
-            Spacer(Modifier.height(8.dp))
-            MeasureKeypad(onKey = press, equalsLabel = "Use", modifier = Modifier.fillMaxWidth().height(320.dp))
+            if (!metric) {
+                FractionPad(settings.precision, onKey = press)
+                Spacer(Modifier.height(8.dp))
+            }
+            MeasureKeypad(onKey = press, equalsLabel = "Use", metric = metric, modifier = Modifier.fillMaxWidth().height(320.dp))
             Spacer(Modifier.height(12.dp))
         }
     }

@@ -3,6 +3,9 @@ package com.thedirepack.constructioncalc.core.data
 import android.content.Context
 import androidx.core.content.edit
 import com.thedirepack.constructioncalc.core.measure.Precision
+import com.thedirepack.constructioncalc.core.measure.MetricDisplay
+import com.thedirepack.constructioncalc.core.measure.MetricResolution
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.measure.input.LengthDisplay
 import com.thedirepack.constructioncalc.core.model.ProjectFormatException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,6 +61,12 @@ data class AppSettings(
     val precision: Precision = Precision.DEFAULT,
     /** Feet-inches, inches only, or Auto (inches when the input was in inches). */
     val lengthDisplay: LengthDisplay = LengthDisplay.AUTO,
+    /** Imperial or metric for everything shown and typed; stored values never change. */
+    val unitSystem: UnitSystem = UnitSystem.IMPERIAL,
+    /** Metric only: which unit lengths are shown in. */
+    val metricDisplay: MetricDisplay = MetricDisplay.AUTO,
+    /** Metric only: what lengths are rounded to. */
+    val metricResolution: MetricResolution = MetricResolution.MILLIMETER,
     /** Where "Save to project" goes by default. */
     val activeProjectId: String? = null,
     val activeRunId: String? = null,
@@ -96,6 +105,9 @@ class SettingsRepository(private val context: Context) {
             put(KEY_ANIMATIONS, s.animations)
             put(KEY_PRECISION, s.precision.denominator)
             put(KEY_DISPLAY, s.lengthDisplay.name)
+            put(KEY_UNITS, s.unitSystem.name)
+            put(KEY_METRIC_DISPLAY, s.metricDisplay.name)
+            put(KEY_METRIC_RESOLUTION, s.metricResolution.name)
             s.activeProjectId?.let { put(KEY_PROJECT, it) }
             s.activeRunId?.let { put(KEY_RUN, it) }
             put(KEY_CO_NAME, s.company.name)
@@ -115,6 +127,9 @@ class SettingsRepository(private val context: Context) {
             animations = json[KEY_ANIMATIONS]?.jsonPrimitive?.booleanOrNull ?: current.animations,
             precision = json[KEY_PRECISION]?.jsonPrimitive?.intOrNull?.let(Precision::fromDenominator) ?: current.precision,
             lengthDisplay = str(KEY_DISPLAY)?.let { n -> LengthDisplay.entries.firstOrNull { it.name == n } } ?: current.lengthDisplay,
+            unitSystem = str(KEY_UNITS)?.let { n -> UnitSystem.entries.firstOrNull { it.name == n } } ?: current.unitSystem,
+            metricDisplay = str(KEY_METRIC_DISPLAY)?.let { n -> MetricDisplay.entries.firstOrNull { it.name == n } } ?: current.metricDisplay,
+            metricResolution = str(KEY_METRIC_RESOLUTION)?.let { n -> MetricResolution.entries.firstOrNull { it.name == n } } ?: current.metricResolution,
             activeProjectId = str(KEY_PROJECT) ?: current.activeProjectId,
             activeRunId = str(KEY_RUN) ?: current.activeRunId,
             company = CompanyProfile(
@@ -142,6 +157,12 @@ class SettingsRepository(private val context: Context) {
 
     fun setLengthDisplay(display: LengthDisplay) = save { it.copy(lengthDisplay = display) }
 
+    fun setUnitSystem(system: UnitSystem) = save { it.copy(unitSystem = system) }
+
+    fun setMetricDisplay(display: MetricDisplay) = save { it.copy(metricDisplay = display) }
+
+    fun setMetricResolution(resolution: MetricResolution) = save { it.copy(metricResolution = resolution) }
+
     fun setActiveTarget(projectId: String?, runId: String?) =
         save { it.copy(activeProjectId = projectId, activeRunId = runId) }
 
@@ -153,6 +174,9 @@ class SettingsRepository(private val context: Context) {
             putBoolean(KEY_ANIMATIONS, s.animations)
             putInt(KEY_PRECISION, s.precision.denominator)
             putString(KEY_DISPLAY, s.lengthDisplay.name)
+            putString(KEY_UNITS, s.unitSystem.name)
+            putString(KEY_METRIC_DISPLAY, s.metricDisplay.name)
+            putString(KEY_METRIC_RESOLUTION, s.metricResolution.name)
             putString(KEY_PROJECT, s.activeProjectId)
             putString(KEY_RUN, s.activeRunId)
             putString(KEY_CO_NAME, s.company.name)
@@ -173,6 +197,10 @@ class SettingsRepository(private val context: Context) {
         lengthDisplay = prefs.getString(KEY_DISPLAY, null)
             ?.let { name -> LengthDisplay.entries.firstOrNull { it.name == name } }
             ?: LengthDisplay.AUTO,
+        unitSystem = prefs.getString(KEY_UNITS, null)?.let { n -> UnitSystem.entries.firstOrNull { it.name == n } } ?: UnitSystem.IMPERIAL,
+        metricDisplay = prefs.getString(KEY_METRIC_DISPLAY, null)?.let { n -> MetricDisplay.entries.firstOrNull { it.name == n } } ?: MetricDisplay.AUTO,
+        metricResolution = prefs.getString(KEY_METRIC_RESOLUTION, null)?.let { n -> MetricResolution.entries.firstOrNull { it.name == n } }
+            ?: MetricResolution.MILLIMETER,
         activeProjectId = prefs.getString(KEY_PROJECT, null),
         activeRunId = prefs.getString(KEY_RUN, null),
         company = CompanyProfile(
@@ -188,7 +216,7 @@ class SettingsRepository(private val context: Context) {
     internal companion object {
         fun validateBackup(settings: JsonObject?, toolSettings: Map<String, JsonObject>) {
             val appKeys = listOf(
-                KEY_THEME, KEY_ANIMATIONS, KEY_PRECISION, KEY_DISPLAY, KEY_PROJECT, KEY_RUN,
+                KEY_THEME, KEY_ANIMATIONS, KEY_PRECISION, KEY_DISPLAY, KEY_UNITS, KEY_METRIC_DISPLAY, KEY_METRIC_RESOLUTION, KEY_PROJECT, KEY_RUN,
                 KEY_CO_NAME, KEY_CO_PREPARED, KEY_CO_LICENSE, KEY_CO_PHONE, KEY_CO_EMAIL, KEY_CO_ADDRESS,
             )
             val badKey = appKeys.firstOrNull { settings?.get(it)?.let { value -> value !is JsonPrimitive } == true }
@@ -207,6 +235,9 @@ class SettingsRepository(private val context: Context) {
         const val KEY_ANIMATIONS = "animations"
         const val KEY_PRECISION = "precision"
         const val KEY_DISPLAY = "length_display"
+        const val KEY_UNITS = "unit_system"
+        const val KEY_METRIC_DISPLAY = "metric_display"
+        const val KEY_METRIC_RESOLUTION = "metric_resolution"
         const val KEY_PROJECT = "active_project"
         const val KEY_RUN = "active_run"
         const val KEY_MODULES = "module_ids"

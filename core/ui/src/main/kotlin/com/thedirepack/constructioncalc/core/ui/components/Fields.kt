@@ -1,5 +1,13 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import androidx.compose.runtime.LaunchedEffect
+
+import com.thedirepack.constructioncalc.core.measure.Decimals
+
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
+
+import com.thedirepack.constructioncalc.core.measure.Measure
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -139,6 +147,67 @@ fun NumberField(
             },
             onDismiss = { picking = false },
         )
+    }
+}
+
+/**
+ * A number in a [Measure] (temperature, run length, weight, tension…), shown and typed in the
+ * user's unit system. [value] and [onValueChange] are always in the measure's **base** unit (what
+ * inputs store and engines use), so switching systems never changes saved data. A picked value
+ * from another tool is taken as base units (e.g. a published length in inches for
+ * [Measure.SMALL_LENGTH]) unless [onPick] converts it.
+ */
+@Composable
+fun UnitField(
+    label: String,
+    measure: Measure,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    supportingText: String? = null,
+    isError: Boolean = false,
+    pickKinds: Set<ValueKind> = emptySet(),
+    onPick: ((ResultValue) -> Unit)? = null,
+) {
+    val system = rememberAppSettings().unitSystem
+    var emitted by remember { mutableStateOf<String?>(null) }
+    var text by remember(system) { mutableStateOf(UnitText.shown(measure, value, system)) }
+    LaunchedEffect(value, system) { if (value != emitted) text = UnitText.shown(measure, value, system) }
+    NumberField(
+        label = label,
+        value = text,
+        onValueChange = { typed ->
+            text = typed
+            val base = UnitText.base(measure, typed, system)
+            emitted = base
+            onValueChange(base)
+        },
+        modifier = modifier,
+        unit = measure.unit(system).symbol,
+        supportingText = supportingText,
+        isError = isError,
+        pickKinds = pickKinds,
+        onPick = onPick ?: { picked -> picked.rational?.let { onValueChange(it.toFieldText(6)) }; Unit },
+        allowNegative = measure == Measure.TEMPERATURE,
+    )
+}
+
+/** Converts a [UnitField]'s text between the base unit (stored) and the user's system (shown). */
+object UnitText {
+    /** Base-unit text → what the field shows. Blank or unreadable text is shown as is. */
+    fun shown(measure: Measure, base: String, system: UnitSystem): String {
+        val unit = measure.unit(system)
+        if (unit == measure.base) return base
+        val value = Decimals.parse(base) ?: return base
+        return Decimals.trim(unit.fromBase(value), unit.decimals + 1)
+    }
+
+    /** What was typed → base-unit text to store. */
+    fun base(measure: Measure, typed: String, system: UnitSystem): String {
+        val unit = measure.unit(system)
+        if (unit == measure.base) return typed
+        val value = Decimals.parse(typed) ?: return typed
+        return Decimals.trim(unit.toBase(value), 6)
     }
 }
 

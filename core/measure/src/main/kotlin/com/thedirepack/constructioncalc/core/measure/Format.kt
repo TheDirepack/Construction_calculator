@@ -98,6 +98,44 @@ object MeasureFormat {
         Dimension.VOLUME -> decimal(q.value / CU_IN_PER_CU_FT, 4) + " cu ft"
     }
 
+    /** The main result in either system, per [format]. */
+    fun primary(q: Quantity, format: LengthFormat): String {
+        if (!format.isMetric) return primary(q, format.precision, format.style)
+        return when (q.dimension) {
+            Dimension.NUMBER -> number(q.value)
+            Dimension.LENGTH -> MetricFormat.length(q.value, format.metricDisplay, format.metricResolution)
+            Dimension.AREA -> MetricFormat.area(q.value)
+            Dimension.VOLUME -> MetricFormat.volume(q.value)
+        }
+    }
+
+    /** Secondary readouts in either system: in metric, the imperial equivalents (and the other way round). */
+    fun conversions(q: Quantity, format: LengthFormat): List<Conversion> {
+        if (!format.isMetric) return conversions(q, format.precision, format.style)
+        val v = q.value
+        return when (q.dimension) {
+            Dimension.NUMBER -> conversions(q, format.precision, format.style)
+            Dimension.LENGTH -> listOf(
+                Conversion("Millimeters", decimal(v * Units.MM_PER_INCH, 1) + " mm"),
+                Conversion("Meters", decimal(v * Units.MM_PER_INCH / THOUSAND, 4) + " m"),
+                Conversion("Feet-inches", length(v, format.precision, LengthStyle.FEET_INCHES)),
+                Conversion("Inches", length(v, format.precision, LengthStyle.INCHES)),
+                Conversion("Decimal ft", decimal(v / Units.INCHES_PER_FOOT, 4) + " ft"),
+            )
+            Dimension.AREA -> listOf(
+                Conversion("Square meters", decimal(v * MM2_PER_IN2 / MILLION, 4) + " m²"),
+                Conversion("Square feet", decimal(v / SQ_IN_PER_SQ_FT, 4) + " sq ft"),
+                Conversion("Square inches", decimal(v, 2) + " sq in"),
+            )
+            Dimension.VOLUME -> listOf(
+                Conversion("Liters", decimal(v * MM2_PER_IN2 * Units.MM_PER_INCH / MILLION, 3) + " L"),
+                Conversion("Cubic feet", decimal(v / CU_IN_PER_CU_FT, 4) + " cu ft"),
+                Conversion("Cubic yards", decimal(v / CU_IN_PER_CU_YD, 4) + " cu yd"),
+                Conversion("US gallons", decimal(v / Units.CUBIC_INCHES_PER_US_GALLON, 3) + " gal"),
+            )
+        }
+    }
+
     /** Whether [primary] had to round a length. */
     fun isRounded(q: Quantity, precision: Precision): Boolean =
         q.dimension == Dimension.LENGTH &&

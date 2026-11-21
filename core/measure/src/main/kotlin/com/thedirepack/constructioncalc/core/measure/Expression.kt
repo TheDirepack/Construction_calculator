@@ -143,7 +143,11 @@ object Evaluator {
 
 /** Renders tokens for display, e.g. `5' 3 1/2" + −2"`. */
 object ExpressionText {
-    fun format(tokens: List<Token>, precision: Precision, style: LengthStyle): String = buildString {
+    fun format(tokens: List<Token>, precision: Precision, style: LengthStyle): String =
+        format(tokens, LengthFormat.imperial(precision, style))
+
+    /** Recalled values are shown in [format]'s system; typed literals as typed. */
+    fun format(tokens: List<Token>, format: LengthFormat): String = buildString {
         tokens.forEachIndexed { i, token ->
             val previous = tokens.getOrNull(i - 1)
             val afterUnaryMinus = previous is Token.Op && previous.operator == Operator.SUBTRACT &&
@@ -151,7 +155,7 @@ object ExpressionText {
             if (i > 0 && !afterUnaryMinus) append(' ')
             when (token) {
                 is Token.Literal -> append(MeasureLiteral.display(token.text))
-                is Token.Value -> append(MeasureFormat.primary(token.quantity, precision, style))
+                is Token.Value -> append(MeasureFormat.primary(token.quantity, format))
                 is Token.Op -> append(token.operator.symbol)
             }
         }

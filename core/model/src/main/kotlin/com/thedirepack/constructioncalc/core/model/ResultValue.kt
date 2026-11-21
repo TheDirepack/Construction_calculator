@@ -29,7 +29,8 @@ enum class ValueKind(val baseUnit: String) {
     FORCE("lbf"),
     PRESSURE("psi"),
     FLOW("gpm"),
-    TEMPERATURE("°F"),
+    /** Degrees Celsius, as the NEC tables and every engine use (shown in °F in imperial). */
+    TEMPERATURE("°C"),
     /** Non-numeric results, e.g. a wire size "4/0 AWG" or a conduit "1-1/4\" EMT". */
     TEXT("");
 

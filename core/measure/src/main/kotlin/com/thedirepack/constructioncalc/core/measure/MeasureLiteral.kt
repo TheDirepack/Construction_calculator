@@ -17,6 +17,7 @@ import com.thedirepack.constructioncalc.core.math.Rational
  * - `3"1/2`      → 3½ inches
  * - `7/16"`      → 7/16 inch
  * - `2.5'`       → 2½ feet
+ * - `300mm` `30cm` `2.5m` → metric lengths (stored as exact inches; 1 in = 25.4 mm)
  */
 object MeasureLiteral {
 
@@ -32,6 +33,8 @@ object MeasureLiteral {
         val fraction: String?,
         /** True when the literal carried a unit mark, making it a length rather than a number. */
         val isLength: Boolean,
+        /** Set for a metric literal; its number is in [inches]'s place. */
+        val metric: MetricLengthUnit? = null,
     )
 
     fun parse(text: String): Quantity = toQuantity(parts(text))
@@ -41,6 +44,10 @@ object MeasureLiteral {
         if (cursor.atEnd) throw CalcException.Incomplete()
 
         val first = cursor.number() ?: throw CalcException.Syntax()
+        cursor.metricUnit()?.let { unit ->
+            if (!cursor.atEnd) throw CalcException.Syntax()
+            return Parts(null, first.text, null, isLength = true, metric = unit)
+        }
         var feet: String? = null
         var inches: String? = null
         var fraction: String? = null
@@ -88,6 +95,10 @@ object MeasureLiteral {
     }
 
     fun toQuantity(parts: Parts): Quantity {
+        parts.metric?.let { unit ->
+            val mm = number(parts.inches ?: "0") * Rational.of(unit.millimeters.toLong())
+            return Quantity.inches(mm / Units.MM_PER_INCH)
+        }
         val inches = (parts.inches?.let(::number) ?: Rational.ZERO) +
             (parts.fraction?.let(::number) ?: Rational.ZERO)
         if (!parts.isLength) return Quantity.number(inches)
@@ -99,6 +110,7 @@ object MeasureLiteral {
     fun display(text: String): String {
         val parts = runCatching { parts(text) }.getOrNull() ?: return text.replace("'", "' ").trimEnd()
         if (!parts.isLength) return parts.inches.orEmpty()
+        parts.metric?.let { return "${parts.inches} ${it.symbol}" }
         return buildString {
             parts.feet?.let { append(it).append(FEET) }
             val inchText = listOfNotNull(parts.inches, parts.fraction).joinToString(" ")
@@ -137,6 +149,20 @@ object MeasureLiteral {
             if (!take(SLASH)) return NumberText(text.substring(start, index), isFraction = false)
             if (!decimal()) throw CalcException.Incomplete()
             return NumberText(text.substring(start, index), isFraction = true)
+        }
+
+        /** `mm`, `cm` or `m` right after a number; null if the next character starts no metric unit. */
+        fun metricUnit(): MetricLengthUnit? = when (peek) {
+            'm' -> {
+                index++
+                if (take('m')) MetricLengthUnit.MILLIMETERS else MetricLengthUnit.METERS
+            }
+            'c' -> {
+                index++
+                if (atEnd) throw CalcException.Incomplete()
+                if (take('m')) MetricLengthUnit.CENTIMETERS else throw CalcException.Syntax()
+            }
+            else -> null
         }
 
         /** After `3"`, an optional `1/2` (and optional closing `"`) completes the inches. */

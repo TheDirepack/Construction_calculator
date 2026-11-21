@@ -67,11 +67,13 @@ private fun digit(c: Char) = KeySpec(c.toString(), Key.Char(c), KeyKind.DIGIT)
 private fun op(o: Operator, description: String) =
     KeySpec(o.symbol, Key.Op(o), KeyKind.OPERATOR, description = description)
 
-private fun rows(equalsLabel: String) = listOf(
+private fun rows(equalsLabel: String, metric: Boolean) = listOf(
     listOf(
         KeySpec("AC", Key.Clear, KeyKind.CLEAR, description = "All clear"),
-        KeySpec("'", Key.Char('\''), KeyKind.UNIT, caption = "feet", description = "Feet"),
-        KeySpec("\"", Key.Char('"'), KeyKind.UNIT, caption = "inch", description = "Inches"),
+        if (metric) KeySpec("mm", Key.Text("mm"), KeyKind.UNIT, description = "Millimeters")
+        else KeySpec("'", Key.Char('\''), KeyKind.UNIT, caption = "feet", description = "Feet"),
+        if (metric) KeySpec("m", Key.Text("m"), KeyKind.UNIT, description = "Meters")
+        else KeySpec("\"", Key.Char('"'), KeyKind.UNIT, caption = "inch", description = "Inches"),
         op(Operator.DIVIDE, "Divide"),
     ),
     listOf(digit('7'), digit('8'), digit('9'), op(Operator.MULTIPLY, "Multiply")),
@@ -80,22 +82,25 @@ private fun rows(equalsLabel: String) = listOf(
     listOf(
         digit('0'),
         KeySpec(".", Key.Char('.'), KeyKind.DIGIT, description = "Decimal point"),
-        KeySpec("/", Key.Char('/'), KeyKind.UNIT, caption = "fraction", description = "Fraction bar"),
+        if (metric) KeySpec("cm", Key.Text("cm"), KeyKind.UNIT, description = "Centimeters")
+        else KeySpec("/", Key.Char('/'), KeyKind.UNIT, caption = "fraction", description = "Fraction bar"),
         KeySpec(equalsLabel, Key.Equals, KeyKind.EQUALS, description = if (equalsLabel == "=") "Equals" else equalsLabel),
     ),
 )
 
 /**
- * The feet-inch calculator keypad: digits, feet/inch marks, fraction bar, operators.
+ * The feet-inch calculator keypad: digits, feet/inch marks, fraction bar, operators. In [metric]
+ * mode the feet, inch and fraction keys become mm, m and cm (either system can still be typed:
+ * the other system's marks are only off the keypad).
  * Used full-screen by Foot-Inch and inside [MeasureInputSheet] by every length field.
  *
  * @param equalsLabel label for the equals key (e.g. "Use" in an input sheet).
  */
 @Composable
-fun MeasureKeypad(onKey: (Key) -> Unit, modifier: Modifier = Modifier, equalsLabel: String = "=") {
+fun MeasureKeypad(onKey: (Key) -> Unit, modifier: Modifier = Modifier, equalsLabel: String = "=", metric: Boolean = false) {
     val gap = 8.dp
     Column(modifier, verticalArrangement = Arrangement.spacedBy(gap)) {
-        rows(equalsLabel).forEach { row ->
+        rows(equalsLabel, metric).forEach { row ->
             Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(gap)) {
                 row.forEach { spec -> CalcKey(spec, onClick = { onKey(spec.key) }, modifier = Modifier.weight(1f)) }
             }

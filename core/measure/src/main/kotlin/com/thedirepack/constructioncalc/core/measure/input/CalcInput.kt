@@ -9,8 +9,11 @@ import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.measure.Token
 
 sealed interface Key {
-    /** A digit or one of `.`, `'`, `"`, `/`. */
+    /** A digit or one of `.`, `'`, `"`, `/`, `m`, `c`. */
     data class Char(val char: kotlin.Char) : Key
+
+    /** Several characters typed at once, all or none: a metric unit key (`mm`, `cm`, `m`). */
+    data class Text(val text: String) : Key
     data class Op(val operator: Operator) : Key
     data object Equals : Key
     data object Backspace : Key
@@ -49,6 +52,7 @@ object CalcInput {
 
     fun reduce(state: CalcState, key: Key): Outcome = when (key) {
         is Key.Char -> typeChar(state, key.char)
+        is Key.Text -> typeText(state, key.text)
         is Key.Op -> typeOperator(state, key.operator)
         Key.Equals -> equals(state)
         Key.Backspace -> backspace(state)
@@ -78,6 +82,15 @@ object CalcInput {
             }
         }
         return if (sawInches) true else null
+    }
+
+    private fun typeText(state: CalcState, text: String): Outcome {
+        var outcome = Outcome(state)
+        for (c in text) {
+            outcome = typeChar(outcome.state, c)
+            if (!outcome.accepted) return rejected(state)
+        }
+        return outcome
     }
 
     private fun typeChar(state: CalcState, c: Char): Outcome {
