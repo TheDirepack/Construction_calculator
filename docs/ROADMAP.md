@@ -197,3 +197,9 @@ Panels, circuits and conduit runs live in the project and are linked:
 
 Next: feeder and service load calculations (Article 220), demand factors, available fault current,
 series ratings, and selective coordination notes.
+
+## Idea backlog
+
+[plans/feature-ideas.md](plans/feature-ideas.md) holds a long list of possible additions, triaged
+into next, later and probably-not. It isn't committed work; ideas move into this roadmap when they
+are picked up.
