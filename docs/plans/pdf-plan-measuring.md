@@ -50,12 +50,38 @@ anything above that disagrees.
   line between them (also along the line's direction when tracing).
 - **Editable drawing data.** Export standalone `drawing.json` for use with the matching source
   PDF, or use the project ZIP to keep originals and editable data together. The annotated PDF is
-  for viewing and printing. Embedding JSON is optional future work.
+  for viewing and printing. Embed the JSON in the annotated PDF too if it's practical, but it is
+  not a priority.
 - **Projects.** A project can hold several PDFs. Exporting a project that has PDFs produces a ZIP
   (project JSON plus the original PDFs); a project without PDFs stays a single JSON file.
 - **Scale.** Presets (architectural, engineering, metric ratios) and two-point calibration with a
   "measure a second known dimension" check, offline only; no AI or internet calibration. Preset
   scales are exact ratios; two-point scales are measured values.
+
+## Decisions from the user: snapping and calibration (2026-11-21, later)
+
+- **A line map per page, built ahead of time from the source.** Snapping never uses the picture
+  on screen, so zoom changes nothing. Vector (CAD) pages snap to the PDF's own drawn lines. Scans
+  and images are read at the embedded image's full resolution; lines are found by contrast and
+  fitted (position, direction, width, both edges). The map is built once per page in the
+  background and kept with the drawing's cached files.
+- **Walls, not text.** Only long strokes go in the line map; text and small symbols do not snap.
+- **Center or nearest edge.** Each snap targets a line's center or its edge nearest the tap. The
+  default is the nearest edge for calibration dimensions and the center for measurements; both
+  are settings.
+- **Snapping can be turned off** separately for measuring and for calibrating, for sheets where it
+  doesn't help.
+- **Calibration is its own layer, document-wide.** Any number of known dimensions, on any page,
+  all fitted together; no page-by-page calibration. A zone with a different scale (a detail, an
+  enlarged plan) has its own dimensions, overrides the document scale inside its area, and is
+  left out of the document fit.
+- **The fit can vary across the sheet.** A photographed or curled sheet is a plane seen in
+  3D: the fit can include perspective and a smooth bend, so a measurement's scale changes along
+  its length, as far as the number and spread of dimensions support it.
+- **Reference sheets.** The snapper is checked against vector PDFs from the local blueprint
+  library, rendered at the app's resolutions and also made to look like scans and phone photos
+  (perspective, curl, lighting, blur, noise, JPEG) with the exact geometry carried through. The
+  full-resolution SVG and render of each reference page are kept with the cases (local only).
 
 ## What we'll build first
 
