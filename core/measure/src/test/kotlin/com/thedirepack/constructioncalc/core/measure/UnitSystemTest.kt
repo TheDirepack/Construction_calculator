@@ -104,4 +104,16 @@ class UnitSystemTest {
             UnitSystem.entries.forEach { sys -> assertEquals("$m $sys", 12.5, m.toBase(m.fromBase(12.5, sys), sys), 1e-9) }
         }
     }
+
+    @Test
+    fun drawingStyleFeetInches() {
+        val drawing = LengthFormat(feetInchStyle = FeetInchStyle.HYPHEN)
+        assertEquals("10'-4 3/16\"", MeasureFormat.primary(Quantity.inches(Rational.of(124) + Rational.of(3, 16)), drawing))
+        assertEquals("12'-0\"", MeasureFormat.primary(inches(144), drawing))
+        assertEquals("7/16\"", MeasureFormat.primary(Quantity.inches(Rational.of(7, 16)), drawing))
+        assertEquals("−2'-0\"", MeasureFormat.primary(inches(-24), drawing))
+        assertEquals("10'-4-3/16\"", MeasureFormat.forClipboard("10'-4 3/16\""))
+        assertEquals("10' 4 3/16\"", MeasureFormat.primary(Quantity.inches(Rational.of(124) + Rational.of(3, 16)), LengthFormat()))
+        assertEquals("1'-0\"", MeasureFormat.conversions(inches(12), drawing.copy(style = LengthStyle.INCHES)).first { it.label == "Feet-inches" }.value)
+    }
 }

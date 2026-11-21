@@ -5,6 +5,7 @@ import com.thedirepack.constructioncalc.core.measure.MetricResolution
 import com.thedirepack.constructioncalc.core.measure.MetricDisplay
 
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
+import com.thedirepack.constructioncalc.core.measure.FeetInchStyle
 
 import androidx.compose.ui.semantics.Role
 
@@ -207,6 +208,14 @@ fun MeasurementSettings() {
                 repo::setLengthDisplay,
                 { it.label },
                 subtitle = "Feet & inches, inches only, or Auto: inches when you entered inches. Applies to every tool.",
+            )
+            ChoiceRow(
+                "Feet-inch style",
+                FeetInchStyle.entries,
+                settings.feetInchStyle,
+                repo::setFeetInchStyle,
+                { it.label },
+                subtitle = "The hyphen style is how drawings write lengths.",
             )
             Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Fraction precision", style = MaterialTheme.typography.bodyLarge)

@@ -9,6 +9,15 @@ enum class UnitSystem(val label: String) {
     METRIC("Metric"),
 }
 
+/** How feet and inches are joined in imperial lengths. */
+enum class FeetInchStyle(val label: String) {
+    /** `10' 4 3/16"`, like most calculators. */
+    SPACE("10' 4 3/16\""),
+
+    /** `10'-4 3/16"`, as on drawings. */
+    HYPHEN("10'-4 3/16\""),
+}
+
 /** A metric length unit, in whole millimeters. */
 enum class MetricLengthUnit(val symbol: String, val millimeters: Int) {
     MILLIMETERS("mm", 1),
@@ -45,6 +54,7 @@ data class LengthFormat(
     val style: LengthStyle = LengthStyle.FEET_INCHES,
     val metricDisplay: MetricDisplay = MetricDisplay.AUTO,
     val metricResolution: MetricResolution = MetricResolution.MILLIMETER,
+    val feetInchStyle: FeetInchStyle = FeetInchStyle.SPACE,
 ) {
     val isMetric: Boolean get() = system == UnitSystem.METRIC
 

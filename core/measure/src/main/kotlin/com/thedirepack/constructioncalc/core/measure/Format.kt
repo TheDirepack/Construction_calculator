@@ -63,10 +63,10 @@ object MeasureFormat {
      * Plain-text feet-inch string, e.g. `10' 4 3/16"`, `7/16"`, `−2' 0"`.
      * Fractions are written `n/d`; the UI typesets them.
      */
-    fun feetInches(fi: FeetInches): String = buildString {
+    fun feetInches(fi: FeetInches, style: FeetInchStyle = FeetInchStyle.SPACE): String = buildString {
         if (fi.negative) append('−')
         val hasFeet = fi.feet.signum() != 0
-        if (hasFeet) append(fi.feet).append("' ")
+        if (hasFeet) append(fi.feet).append(if (style == FeetInchStyle.HYPHEN) "'-" else "' ")
         // Always show whole inches after feet (`1' 0 1/2"`), and alone when there's no fraction.
         val showWhole = hasFeet || fi.inches.signum() != 0 || !fi.hasFraction
         if (showWhole) append(fi.inches)
@@ -77,8 +77,8 @@ object MeasureFormat {
         append('"')
     }
 
-    fun length(inches: Rational, precision: Precision, style: LengthStyle) =
-        feetInches(splitInches(inches, precision, style))
+    fun length(inches: Rational, precision: Precision, style: LengthStyle, feetInchStyle: FeetInchStyle = FeetInchStyle.SPACE) =
+        feetInches(splitInches(inches, precision, style), feetInchStyle)
 
     /** Exact-to-[maxDecimals] decimal with trailing zeros removed. */
     fun decimal(value: Rational, maxDecimals: Int): String {
@@ -100,7 +100,10 @@ object MeasureFormat {
 
     /** The main result in either system, per [format]. */
     fun primary(q: Quantity, format: LengthFormat): String {
-        if (!format.isMetric) return primary(q, format.precision, format.style)
+        if (!format.isMetric) {
+            return if (q.dimension == Dimension.LENGTH) length(q.value, format.precision, format.style, format.feetInchStyle)
+            else primary(q, format.precision, format.style)
+        }
         return when (q.dimension) {
             Dimension.NUMBER -> number(q.value)
             Dimension.LENGTH -> MetricFormat.length(q.value, format.metricDisplay, format.metricResolution)
@@ -111,14 +114,18 @@ object MeasureFormat {
 
     /** Secondary readouts in either system: in metric, the imperial equivalents (and the other way round). */
     fun conversions(q: Quantity, format: LengthFormat): List<Conversion> {
-        if (!format.isMetric) return conversions(q, format.precision, format.style)
+        if (!format.isMetric) {
+            val list = conversions(q, format.precision, format.style)
+            if (format.feetInchStyle == FeetInchStyle.SPACE || q.dimension != Dimension.LENGTH) return list
+            return list.map { if (it.label == "Feet-inches") it.copy(value = length(q.value, format.precision, LengthStyle.FEET_INCHES, FeetInchStyle.HYPHEN)) else it }
+        }
         val v = q.value
         return when (q.dimension) {
             Dimension.NUMBER -> conversions(q, format.precision, format.style)
             Dimension.LENGTH -> listOf(
                 Conversion("Millimeters", decimal(v * Units.MM_PER_INCH, 1) + " mm"),
                 Conversion("Meters", decimal(v * Units.MM_PER_INCH / THOUSAND, 4) + " m"),
-                Conversion("Feet-inches", length(v, format.precision, LengthStyle.FEET_INCHES)),
+                Conversion("Feet-inches", length(v, format.precision, LengthStyle.FEET_INCHES, format.feetInchStyle)),
                 Conversion("Inches", length(v, format.precision, LengthStyle.INCHES)),
                 Conversion("Decimal ft", decimal(v / Units.INCHES_PER_FOOT, 4) + " ft"),
             )

@@ -3,6 +3,7 @@ package com.thedirepack.constructioncalc.core.data
 import android.content.Context
 import androidx.core.content.edit
 import com.thedirepack.constructioncalc.core.measure.Precision
+import com.thedirepack.constructioncalc.core.measure.FeetInchStyle
 import com.thedirepack.constructioncalc.core.measure.MetricDisplay
 import com.thedirepack.constructioncalc.core.measure.MetricResolution
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
@@ -67,6 +68,8 @@ data class AppSettings(
     val metricDisplay: MetricDisplay = MetricDisplay.AUTO,
     /** Metric only: what lengths are rounded to. */
     val metricResolution: MetricResolution = MetricResolution.MILLIMETER,
+    /** Imperial only: `10' 4"` or drawing-style `10'-4"`. */
+    val feetInchStyle: FeetInchStyle = FeetInchStyle.SPACE,
     /** Where "Save to project" goes by default. */
     val activeProjectId: String? = null,
     val activeRunId: String? = null,
@@ -108,6 +111,7 @@ class SettingsRepository(private val context: Context) {
             put(KEY_UNITS, s.unitSystem.name)
             put(KEY_METRIC_DISPLAY, s.metricDisplay.name)
             put(KEY_METRIC_RESOLUTION, s.metricResolution.name)
+            put(KEY_FT_IN_STYLE, s.feetInchStyle.name)
             s.activeProjectId?.let { put(KEY_PROJECT, it) }
             s.activeRunId?.let { put(KEY_RUN, it) }
             put(KEY_CO_NAME, s.company.name)
@@ -130,6 +134,7 @@ class SettingsRepository(private val context: Context) {
             unitSystem = str(KEY_UNITS)?.let { n -> UnitSystem.entries.firstOrNull { it.name == n } } ?: current.unitSystem,
             metricDisplay = str(KEY_METRIC_DISPLAY)?.let { n -> MetricDisplay.entries.firstOrNull { it.name == n } } ?: current.metricDisplay,
             metricResolution = str(KEY_METRIC_RESOLUTION)?.let { n -> MetricResolution.entries.firstOrNull { it.name == n } } ?: current.metricResolution,
+            feetInchStyle = str(KEY_FT_IN_STYLE)?.let { n -> FeetInchStyle.entries.firstOrNull { it.name == n } } ?: current.feetInchStyle,
             activeProjectId = str(KEY_PROJECT) ?: current.activeProjectId,
             activeRunId = str(KEY_RUN) ?: current.activeRunId,
             company = CompanyProfile(
@@ -163,6 +168,8 @@ class SettingsRepository(private val context: Context) {
 
     fun setMetricResolution(resolution: MetricResolution) = save { it.copy(metricResolution = resolution) }
 
+    fun setFeetInchStyle(style: FeetInchStyle) = save { it.copy(feetInchStyle = style) }
+
     fun setActiveTarget(projectId: String?, runId: String?) =
         save { it.copy(activeProjectId = projectId, activeRunId = runId) }
 
@@ -177,6 +184,7 @@ class SettingsRepository(private val context: Context) {
             putString(KEY_UNITS, s.unitSystem.name)
             putString(KEY_METRIC_DISPLAY, s.metricDisplay.name)
             putString(KEY_METRIC_RESOLUTION, s.metricResolution.name)
+            putString(KEY_FT_IN_STYLE, s.feetInchStyle.name)
             putString(KEY_PROJECT, s.activeProjectId)
             putString(KEY_RUN, s.activeRunId)
             putString(KEY_CO_NAME, s.company.name)
@@ -201,6 +209,7 @@ class SettingsRepository(private val context: Context) {
         metricDisplay = prefs.getString(KEY_METRIC_DISPLAY, null)?.let { n -> MetricDisplay.entries.firstOrNull { it.name == n } } ?: MetricDisplay.AUTO,
         metricResolution = prefs.getString(KEY_METRIC_RESOLUTION, null)?.let { n -> MetricResolution.entries.firstOrNull { it.name == n } }
             ?: MetricResolution.MILLIMETER,
+        feetInchStyle = prefs.getString(KEY_FT_IN_STYLE, null)?.let { n -> FeetInchStyle.entries.firstOrNull { it.name == n } } ?: FeetInchStyle.SPACE,
         activeProjectId = prefs.getString(KEY_PROJECT, null),
         activeRunId = prefs.getString(KEY_RUN, null),
         company = CompanyProfile(
@@ -216,7 +225,7 @@ class SettingsRepository(private val context: Context) {
     internal companion object {
         fun validateBackup(settings: JsonObject?, toolSettings: Map<String, JsonObject>) {
             val appKeys = listOf(
-                KEY_THEME, KEY_ANIMATIONS, KEY_PRECISION, KEY_DISPLAY, KEY_UNITS, KEY_METRIC_DISPLAY, KEY_METRIC_RESOLUTION, KEY_PROJECT, KEY_RUN,
+                KEY_THEME, KEY_ANIMATIONS, KEY_PRECISION, KEY_DISPLAY, KEY_UNITS, KEY_METRIC_DISPLAY, KEY_METRIC_RESOLUTION, KEY_FT_IN_STYLE, KEY_PROJECT, KEY_RUN,
                 KEY_CO_NAME, KEY_CO_PREPARED, KEY_CO_LICENSE, KEY_CO_PHONE, KEY_CO_EMAIL, KEY_CO_ADDRESS,
             )
             val badKey = appKeys.firstOrNull { settings?.get(it)?.let { value -> value !is JsonPrimitive } == true }
@@ -238,6 +247,7 @@ class SettingsRepository(private val context: Context) {
         const val KEY_UNITS = "unit_system"
         const val KEY_METRIC_DISPLAY = "metric_display"
         const val KEY_METRIC_RESOLUTION = "metric_resolution"
+        const val KEY_FT_IN_STYLE = "feet_inch_style"
         const val KEY_PROJECT = "active_project"
         const val KEY_RUN = "active_run"
         const val KEY_MODULES = "module_ids"
