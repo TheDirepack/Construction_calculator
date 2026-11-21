@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.electrical.code.codePercent
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.ui.show
 import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
@@ -257,7 +259,7 @@ internal fun CircuitSheet(
                                 "Empty: sized for the panels it feeds, ${Wire.va(it)} connected."
                             } ?: "Needed to check voltage drop and phase balance.",
                         )
-                        ToggleRow("Continuous load", draft.continuous, { draft = draft.copy(continuous = it) }, "On for 3 hours or more: wire and breaker sized at 125%.")
+                        ToggleRow("Continuous load", draft.continuous, { draft = draft.copy(continuous = it) }, "On for 3 hours or more: wire and breaker sized at ${codePercent(Code.book.values.continuousLoadFactor, spaced = false)}.")
                         if (panel.system.lineToNeutral != null) {
                             ToggleRow("Neutral conductor", draft.neutral, { draft = draft.copy(neutral = it) }, "Pulled with the circuit and counted when it carries current.")
                         }

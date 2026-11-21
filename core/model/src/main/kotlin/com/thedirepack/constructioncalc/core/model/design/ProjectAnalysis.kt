@@ -2,6 +2,7 @@ package com.thedirepack.constructioncalc.core.model.design
 
 import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.AmbientCorrection
 import com.thedirepack.constructioncalc.core.electrical.ConductorCountAdjustment
@@ -144,7 +145,8 @@ data class ProjectDesign(
  * Pure function of the project: call it whenever the project changes.
  */
 object ProjectAnalysis {
-    private const val POWER_FACTOR = 0.85
+    /** The power factor of Chapter 9 Table 9's "Effective Z" columns. */
+    private val POWER_FACTOR: Double get() = Code.book.values.acImpedanceTablePowerFactor
     private const val MAX_VD_UPSIZE_STEPS = 8
 
     /** Conduit Bending's tool id and the result key its saved items carry their total bend angle in. */
@@ -174,7 +176,7 @@ object ProjectAnalysis {
         val va get() = phases.values.sumOf { it.va }.takeIf { problem == null }
         val continuousVa get() = phases.values.sumOf { it.continuousVa }
         val amps get() = phases.values.maxOfOrNull { it.amps }
-        val terminalAmps get() = phases.values.maxOfOrNull { it.amps + 0.25 * it.continuousAmps }
+        val terminalAmps get() = phases.values.maxOfOrNull { it.amps + (Code.book.values.continuousLoadFactor - 1.0) * it.continuousAmps }
     }
 
     private fun panelPhases(panel: Panel) =
@@ -302,7 +304,7 @@ object ProjectAnalysis {
         val ambient = if (runs.isEmpty()) project.design.ambientC else runs.maxOf { runAmbient(project, it, xhhw2) }
         val hottest = runs.maxByOrNull { runAmbient(project, it, xhhw2) }
         if (hottest?.raceway?.rooftop == true && !xhhw2) {
-            notes += info("${hottest.name} is on a rooftop: +${temperatureDifference(AmbientCorrection.ROOFTOP_ADDER_C, units)} adder (${CodeRule.ROOFTOP_ADDER.cite}).")
+            notes += info("${hottest.name} is on a rooftop: ${AmbientCorrection.rooftopAdderText(units)} adder (${CodeRule.ROOFTOP_ADDER.cite}).")
         }
         val runConduits = runs.map { it.raceway?.conduitType?.let(::table9Conduit) ?: Table9Conduit.PVC }
         val runSegments = runs.zip(runConduits).mapNotNull { (run, conduit) ->
@@ -355,6 +357,7 @@ object ProjectAnalysis {
                 currentCarrying = ccc,
                 multipleCordReceptacles = c.multipleCordReceptacles,
             ),
+            units,
         )
         notes += sizing.notes.map { if (sizing.size == null) warn(it) else info(it) }
         val minimum = sizing.size
@@ -556,10 +559,6 @@ object ProjectAnalysis {
         panel.mainAmps?.let { if (worst > it) notes += warn("Phase current ${fmt(worst)} A exceeds the ${it} A main.") }
         return PanelDesign(panel, phaseVa, phaseVa.values.sum(), phaseAmps, PanelLayout.conflicts(panel), notes)
     }
-
-    /** A temperature difference given in °C (no +32 offset): `33 °C`, or `59.4 °F (33 °C)`: the code states it in °C. */
-    private fun temperatureDifference(celsius: Double, units: UnitSystem): String =
-        if (units == UnitSystem.METRIC) "${fmt(celsius)} °C" else "${fmt(celsius * 9.0 / 5.0)} °F (${fmt(celsius)} °C)"
 
     private fun fmt(v: Double) = com.thedirepack.constructioncalc.core.measure.Decimals.trim(v, 1)
 }

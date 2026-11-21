@@ -6,6 +6,8 @@ import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.code.CountAdjustmentBand
 import com.thedirepack.constructioncalc.core.electrical.code.SmallConductorLimitRow
 import com.thedirepack.constructioncalc.core.measure.Decimals
+import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 
 /**
  * Ambient temperature correction: [CodeRule.AMBIENT_CORRECTION] (Table 310.15(B)(1)(1) in NEC 2023)
@@ -33,6 +35,15 @@ object AmbientCorrection {
      * NEC 2023). Exception: Type XHHW-2 conductors aren't subject to the adder.
      */
     val ROOFTOP_ADDER_C: Double get() = Code.book.values.rooftopAdderC
+
+    /** [CodeRule.ROOFTOP_ADDER] in °F as the code prints it (a temperature difference, not converted from [ROOFTOP_ADDER_C]). */
+    val ROOFTOP_ADDER_F: Double get() = Code.book.values.rooftopAdderF
+
+    /** The adder as the code prints it in [units]: imperial `+60 °F`, metric `+33 °C`. */
+    fun rooftopAdderText(units: UnitSystem = UnitSystem.IMPERIAL): String {
+        val shown = if (units == UnitSystem.METRIC) ROOFTOP_ADDER_C else ROOFTOP_ADDER_F
+        return "+${Decimals.trim(shown, 1)} ${Measure.TEMPERATURE.unit(units).symbol}"
+    }
 
     fun effectiveAmbient(ambientC: Double, rooftopUnder3_4In: Boolean, xhhw2: Boolean): Double =
         if (rooftopUnder3_4In && !xhhw2) ambientC + ROOFTOP_ADDER_C else ambientC

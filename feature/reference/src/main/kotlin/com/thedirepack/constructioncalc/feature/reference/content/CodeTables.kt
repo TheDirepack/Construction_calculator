@@ -29,9 +29,17 @@ import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.electrical.WorkingSpace
 import com.thedirepack.constructioncalc.core.electrical.WorkingSpaceCondition
+import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.codeLength
+import com.thedirepack.constructioncalc.core.electrical.code.codeNumber
+import com.thedirepack.constructioncalc.core.electrical.code.codePercent
+import com.thedirepack.constructioncalc.core.electrical.code.codePercentValue
+import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
+import kotlin.math.roundToInt
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Bullets
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Choice
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Paragraph
@@ -95,11 +103,12 @@ internal object CodeTables {
             tools = listOf(ToolIds.PANELS, ToolIds.CONDUIT_FILL, ToolIds.VFD_SIZING),
             keywords = listOf("terminal", "lug", "60 °c", "75 °c", "column"),
         ) {
+            val v = Code.book.values
             listOf(
                 Bullets(
                     listOf(
-                        "Circuits rated 100 A or less, or 14 AWG through 1 AWG: use the 60 °C column, unless the equipment is listed and marked for 75 °C.",
-                        "Circuits over 100 A, or conductors larger than 1 AWG: use the 75 °C column, unless the equipment is listed and marked higher.",
+                        "Circuits rated ${v.terminationLowColumnMaxAmps} A or less, or ${ConductorSize.entries.first().label} through ${v.terminationLowColumnMaxSize.label}: use the 60 °C column, unless the equipment is listed and marked for 75 °C.",
+                        "Circuits over ${v.terminationLowColumnMaxAmps} A, or conductors larger than ${v.terminationLowColumnMaxSize.label}: use the 75 °C column, unless the equipment is listed and marked higher.",
                         "Most panelboards, breakers and devices today are marked 60/75 °C, so 75 °C is common. Check the label.",
                         "Higher-rated insulation (90 °C) still helps: correction and adjustment start from its column, as long as the result doesn't exceed the terminal column.",
                     ),
@@ -113,16 +122,19 @@ internal object CodeTables {
             tools = listOf(ToolIds.PANELS, ToolIds.CONDUIT_FILL),
             keywords = listOf("ambient", "temperature", "correction", "derate", "heat", "rooftop", "attic"),
         ) {
-            val upper = (10..85 step 5).toList()
-            val rows = upper.mapIndexed { idx, c ->
-                val f = c * 9 / 5 + 32
-                val cRange = if (idx == 0) "$c or less" else "${upper[idx - 1] + 1}–$c"
-                val fRange = if (idx == 0) "$f or less" else "${upper[idx - 1] * 9 / 5 + 33}–$f"
-                listOf(cRange, fRange) + TemperatureRating.entries.map { n(AmbientCorrection.factor(c.toDouble(), it), 2) }
+            val bands = AmbientCorrection.bands
+            val rows = bands.mapIndexed { idx, band ->
+                val c = band.maxC.toInt()
+                val f = Measure.TEMPERATURE.fromBase(band.maxC, UnitSystem.IMPERIAL).toInt()
+                val prev = bands.getOrNull(idx - 1)?.maxC?.toInt()
+                val cRange = if (prev == null) "$c or less" else "${prev + 1}–$c"
+                val fRange = if (prev == null) "$f or less" else "${Measure.TEMPERATURE.fromBase(prev.toDouble(), UnitSystem.IMPERIAL).toInt() + 1}–$f"
+                listOf(cRange, fRange) + TemperatureRating.entries.map { n(band.of(it), 2) }
             }
+            val basis = Code.book.values.ambientBasisC
             listOf(
-                Table(listOf("°C", "°F", "60 °C", "75 °C", "90 °C"), rows, "Factors for a 30 °C (86 °F) table basis. A dash: too hot for that insulation."),
-                Paragraph("Raceways or cables in sunlight on a rooftop, less than 3/4 in. (19 mm) above it: add ${AmbientCorrection.ROOFTOP_ADDER_C.toInt()} °C (60 °F) to the outdoor temperature (${CodeRule.ROOFTOP_ADDER.cite}). Type XHHW-2 is exempt."),
+                Table(listOf("°C", "°F", "60 °C", "75 °C", "90 °C"), rows, "Factors for a ${Measure.TEMPERATURE.format(basis, UnitSystem.METRIC, 0)} (${Measure.TEMPERATURE.format(basis, UnitSystem.IMPERIAL, 0)}) table basis. A dash: too hot for that insulation."),
+                Paragraph("Raceways or cables in sunlight on a rooftop, less than 3/4 in. (19 mm) above it: add ${AmbientCorrection.rooftopAdderText(UnitSystem.METRIC).drop(1)} (${AmbientCorrection.rooftopAdderText(UnitSystem.IMPERIAL).drop(1)}) to the outdoor temperature (${CodeRule.ROOFTOP_ADDER.cite}). Type XHHW-2 is exempt."),
             )
         },
         RefEntry(
@@ -131,17 +143,17 @@ internal object CodeTables {
             RefSource.CodeRef(listOf(CodeRule.CONDUCTOR_COUNT_ADJUSTMENT, CodeRule.NEUTRAL_COUNTING, CodeRule.GROUNDING_COUNTING)),
             tools = listOf(ToolIds.PANELS, ToolIds.CONDUIT_FILL),
             keywords = listOf("bundling", "derate", "derating", "adjustment", "current carrying", "ccc", "neutral"),
-        ) {
-            val bands = listOf(4 to 6, 7 to 9, 10 to 20, 21 to 30, 31 to 40)
-            val rows = bands.map { (lo, hi) -> listOf("$lo–$hi", "${(ConductorCountAdjustment.factor(hi) * 100).toInt()}%") } +
-                listOf(listOf("41 and above", "${(ConductorCountAdjustment.factor(41) * 100).toInt()}%"))
+        ) { ctx ->
+            val rows = ConductorCountAdjustment.bands.map { b ->
+                listOf(if (b.to == null) "${b.from} and above" else "${b.from}–${b.to}", codePercent(b.factor, spaced = false))
+            }
             listOf(
                 Table(listOf("Current-carrying conductors", "Percent of ampacity"), rows, "Apply together with any ambient correction."),
                 Bullets(
                     listOf(
                         "A neutral carrying only the unbalanced current of its circuit doesn't count. It does count on a 3-wire circuit from a 4-wire wye (two phases and the neutral), and where most of the load is nonlinear (${CodeRule.NEUTRAL_COUNTING.cite}).",
                         "Equipment grounding and bonding conductors don't count (${CodeRule.GROUNDING_COUNTING.cite}).",
-                        "Raceways 24 in. or shorter (nipples) need no adjustment (${CodeRule.SHORT_RACEWAY_ADJUSTMENT.cite}).",
+                        "Raceways ${Code.book.values.let { codeLength(it.nippleMaxLengthIn, it.nippleMaxLengthMm, ctx.system) }} or shorter (nipples) need no adjustment (${CodeRule.SHORT_RACEWAY_ADJUSTMENT.cite}).",
                     ),
                 ),
                 ToolLink("Check a raceway in Conduit Fill", ToolIds.CONDUIT_FILL),
@@ -275,7 +287,8 @@ internal object CodeTables {
             RefSource.CodeRef(listOf(CodeRule.FILL_PERCENT, CodeRule.FILL_NIPPLES, CodeRule.FILL_ROUNDING, CodeRule.FILL_GROUNDING_CONDUCTORS)),
             tools = listOf(ToolIds.CONDUIT_FILL, ToolIds.PULL_PLANNER),
             keywords = listOf("fill", "40%", "53%", "31%", "60%", "nipple", "percent"),
-        ) {
+        ) { ctx ->
+            val v = Code.book.values
             listOf(
                 Table(
                     listOf("Conductors", "Maximum fill"),
@@ -283,14 +296,14 @@ internal object CodeTables {
                         listOf("1", "${ConduitFill.limitPercent(1)}%"),
                         listOf("2", "${ConduitFill.limitPercent(2)}%"),
                         listOf("Over 2", "${ConduitFill.limitPercent(3)}%"),
-                        listOf("Nipple, 24 in. or shorter", "${ConduitFill.limitPercent(3, nipple = true)}%"),
+                        listOf("Nipple, ${codeLength(v.nippleMaxLengthIn, v.nippleMaxLengthMm, ctx.system)} or shorter", "${ConduitFill.limitPercent(3, nipple = true)}%"),
                     ),
                 ),
                 Bullets(
                     listOf(
                         "Equipment grounding conductors count toward fill (${CodeRule.FILL_GROUNDING_CONDUCTORS.cite}).",
-                        "All conductors the same size: a count ending in .8 or more rounds up (${CodeRule.FILL_ROUNDING.cite}).",
-                        "Three conductors can jam in a bend when the conduit's inside diameter is 2.8 to 3.2 times a conductor's diameter (${CodeRule.JAM_RATIO.cite}).",
+                        "All conductors the same size: a count ending in .${(v.note7RoundUpFraction * 10).roundToInt()} or more rounds up (${CodeRule.FILL_ROUNDING.cite}).",
+                        "Three conductors can jam in a bend when the conduit's inside diameter is ${codeNumber(ConduitFill.JAM_LOW)} to ${codeNumber(ConduitFill.JAM_HIGH)} times a conductor's diameter (${CodeRule.JAM_RATIO.cite}).",
                     ),
                 ),
                 ToolLink("Check fill", ToolIds.CONDUIT_FILL),
@@ -304,16 +317,19 @@ internal object CodeTables {
             keywords = listOf("emt", "rmc", "imc", "pvc", "inside diameter", "id", "area", "table 4", "trade size"),
         ) { ctx ->
             val types = ConduitType.entries
+            // Table 4's columns after 100 %: over 2 conductors, 1, 2 and nipple.
+            val v = Code.book.values
+            val fills = listOf(v.fillOverTwoConductorsPercent, v.fillOneConductorPercent, v.fillTwoConductorsPercent, v.fillNipplePercent)
             listOf(
                 Choice("Conduit", types.map { it.displayName }) { pick ->
                     val type = types[pick]
                     val rows = ConduitTable.sizes(type).map { c ->
                         listOf(c.tradeSize.display, c.tradeSize.metricDesignator.toString(), len(c.internalDiameterIn, ctx)) +
-                            listOf(c.area100SqIn, c.allowedAreaSqIn(40), c.allowedAreaSqIn(53), c.allowedAreaSqIn(31), c.allowedAreaSqIn(60)).map { a ->
+                            (listOf(c.area100SqIn) + fills.map { c.allowedAreaSqIn(it) }).map { a ->
                                 if (ctx.metric) area(a, ctx) else n(a, 3)
                             }
                     }
-                    listOf(Table(listOf("Trade size", "Metric", "ID ${lenUnit(ctx)}", "100% ${areaUnit(ctx)}", "40%", "53%", "31%", "60%"), rows, "${type.fullName}, ${type.article}."))
+                    listOf(Table(listOf("Trade size", "Metric", "ID ${lenUnit(ctx)}", "100% ${areaUnit(ctx)}") + fills.map { "$it%" }, rows, "${type.fullName}, ${type.article}."))
                 },
             )
         },
@@ -345,7 +361,7 @@ internal object CodeTables {
         },
         RefEntry(
             "nec-bend-radius", "Bend radius and bends between pull points", RefSection.RACEWAY,
-            "Minimum radius of conduit bends, and the 360° limit between pull points.",
+            "Minimum radius of conduit bends, and the ${RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS.toInt()}° limit between pull points.",
             RefSource.CodeRef(CodeRule.BEND_RADIUS),
             tools = listOf(ToolIds.CONDUIT_BENDING, ToolIds.PULL_PLANNER),
             keywords = listOf("radius", "bend", "360", "pull point", "pull box", "table 2"),
@@ -368,7 +384,8 @@ internal object CodeTables {
             RefSource.CodeRef(CodeRule.WORKING_SPACE),
             tools = listOf(ToolIds.PANELS),
             keywords = listOf("clearance", "working space", "36 in", "3 ft", "panel", "110.26"),
-        ) {
+        ) { ctx ->
+            val v = Code.book.values
             listOf(
                 Table(
                     listOf("Volts to ground") + WorkingSpaceCondition.entries.map { it.label },
@@ -376,7 +393,7 @@ internal object CodeTables {
                     "Depth, measured from exposed live parts or the enclosure front.",
                 ),
                 Bullets(WorkingSpaceCondition.entries.map { "${it.label}: ${it.description}." }),
-                Paragraph("Width: at least ${WorkingSpace.MIN_WIDTH_IN} in. or the equipment's width, whichever is more, with room for doors to open 90°. Height: at least 6-1/2 ft or the equipment's height."),
+                Paragraph("Width: at least ${codeLength(v.workingSpaceMinWidthIn, v.workingSpaceMinWidthMm, ctx.system)} or the equipment's width, whichever is more, with room for doors to open 90°. Height: at least ${codeLength(WorkingSpace.MIN_HEIGHT_IN, v.workingSpaceMinHeightMm, ctx.system)} or the equipment's height."),
             )
         },
         RefEntry(
@@ -399,18 +416,19 @@ internal object CodeTables {
             tools = listOf(ToolIds.VFD_SIZING),
             keywords = listOf("motor", "breaker", "fuse", "250%", "175%", "short circuit", "overload", "disconnect"),
         ) {
+            val mv = Code.book.values
             listOf(
                 Table(
                     listOf("Motor") + MotorProtectiveDevice.entries.map { it.label },
-                    MotorType.entries.map { m -> listOf(m.label) + MotorProtectiveDevice.entries.map { "${MotorProtection.percent(m, it)}%" } },
+                    MotorType.entries.map { m -> listOf(m.label) + MotorProtectiveDevice.entries.map { codePercentValue(MotorProtection.percent(m, it), spaced = false) } },
                     "Percent of the table full-load current.",
                 ),
                 Bullets(
                     listOf(
                         "If the result isn't a standard size, the next larger standard size is allowed (${CodeRule.MOTOR_NEXT_HIGHER_RATING.cite}).",
-                        "Conductors for one motor: at least 125% of full-load current (${CodeRule.MOTOR_CONDUCTORS.cite}).",
-                        "Overloads: no more than 125% of nameplate current for a service factor of 1.15 or more or a 40 °C rise, 115% otherwise (${CodeRule.MOTOR_OVERLOAD.cite}).",
-                        "Disconnect: rated at least 115% of full-load current (${CodeRule.MOTOR_DISCONNECT_RATING.cite}).",
+                        "Conductors for one motor: at least ${codePercent(mv.motorConductorFactor, spaced = false)} of full-load current (${CodeRule.MOTOR_CONDUCTORS.cite}).",
+                        "Overloads: no more than ${codePercent(mv.motorOverloadFactor, spaced = false)} of nameplate current for a service factor of ${codeNumber(mv.motorOverloadServiceFactor)} or more or a ${codeNumber(mv.motorOverloadMaxRiseC)} °C rise, ${codePercent(mv.motorOverloadFactorOther, spaced = false)} otherwise (${CodeRule.MOTOR_OVERLOAD.cite}).",
+                        "Disconnect: rated at least ${codePercent(mv.motorDisconnectFactor, spaced = false)} of full-load current (${CodeRule.MOTOR_DISCONNECT_RATING.cite}).",
                     ),
                 ),
                 ToolLink("Size a motor circuit with a drive", ToolIds.VFD_SIZING),

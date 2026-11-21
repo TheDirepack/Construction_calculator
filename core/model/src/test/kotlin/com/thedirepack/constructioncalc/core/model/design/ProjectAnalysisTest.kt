@@ -148,7 +148,7 @@ class ProjectAnalysisTest {
         val project = Project(name = "P", createdAt = 0, runs = listOf(indoor, roof), panels = listOf(Panel(name = "LP", circuits = listOf(c))))
         val d = ProjectAnalysis.analyze(project).circuits.getValue(c.id)
         assertEquals(63.0, d.sizing!!.effectiveAmbientC, 0.0)
-        assertTrue(d.notes.any { "Roof" in it.text && "33" in it.text && !it.isWarning })
+        assertTrue(d.notes.any { "Roof" in it.text && "+60 °F" in it.text && !it.isWarning })
     }
 
     @Test fun aCoolerRunAmbientIsHonoredLikeTheRunsTabShowsIt() {

@@ -7,6 +7,7 @@ import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
 import com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillInputs
+import com.thedirepack.constructioncalc.core.electrical.AmbientCorrection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -77,14 +78,8 @@ class FillDeratingTest {
     }
 
     @Test fun temperatureTextFollowsTheSystem() {
-        val imperial = AppSettings()
-        val metric = AppSettings(unitSystem = UnitSystem.METRIC)
-        val rooftop = "Rooftop in sunlight under 3/4 in.: +33 °C (310.15(B)(2))."
-        assertEquals("Rooftop in sunlight under 3/4 in.: +60 °F (310.15(B)(2)).", localizeTemperatures(rooftop, imperial))
-        assertEquals(rooftop, localizeTemperatures(rooftop, metric))
-        assertEquals("× 0.96 (97 °F)", localizeTemperatures("× 0.96 (36 °C)", imperial))
-        assertEquals("× 0.96 (36 °C)", localizeTemperatures("× 0.96 (36 °C)", metric))
-        assertEquals("(86 °F basis)", localizeTemperatures("(30 °C basis)", imperial))
-        assertEquals("terminals limited to 75 °C", localizeTemperatures("terminals limited to 75 °C", imperial, keepRatings = true))
+        // The rooftop adder is a temperature difference: the code prints 33 °C (60 °F).
+        assertEquals("+60 °F", AmbientCorrection.rooftopAdderText(UnitSystem.IMPERIAL))
+        assertEquals("+33 °C", AmbientCorrection.rooftopAdderText(UnitSystem.METRIC))
     }
 }

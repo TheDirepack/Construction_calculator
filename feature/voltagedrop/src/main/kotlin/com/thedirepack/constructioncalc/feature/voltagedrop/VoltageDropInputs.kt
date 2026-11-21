@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop
 
+import com.thedirepack.constructioncalc.core.electrical.code.codeNumber
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.Table9Conduit
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.Stranding
@@ -29,8 +31,8 @@ data class VoltageDropInputs(
     val parallelSets: Int = 1,
     val method: Method = Method.AC_TABLE_9,
     val conduit: Table9Conduit = Table9Conduit.PVC,
-    val powerFactor: String = "0.85",
-    val targetPercent: String = "3",
+    val powerFactor: String = codeNumber(Code.book.values.acImpedanceTablePowerFactor),
+    val targetPercent: String = codeNumber(Code.book.values.voltageDropBranchPercent),
     val stranding: Stranding = Stranding.STRANDED,
 ) {
     val conductorMaterial: ConductorMaterial
@@ -68,7 +70,7 @@ fun VoltageDropInputs.parse(): ParsedInputs {
     val currentAmps = number(amps, "Load current")
     val lengthFeet = length?.takeIf { it.dimension == Dimension.LENGTH }?.toQuantity()?.value?.toDouble()?.div(12.0)
     if (lengthFeet == null) missing += "Length"
-    val pf = if (method == Method.AC_TABLE_9) number(powerFactor, "Power factor") else 0.85
+    val pf = if (method == Method.AC_TABLE_9) number(powerFactor, "Power factor") else Code.book.values.acImpedanceTablePowerFactor
     val target = number(targetPercent, "Target drop")
 
     if (missing.isNotEmpty() || problems.isNotEmpty()) return ParsedInputs(null, missing, problems)

@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.vfdsizing
 
+import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.codePercent
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -120,7 +122,7 @@ fun VfdSizingScreen(host: ToolHost) {
                     { t -> vm.update { it.copy(driveInputAmps = t) } },
                     unit = "A",
                     pickKinds = setOf(ValueKind.CURRENT),
-                    supportingText = "From the drive's nameplate. Blank: 125 % of motor FLC is used",
+                    supportingText = "From the drive's nameplate. Blank: ${codePercent(Code.book.values.driveInputConductorFactor)} of motor FLC is used",
                 )
             }
 

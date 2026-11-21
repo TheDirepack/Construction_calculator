@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.vfdsizing.domain
 
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.Ampacity
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
@@ -88,16 +89,22 @@ object VfdSizing {
     /** Motor voltages offered: three-phase table columns up to 600 V (Part X). 2300 V is Part XI and out of scope. */
     val MOTOR_VOLTAGES: List<Int> = listOf(200, 208, 230, 460, 575)
 
-    /** 430.122 and 430.22 conductor factor. */
-    const val CONDUCTOR_FACTOR = 1.25
-    /** 430.128 disconnecting means factor. */
-    const val DISCONNECT_FACTOR = 1.15
+    /** [CodeRule.DRIVE_INPUT_CONDUCTORS]: multiple of the drive's rated input current. */
+    val INPUT_CONDUCTOR_FACTOR: Double get() = Code.book.values.driveInputConductorFactor
+    /** [CodeRule.DRIVE_OUTPUT_CONDUCTORS]: multiple of the motor's full-load current. */
+    val OUTPUT_CONDUCTOR_FACTOR: Double get() = Code.book.values.driveOutputConductorFactor
+    /** [CodeRule.DRIVE_DISCONNECT_RATING]: multiple of the drive's rated input current. */
+    val DISCONNECT_FACTOR: Double get() = Code.book.values.driveDisconnectFactor
+    /** Table 430.52(C)(1) maximum for an inverse-time breaker, percent of full-load current. */
+    val BREAKER_PERCENT: Int get() = MotorProtection.percent(MotorType.POLYPHASE_AC, MotorProtectiveDevice.INVERSE_TIME_BREAKER)
+    /** Table 430.52(C)(1) maximum for a time-delay (dual-element) fuse, percent of full-load current. */
+    val DUAL_ELEMENT_FUSE_PERCENT: Int get() = MotorProtection.percent(MotorType.POLYPHASE_AC, MotorProtectiveDevice.DUAL_ELEMENT_FUSE)
     /** Table 430.52(C)(1), inverse-time circuit breaker, three-phase induction motor. */
     val BREAKER_FACTOR = MotorProtection.factor(MotorType.POLYPHASE_AC, MotorProtectiveDevice.INVERSE_TIME_BREAKER)
     /** Table 430.52(C)(1), time-delay (dual-element) fuse, three-phase induction motor. */
     val DUAL_ELEMENT_FUSE_FACTOR = MotorProtection.factor(MotorType.POLYPHASE_AC, MotorProtectiveDevice.DUAL_ELEMENT_FUSE)
-    /** Overload device maximum, motors with service factor 1.15 or more or ≤ 40 °C rise (430.32(A)(1)). */
-    const val OVERLOAD_FACTOR = 1.25
+    /** [CodeRule.MOTOR_OVERLOAD]: overload device maximum for motors with a high service factor or a low temperature rise. */
+    val OVERLOAD_FACTOR: Double get() = Code.book.values.motorOverloadFactor
     /** Rule of thumb only, not a code requirement. */
     const val SINGLE_PHASE_DRIVE_MULTIPLIER = 2.0
     /**
@@ -108,8 +115,8 @@ object VfdSizing {
     const val SINGLE_PHASE_INPUT_ESTIMATE_FACTOR = 2.0
     /** Parallel sets considered when one conductor isn't enough. */
     const val MAX_SETS = 6
-    /** 310.10(G): parallel conductors are 1/0 AWG or larger. */
-    private val MIN_PARALLEL_SIZE = ConductorSize.AWG_1_0
+    /** [CodeRule.PARALLEL_CONDUCTORS]: the smallest conductor allowed in parallel. */
+    val MIN_PARALLEL_SIZE: ConductorSize get() = Code.book.values.parallelMinimumSize
     private const val KW_PER_HP = 0.7457
 
     /** Standard horsepower ratings with a Table 430.250 value at [volts]. */
@@ -144,8 +151,8 @@ object VfdSizing {
         val inputEstimate = request.driveInputAmps == null
         val inputBasis = request.driveInputAmps
             ?: if (request.supplyPhase == AcPhases.SINGLE) flc * SINGLE_PHASE_INPUT_ESTIMATE_FACTOR else flc
-        val inputRequired = inputBasis * CONDUCTOR_FACTOR
-        val outputRequired = flc * CONDUCTOR_FACTOR
+        val inputRequired = inputBasis * INPUT_CONDUCTOR_FACTOR
+        val outputRequired = flc * OUTPUT_CONDUCTOR_FACTOR
         val breakerCalc = flc * BREAKER_FACTOR
         val fuseCalc = flc * DUAL_ELEMENT_FUSE_FACTOR
         return VfdResult(

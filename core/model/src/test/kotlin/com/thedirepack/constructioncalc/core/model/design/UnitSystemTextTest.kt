@@ -77,7 +77,7 @@ class UnitSystemTextTest {
         val c = circuits.first().id
         val ni = ProjectAnalysis.analyze(project, imperial).circuits.getValue(c).notes.map { it.text }
         val nm = ProjectAnalysis.analyze(project, metric).circuits.getValue(c).notes.map { it.text }
-        assertTrue(ni.toString(), ni.any { "+59.4 °F (33 °C) adder" in it })
+        assertTrue(ni.toString(), ni.any { "+60 °F adder" in it })
         assertTrue(nm.toString(), nm.any { "+33 °C adder" in it })
         val ri = ProjectAnalysis.analyze(project, imperial).runs.getValue(run.id).notes.map { it.text }
         val rm = ProjectAnalysis.analyze(project, metric).runs.getValue(run.id).notes.map { it.text }

@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.electrical.code.codePercentValue
 import com.thedirepack.constructioncalc.core.ui.components.UnitField
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.show
@@ -88,7 +89,7 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
                     value = targetText,
                     onValueChange = { targetText = it },
                     unit = "%",
-                    supportingText = "NEC recommends 3% on a branch circuit, 5% overall (informational notes).",
+                    supportingText = "NEC recommends ${codePercentValue(Code.book.values.voltageDropBranchPercent, spaced = false)} on a branch circuit, ${codePercentValue(Code.book.values.voltageDropTotalPercent, spaced = false)} overall (informational notes).",
                 )
                 ToggleRow(
                     "Upsize wire for voltage drop",

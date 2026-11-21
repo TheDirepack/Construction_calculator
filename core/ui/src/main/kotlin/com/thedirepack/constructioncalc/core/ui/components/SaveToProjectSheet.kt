@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.electrical.RacewayBends
+
 import com.thedirepack.constructioncalc.core.model.Raceway
 import com.thedirepack.constructioncalc.core.model.RunPath
 import com.thedirepack.constructioncalc.core.model.addBendsToRunPath
@@ -193,7 +195,7 @@ fun SaveToProjectSheet(
                     title = "Add to run path",
                     checked = addBends,
                     onCheckedChange = { addBends = it },
-                    detail = "Adds its ${bends.size} bend${if (bends.size == 1) "" else "s"} (${bends.joinToString(", ") { formatDecimal(it.angleDegrees, 1) + "°" }}) to the run's route for the 360° check and the pull planner.",
+                    detail = "Adds its ${bends.size} bend${if (bends.size == 1) "" else "s"} (${bends.joinToString(", ") { formatDecimal(it.angleDegrees, 1) + "°" }}) to the run's route for the ${RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS.toInt()}° check and the pull planner.",
                 )
             }
             if (route != null && !updateExisting) {

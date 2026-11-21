@@ -201,7 +201,7 @@ object PullAnalysis {
         sectionDegrees.forEachIndexed { i, deg ->
             if (deg > RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS + 1e-9) {
                 val where = if (sectionDegrees.size == 1) "The path has" else "Pull section ${i + 1} has"
-                notes += warn("$where ${fmt(deg, 1)}° of bends: over 360° between pull points (${Code.label} $section).")
+                notes += warn("$where ${fmt(deg, 1)}° of bends: over ${Decimals.trim(RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS, 0)}° between pull points (${Code.label} $section).")
             }
         }
 
@@ -272,7 +272,7 @@ object PullAnalysis {
     fun fitNotes(conduitId: Double, cableOd: Double, count: Int, units: UnitSystem = UnitSystem.IMPERIAL): List<DesignNote> = buildList {
         val jam = PullFormulas.jamRatio(conduitId, cableOd)
         if (count == 3 && PullFormulas.inJamRange(jam)) {
-            add(warn("Jam ratio ${fmt(jam, 2)} (1.05 × D/d) is between 2.8 and 3.2: three cables can jam in a bend (NEC ${CodeRule.JAM_RATIO.cite}; IEEE 1185)."))
+            add(warn("Jam ratio ${fmt(jam, 2)} (1.05 × D/d) is between ${Decimals.trim(ConduitFill.JAM_LOW)} and ${Decimals.trim(ConduitFill.JAM_HIGH)}: three cables can jam in a bend (NEC ${CodeRule.JAM_RATIO.cite}; IEEE 1185)."))
         }
         val clearance = PullFormulas.clearance(count, conduitId, cableOd)
         when {

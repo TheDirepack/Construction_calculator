@@ -2,6 +2,9 @@ package com.thedirepack.constructioncalc.feature.conduitfill.domain
 
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.codeLength
+import com.thedirepack.constructioncalc.core.electrical.code.codeNumber
+import com.thedirepack.constructioncalc.core.electrical.code.codePercentValue
 import com.thedirepack.constructioncalc.core.electrical.ConduitFill
 import com.thedirepack.constructioncalc.core.electrical.FillAnalysis
 import com.thedirepack.constructioncalc.core.electrical.JamCheck
@@ -99,7 +102,7 @@ data class ConduitFillReport(
                     add(
                         ReportNotice(
                             "Fill is ${fmt(a.percentFill, 1)}%, a hair over ${a.limitPercent}%, but allowed: " +
-                                "${CodeRule.FILL_ROUNDING.cite} rounds a count up when the decimal is 0.8 or more and all conductors are the same size.",
+                                "${CodeRule.FILL_ROUNDING.cite} rounds a count up when the decimal is ${codeNumber(Code.book.values.note7RoundUpFraction)} or more and all conductors are the same size.",
                         ),
                     )
                 }
@@ -112,19 +115,19 @@ data class ConduitFillReport(
                     if (jam.inJamRange) {
                         add(
                             ReportNotice(
-                                "Jam ratio $r (conduit inside diameter / $of outside diameter) is between 2.8 and 3.2. " +
+                                "Jam ratio $r (conduit inside diameter / $of outside diameter) is between ${codeNumber(ConduitFill.JAM_LOW)} and ${codeNumber(ConduitFill.JAM_HIGH)}. " +
                                     "Three conductors can jam when pulled, so consider another size or an offset pull plan (${CodeRule.JAM_RATIO.cite}).",
                                 ReportSeverity.WARNING,
                             ),
                         )
                     } else {
-                        add(ReportNotice("Jam ratio $r for three conductors, outside the 2.8–3.2 range where jamming can occur."))
+                        add(ReportNotice("Jam ratio $r for three conductors, outside the ${codeNumber(ConduitFill.JAM_LOW)}–${codeNumber(ConduitFill.JAM_HIGH)} range where jamming can occur."))
                     }
                 }
                 if (request.nipple) {
                     add(
                         ReportNotice(
-                            "Nipple fill (60%) applies only to nipples 24 in. (600 mm) or shorter between boxes, cabinets or similar " +
+                            "Nipple fill (${codePercentValue(Code.book.values.fillNipplePercent, spaced = false)}) applies only to nipples ${Code.book.values.let { codeLength(it.nippleMaxLengthIn, it.nippleMaxLengthMm, settings.unitSystem) }} or shorter between boxes, cabinets or similar " +
                                 "enclosures. ${CodeRule.FILL_NIPPLES.cite} also waives the ${CodeRule.CONDUCTOR_COUNT_ADJUSTMENT.cite} adjustment factors for them.",
                         ),
                     )

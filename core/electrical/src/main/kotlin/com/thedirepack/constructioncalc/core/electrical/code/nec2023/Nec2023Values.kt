@@ -11,6 +11,7 @@ internal object Nec2023Values {
     val values = CodeValues(
         ambientBasisC = 30.0, // Table 310.16 heading and Table 310.15(B)(1)(1), 70-185/70-187
         rooftopAdderC = 33.0, // 310.15(B)(2): 33 °C (60 °F)
+        rooftopAdderF = 60.0,
         continuousLoadFactor = 1.25, // 210.19(A)(1), 210.20(A), 215.2(A)(1), 215.3: 125 percent
         nextSizeUpMaxAmps = 800, // 240.4(B)
         minimumSizeCopper = ConductorSize.AWG_14, // 310.3(A), 70-177
@@ -24,6 +25,7 @@ internal object Nec2023Values {
         fillOverTwoConductorsPercent = 40,
         fillNipplePercent = 60, // Chapter 9 Note (4)
         nippleMaxLengthIn = 24.0, // Chapter 9 Note (4), 310.15(C)(1)(b): 600 mm (24 in.)
+        nippleMaxLengthMm = 600.0,
         note7RoundUpFraction = 0.8, // Chapter 9 Note (7)
         jamRatioLow = 2.8, // Chapter 9 Table 1 Informational Note No. 2
         jamRatioHigh = 3.2,
@@ -50,6 +52,8 @@ internal object Nec2023Values {
         driveDisconnectFactor = 1.15, // 430.128, 70-360
 
         workingSpaceMinWidthIn = 30, // 110.26(A)(2): 762 mm (30 in.), 70-68
+        workingSpaceMinWidthMm = 762,
         workingSpaceMinHeightIn = 78, // 110.26(A)(3): 2.0 m (6-1/2 ft)
+        workingSpaceMinHeightMm = 2000,
     )
 }
