@@ -42,12 +42,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thedirepack.constructioncalc.core.data.BackupSections
-import com.thedirepack.constructioncalc.core.model.AppFile
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.ui.R
-import com.thedirepack.constructioncalc.core.ui.components.ImportFileDialog
 import com.thedirepack.constructioncalc.core.ui.components.TextInputDialog
-import com.thedirepack.constructioncalc.core.ui.components.rememberAppFileOpener
 import com.thedirepack.constructioncalc.core.ui.components.rememberBackupExporter
 import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
@@ -78,11 +75,8 @@ private fun ProjectListScreen(projects: List<Project>, host: ToolHost, onOpen: (
     val settings = rememberAppSettings()
     var creating by remember { mutableStateOf(false) }
 
-    var importing by remember { mutableStateOf<AppFile?>(null) }
     var menu by remember { mutableStateOf(false) }
-    val openFile = rememberAppFileOpener { result ->
-        result.onSuccess { importing = it }.onFailure { host.showMessage(it.message ?: "Couldn't open that file") }
-    }
+    val openFile = host::openFile
     val exporter = rememberBackupExporter(host::showMessage)
     val context = LocalContext.current
     val tools = LocalTools.current
@@ -97,17 +91,6 @@ private fun ProjectListScreen(projects: List<Project>, host: ToolHost, onOpen: (
     val setArchived: (Project, Boolean) -> Unit = { project, archive ->
         archiveProject(services, project, archive)
         host.showMessage(if (archive) "Archived ${project.name}. It's read-only until you unarchive it." else "Unarchived ${project.name}")
-    }
-    importing?.let { file ->
-        ImportFileDialog(
-            file = file,
-            onFinished = { text, projectId ->
-                importing = null
-                host.showMessage(text)
-                projectId?.let(onOpen)
-            },
-            onDismiss = { importing = null },
-        )
     }
 
     ToolScaffold(

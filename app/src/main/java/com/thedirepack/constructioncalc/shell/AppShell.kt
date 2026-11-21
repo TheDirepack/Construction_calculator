@@ -52,6 +52,7 @@ import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.data.activeTarget
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.components.ImportFileDialog
+import com.thedirepack.constructioncalc.core.ui.components.rememberAppFileOpener
 import com.thedirepack.constructioncalc.core.ui.components.SaveToProjectSheet
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.ItemDraft
@@ -63,6 +64,7 @@ import com.thedirepack.constructioncalc.feature.projects.ProjectsTool
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** A place in the app. The shell keeps a simple back stack of these. */
@@ -79,33 +81,34 @@ private const val PUBLISH_SETTLE_MS = 1_200L
 
 private const val SEP = '\u0001'
 
-/** Saves the back stack as strings (a saved item travels as its JSON). */
-private val StackSaver = listSaver<SnapshotStateList<Destination>, String>(
-    save = { stack ->
-        stack.map { d ->
-            when (d) {
-                is Destination.Tool -> "T" + d.toolId + SEP +
-                    (d.item?.let { ProjectCodec.json.encodeToString(ProjectItem.serializer(), it) } ?: "") + SEP +
-                    (d.target?.encode() ?: "")
-                is Destination.Settings -> "S" + (d.toolId ?: "")
-            }
+/** A back-stack entry as a string, for saved instance state (a saved item travels as its JSON). */
+internal object DestinationCodec {
+    fun encode(d: Destination): String = when (d) {
+        is Destination.Tool -> "T" + d.toolId + SEP +
+            (d.item?.let { ProjectCodec.json.encodeToString(ProjectItem.serializer(), it) } ?: "") + SEP +
+            (d.target?.encode() ?: "")
+        is Destination.Settings -> "S" + (d.toolId ?: "")
+    }
+
+    /** Null for anything [encode] didn't produce. A damaged item or target is dropped, not the entry. */
+    fun decode(s: String): Destination? = when (s.firstOrNull()) {
+        'T' -> {
+            // JSON escapes control characters, so SEP never appears inside the item.
+            val parts = s.drop(1).split(SEP)
+            val item = parts.getOrNull(1)?.takeIf { it.isNotEmpty() }
+                ?.let { runCatching { ProjectCodec.json.decodeFromString(ProjectItem.serializer(), it) }.getOrNull() }
+            parts[0].takeIf { it.isNotEmpty() }?.let { Destination.Tool(it, item, parts.getOrNull(2)?.let(ToolTarget::decode)) }
         }
-    },
+        'S' -> Destination.Settings(s.drop(1).ifEmpty { null })
+        else -> null
+    }
+}
+
+/** Saves the back stack across rotation and process death. */
+private val StackSaver = listSaver<SnapshotStateList<Destination>, String>(
+    save = { stack -> stack.map(DestinationCodec::encode) },
     restore = { saved ->
-        val restored = saved.mapNotNull { s ->
-            when (s.firstOrNull()) {
-                'T' -> {
-                    val body = s.drop(1)
-                    // JSON escapes control characters, so SEP never appears inside the item.
-                    val parts = body.split(SEP)
-                    val item = parts.getOrNull(1)?.takeIf { it.isNotEmpty() }
-                        ?.let { runCatching { ProjectCodec.json.decodeFromString(ProjectItem.serializer(), it) }.getOrNull() }
-                    Destination.Tool(parts[0], item, parts.getOrNull(2)?.let(ToolTarget::decode))
-                }
-                'S' -> Destination.Settings(s.drop(1).ifEmpty { null })
-                else -> null
-            }
-        }.ifEmpty { listOf(Destination.Tool(ToolRegistry.default.id)) }
+        val restored = saved.mapNotNull(DestinationCodec::decode).ifEmpty { listOf(Destination.Tool(ToolRegistry.default.id)) }
         mutableStateListOf(*restored.toTypedArray())
     },
 )
@@ -135,6 +138,20 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
 
     BackHandler(enabled = drawer.isOpen) { scope.launch { drawer.close() } }
     BackHandler(enabled = !drawer.isOpen && stack.size > 1) { pop() }
+
+    // The one place files are opened (Projects, Settings and "open with" all end here).
+    val openFile = rememberAppFileOpener { result ->
+        result.onSuccess { pendingImport = it }.onFailure { message(it.message ?: "Couldn't open that file") }
+    }
+
+    // Tell the user once if a saved project file couldn't be read (it was set aside, not deleted).
+    LaunchedEffect(Unit) {
+        services.projects.loaded.first { it }
+        val damaged = services.projects.damaged.value
+        if (damaged.isNotEmpty()) {
+            message("${damaged.size} project file${if (damaged.size == 1) "" else "s"} couldn't be read and ${if (damaged.size == 1) "was" else "were"} set aside, not deleted.")
+        }
+    }
 
     LaunchedEffect(imports) {
         imports.collect { result ->
@@ -199,6 +216,7 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
                                     }
                                 },
                                 onMessage = ::message,
+                                onOpenFile = openFile,
                             )
                         }
                         tool.Content(host)
@@ -209,7 +227,7 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
                         onBack = ::pop,
                         onOpenDrawer = { scope.launch { drawer.open() } },
                         onOpenToolPage = { push(Destination.Settings(it)) },
-                        onImport = { pendingImport = it },
+                        onOpenFile = openFile,
                         onMessage = ::message,
                     )
                 }
@@ -259,6 +277,7 @@ private class ShellHost(
     private val onOpenSettings: () -> Unit,
     private val onShareText: (String, String) -> Unit,
     private val onMessage: (String) -> Unit,
+    private val onOpenFile: () -> Unit,
 ) : ToolHost {
     override fun openDrawer() = onOpenDrawer()
     override fun openTool(toolId: String, item: ProjectItem?, target: ToolTarget?) = onOpenTool(toolId, item, target)
@@ -269,6 +288,7 @@ private class ShellHost(
     override fun openSettings() = onOpenSettings()
     override fun shareText(subject: String, text: String) = onShareText(subject, text)
     override fun showMessage(message: String) = onMessage(message)
+    override fun openFile() = onOpenFile()
 }
 
 @Composable

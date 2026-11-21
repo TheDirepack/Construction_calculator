@@ -21,9 +21,7 @@ import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.BuildConfig
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.data.BackupSections
-import com.thedirepack.constructioncalc.core.model.AppFile
 import com.thedirepack.constructioncalc.core.ui.components.ActionRow
-import com.thedirepack.constructioncalc.core.ui.components.rememberAppFileOpener
 import com.thedirepack.constructioncalc.core.ui.components.rememberBackupExporter
 import com.thedirepack.constructioncalc.core.ui.components.CompanySettings
 import com.thedirepack.constructioncalc.core.ui.components.GeneralSettings
@@ -43,7 +41,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenDrawer: () -> Unit,
     onOpenToolPage: (String) -> Unit,
-    onImport: (AppFile) -> Unit,
+    onOpenFile: () -> Unit,
     onMessage: (String) -> Unit,
 ) {
     val tool = toolId?.let { id -> ToolRegistry.all.firstOrNull { it.id == id && it.hasSettings } }
@@ -82,7 +80,7 @@ fun SettingsScreen(
                         toolsWithSettings.forEach { t -> ActionRow(t.title, onClick = { onOpenToolPage(t.id) }, subtitle = t.summary) }
                     }
                 }
-                DataSettings(onImport, onMessage)
+                DataSettings(onOpenFile, onMessage)
                 SettingsGroup("About") {
                     Text(
                         "Construction Calc ${BuildConfig.VERSION_NAME}\nNo permissions required. Projects stay on this device " +
@@ -99,11 +97,8 @@ fun SettingsScreen(
 
 /** Save/load everything: backups (projects, settings, tool data) by share sheet or file, and import. */
 @Composable
-private fun DataSettings(onImport: (AppFile) -> Unit, onMessage: (String) -> Unit) {
+private fun DataSettings(open: () -> Unit, onMessage: (String) -> Unit) {
     val exporter = rememberBackupExporter(onMessage)
-    val open = rememberAppFileOpener { result ->
-        result.onSuccess(onImport).onFailure { onMessage(it.message ?: "Couldn't open that file") }
-    }
     SettingsGroup("Data") {
         ActionRow(
             "Share full backup",

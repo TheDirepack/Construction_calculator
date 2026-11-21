@@ -107,6 +107,9 @@ interface ToolHost {
 
     fun shareText(subject: String, text: String)
 
+    /** Opens the system file picker for a project or backup file; the app then asks what to import. */
+    fun openFile()
+
     fun showMessage(message: String)
 }
 

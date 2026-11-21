@@ -73,4 +73,21 @@ class FileProjectStoreTest {
         assertEquals(1, loaded.size)
         assertEquals("Clean Project", loaded.single().name)
     }
+
+    @Test
+    fun unreadableFilesAreSetAsideAndReported() {
+        val dir = tempFolder.newFolder("projects_damaged")
+        val store = FileProjectStore(dir)
+        val good = Project.create("Good", now = 1L)
+        store.save(good)
+        File(dir, "broken.json").writeText("{ not json")
+        val loaded = store.loadAll()
+        assertEquals(listOf(good.id), loaded.map { it.id })
+        assertEquals(listOf("broken.json"), store.damaged())
+        assertFalse(File(dir, "broken.json").exists())
+        assertTrue(File(store.damagedDir, "broken.json").readText().startsWith("{ not json"))
+        // Set aside, it no longer loads or reports.
+        store.loadAll()
+        assertEquals(emptyList<String>(), store.damaged())
+    }
 }

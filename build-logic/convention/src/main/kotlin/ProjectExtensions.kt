@@ -11,10 +11,9 @@ internal val Project.libs: VersionCatalog
 internal fun VersionCatalog.lib(alias: String): Provider<MinimalExternalModuleDependency> =
     findLibrary(alias).orElseThrow { IllegalArgumentException("No library '$alias' in libs.versions.toml") }
 
-/** Shared Android SDK levels for every module. */
+/** Shared Android SDK levels for every library module (app/build.gradle.kts states the same compile and min levels, plus targetSdk). */
 internal object Sdk {
     const val COMPILE = 37
     const val COMPILE_MINOR = 2
     const val MIN = 26
-    const val TARGET = 36
 }

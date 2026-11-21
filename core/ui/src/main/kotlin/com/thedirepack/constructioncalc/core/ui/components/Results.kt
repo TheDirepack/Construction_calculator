@@ -1,5 +1,8 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.ui.spokenText
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.compose.foundation.clickable
@@ -54,7 +57,10 @@ fun ResultCard(
                 Text(emptyText, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             results.firstOrNull()?.let { primary ->
-                Column(Modifier.fillMaxWidth().clickable(onClickLabel = "Copy") { copy(primary) }) {
+                Column(
+                    Modifier.fillMaxWidth().clickable(onClickLabel = "Copy") { copy(primary) }
+                        .semantics(mergeDescendants = true) { contentDescription = "${primary.label}: ${spokenText(primary.text)}" },
+                ) {
                     Text(primary.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
                         fractionText(primary.text),
@@ -66,7 +72,8 @@ fun ResultCard(
             }
             results.drop(1).forEach { value ->
                 Row(
-                    Modifier.fillMaxWidth().clickable(onClickLabel = "Copy") { copy(value) }.padding(vertical = 2.dp),
+                    Modifier.fillMaxWidth().clickable(onClickLabel = "Copy") { copy(value) }.padding(vertical = 2.dp)
+                        .semantics(mergeDescendants = true) { contentDescription = "${value.label}: ${spokenText(value.text)}" },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(value.label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))

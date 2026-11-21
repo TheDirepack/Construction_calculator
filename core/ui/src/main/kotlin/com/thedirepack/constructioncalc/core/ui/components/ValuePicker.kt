@@ -1,5 +1,8 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.ui.spokenText
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.core.model.design.PublishedValues
 import com.thedirepack.constructioncalc.core.model.design.ProjectAnalysis
@@ -109,7 +112,10 @@ private fun SectionLabel(text: String) = Text(
 
 @Composable
 private fun PickItem(row: PickRow, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 10.dp)) {
+    Column(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 10.dp)
+            .semantics(mergeDescendants = true) { contentDescription = "${spokenText(row.value.text)}, ${row.value.label}, from ${row.source}" },
+    ) {
         Text(fractionText(row.value.text), style = MaterialTheme.typography.titleMedium)
         Text(
             "${row.value.label} — ${row.source}",

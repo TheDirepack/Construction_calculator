@@ -40,9 +40,15 @@ class ProjectRepository(
     val projects: StateFlow<List<Project>> = state.asStateFlow()
     val loaded: StateFlow<Boolean> = _loaded.asStateFlow()
 
+    private val _damaged = MutableStateFlow<List<String>>(emptyList())
+
+    /** Project files that couldn't be read when the app started (set aside by the store). */
+    val damaged: StateFlow<List<String>> = _damaged.asStateFlow()
+
     init {
         scope.launch(io) {
             val all = store.loadAll()
+            _damaged.value = store.damaged()
             state.update { current -> (current + all).distinctBy { it.id }.sortedByDescending { it.updatedAt } }
             _loaded.value = true
         }

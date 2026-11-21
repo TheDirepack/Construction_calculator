@@ -11,6 +11,9 @@ interface ProjectStore {
     fun save(project: Project)
     fun delete(projectId: String)
 
+    /** Files the last [loadAll] couldn't read. They are kept aside (never deleted) so nothing is lost silently. */
+    fun damaged(): List<String> = emptyList()
+
     companion object {
         fun files(context: Context): ProjectStore = FileProjectStore(File(context.filesDir, "projects"))
     }
@@ -18,11 +21,28 @@ interface ProjectStore {
 
 class FileProjectStore(private val dir: File) : ProjectStore {
 
+    private var damaged: List<String> = emptyList()
+
+    /** Where unreadable project files are moved, so they stop loading but can still be recovered. */
+    val damagedDir: File get() = File(dir, "damaged")
+
     override fun loadAll(): List<Project> {
         dir.mkdirs()
-        return dir.listFiles { f -> f.name.endsWith(".json") }.orEmpty()
-            .mapNotNull { file -> runCatching { ProjectCodec.decode(file.readText()) }.getOrNull() }
+        val bad = mutableListOf<String>()
+        val projects = dir.listFiles { f -> f.isFile && f.name.endsWith(".json") }.orEmpty().mapNotNull { file ->
+            runCatching { ProjectCodec.decode(file.readText()) }.getOrElse {
+                damagedDir.mkdirs()
+                val aside = File(damagedDir, file.name)
+                if (!file.renameTo(aside)) file.copyTo(aside, overwrite = true)
+                bad += file.name
+                null
+            }
+        }
+        damaged = bad
+        return projects
     }
+
+    override fun damaged(): List<String> = damaged
 
     override fun save(project: Project) {
         dir.mkdirs()
