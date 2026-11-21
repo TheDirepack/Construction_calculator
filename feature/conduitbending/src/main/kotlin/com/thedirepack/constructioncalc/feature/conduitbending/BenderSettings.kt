@@ -13,6 +13,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thedirepack.constructioncalc.core.data.ModuleSettings
 import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
+import com.thedirepack.constructioncalc.core.ui.tradeSizeLabel
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.ui.components.ActionRow
 import com.thedirepack.constructioncalc.core.ui.components.MeasureField
@@ -72,6 +74,7 @@ internal object BenderStore {
 /** This tool's page in Settings: the bender's take-up and gain for every conduit type and size. */
 @Composable
 internal fun BenderSettingsPage() {
+    val settings = rememberAppSettings()
     val store = LocalAppServices.current.settings.module(ConduitBendingTool.ID)
     val version by store.changes.collectAsStateWithLifecycle()
     val table = remember(version) { BenderStore.load(store) }
@@ -92,12 +95,12 @@ internal fun BenderSettingsPage() {
                 for (size in Bendable.sizes(type)) {
                     val spec = table.spec(type, size) ?: continue
                     MeasureField(
-                        label = "${size.display} ${type.displayName} take-up",
+                        label = "${settings.tradeSizeLabel(size)} ${type.displayName} take-up",
                         value = Quantity.inches(spec.takeUp),
                         onValueChange = { BenderStore.setTakeUp(store, type, size, it?.value) },
                     )
                     MeasureField(
-                        label = "${size.display} ${type.displayName} gain",
+                        label = "${settings.tradeSizeLabel(size)} ${type.displayName} gain",
                         value = Quantity.inches(spec.gain),
                         onValueChange = { BenderStore.setGain(store, type, size, it?.value) },
                     )

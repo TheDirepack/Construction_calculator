@@ -3,6 +3,8 @@ package com.thedirepack.constructioncalc.feature.conduitbending.domain
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.measure.LengthFormat
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -299,5 +301,25 @@ class BendsTest {
         assertEquals(90.0, BendPlanner.plan(BendRequest(BendType.STUB_UP, size = r(10))).totalDegrees!!, 1e-9)
         assertEquals(180.0, BendPlanner.plan(BendRequest(BendType.STUB_UP, size = r(10), backToBack = true, between = r(30))).totalDegrees!!, 1e-9)
         assertEquals(22.5, BendPlanner.plan(BendRequest(BendType.KICK, size = r(4), angleDeg = 22.5)).totalDegrees!!, 1e-9)
+    }
+
+    private val metric = LengthFormat(system = UnitSystem.METRIC)
+
+    @Test fun messagesFollowTheUnitSystem() {
+        val request = BendRequest(BendType.OFFSET, size = r(6), angleDeg = 30.0, space = r(10))
+        val imperial = BendPlanner.plan(request).issues.single { it.severity == Severity.ERROR }.text
+        val mm = BendPlanner.plan(request.copy(format = metric)).issues.single { it.severity == Severity.ERROR }.text
+        assertTrue(imperial, imperial.contains("12\" between them but only 10\""))
+        assertTrue(mm, mm.contains("305 mm between them but only 254 mm") && !mm.contains("\""))
+    }
+
+    @Test fun fieldConstantAndTradeSizeLabelsFollowTheUnitSystem() {
+        val request = BendRequest(BendType.OFFSET, size = r(6), angleDeg = 30.0)
+        assertTrue(BendPlanner.plan(request).figures.any { it.label.contains("per inch") })
+        assertTrue(BendPlanner.plan(request.copy(format = metric)).figures.any { it.label.contains("mm per mm") })
+        val stub = BendRequest(BendType.STUB_UP, size = r(4), conduit = ConduitType.EMT, conduitSize = TradeSize.S_1_2)
+        assertTrue(BendPlanner.plan(stub).issues.single().text.contains("1/2\" EMT stub") || BendPlanner.plan(stub).issues.single().text.contains("1/2 EMT stub"))
+        val text = BendPlanner.plan(stub.copy(format = metric)).issues.single().text
+        assertTrue(text, text.contains("(16)") && text.contains("127 mm"))
     }
 }

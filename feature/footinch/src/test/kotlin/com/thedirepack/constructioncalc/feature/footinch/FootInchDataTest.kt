@@ -8,6 +8,7 @@ import com.thedirepack.constructioncalc.core.measure.Operator
 import com.thedirepack.constructioncalc.core.measure.Precision
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.measure.Token
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.measure.input.CalcInput
 import com.thedirepack.constructioncalc.core.measure.input.CalcState
 import com.thedirepack.constructioncalc.core.measure.input.Key
@@ -133,5 +134,28 @@ class FootInchDataTest {
         assertNotNull(restoredInputs)
         assertEquals(3, restoredInputs!!.tokens.size)
         assertEquals(answer.stored(), restoredInputs.answer)
+    }
+
+    private val metric = AppSettings(unitSystem = UnitSystem.METRIC)
+
+    @Test
+    fun formatsInBothSystems() {
+        val q = Quantity.inches(Rational.of(60)) // 5 ft = 1524 mm
+        assertEquals("5' 0\"", FootInchFormat.primary(q, AppSettings(), null))
+        assertEquals("1.524 m", FootInchFormat.primary(q, metric, null))
+        assertTrue(FootInchFormat.conversions(q, AppSettings(), null).any { it.value.endsWith(" mm") })
+        assertTrue(FootInchFormat.conversions(q, metric, null).any { it.label == "Feet-inches" && it.value == "5' 0\"" })
+        val tokens = listOf(Token.Value(q, null), Token.Op(Operator.ADD), Token.Value(Quantity.inches(Rational.of(6)), null))
+        assertEquals("5' 0\" + 6\"", FootInchFormat.expression(tokens, AppSettings(), null))
+        assertEquals("1.524 m + 152 mm", FootInchFormat.expression(tokens, metric, null))
+    }
+
+    @Test
+    fun metricHasNoRoundingHintAndItsOwnExample() {
+        val third = Quantity.inches(Rational.of(1, 3))
+        assertEquals(-1, FootInchFormat.roundingDirection(third, AppSettings().copy(precision = Precision.entries.first { it.denominator == 16 })))
+        assertEquals(0, FootInchFormat.roundingDirection(third, metric))
+        assertTrue(FootInchFormat.hint(metric, true).contains("cm"))
+        assertTrue(FootInchFormat.hint(AppSettings(), true).contains("'"))
     }
 }

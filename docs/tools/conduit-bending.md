@@ -4,7 +4,9 @@ Field bending math for hand benders. Code: `feature/conduitbending` (math in `do
 unit-tested). Tool id `conduit-bending`.
 
 All lengths are exact inches (`Rational`); trig results are rounded to 10 decimals first (so
-1/sin 30° is exactly 2) and then shown with the app's precision and ft-in/in setting.
+1/sin 30° is exactly 2) and then shown in the app's unit system (ft-in/in with fractions, or mm/cm/m in metric;
+storage and bender data stay in inches). Messages built in `domain/` take a `LengthFormat` (`BendRequest.format`);
+trade sizes show their metric designator in metric.
 
 ## Formulas
 

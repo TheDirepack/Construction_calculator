@@ -49,6 +49,8 @@ import com.thedirepack.constructioncalc.core.ui.components.ResultCard
 import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
 import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.core.ui.formatDecimal
+import com.thedirepack.constructioncalc.core.ui.lengthFormat
+import com.thedirepack.constructioncalc.core.ui.tradeSizeLabel
 import com.thedirepack.constructioncalc.core.ui.fractionText
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.components.NumberField
@@ -79,7 +81,7 @@ fun ConduitBendingScreen(host: ToolHost) {
     val table = remember(version) { BenderStore.load(store) }
 
     val inputs = vm.inputs
-    val plan = remember(inputs, table) { BendPlanner.plan(inputs.toRequest(table)) }
+    val plan = remember(inputs, table, settings) { BendPlanner.plan(inputs.toRequest(table, settings.lengthFormat())) }
     val results = remember(plan, settings) { plan.toResults(settings) }
     val summary = remember(plan, settings) { plan.summary(settings) }
 
@@ -112,7 +114,7 @@ fun ConduitBendingScreen(host: ToolHost) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            ConduitFields(inputs, vm::update)
+            ConduitFields(settings, inputs, vm::update)
             FormSection("Bend") {
                 ChoiceField(
                     label = "Bend type",
@@ -139,7 +141,7 @@ fun ConduitBendingScreen(host: ToolHost) {
 }
 
 @Composable
-private fun ConduitFields(inputs: ConduitBendingInputs, update: ((ConduitBendingInputs) -> ConduitBendingInputs) -> Unit) {
+private fun ConduitFields(settings: AppSettings, inputs: ConduitBendingInputs, update: ((ConduitBendingInputs) -> ConduitBendingInputs) -> Unit) {
     val type = inputs.conduit
     FormSection("Conduit") {
         ChoiceField(
@@ -157,7 +159,7 @@ private fun ConduitFields(inputs: ConduitBendingInputs, update: ((ConduitBending
             options = Bendable.sizes(type),
             selected = inputs.tradeSize,
             onSelect = { size -> update { it.copy(conduitSize = size.label) } },
-            optionLabel = { it.display },
+            optionLabel = { settings.tradeSizeLabel(it) },
             supportingText = "Sizes with hand-bender profiles",
         )
     }

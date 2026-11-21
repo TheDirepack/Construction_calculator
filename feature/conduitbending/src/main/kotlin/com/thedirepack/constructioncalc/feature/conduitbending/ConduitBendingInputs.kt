@@ -1,6 +1,7 @@
 package com.thedirepack.constructioncalc.feature.conduitbending
 
 import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.measure.LengthFormat
 import com.thedirepack.constructioncalc.core.model.StoredQuantity
 import com.thedirepack.constructioncalc.core.ui.toDecimalOrNull
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.BendRequest
@@ -57,7 +58,7 @@ data class ConduitBendingInputs(
         else -> angle.toDoubleOrNull()
     }
 
-    fun toRequest(table: BenderTable) = BendRequest(
+    fun toRequest(table: BenderTable, format: LengthFormat = LengthFormat()) = BendRequest(
         type = bendType,
         size = when (bendType) {
             BendType.OFFSET -> offsetDepth
@@ -78,6 +79,7 @@ data class ConduitBendingInputs(
         between = between.rational(),
         secondStub = secondStub.rational(),
         bender = table,
+        format = format,
     )
 
     companion object {

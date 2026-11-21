@@ -70,7 +70,7 @@ import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
 import com.thedirepack.constructioncalc.core.ui.components.rememberKeyPress
 import com.thedirepack.constructioncalc.core.ui.components.rememberModuleBoolean
 import com.thedirepack.constructioncalc.core.ui.fractionText
-import com.thedirepack.constructioncalc.core.ui.lengthStyle
+import com.thedirepack.constructioncalc.core.ui.isMetric
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
@@ -132,14 +132,15 @@ fun FootInchScreen(host: ToolHost) {
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
             ControlRow(
+                metric = settings.isMetric,
                 precision = settings.precision,
                 onPrecision = LocalAppServices.current.settings::setPrecision,
                 onBackspace = { press(Key.Backspace) },
                 onClear = { press(Key.Clear) },
             )
-            if (showFractionKeys) FractionPad(settings.precision, onKey = press)
+            if (showFractionKeys && !settings.isMetric) FractionPad(settings.precision, onKey = press)
             Spacer(Modifier.height(8.dp))
-            MeasureKeypad(onKey = press, modifier = Modifier.weight(1.45f).fillMaxWidth())
+            MeasureKeypad(onKey = press, metric = settings.isMetric, modifier = Modifier.weight(1.45f).fillMaxWidth())
         }
     }
 
@@ -172,7 +173,6 @@ private fun Display(
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val style = settings.lengthStyle(preferInches)
     Column(
         modifier.padding(horizontal = 8.dp, vertical = 4.dp),
         verticalArrangement = Arrangement.Bottom,
@@ -180,7 +180,7 @@ private fun Display(
     ) {
         if (expression.isEmpty()) {
             Text(
-                fractionText(if (showFractionKeys) "Try  5  '  3  1/2  for  5' 3 1/2\"" else "Try  5 ' 3 \" 1 / 2  for  5' 3 1/2\""),
+                fractionText(FootInchFormat.hint(settings, showFractionKeys)),
                 style = MaterialTheme.typography.bodyLarge,
                 color = scheme.outline,
             )
@@ -202,8 +202,8 @@ private fun Display(
         when {
             error != null -> Text(error, color = scheme.error, style = MaterialTheme.typography.headlineSmall)
             result != null -> {
-                val primary = MeasureFormat.primary(result, settings.precision, style)
-                val rounding = MeasureFormat.roundingDirection(result, settings.precision)
+                val primary = FootInchFormat.primary(result, settings, preferInches)
+                val rounding = FootInchFormat.roundingDirection(result, settings)
                 BasicText(
                     fractionText((if (rounding != 0) "≈ " else "") + primary),
                     style = TextStyle(
@@ -225,7 +225,7 @@ private fun Display(
                         color = scheme.onSurfaceVariant,
                     )
                 }
-                val conversions = MeasureFormat.conversions(result, settings.precision, style)
+                val conversions = FootInchFormat.conversions(result, settings, preferInches)
                 if (conversions.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
@@ -245,6 +245,7 @@ private fun Display(
 
 @Composable
 private fun ControlRow(
+    metric: Boolean,
     precision: Precision,
     onPrecision: (Precision) -> Unit,
     onBackspace: () -> Unit,
@@ -252,7 +253,7 @@ private fun ControlRow(
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box {
+        if (!metric) Box {
             TextButton(
                 onClick = { menu = true },
                 modifier = Modifier.semantics { contentDescription = "Precision ${precision.label} inch. Change." },
@@ -323,9 +324,8 @@ private fun HistorySheet(
                         horizontalAlignment = Alignment.End,
                     ) {
                         Text(fractionText(entry.expression), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End)
-                        val style = settings.lengthStyle(entry.preferInches)
                         Text(
-                            fractionText("= " + MeasureFormat.primary(entry.result.toQuantity(), settings.precision, style)),
+                            fractionText("= " + FootInchFormat.primary(entry.result.toQuantity(), settings, entry.preferInches)),
                             style = MaterialTheme.typography.titleLarge,
                         )
                     }
@@ -354,9 +354,16 @@ internal fun FootInchSettingsPage() {
     SettingsGroup("History") {
         ActionRow("Clear calculation history", onClick = { FootInchHistory.get(context).clear() })
     }
+    val metric = rememberAppSettings().isMetric
     SettingsGroup("Entering measurements") {
         Text(
             fractionText(
+                if (metric) {
+                    "Type a number then m, cm or mm — 1 m 20 cm  →  1.2 m.\n" +
+                        "A number with no unit next to a length counts as millimeters: 1 m + 50 = 1.05 m.\n" +
+                        "Feet and inches (5' 3\") also work if you type them.\n" +
+                        "Tap the result or a conversion to copy it. Long-press ⌫ to clear."
+                } else
                 "Type feet, then ' — inches — then tap a fraction key (or type \" and a fraction with /).\n" +
                     "5 ' 3 [1/2]  →  5' 3 1/2\"     [7/16]  →  7/16\"\n" +
                     "A number with no mark next to a length counts as inches: 5' + 6 = 5' 6\".\n" +

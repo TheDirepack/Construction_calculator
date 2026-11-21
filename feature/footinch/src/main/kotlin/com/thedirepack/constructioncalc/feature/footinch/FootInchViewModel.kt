@@ -8,7 +8,6 @@ import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.AP
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.thedirepack.constructioncalc.core.data.AppSettings
-import com.thedirepack.constructioncalc.core.measure.ExpressionText
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.measure.Token
 import com.thedirepack.constructioncalc.core.measure.input.CalcInput
@@ -20,7 +19,6 @@ import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ToolInputs
 import com.thedirepack.constructioncalc.core.model.stored
 import com.thedirepack.constructioncalc.core.ui.format
-import com.thedirepack.constructioncalc.core.ui.lengthStyle
 import com.thedirepack.constructioncalc.core.ui.tool.ItemDraft
 
 class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
@@ -58,7 +56,7 @@ class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
     fun preferInches(): Boolean? = CalcInput.prefersInches(state.tokens)
 
     fun formatExpression(tokens: List<Token>, settings: AppSettings): String =
-        ExpressionText.format(tokens, settings.precision, settings.lengthStyle(CalcInput.prefersInches(tokens)))
+        FootInchFormat.expression(tokens, settings, CalcInput.prefersInches(tokens))
 
     /** The result as a value other tools can use. */
     fun resultValue(calc: Calculation, settings: AppSettings): ResultValue {

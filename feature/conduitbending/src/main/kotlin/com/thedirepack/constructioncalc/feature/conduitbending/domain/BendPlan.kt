@@ -3,6 +3,9 @@ package com.thedirepack.constructioncalc.feature.conduitbending.domain
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.measure.LengthFormat
+import com.thedirepack.constructioncalc.core.measure.MeasureFormat
+import com.thedirepack.constructioncalc.core.measure.Quantity
 
 enum class BendType(val label: String) {
     OFFSET("Offset"),
@@ -71,6 +74,8 @@ data class BendRequest(
     val between: Rational? = null,
     val secondStub: Rational? = null,
     val bender: BenderTable = BenderTable.DEFAULT,
+    /** How lengths inside messages are written (figures stay in inches; the screen formats those). */
+    val format: LengthFormat = LengthFormat(),
 )
 
 object BendPlanner {
@@ -105,12 +110,12 @@ object BendPlanner {
 
     // ---- offset -----------------------------------------------------------------------------
 
-    private fun offsetFigures(o: OffsetResult, spacingLabel: String = "Distance between marks"): List<Figure> = buildList {
+    private fun offsetFigures(o: OffsetResult, f: LengthFormat, spacingLabel: String = "Distance between marks"): List<Figure> = buildList {
         add(len("spacing", spacingLabel, o.spacing))
         add(ratio("multiplier", "Multiplier (1 ÷ sin ${angleText(o.angleDeg)})", o.multiplier))
         add(len("shrink", "Shrink", o.shrink))
         o.field?.let {
-            add(len("shrink_field", "Shrink, field constant (${it.shrinkPerInch}\" per inch)", o.fieldShrink!!))
+            add(len("shrink_field", "Shrink, field constant (${f.perUnit(it.shrinkPerInch)})", o.fieldShrink!!))
         }
         add(angle("angle", "Bend angle", o.angleDeg))
     }
@@ -120,9 +125,9 @@ object BendPlanner {
         return listOf(Mark("mark_1", "Mark 1", first), Mark("mark_2", "Mark 2", o.secondMark ?: o.spacing))
     }
 
-    private fun spaceIssues(spacing: Rational, space: Rational?) =
+    private fun spaceIssues(spacing: Rational, space: Rational?, f: LengthFormat) =
         if (space != null && space.signum > 0 && spacing > space) {
-            listOf(Issue(Severity.ERROR, "The marks need ${spacing.toDouble().fmt()}\" between them but only ${space.toDouble().fmt()}\" is available: use a steeper angle or a smaller offset."))
+            listOf(Issue(Severity.ERROR, "The marks need ${f.dist(spacing)} between them but only ${f.dist(space)} is available: use a steeper angle or a smaller offset."))
         } else emptyList()
 
     private fun offset(r: BendRequest): BendPlan {
@@ -131,11 +136,11 @@ object BendPlanner {
         val depth = r.size ?: return empty(BendType.OFFSET)
         val o = Bends.offset(depth, angle, r.distance) ?: return empty(BendType.OFFSET, Issue(Severity.ERROR, "Offset depth must be greater than zero."))
         val issues = buildList {
-            addAll(spaceIssues(o.spacing, r.space))
+            addAll(spaceIssues(o.spacing, r.space, r.format))
             add(SHRINK_NOTE)
             if (r.distance != null) add(DISTANCE_NOTE)
         }
-        return BendPlan(BendType.OFFSET, offsetFigures(o), offsetMarks(o), r.distance != null, issues, 2 * angle)
+        return BendPlan(BendType.OFFSET, offsetFigures(o, r.format), offsetMarks(o), r.distance != null, issues, 2 * angle)
     }
 
     // ---- rolling offset -------------------------------------------------------------------
@@ -150,10 +155,10 @@ object BendPlanner {
         val o = res.offset
         val figures = buildList {
             add(len("true_offset", "True offset", res.trueOffset))
-            addAll(offsetFigures(o, "Travel (distance between marks)"))
+            addAll(offsetFigures(o, r.format, "Travel (distance between marks)"))
         }
         val issues = buildList {
-            addAll(spaceIssues(o.spacing, r.space))
+            addAll(spaceIssues(o.spacing, r.space, r.format))
             add(Issue(Severity.INFO, "True offset = √(rise² + roll²). Bend the offset at this depth, then rotate the conduit in the bender so the offset lands on the roll plane."))
             add(SHRINK_NOTE)
             if (r.distance != null) add(DISTANCE_NOTE)
@@ -171,7 +176,7 @@ object BendPlanner {
         val figures = listOf(
             len("outer_from_center", "Outer marks from center", s.outerDistance),
             ratio("multiplier", "Multiplier (outer marks ÷ height)", s.multiplier),
-            len("shrink", "Shrink to the center mark (${s.shrinkPerInch}\" per inch)", s.shrink),
+            len("shrink", "Shrink to the center mark (${r.format.perUnit(s.shrinkPerInch)})", s.shrink),
             len("shrink_ideal", "Total shrink, whole saddle (geometry)", s.idealShrink),
             angle("center_angle", "Center bend", s.centerAngleDeg),
             angle("outer_angle", "Outer bends", s.outerAngleDeg),
@@ -183,9 +188,9 @@ object BendPlanner {
         }
         val issues = buildList {
             if (s.nearMark != null && s.nearMark.signum < 0) {
-                add(Issue(Severity.ERROR, "The obstruction is too close to the end of the stick: the near outer mark would fall ${(-s.nearMark.toDouble()).fmt()}\" before the end. Start with a longer piece or reverse the stick."))
+                add(Issue(Severity.ERROR, "The obstruction is too close to the end of the stick: the near outer mark would fall ${r.format.dist(-s.nearMark)} before the end. Start with a longer piece or reverse the stick."))
             }
-            add(Issue(Severity.INFO, "Outer marks use the usual field multiplier (2.5 for 45°/22.5°, 2 for 60°/30°), bent at the center angle and half that angle either side. The field shrink (${s.shrinkPerInch}\" per inch of height) is what the conduit loses up to the center bend; the whole saddle loses about twice that."))
+            add(Issue(Severity.INFO, "Outer marks use the usual field multiplier (2.5 for 45°/22.5°, 2 for 60°/30°), bent at the center angle and half that angle either side. The field shrink (${r.format.perUnit(s.shrinkPerInch)} of height) is what the conduit loses up to the center bend; the whole saddle loses about twice that."))
             if (r.distance != null) add(Issue(Severity.INFO, "Center mark = distance to the obstruction's center + the shrink."))
         }
         return BendPlan(BendType.SADDLE_3, figures, marks, r.distance != null, issues, center + 2 * s.outerAngleDeg)
@@ -220,11 +225,11 @@ object BendPlanner {
     private fun stub(r: BendRequest): BendPlan {
         val height = r.size ?: return empty(BendType.STUB_UP)
         val spec = r.bender.spec(r.conduit, r.conduitSize)
-            ?: return empty(BendType.STUB_UP, Issue(Severity.ERROR, "No bender values for ${r.conduitSize.display} ${r.conduit.displayName}. Add them in this tool's settings."))
+            ?: return empty(BendType.STUB_UP, Issue(Severity.ERROR, "No bender values for ${r.format.trade(r.conduitSize)} ${r.conduit.displayName}. Add them in this tool's settings."))
         val stub = Bends.stubUp(height, spec)
             ?: return empty(
                 BendType.STUB_UP,
-                Issue(Severity.ERROR, "A ${r.conduitSize.display} ${r.conduit.displayName} stub can't be shorter than the bender's take-up of ${spec.takeUp.toDouble().fmt()}\"."),
+                Issue(Severity.ERROR, "A ${r.format.trade(r.conduitSize)} ${r.conduit.displayName} stub can't be shorter than the bender's take-up of ${r.format.dist(spec.takeUp)}."),
             )
         val figures = mutableListOf(
             len("stub_mark", "Mark from the end of the stick", stub.mark, mark = true),
@@ -242,7 +247,7 @@ object BendPlanner {
                 if (b != null) {
                     figures.add(1, len("second_from_back", "Second mark, from the back of the first 90", b.secondMarkFromBack))
                     b.cutLength?.let { figures.add(len("cut_length", "Cut length (stub 1 + between + stub 2 − 2 × gain)", it)) }
-                    issues.add(Issue(Severity.INFO, "Back-to-back: after the first 90, measure ${b.secondMarkFromBack.toDouble().fmt()}\" from the back of the bend, mark it, and line the mark up with your bender's back-to-back mark (often a star or the arrow's edge) for the second 90."))
+                    issues.add(Issue(Severity.INFO, "Back-to-back: after the first 90, measure ${r.format.dist(b.secondMarkFromBack)} from the back of the bend, mark it, and line the mark up with your bender's back-to-back mark (often a star or the arrow's edge) for the second 90."))
                 } else {
                     issues.add(Issue(Severity.ERROR, "Back-to-back distance must be greater than zero."))
                 }
@@ -270,7 +275,7 @@ object BendPlanner {
         val issues = buildList {
             val mark = k.bendMark
             if (mark != null && mark.signum < 0) {
-                add(Issue(Severity.ERROR, "The kick needs ${k.run.toDouble().fmt()}\" of run but only ${r.distance!!.toDouble().fmt()}\" is available: use a steeper angle."))
+                add(Issue(Severity.ERROR, "The kick needs ${r.format.dist(k.run)} of run but only ${r.format.dist(r.distance!!)} is available: use a steeper angle."))
             }
             add(Issue(Severity.INFO, "A kick is one bend: the conduit leaves its line at the angle and gains the height after the travel. The bend mark is the distance to where the kick must reach its height minus the run."))
         }
@@ -283,3 +288,15 @@ object BendPlanner {
 
 /** A short decimal: up to 3 places, no trailing zeros. */
 internal fun Double.fmt(): String = com.thedirepack.constructioncalc.core.measure.Decimals.trim(this, 3)
+
+/** A length in a message: decimal inches in imperial (as before), the metric length in metric. */
+internal fun LengthFormat.dist(v: Rational): String =
+    if (isMetric) MeasureFormat.primary(Quantity.inches(v), this) else v.toDouble().fmt() + "\""
+
+/** A field constant (a ratio of shrink to depth): `1/4" per inch` or `0.25 mm per mm`. */
+internal fun LengthFormat.perUnit(ratio: Rational): String =
+    if (isMetric) "${ratio.toDouble().fmt()} mm per mm" else "$ratio\" per inch"
+
+/** A trade size as written in this system. */
+internal fun LengthFormat.trade(size: TradeSize): String =
+    if (isMetric) "${size.display} (${size.metricDesignator})" else size.display
