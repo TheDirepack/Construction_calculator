@@ -34,7 +34,8 @@ private val TERMINATIONS = listOf(60, 75)
 fun VfdSizingScreen(host: ToolHost) {
     val vm: VfdSizingViewModel = toolViewModel(VfdSizingTool.ID, host)
     val inputs = vm.inputs
-    val output = remember(inputs) { vfdSizingOutput(inputs) }
+    val settings = com.thedirepack.constructioncalc.core.ui.rememberAppSettings()
+    val output = remember(inputs, settings) { vfdSizingOutput(inputs, settings) }
     val results = output.results
 
     LaunchedEffect(results) {

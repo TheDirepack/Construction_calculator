@@ -10,7 +10,7 @@ object Conversions {
     /** [value] of [from] expressed in [to]. */
     fun convert(value: Rational, from: UnitDef, to: UnitDef): Rational = to.fromBase(from.toBase(value))
 
-    /** [value] of [from], in the category's base unit (inches, sq in, cu in, lb, °F, psi, W, gpm…). */
+    /** [value] of [from], in the category's base unit (inches, sq in, cu in, lb, °C, psi, W, gpm…). */
     fun toBase(value: Rational, from: UnitDef): Rational = from.toBase(value)
 
     /** [value] of [from] in every unit of [category], in table order (including [from] itself). */
@@ -19,6 +19,6 @@ object Conversions {
         return UnitTable.unitsFor(category).map { UnitValue(it, it.fromBase(base)) }
     }
 
-    /** True if [base] °F (temperature's base) is below absolute zero (−459.67 °F). */
-    fun belowAbsoluteZero(baseFahrenheit: Rational): Boolean = baseFahrenheit < Rational.parse("-45967/100")
+    /** True if [baseCelsius] (temperature's base) is below absolute zero (−273.15 °C). */
+    fun belowAbsoluteZero(baseCelsius: Rational): Boolean = baseCelsius < Rational.parse("-27315/100")
 }

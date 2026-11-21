@@ -11,6 +11,11 @@ import com.thedirepack.constructioncalc.core.electrical.ConduitSize
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ValueKind
+import com.thedirepack.constructioncalc.core.data.AppSettings
+import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.ui.isMetric
+import com.thedirepack.constructioncalc.core.ui.show
+import com.thedirepack.constructioncalc.core.ui.tradeSizeLabel
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.Locale
@@ -48,8 +53,10 @@ data class ConduitFillReport(
         const val KEY_MAX_COUNT = "max_count"
 
         /** The report for [request], or null when there are no conductors to check. */
-        fun build(request: FillRequest): ConduitFillReport? {
+        fun build(request: FillRequest, settings: AppSettings = AppSettings()): ConduitFillReport? {
             val conduit = request.conduit
+            val conduitName = conduitName(conduit, settings)
+            fun area(x: Double) = if (settings.isMetric) settings.show(Measure.SMALL_AREA, x) else "${fmt(x, 4)} in²"
             val active = request.groups.filter { it.count > 0 }
             if (active.isEmpty()) return null
             val a = ConduitFill.analyze(conduit, active, request.nipple)
@@ -61,14 +68,14 @@ data class ConduitFillReport(
             val results = buildList {
                 add(decimalResult(KEY_PERCENT, "Conduit fill", ValueKind.PERCENT, a.percentFill, 2, "${fmt(a.percentFill, 1)}%"))
                 add(ResultValue.number(KEY_LIMIT, "Fill limit (${CodeRule.FILL_PERCENT.cite})", ValueKind.PERCENT, Rational.of(a.limitPercent.toLong()), "${a.limitPercent}%"))
-                add(decimalResult(KEY_CONDUCTOR_AREA, "Conductor area", ValueKind.AREA, a.totalAreaSqIn, 4, "${fmt(a.totalAreaSqIn, 4)} in²"))
-                add(decimalResult(KEY_ALLOWED_AREA, "Allowed area", ValueKind.AREA, a.allowedAreaSqIn, 4, "${fmt(a.allowedAreaSqIn, 4)} in²"))
-                add(ResultValue.text(KEY_MIN_CONDUIT, "Smallest ${conduit.type.displayName}", minimum?.displayName ?: "None fits"))
+                add(decimalResult(KEY_CONDUCTOR_AREA, "Conductor area", ValueKind.AREA, a.totalAreaSqIn, 4, area(a.totalAreaSqIn)))
+                add(decimalResult(KEY_ALLOWED_AREA, "Allowed area", ValueKind.AREA, a.allowedAreaSqIn, 4, area(a.allowedAreaSqIn)))
+                add(ResultValue.text(KEY_MIN_CONDUIT, "Smallest ${conduit.type.displayName}", minimum?.let { conduitName(it, settings) } ?: "None fits"))
                 if (maxCount != null) {
                     add(
                         ResultValue.number(
                             KEY_MAX_COUNT,
-                            "Most ${request.fit.shortLabel} in ${conduit.displayName}",
+                            "Most ${request.fit.shortLabel} in $conduitName",
                             ValueKind.NUMBER,
                             Rational.of(maxCount.toLong()),
                             maxCount.toString(),
@@ -79,7 +86,7 @@ data class ConduitFillReport(
 
             val notices = buildList {
                 if (!a.withinLimit) {
-                    val fix = if (minimum != null) "The smallest ${conduit.type.displayName} that works is ${minimum.displayName}."
+                    val fix = if (minimum != null) "The smallest ${conduit.type.displayName} that works is ${conduitName(minimum, settings)}."
                     else "No ${conduit.type.displayName} trade size is large enough."
                     add(
                         ReportNotice(
@@ -97,7 +104,7 @@ data class ConduitFillReport(
                     )
                 }
                 if (maxCount != null && maxCount == 0) {
-                    add(ReportNotice("Not even one ${request.fit.shortLabel} fits in ${conduit.displayName}.", ReportSeverity.WARNING))
+                    add(ReportNotice("Not even one ${request.fit.shortLabel} fits in $conduitName.", ReportSeverity.WARNING))
                 }
                 if (jam != null) {
                     val r = fmt(jam.ratio, 2)
@@ -142,7 +149,7 @@ data class ConduitFillReport(
                 )
             }
 
-            val summary = "${conduit.displayName}, ${a.conductorCount} conductors: ${fmt(a.percentFill, 1)}% fill " +
+            val summary = "$conduitName, ${a.conductorCount} conductors: ${fmt(a.percentFill, 1)}% fill " +
                 "(limit ${a.limitPercent}%${if (request.nipple) ", nipple" else ""})"
             return ConduitFillReport(a, minimum, maxCount, jam, results, notices, summary)
         }
@@ -150,6 +157,9 @@ data class ConduitFillReport(
         /** [value] rounded to [scale] decimals as an exact rational, so no binary-double noise is stored. */
         private fun decimalResult(key: String, label: String, kind: ValueKind, value: Double, scale: Int, text: String) =
             ResultValue(key, label, kind, Rational.of(BigDecimal(value).setScale(scale, RoundingMode.HALF_UP)).toString(), text)
+
+        /** `3/4 EMT`, or `3/4 (21) EMT` in metric. */
+        fun conduitName(size: ConduitSize, settings: AppSettings) = "${settings.tradeSizeLabel(size.tradeSize)} ${size.type.displayName}"
 
         private fun fmt(x: Double, decimals: Int) = com.thedirepack.constructioncalc.core.measure.Decimals.fixed(x, decimals)
     }

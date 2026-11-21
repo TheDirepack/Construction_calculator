@@ -2,9 +2,23 @@ package com.thedirepack.constructioncalc.feature.formulas
 
 import com.thedirepack.constructioncalc.core.electrical.formula.Formula
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaCatalog
+import com.thedirepack.constructioncalc.core.electrical.formula.FormulaQuantity
+import com.thedirepack.constructioncalc.core.electrical.formula.FormulaUnit
+import com.thedirepack.constructioncalc.core.electrical.formula.Variable
 import com.thedirepack.constructioncalc.core.measure.Decimals
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.ui.tool.ToolInputsViewModel
 import kotlinx.serialization.Serializable
+
+private val METERS = FormulaUnit("m", 1.0 / 0.3048)
+
+/** The units a variable offers: lengths (feet in the catalog) also offer meters. */
+val Variable.shownUnits: List<FormulaUnit>
+    get() = if (quantity == FormulaQuantity.LENGTH && units.none { it.label == "m" }) units + METERS else units
+
+/** The unit a variable starts on in [system]: meters for lengths in metric, otherwise the catalog's default. */
+fun Variable.defaultUnitIn(system: UnitSystem): Int =
+    if (quantity == FormulaQuantity.LENGTH && system == UnitSystem.METRIC) shownUnits.indexOfFirst { it.label == "m" } else defaultUnit
 
 /**
  * What the person typed, saved with an item. Values are kept as typed (in the unit picked for each
@@ -21,15 +35,16 @@ data class FormulaInputs(
 ) {
     val formula: Formula get() = FormulaCatalog.find(formulaId) ?: FormulaCatalog.default
 
-    fun unitIndex(variableId: String): Int {
+    /** The picked unit, or the variable's default in [system] when none was picked. */
+    fun unitIndex(variableId: String, system: UnitSystem = UnitSystem.IMPERIAL): Int {
         val v = formula.variables.firstOrNull { it.id == variableId } ?: return 0
-        return units[variableId]?.takeIf { it in v.units.indices } ?: v.defaultUnit
+        return units[variableId]?.takeIf { it in v.shownUnits.indices } ?: v.defaultUnitIn(system)
     }
 
     /** Entered values in base units; blank or unreadable entries are left out. */
-    fun given(): Map<String, Double> = formula.variables.mapNotNull { v ->
+    fun given(system: UnitSystem = UnitSystem.IMPERIAL): Map<String, Double> = formula.variables.mapNotNull { v ->
         val shown = values[v.id]?.let(Decimals::parse) ?: return@mapNotNull null
-        v.id to shown * v.units[unitIndex(v.id)].factor
+        v.id to shown * v.shownUnits[unitIndex(v.id, system)].factor
     }.toMap()
 
     /** Entries that aren't blank but can't be read as a number. */
@@ -41,11 +56,11 @@ data class FormulaInputs(
     fun withValue(id: String, text: String) = copy(values = values + (id to text))
 
     /** Changes a variable's unit, converting what was typed so the quantity stays the same. */
-    fun withUnit(id: String, index: Int): FormulaInputs {
+    fun withUnit(id: String, index: Int, system: UnitSystem = UnitSystem.IMPERIAL): FormulaInputs {
         val v = formula.variables.firstOrNull { it.id == id } ?: return this
-        if (index !in v.units.indices) return this
+        if (index !in v.shownUnits.indices) return this
         val typed = values[id]?.let(Decimals::parse)
-        val converted = typed?.let { FormulasText.number(it * v.units[unitIndex(id)].factor / v.units[index].factor) }
+        val converted = typed?.let { FormulasText.number(it * v.shownUnits[unitIndex(id, system)].factor / v.shownUnits[index].factor) }
         return copy(units = units + (id to index), values = if (converted != null) values + (id to converted) else values)
     }
 

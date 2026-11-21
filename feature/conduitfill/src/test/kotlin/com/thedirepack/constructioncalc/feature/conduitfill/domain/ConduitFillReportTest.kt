@@ -15,6 +15,8 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
+import com.thedirepack.constructioncalc.core.data.AppSettings
 
 class ConduitFillReportTest {
     private fun conduit(type: ConduitType, size: TradeSize) = ConduitTable.find(type, size)!!
@@ -150,5 +152,25 @@ class ConduitFillReportTest {
         assertTrue(report.has("NEC 2023 Chapter 9 Table 4"))
         assertTrue(report.has("Equipment grounding conductors"))
         assertTrue(report.has("Not covered"))
+    }
+
+    private val metric = AppSettings(unitSystem = UnitSystem.METRIC)
+
+    @Test fun areasAndTradeSizesFollowTheSystem() {
+        val req = request(TradeSize.S_3_4, 3 to thhn(ConductorSize.AWG_12))
+        val imperial = ConduitFillReport.build(req, AppSettings())!!
+        val si = ConduitFillReport.build(req, metric)!!
+        assertEquals("0.0399 in²", imperial.value(ConduitFillReport.KEY_CONDUCTOR_AREA).text)
+        assertEquals("25.7 mm²", si.value(ConduitFillReport.KEY_CONDUCTOR_AREA).text)
+        // exact values stay in square inches in both systems
+        assertEquals(imperial.value(ConduitFillReport.KEY_CONDUCTOR_AREA).exact, si.value(ConduitFillReport.KEY_CONDUCTOR_AREA).exact)
+        assertTrue(imperial.summary.startsWith("3/4\" EMT"))
+        assertTrue(si.summary, si.summary.startsWith("3/4\" (21) EMT"))
+    }
+
+    @Test fun minimumConduitNamesMetricDesignator() {
+        val report = ConduitFillReport.build(request(TradeSize.S_1_2, 10 to thhn(ConductorSize.AWG_12)), metric)!!
+        val min = report.value(ConduitFillReport.KEY_MIN_CONDUIT).text
+        assertTrue(min, min.contains("(") && min.endsWith("EMT"))
     }
 }

@@ -1,11 +1,12 @@
 package com.thedirepack.constructioncalc.feature.conversions.domain
 
 import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import java.math.BigDecimal
 
 /**
  * One unit: `base = value × factor + offset`, where base is the category's base unit
- * (the unit published to other tools: inches, sq in, cu in, lb, °F, psi, W, gpm, degrees;
+ * (the unit published to other tools: inches, sq in, cu in, lb, °C, psi, W, gpm, degrees; °C for temperature;
  * joules, m/s and Ω per 1000 ft for the number-only categories).
  *
  * Only temperature has a non-zero [offset] (it is affine; see [UnitTable]).
@@ -45,7 +46,7 @@ data class UnitDef(
  * - 1 radian = 180/π degrees. π is irrational, so the radian factor carries 30 digits.
  * - Temperature: °C = (°F − 32) × 5/9 and K = °C + 273.15, °R = °F + 459.67. The scales differ
  *   by an offset as well as a ratio, so each temperature unit has an [UnitDef.offset] and converts
- *   through °F.
+ *   through °C (the base, as the NEC tables use).
  * - Resistance per length: 1 Ω/km = 0.3048 Ω/1000 ft (exact); 1 mi = 5.28 × 1000 ft.
  */
 object UnitTable {
@@ -121,10 +122,11 @@ object UnitTable {
     )
 
     private val temperature = listOf(
-        UnitDef("f", "°F", "Fahrenheit", Rational.ONE),
-        UnitDef("c", "°C", "Celsius", Rational.of(9, 5), offset = n(32)),
-        UnitDef("k", "K", "Kelvin", Rational.of(9, 5), offset = n(32) - d("273.15") * Rational.of(9, 5)),
-        UnitDef("r", "°R", "Rankine", Rational.ONE, offset = -d("459.67")),
+        // Base is °C (matching ValueKind.TEMPERATURE): °C = value × factor + offset.
+        UnitDef("f", "°F", "Fahrenheit", Rational.of(5, 9), offset = Rational.of(-160, 9)),
+        UnitDef("c", "°C", "Celsius", Rational.ONE),
+        UnitDef("k", "K", "Kelvin", Rational.ONE, offset = -d("273.15")),
+        UnitDef("r", "°R", "Rankine", Rational.of(5, 9), offset = -d("273.15")),
     )
 
     private val pressure = listOf(
@@ -211,7 +213,22 @@ object UnitTable {
     }
 
     /** Id of the unit the category starts on. */
-    fun defaultUnitId(category: ConversionCategory): String = when (category) {
+    fun defaultUnitId(category: ConversionCategory, system: UnitSystem = UnitSystem.IMPERIAL): String =
+        if (system == UnitSystem.METRIC) metricDefaultUnitId(category) ?: defaultUnitId(category) else defaultUnitId(category)
+
+    /** The metric unit a category starts on when the app is set to Metric, or null to keep the imperial default. */
+    private fun metricDefaultUnitId(category: ConversionCategory): String? = when (category) {
+        ConversionCategory.AREA -> "m2"
+        ConversionCategory.VOLUME -> "l"
+        ConversionCategory.WEIGHT -> "kg"
+        ConversionCategory.TEMPERATURE -> "c"
+        ConversionCategory.PRESSURE -> "kpa"
+        ConversionCategory.SPEED -> "kmh"
+        ConversionCategory.FLOW -> "lpm"
+        else -> null
+    }
+
+    private fun defaultUnitId(category: ConversionCategory): String = when (category) {
         ConversionCategory.LENGTH -> CALCULATOR_ID
         ConversionCategory.AREA -> "sqft"
         ConversionCategory.VOLUME -> "gal"
