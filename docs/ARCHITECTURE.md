@@ -15,9 +15,12 @@ contract for building a tool.
                      and prints plain decimals). The calculator brain, reusable by any tool.
 :core:electrical     Pure Kotlin. NEC tables and electrical rules shared by every electrical tool and
                      the design engine: ampacity, corrections, ConductorSizing, ConductorProtection
-                     (240.4), ConduitFill (Chapter 9, Note 7), FillDerating, Table 8/9, motors, AcPhases.
+                     (240.4), ConduitFill (Chapter 9, Note 7), FillDerating, Table 8/9, motors, AcPhases,
+                     RacewayBends (Table 2 radii, the 360° sections), PullFormulas and PullRatings
+                     (pulling tension, sidewall pressure, limits), CableWeight.
 :core:model          Pure Kotlin + kotlinx.serialization. Project → Run → ProjectItem, panels/circuits,
-                     the design engine (design/: ProjectAnalysis, Wire, PublishedValues), ResultValue
+                     run paths (RunPath, PathSegment) and pull settings (PullSetup), the design engine
+                     (design/: ProjectAnalysis, PullAnalysis, MaterialTakeoff, Wire, PublishedValues), ResultValue
                      (the unit of exchange between tools), ToolTarget, the project and backup file
                      formats (plain JSON), text export (ProjectText, including the design).
 :core:data           Android. AppServices: SettingsRepository (app-wide plus per-tool settings),
@@ -67,8 +70,20 @@ project, and open each other by id (`ToolIds`) with a `ToolTarget`, never by imp
 - **Electrical design lives in the project.** `Project.panels/groups/design` and `Run.raceway`
   link panels → circuits → conduit runs. `ProjectAnalysis.analyze(project)` (pure, tested) turns
   that into wire sizes, grounds, voltage drop, fill, bend totals, feeder loads and phase balance;
-  any tool can call it. Its notes are `DesignNote`s with a level (INFO explains, WARNING is a
+  any tool can call it. A run's 360° bend check uses its path (per pull section), and its fill
+  check adds jam and clearance notes. Its notes are `DesignNote`s with a level (INFO explains, WARNING is a
   problem), so screens never guess severity from the text.
+- **Runs have a route.** `Run.path` is a list of `PathSegment`s (straights with slope, bends with
+  radius and plane, pull points) shared by Conduit Bending, Panels › Runs, the Wire Pull Planner and
+  exports; `Run.pull` holds the run's pull settings. When a path exists, `Raceway.length` is its
+  routed length. Never set one without the other: change them through `Project.withRunPath`,
+  `withRunLength`, `withRaceway` or `addBendsToRunPath` (all in `RunPath.kt`), which keep them in
+  step. `PullAnalysis.analyze(run, runDesign)` is the pull for a run (both directions), and
+  `MaterialTakeoffs.of(project)` is the project's wire and conduit footage for reports.
+- **Tools can add bends to a run's path** without being imported: a tool overrides
+  `ToolModule.pathBends(item)` (Conduit Bending does), and a draft can carry `pathBends` (the save
+  sheet offers "Add to run path", and updating the item updates its bends) or a whole `route` (the
+  Pull Planner working without a project).
 - **Company profile** (Settings › Company) heads exports: use `AppSettings.company.headerLines()`.
 - **Save/load everything.** Two file types, both plain pretty-printed JSON, told apart by
   their `format` field (`AppFileCodec`):
@@ -175,7 +190,12 @@ fun VoltageDropScreen(host: ToolHost) {
 - **Show assumptions and limits** with `Notice`s (code tables used, derating not applied,
   above recommended limits). These calculators guide fieldwork; say what they don't cover.
 - **Reference data cites its source** (e.g. "NEC 2023 Chapter 9 Table 8") and has spot-check
-  tests against published values. Shared tables go in `:core:electrical`.
+  tests against published values. Shared tables go in `:core:electrical`. Manufacturer figures
+  (a sidewall pressure preset, friction values) are labelled guidance in the UI, with their source,
+  and a user value replaces them.
+- **Validate on construction.** Model classes that come from files (`Circuit`, `PathSegment`,
+  `PullSetup`, `StoredQuantity`) check their values in `init`, so a damaged file fails to load as
+  "damaged" instead of crashing later.
 - **Original work only.** The apps in `docs/research/` are a feature inventory. Don't copy their
   code, text, art or layouts.
 - **Accessibility**: content descriptions on icon buttons, no meaning carried by colour alone,

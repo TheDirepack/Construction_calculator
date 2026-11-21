@@ -1151,7 +1151,7 @@ The checked items reflect a review of the app entry points and local tests at co
 - Project evidence includes the shared project switcher, project-file round trips, and repository tests for read-only archived projects. The backup service handles projects, settings, recents, and tool data. Full restore into an existing installation remains open. [Projects roadmap](ROADMAP.md#10-projects--runs-linking-everything-together)
 - Panels and circuits use stored run and group IDs. The design engine handles conductor sizing and thermal correction. Copper-clad aluminum uses aluminum's resistance and impedance table values. [Panels and circuits](tools/panels.md)
 - The app has an animation toggle. Whether motion is minimal still needs visual review.
-- The wire-pull integration plan exists. The independent review sequence and the timing of the plan relative to it remain unverified. [Wire Pull Planner plan](plans/wire-pull-planner.md)
+- The Wire Pull Planner is implemented (v1) and integrated with project runs, circuits, Conduit Bending, Panels, Reel Length and exports. The independent review sequence and the timing of the plan relative to it remain unverified. [Wire Pull Planner](tools/pull-planner.md)
 
 ## Calculator
 

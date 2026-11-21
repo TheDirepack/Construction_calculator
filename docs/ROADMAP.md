@@ -34,7 +34,7 @@ inventory of features, never as a source of code, art or text.
 | Conduit Bending | **done** (v1) | [Bending tool notes](tools/conduit-bending.md) |
 | Conduit Fill | **done** (v1: Table 1 limits, Note 7, jam ratio, derating; the same check the design engine uses) | [Southwire Conduit Fill](https://www.southwire.com/calculator-conduit) |
 | Voltage Drop | **done** (v1, tables checked vs NEC 2023) | Southwire Voltage Drop (`com.southwire.voltageDrop`) |
-| Wire Pull Planner | planned in detail: [plans/wire-pull-planner.md](plans/wire-pull-planner.md) | [Southwire Cable Pull](https://www.southwire-cablepull.com/) and SIMpull workbook |
+| Wire Pull Planner | **done** (v1: run paths, both directions, SWBP, limits, takeoff; [tool notes](tools/pull-planner.md)) | [Southwire Cable Pull](https://www.southwire-cablepull.com/) and SIMpull workbook |
 | Partial Reel Length | **done** (v1) | Southwire Partial Reel (`com.southwire.partialReelCalculator`) |
 | Unit Conversions | **done** (v1) | Southwire Conversion (`com.southwire.conversion`) |
 | VFD Sizing | **done** (v1, tables checked vs NEC 2023) | Southwire VFD Sizing (`com.southwire.VFDSizingCalculator`) |
@@ -81,9 +81,9 @@ Bending math for EMT, IMC and rigid conduit with hand benders and benders such a
 - Diagrams of each bend showing where every mark goes, measured from the end of the stick
 - Uses the Foot-Inch engine (`core/measure`) for all lengths and fractions
 
-Next: plan several bend groups on one conduit piece and several pieces in a project run. Show
-each piece's marks and developed length, then pass the route geometry and pull points to the
-[Wire Pull Planner](plans/wire-pull-planner.md).
+Saved bends can be added to the run's path ("Add to run path"), which the
+[Wire Pull Planner](tools/pull-planner.md) uses. Next: plan several bend groups on one conduit
+piece and several pieces in a project run, and show each piece's marks and developed length.
 
 ## 3. Conduit Fill
 
@@ -104,15 +104,23 @@ each piece's marks and developed length, then pass the route geometry and pull p
 - Methods: the simple K-factor formula (2·K·I·L / CM, or √3 for three-phase) and NEC Chapter 9 Table 9 impedance
 - Max distance for a given wire, load and % drop
 
-## 5. Wire Pull Planner
+## 5. Wire Pull Planner (done: v1)
 
-- Build a pull path from straight runs and bends (angle, radius) with elevation changes
-- Pulling tension for each segment and sidewall bearing pressure in each bend, with the governing
-  limit and its source shown in the results
-- Inputs: conductors (size, count, weight per foot), conduit size and type, coefficient of friction (lubricant), and the cable's max tension
-- Pull from the other end to compare; set the tugger capacity; warnings when a limit is exceeded
-- Jam ratio and clearance checks
-- Exports a pull report (see Projects & Runs)
+See [tool notes](tools/pull-planner.md) and the [plan](plans/wire-pull-planner.md).
+- The path (straights with slope, bends with radius and plane, pull points) lives on the project
+  run, shared with Bending and Panels; the run's length is the routed length
+- Tension per segment in both directions, SWBP per bend, the governing limit and its source,
+  recommended direction, jam ratio, clearance, degrees per pull section (NEC 2023 xxx.24(B))
+- Cables from the run's circuits plus hand-added ones; equipment ratings, a cable pressure rating,
+  friction, incoming tension per section, slack
+- Pull report saved to the run; pulls and the material takeoff in the project text and the panel
+  schedule export; Reel Length checks a run's cable needed
+
+Next:
+- [ ] Compare the workflow fixture with the Re³ web calculator using matched settings
+- [ ] Cable presets from catalog data (OD, weight, pressure rating) with their sources
+- [ ] Friction values by conduit and jacket from a citable source
+- [ ] Turn direction for horizontal bends, so the diagram can show a plan view
 
 ## 6. Partial Reel Length
 

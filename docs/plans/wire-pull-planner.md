@@ -1,7 +1,27 @@
 # Wire Pull Planner: plan
 
-Status: **planned**. Implementation starts after the current bug-fix and refactor pass lands on
-`main`. Well & Pump stays last.
+Status: **implemented** (v1, November 2026). See [the tool notes](../tools/pull-planner.md) for
+what shipped, the reference checks and where it differs from this plan. Well & Pump stays last.
+
+### As built: differences from this plan
+
+- **Bends from Bending** reach the path through `ToolModule.pathBends(item)` (features never
+  import each other), from the save sheet ("Add to run path"), the project page and the planner's
+  "Import bends". Imported bends have no radius (Table 2) and start horizontal.
+- **Configuration** is picked from the cable count and D/d (cradled from D/d 2.5 with three
+  cables), with a per-run override. Two cables use the triangular forms; four or more use
+  1 + 2x² and the cradled SWBP form. These are stated assumptions in every report.
+- **Clearance** uses the one-on-two (triangular) geometry, D/2 − 1.366d + (D−d)/2 √(1 − x²): that
+  arrangement leaves the least room, so it's the one checked. The cradled arrangement
+  always has more clearance.
+- **Vertical bends** use concave-up and concave-down forms derived here from the same friction
+  model (checked numerically against the differential equation), not copied from a table.
+- **Friction presets** are by lubricant only (lubricated 0.35, none 0.50, pre-lubricated 0.15),
+  labelled guidance. No conduit-specific values were found in a source we could cite.
+- **Workflow fixture:** the original two-section fixture is checked against an independent script.
+  The comparison with the Re³ web calculator is still to do (it needs interactive entry).
+- **Project report** means the Panels schedule export (text and PDF) and the shared project text;
+  both now end with each run's pull and the material takeoff.
 
 ## Goal
 
@@ -58,7 +78,7 @@ data class Run(..., val raceway: Raceway?, val path: List<PathSegment> = emptyLi
   - 90° stub → one 90° bend
 
   The bends keep `sourceItemId`, so later edits to that item can update them.
-- **The two conduit enums are merged into one.** Bending's local conduit enum is being merged into core `ConduitType`/`TradeSize` in the current refactor; the pull planner relies on that.
+- **The two conduit enums are merged into one.** Bending uses the core `ConduitType`/`TradeSize`; the pull planner relies on that.
 
 ## Engineering (core:electrical, pure, unit-tested)
 
@@ -117,8 +137,8 @@ and unsupported cable configurations before adding presets.
 | **Jam ratio** | 1.05·D/d between 2.8 and 3.2 → jam warning; the 1.05 accounts for conduit ovality at bends. |
 | **Clearance** | Cradled-configuration clearance formula. Recommend ≥ 0.5 in (0.25 in minimum). |
 | **Coefficient of friction μ** | Presets by conduit (EMT, RMC, PVC…) and lubricant (none, wax, polymer), default 0.35 lubricated. User override. |
-| **Bends between pull points** | ≤ 360° per pull section: NEC 2023 "Bends — (B) Number in One Run" in each raceway article (358.24(B) for EMT checked on the printed page, 70-245; the same rule in the IMC, RMC, FMC, LFMC, PVC, LFNC and ENT articles, pp. 70-232 to 70-248). Map each ConduitType to its section number, checked page by page against the local PDF. |
-| **Bend radius default** | Chapter 9 Table 2 minimum radius (one-shot and full-shoe benders, and other bends), by trade size, as the default when a bend has no radius. Verify against the printed table. |
+| **Bends between pull points** | ≤ 360° per pull section: NEC 2023 "Bends — (B) Number in One Run". Checked page by page: IMC 342.24(B) p. 70-232, RMC 344.24(B) 70-233, FMC 348.24(B) 70-235, LFMC 350.24(B) 70-236, PVC 352.24(B) 70-238, HDPE 353.24(B) 70-240, LFNC 356.24(B) 70-244, EMT 358.24(B) 70-245, ENT 362.24(B) 70-248 (`RacewayBends.section`). |
+| **Bend radius default** | Chapter 9 Table 2 (printed p. 70-716, verified): one-shot column for EMT (358.24(A) names it), IMC, RMC and PVC; "Other Bends" for FMC, LFMC, LFNC and ENT (their (A) sections name it). |
 | **Fill** | Reuses the shared fill check (the same core implementation as Conduit Fill). |
 
 **Both directions.** Recalculate each section with its geometry and initial tension for each direction. Compare peak tension and peak SWBP against their own limits and identify the governing segment.
