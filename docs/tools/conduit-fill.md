@@ -1,8 +1,9 @@
 # Conduit Fill
 
-Module: `feature/conduitfill` (math in `domain/ConduitFill.kt`, results and notices in
-`domain/ConduitFillReport.kt`). Shared tables: `core/electrical` (`ConduitTable.kt`,
-`InsulatedConductorArea.kt`), reused by the Wire Pull Planner and Panel Design.
+Module: `feature/conduitfill` (results and notices in `domain/ConduitFillReport.kt`). The fill math
+(`ConduitFill.kt`) and derating (`FillDerating.kt`) live in `core/electrical` with the tables
+(`ConduitTable.kt`, `InsulatedConductorArea.kt`), so the Panels design engine checks a run's fill
+with exactly the same code, Note 7 included.
 
 ## What it does
 
@@ -70,5 +71,8 @@ Every conduit row, every Table 5 area and diameter in the seven insulation famil
 - Bare conductors use stranded Table 8 areas.
 - Multiconductor cables count as one conductor with their actual (elliptical-major) diameter: not
   modelled, enter an equivalent insulated size instead.
-- Does not check conductor derating or ampacity, pull length, bends, box fill, or whether a conduit type
-  suits the location.
+- Derating (310.15(B) ambient with the rooftop adder, XHHW-2 exempt; 310.15(C)(1) count; 110.14(C)
+  terminals; the 240.4 largest OCPD) is shown per conductor group. Not checked: pull length, bends,
+  box fill, or whether a conduit type suits the location.
+- Opened for a project run (Panels › Runs or the project page › run menu › *Check fill*), it starts
+  with every conductor the design puts in that run, split into current-carrying or not.

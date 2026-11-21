@@ -30,6 +30,17 @@ continuous loads at 125 %, no demand factors), shows it on the schedule as "VA (
 in the upstream panel's phase totals. Enter a load on the feeder to override it (e.g. after demand
 factors). Duplicating a panel copies its circuits without their conduit runs.
 
+## Links to the other tools
+
+- Circuit sheet › *Voltage drop for this circuit…* opens Voltage Drop prefilled from the circuit
+  (voltage, phases, load, length, sized wire, the run's Table 9 conduit, the project target).
+- Runs tab › run menu › *Check fill in Conduit Fill* / *Bend this conduit* open those tools for
+  the run. The project page's run menu has the same, plus *Open in Panels & Circuits*.
+- Opened for a run, Panels starts on the Runs tab; for a circuit, on its panel.
+- Design values (circuit currents and loads, lengths, panel loads, run lengths) appear in every
+  tool's value picker under "From the design".
+- The project's shared text includes every panel schedule and each run's conduit and fill.
+
 ## Temperature
 
 Each conduit run's ambient (or the project default when blank) plus its own rooftop adder gives the
@@ -46,5 +57,6 @@ Open panel: phase A/B/C current (`CURRENT`), connected load (`APPARENT_POWER`, a
 ## Notes and limits
 
 - Sizing follows NEC 2023 via `ProjectAnalysis`; it guides fieldwork and doesn't replace a code check.
+- Insulation XHHW-2 is listed separately from XHHW/XHH/ZW: only XHHW-2 is exempt from the rooftop adder.
 - Imbalance is the largest phase deviation from the average, over the average.
 - The schedule uses fixed row heights; at very large font scales text is clipped (the circuit sheet shows everything).

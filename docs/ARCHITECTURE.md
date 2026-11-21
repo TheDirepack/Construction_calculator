@@ -10,32 +10,46 @@ contract for building a tool.
 :app                 Shell: drawer, navigation, ToolHost, the one Settings screen, file import.
                      ToolRegistry lists every tool.
 :core:measure        Pure Kotlin. Rational (exact fractions), Quantity (number/length/area/volume),
-                     feet-inch parsing, the expression evaluator, formatting, and the keypad
-                     input state machine (CalcInput). The calculator brain, reusable by any tool.
-:core:electrical     Pure Kotlin. NEC tables and electrical formulas shared by the electrical tools.
+                     feet-inch parsing, the expression evaluator, formatting, the keypad
+                     input state machine (CalcInput), and Decimals (how every number field parses
+                     and prints plain decimals). The calculator brain, reusable by any tool.
+:core:electrical     Pure Kotlin. NEC tables and electrical rules shared by every electrical tool and
+                     the design engine: ampacity, corrections, ConductorSizing, ConductorProtection
+                     (240.4), ConduitFill (Chapter 9, Note 7), FillDerating, Table 8/9, motors, AcPhases.
 :core:model          Pure Kotlin + kotlinx.serialization. Project → Run → ProjectItem, panels/circuits,
-                     the design engine (design/), ResultValue
-                     (the unit of exchange between tools), the project and backup file formats (plain JSON), text export.
+                     the design engine (design/: ProjectAnalysis, Wire, PublishedValues), ResultValue
+                     (the unit of exchange between tools), ToolTarget, the project and backup file
+                     formats (plain JSON), text export (ProjectText, including the design).
 :core:data           Android. AppServices: SettingsRepository (app-wide plus per-tool settings),
                      ProjectRepository (one JSON file per project), RecentResultsRepository, BackupService,
                      ProjectSharing (share sheet and file picker, no permissions).
-:core:ui             Android/Compose. Theme, the ToolModule/ToolHost API, and the UI kit:
-                     ToolScaffold, MeasureField, NumberField, ChoiceField, SegmentedChoice,
-                     ResultCard, FormSection, MeasureKeypad, FractionPad, settings rows, dialogs.
+:core:ui             Android/Compose. Theme, the ToolModule/ToolHost API, ToolIds,
+                     ToolInputsViewModel + toolViewModel(), and the UI kit: ToolScaffold, MeasureField,
+                     NumberField, ChoiceField, SegmentedChoice, ToggleRow, ResultCard, FormSection,
+                     MeasureKeypad, FractionPad, settings rows, dialogs, value picker.
 :feature:<tool>      One module per tool. Depends on all core modules (via the cc.android.feature
                      plugin).
 build-logic/         Convention plugins: cc.jvm.library, cc.android.library, cc.android.feature.
 ```
 
-Dependencies only point down: features → core:ui → core:data → core:model → core:measure.
-Features never depend on each other. They share data through `ResultValue`s, not imports.
+Dependencies only point down: features → core:ui → core:data → core:model → core:electrical →
+core:measure. Features never depend on each other. They share data through `ResultValue`s and the
+project, and open each other by id (`ToolIds`) with a `ToolTarget`, never by import.
 
 ## How the pieces connect
 
-- **Values flow between tools.** When a tool finishes a calculation it calls
-  `host.publish(results)`. Every `MeasureField` and `NumberField(pickKinds = …)` in every
-  other tool offers those values, plus results saved in the active project, filtered by
-  `ValueKind`. So a length from Foot-Inch can feed Voltage Drop without retyping.
+- **Values flow between tools.** A tool calls `host.publish(results)` whenever its results change;
+  the shell offers them to other tools once they have settled for 1.2 s (pass `immediate = true`
+  for a deliberate result such as Foot-Inch's `=`). Every `MeasureField` (via the picker button in
+  its calculator sheet) and `NumberField(pickKinds = …)` offers those values, results saved in the
+  active project, and what the project's design works out (circuit currents and loads, circuit and
+  run lengths, panel loads), filtered by `ValueKind`.
+- **Tools open each other for a circuit or run.** `host.openTool(ToolIds.VOLTAGE_DROP, target =
+  ToolTarget.OfCircuit(projectId, circuitId))` (or `OfRun`) opens a tool *for* that part of the
+  project. The tool reads `host.target` and starts from it with `vm.prefill(target) { … }` (Voltage
+  Drop for a circuit, Conduit Fill and Bending for a run, Panels on the run or circuit).
+  `ToolScaffold` then names the target and shows a back arrow, and Save defaults to that run. A
+  draft can carry a `conduit` (a bend does) that the save sheet offers as the run's conduit.
 - **Every length input is the calculator.** `MeasureField` opens `MeasureInputSheet`, the
   feet-inch keypad with fraction keys, math and recent values. It returns an exact `Quantity`.
 - **Projects.** `host.saveToProject(draft)` opens the save sheet: pick a project and run, or
@@ -48,10 +62,13 @@ Features never depend on each other. They share data through `ResultValue`s, not
   title: "No project" (the default) or the active project and run, with a dropdown to switch,
   pick the run saves go to, export any project, create one, or manage projects. The active
   project is app-wide (`AppSettings.activeProjectId/activeRunId`): it's where Save goes and whose
-  results the value picker offers.
+  results the value picker offers. Always read it with `AppSettings.activeTarget(projects)`
+  (archived projects are never a target; a stale run falls back to the last run).
 - **Electrical design lives in the project.** `Project.panels/groups/design` and `Run.raceway`
   link panels → circuits → conduit runs. `ProjectAnalysis.analyze(project)` (pure, tested) turns
-  that into wire sizes, grounds, voltage drop, fill and phase balance; any tool can call it.
+  that into wire sizes, grounds, voltage drop, fill, bend totals, feeder loads and phase balance;
+  any tool can call it. Its notes are `DesignNote`s with a level (INFO explains, WARNING is a
+  problem), so screens never guess severity from the text.
 - **Company profile** (Settings › Company) heads exports: use `AppSettings.company.headerLines()`.
 - **Save/load everything.** Two file types, both plain pretty-printed JSON, told apart by
   their `format` field (`AppFileCodec`):
@@ -101,12 +118,12 @@ data class VoltageDropInputs(
 
 @Composable
 fun VoltageDropScreen(host: ToolHost) {
-    // Inputs live in a ViewModel keyed by the opened item, so rotation keeps them and each saved
-    // item gets its own state. Restore once when opened from a project:
-    val vm: VoltageDropViewModel = viewModel(key = "voltage-drop:${host.openedItem?.id}")
-    LaunchedEffect(host.openedItem) {
-        host.openedItem?.takeIf { it.toolId == VoltageDropTool.ID }
-            ?.let { ToolInputs.decode<VoltageDropInputs>(it.inputs) }?.let(vm::restore)
+    // class VoltageDropViewModel : ToolInputsViewModel<VoltageDropInputs>(VoltageDropInputs(), VoltageDropInputs.serializer())
+    // toolViewModel keys it by the opened item and target (rotation keeps it, each saved item has its
+    // own state) and restores a saved item once.
+    val vm: VoltageDropViewModel = toolViewModel(VoltageDropTool.ID, host)
+    LaunchedEffect(host.target) {                                  // opened for a project circuit?
+        (host.target as? ToolTarget.OfCircuit)?.let { t -> vm.prefill(t) { /* inputs from the circuit */ null } }
     }
     val inputs = vm.inputs
     val result = remember(inputs) { VoltageDrop.calculate(…) }   // domain call
@@ -143,6 +160,9 @@ fun VoltageDropScreen(host: ToolHost) {
 - **One settings screen.** Options go in `SettingsContent()`. Store them with
   `LocalAppServices.current.settings.module(ID)`, and read Booleans with
   `rememberModuleBoolean`. Never add a separate settings sheet or menu.
+- **Plain numbers use `Decimals`** (`core:measure`) to parse and print, single/three phase is
+  `AcPhases`, conduit is the core `ConduitType`/`TradeSize`, and switches are `ToggleRow`: one of
+  each for the whole app.
 - **Lengths use `MeasureField`**, displayed with the app settings (`settings.format(q)`).
   Store lengths as `StoredQuantity` (exact) and publish them as `ValueKind.LENGTH` in inches.
 - **Publish results with the right `ValueKind`** and base unit (see `ValueKind`), and stable `key`s.

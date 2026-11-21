@@ -33,6 +33,14 @@ OD the conduit outside diameter (EMT 0.706/0.922/1.163/1.510; IMC 0.815/1.029/1.
 0.840/1.050/1.315 in). Defaults: EMT 2-3/4, 3-1/4, 4-3/8, 5-7/8; IMC 3-1/4, 4-1/4, 4-7/8;
 rigid 3-1/4, 4-1/4, 4-7/8. Gain only affects the back-to-back cut length.
 
+## Conduit and runs
+
+The conduit type and trade size are the app's own (`ConduitType`, `TradeSize`: the ones a project
+run uses); `Bendable` lists those with hand-bender values (EMT 1/2–1-1/4, IMC and RMC 1/2–1). Every
+result includes *Total bend* (a 30° offset is 60°, a back-to-back is 180°). Opened for a run, the
+tool starts with the run's conduit; saving a bend to a run offers its conduit as the run's conduit,
+and the run adds up its saved bends and warns past 360° between pull points.
+
 ## Limitations
 
 - The distance convention for offsets (first mark = distance + shrink) fits a distance measured on

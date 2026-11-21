@@ -12,7 +12,7 @@ The motor is always three-phase (the drive output). The supply into the drive is
 | Table FLC | Table 430.250 (induction), by HP and voltage. 430.6(A)(1): conductors and protection use the table, not the nameplate. |
 | Min. drive output current | Nameplate FLA if entered, else the table FLC. Compare with the drive's normal-duty (variable torque) or heavy-duty (constant torque) continuous rating. *Guidance.* |
 | Single-phase input | Drive output rating ≈ 2× the motor current, or per the manufacturer's derate. *Rule of thumb, not code.* |
-| Input conductors | 430.122(A): ≥ 125 % of the drive's rated input current. If not entered, 125 % of the table FLC is used (an approximation, flagged). |
+| Input conductors | 430.122(A): ≥ 125 % of the drive's rated input current. If not entered, 125 % of an estimate is used and flagged: the table FLC for a three-phase supply, 2 × the table FLC for a single-phase supply (√3 from the power balance, rounded up for the rectifier's input). |
 | Output conductors | 430.122(B) / 430.22: ≥ 125 % of the table FLC. The "Suitable for Output Motor Conductor Protection" exception is noted, not applied. |
 | Conductor size | Smallest size in Table 310.16 (copper or aluminum, 60 or 75 °C column) with ampacity ≥ required. If none, the fewest parallel sets (1/0 AWG or larger each, up to 6). |
 | Short-circuit protection | Table 430.52(C)(1) maximums (250 % inverse-time breaker, 175 % time-delay fuse) rounded up to the next 240.6(A) rating (430.52(C)(1)(a)). The drive manufacturer's marked limits take precedence (430.130(A)(2)). |

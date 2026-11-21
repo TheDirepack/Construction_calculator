@@ -33,6 +33,14 @@ Table 9 (copper 14 AWG to 1000 kcmil, aluminum 12 AWG to 1000 kcmil), values as 
 2017 to 2023 editions. 12 AWG copper is 1.93 Ω/kft (editions before about 2008 printed 1.98).
 Table 9 does not list 18/16 AWG or sizes above 1000 kcmil, so the AC method offers only listed sizes.
 
+## From a project circuit
+
+Opened from Panels (circuit sheet › *Voltage drop for this circuit…*), the tool starts from the
+circuit as the design engine sees it: voltage and phases from the panel, the load current (a
+feeder carries the panels it feeds), the length (override or the sum of its runs), the wire size
+the design chose, the first run's conduit for Table 9 and the project's drop target. Its drop
+matches the design's.
+
 ## Limits
 
 - Conductors assumed at 75 °C; no temperature correction.

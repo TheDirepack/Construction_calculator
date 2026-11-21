@@ -20,8 +20,10 @@ See [Requirements and acceptance checklist](REQUIREMENTS.md) for the original sc
 - One Settings screen: General (theme, animations on/off), Measurements (Auto/ft-in/in, precision),
   and a page per tool that has options (opened directly from inside that tool)
 
-Feature references for each future tool are in [`docs/research/`](research/). They are written
-from the public Play Store listings and from inspecting the reference apps. We use them only as an
+Feature references are in [`docs/research/`](research/): ArchCalc, Southwire Voltage Drop, Conduit
+Fill (`com.conduit`), Partial Reel, Conversion and VFD Sizing (each with a "gap vs. our app"
+section). They are written from public store listings and vendor pages (the Play listings could
+not be read in full; see each file's sources). We use them only as an
 inventory of features, never as a source of code, art or text.
 
 ## Status
@@ -30,15 +32,15 @@ inventory of features, never as a source of code, art or text.
 | --- | --- | --- |
 | Foot-Inch Calculator | **done** (on shared system) | ArchCalc (`evanwinograd.archcalc`) |
 | Conduit Bending | **done** (v1) | [Bending tool notes](tools/conduit-bending.md) |
-| Conduit Fill | in progress | [Southwire Conduit Fill](https://www.southwire.com/calculator-conduit) |
+| Conduit Fill | **done** (v1: Table 1 limits, Note 7, jam ratio, derating; the same check the design engine uses) | [Southwire Conduit Fill](https://www.southwire.com/calculator-conduit) |
 | Voltage Drop | **done** (v1, tables checked vs NEC 2023) | Southwire Voltage Drop (`com.southwire.voltageDrop`) |
 | Wire Pull Planner | planned in detail: [plans/wire-pull-planner.md](plans/wire-pull-planner.md) | [Southwire Cable Pull](https://www.southwire-cablepull.com/) and SIMpull workbook |
 | Partial Reel Length | **done** (v1) | Southwire Partial Reel (`com.southwire.partialReelCalculator`) |
-| Unit Conversions | in progress | Southwire Conversion (`com.southwire.conversion`) |
+| Unit Conversions | **done** (v1) | Southwire Conversion (`com.southwire.conversion`) |
 | VFD Sizing | **done** (v1, tables checked vs NEC 2023) | Southwire VFD Sizing (`com.southwire.VFDSizingCalculator`) |
 | Well & Pump | last (after everything else) | Well Drilling (`com.welldrilling`) |
-| Panels & Circuits | in progress (model + design engine done) | Original: panel schedules linked to runs, wire sizing |
-| Projects & Runs | **done** (core); linking flows next | Original to this app: links all of the above |
+| Panels & Circuits | **done** (v1: schedules, feeders, design engine, PDF/text, links to the other tools) | Original: panel schedules linked to runs, wire sizing |
+| Projects & Runs | **done** (circuits and runs open Voltage Drop, Conduit Fill, Bending and Panels; shared text includes the design) | Original to this app: links all of the above |
 
 ## 1. Foot-Inch Calculator (done: v0.1)
 
@@ -156,16 +158,12 @@ The main thing this app adds over single-purpose calculators:
 - Values flow between tools: a length worked out in Foot-Inch can feed Voltage Drop and Pull Planner without retyping it.
 - Each tool's screen gets an "Add to run" action, and a run shows every step and its result.
 - Sharing: export a run or project as a readable summary (text or PDF) and as a file that someone else's copy of the app can import. Later: a share link.
-- Storage: Room database; the shared measurement types live in `core/`.
+- Storage: one plain JSON file per project (`core:data` `FileProjectStore`, unreadable files set aside in `projects/damaged/`), the same format that is shared.
 
 ## Architecture notes
 
-- `core/math`: `Rational`, the exact fractions everything uses
-- `core/measure`: quantities with dimensions, the measurement parser, the expression evaluator, and formatting
-- `feature/<tool>`: one package per tool (screen, ViewModel, pure input/logic classes)
-- `ui/`: app shell, theme, shared composables (`fractionText`)
-- Engine code stays pure Kotlin with JVM unit tests; UI is Jetpack Compose + Material 3
-- When a second tool lands: move `core/` into its own Gradle module and add Navigation Compose
+See [ARCHITECTURE.md](ARCHITECTURE.md): module map, the tool API, how tools link to project circuits
+and runs, and the rules every tool follows.
 
 ## Panels & Circuits (integrated electrical design)
 
