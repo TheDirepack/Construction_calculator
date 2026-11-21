@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.reference.content
 
+import com.thedirepack.constructioncalc.core.electrical.RacewayBends
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
@@ -61,7 +62,7 @@ internal object FieldReference {
                     listOf(
                         "Three-point saddle: center bend on the obstruction's center, the two outer bends at half the angle, bent the other way.",
                         "Four-point saddle: two offsets back to back. Lay out the first offset, add the obstruction's width, then the second offset.",
-                        "Every saddle adds its total degrees toward the 360° limit between pull points.",
+                        "Every saddle adds its total degrees toward the ${RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS.toInt()}° limit between pull points.",
                     ),
                 ),
                 ToolLink("Lay out a saddle", ToolIds.CONDUIT_BENDING),

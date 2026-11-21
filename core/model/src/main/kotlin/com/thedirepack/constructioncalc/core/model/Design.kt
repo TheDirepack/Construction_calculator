@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.core.model
 
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.InsulationType
@@ -145,7 +146,7 @@ data class Raceway(
 data class DesignDefaults(
     val conductor: ConductorSpec = ConductorSpec(),
     val ambientC: Double = 30.0,
-    val voltageDropTargetPercent: Double = 3.0,
+    val voltageDropTargetPercent: Double = Code.book.values.voltageDropBranchPercent,
     /** Upsize conductors to meet [voltageDropTargetPercent] (and the EGC with them, 250.122(B)). */
     val upsizeForVoltageDrop: Boolean = true,
 )

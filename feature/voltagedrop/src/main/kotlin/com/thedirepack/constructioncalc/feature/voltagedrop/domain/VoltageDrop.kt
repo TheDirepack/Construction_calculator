@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop.domain
 
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorImpedance
@@ -35,8 +36,8 @@ data class VoltageDropRequest(
     val parallelSets: Int = 1,
     val method: Method = Method.AC_TABLE_9,
     val conduit: Table9Conduit = Table9Conduit.PVC,
-    val powerFactor: Double = 0.85,
-    val targetPercent: Double = 3.0,
+    val powerFactor: Double = Code.book.values.acImpedanceTablePowerFactor,
+    val targetPercent: Double = Code.book.values.voltageDropBranchPercent,
     /** Solid or stranded, for the DC method's Table 8 rows (18–8 AWG differ). */
     val stranding: Stranding = Stranding.STRANDED,
 )

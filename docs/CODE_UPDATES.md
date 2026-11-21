@@ -106,14 +106,11 @@ These stay out of the edition on purpose:
 - **Physics and formulas**: `AcPhases` (√3, 2), `formula/` (Ohm's law and friends). The formula
   catalog's Table 8 coefficients are read from the edition.
 
-## Still to switch over
+## Text and tools
 
-Some feature and model code still writes NEC numbers itself. They have a `CodeValues` entry and
-should read it (see the commit that introduced `ElectricalCode` for the list of call sites):
-VFD sizing (430.122, 430.128, 430.32(A)(1) factors, 1/0 parallel minimum), the design engine's
-125 % continuous load, the 3 %/5 % voltage-drop recommendations, and text in the Reference, Conduit
-Fill and Panels that spells out 360°, 33 °C, 60 %, 0.8, 2.8–3.2, 24 in., 100 A and the motor
-percentages.
+Tools and notes build every code number into their text from the edition (`Code.book.values`,
+`AmbientCorrection.rooftopAdderText`, `codeLength`/`codePercent` in `code/CodeText.kt`), in the
+user's unit system. A new tool follows the same rule: no literal code number in logic or text.
 
 ## Never
 

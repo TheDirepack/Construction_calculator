@@ -2,6 +2,9 @@ package com.thedirepack.constructioncalc.feature.vfdsizing
 
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.codeNumber
+import com.thedirepack.constructioncalc.core.electrical.code.codePercent
+import com.thedirepack.constructioncalc.core.electrical.code.codePercentValue
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.MotorFullLoadCurrent
 import com.thedirepack.constructioncalc.core.math.Rational
@@ -62,7 +65,7 @@ internal fun vfdSizingOutput(inputs: VfdSizingInputs, settings: AppSettings = Ap
         add(currentResult("min_drive_output", "Min. drive output current ($duty)", result.minDriveOutputAmps))
         add(currentResult("table_flc", "Motor FLC, ${CodeRule.MOTOR_FLC_THREE_PHASE.cite}", result.tableFlc))
         result.nameplatePercentOfTable?.let { add(percentResult("nameplate_pct_of_table", "Nameplate FLA vs. table FLC", it)) }
-        result.overloadMaxAmps?.let { add(currentResult("overload_max", "Overload setting, max (125 % of FLA)", it)) }
+        result.overloadMaxAmps?.let { add(currentResult("overload_max", "Overload setting, max (${codePercent(Code.book.values.motorOverloadFactor)} of FLA)", it)) }
         result.singlePhaseDriveGuidanceAmps?.let {
             add(currentResult("single_phase_drive_guidance", "Drive output rating for 1-phase input (guidance)", it))
             add(percentResult("single_phase_derate", "1-phase input derate (guidance)", 100.0 / VfdSizing.SINGLE_PHASE_DRIVE_MULTIPLIER))
@@ -78,13 +81,13 @@ internal fun vfdSizingOutput(inputs: VfdSizingInputs, settings: AppSettings = Ap
                 result.inputBasisAmps,
             ),
         )
-        add(currentResult("input_ampacity_required", "Input conductor ampacity, min (125 %)", result.inputAmpacityRequired))
+        add(currentResult("input_ampacity_required", "Input conductor ampacity, min (${codePercent(Code.book.values.driveInputConductorFactor)})", result.inputAmpacityRequired))
         add(ResultValue.text("input_conductor", "Input conductors (${request.termination.label})", result.inputConductor?.text(metal) ?: BEYOND_TABLE))
-        add(currentResult("output_ampacity_required", "Motor conductor ampacity, min (125 % of FLC)", result.outputAmpacityRequired))
+        add(currentResult("output_ampacity_required", "Motor conductor ampacity, min (${codePercent(Code.book.values.driveOutputConductorFactor)} of FLC)", result.outputAmpacityRequired))
         add(ResultValue.text("output_conductor", "Motor output conductors (${request.termination.label})", result.outputConductor?.text(metal) ?: BEYOND_TABLE))
-        add(currentResult("disconnect_min", "Disconnect rating, min (115 % of input)", result.disconnectMinAmps))
-        add(ResultValue.text("breaker_max", "Max inverse-time breaker (250 %)", result.breakerMax?.let { "$it A" } ?: BEYOND_OCPD))
-        add(ResultValue.text("fuse_max", "Max dual-element fuse (175 %)", result.fuseMax?.let { "$it A" } ?: BEYOND_OCPD))
+        add(currentResult("disconnect_min", "Disconnect rating, min (${codePercent(Code.book.values.driveDisconnectFactor)} of input)", result.disconnectMinAmps))
+        add(ResultValue.text("breaker_max", "Max inverse-time breaker (${codePercentValue(VfdSizing.BREAKER_PERCENT)})", result.breakerMax?.let { "$it A" } ?: BEYOND_OCPD))
+        add(ResultValue.text("fuse_max", "Max dual-element fuse (${codePercentValue(VfdSizing.DUAL_ELEMENT_FUSE_PERCENT)})", result.fuseMax?.let { "$it A" } ?: BEYOND_OCPD))
     }
 
     return VfdSizingOutput(results, notices(inputs, parsed.convertedHp, request, result, errors, settings), summary(request, result))
@@ -146,8 +149,8 @@ private fun notices(
     if (result.inputBasisIsEstimate) {
         add(
             Notice(
-                "Drive input current not entered: 125 % of the motor's table FLC is used as an approximation. " +
-                    "${CodeRule.DRIVE_INPUT_CONDUCTORS.cite} requires 125 % of the drive's rated input current, so enter it from the drive's nameplate or manual for a code-based size.",
+                "Drive input current not entered: ${codePercent(Code.book.values.driveInputConductorFactor)} of the motor's table FLC is used as an approximation. " +
+                    "${CodeRule.DRIVE_INPUT_CONDUCTORS.cite} requires ${codePercent(Code.book.values.driveInputConductorFactor)} of the drive's rated input current, so enter it from the drive's nameplate or manual for a code-based size.",
                 NoticeLevel.WARNING,
             ),
         )
@@ -157,12 +160,12 @@ private fun notices(
     }
     add(
         Notice(
-            "Output conductors (drive to motor) are 125 % of the table FLC per ${CodeRule.DRIVE_OUTPUT_CONDUCTORS.cite}. If the drive is listed and marked " +
+            "Output conductors (drive to motor) are ${codePercent(Code.book.values.driveOutputConductorFactor)} of the table FLC per ${CodeRule.DRIVE_OUTPUT_CONDUCTORS.cite}. If the drive is listed and marked " +
                 "“Suitable for Output Motor Conductor Protection,” the larger of that and the drive's marked minimum conductor size applies instead.",
         ),
     )
     listOfNotNull(result.inputConductor?.takeIf { it.sets > 1 }, result.outputConductor?.takeIf { it.sets > 1 }).firstOrNull()?.let {
-        add(Notice("Parallel sets assume equal current sharing, each 1/0 AWG or larger (${CodeRule.PARALLEL_CONDUCTORS.cite}).", NoticeLevel.INFO))
+        add(Notice("Parallel sets assume equal current sharing, each ${VfdSizing.MIN_PARALLEL_SIZE.label} or larger (${CodeRule.PARALLEL_CONDUCTORS.cite}).", NoticeLevel.INFO))
     }
     if (result.inputConductor == null || result.outputConductor == null) {
         add(Notice("The required ampacity is beyond ${VfdSizing.MAX_SETS} parallel 2000 kcmil conductors. Split the load or use a larger system.", NoticeLevel.ERROR))
@@ -177,7 +180,7 @@ private fun notices(
     // Protection.
     add(
         Notice(
-            "Short-circuit/ground-fault maximums are ${CodeRule.MOTOR_BRANCH_PROTECTION.cite}: 250 % of FLC for an inverse-time breaker and 175 % for a time-delay fuse, " +
+            "Short-circuit/ground-fault maximums are ${CodeRule.MOTOR_BRANCH_PROTECTION.cite}: ${codePercentValue(VfdSizing.BREAKER_PERCENT)} of FLC for an inverse-time breaker and ${codePercentValue(VfdSizing.DUAL_ELEMENT_FUSE_PERCENT)} for a time-delay fuse, " +
                 "rounded up to the next standard rating in ${CodeRule.STANDARD_OCPD.cite} (${CodeRule.MOTOR_NEXT_HIGHER_RATING.cite}). Where the drive's manufacturer marks or lists a maximum device size or type, " +
                 "that takes precedence and must not be exceeded (${CodeRule.DRIVE_SHORT_CIRCUIT.cite}). The device must also be at least the drive's input current.",
             NoticeLevel.WARNING,
@@ -189,8 +192,8 @@ private fun notices(
     }
     add(
         Notice(
-            "Overload: the drive's electronic overload usually serves (${CodeRule.DRIVE_OVERLOAD.cite}). When set from the nameplate, 125 % of FLA applies to motors with service factor 1.15 or more " +
-                "or marked temperature rise of ${riseLabel(40, settings)} or less, otherwise 115 % (${CodeRule.MOTOR_OVERLOAD.cite}). Edition: ${Code.label} (NFPA 70); your jurisdiction may use another.",
+            "Overload: the drive's electronic overload usually serves (${CodeRule.DRIVE_OVERLOAD.cite}). When set from the nameplate, ${codePercent(Code.book.values.motorOverloadFactor)} of FLA applies to motors with service factor ${codeNumber(Code.book.values.motorOverloadServiceFactor)} or more " +
+                "or marked temperature rise of ${riseLabel(Code.book.values.motorOverloadMaxRiseC.toInt(), settings)} or less, otherwise ${codePercent(Code.book.values.motorOverloadFactorOther)} (${CodeRule.MOTOR_OVERLOAD.cite}). Edition: ${Code.label} (NFPA 70); your jurisdiction may use another.",
         ),
     )
 }

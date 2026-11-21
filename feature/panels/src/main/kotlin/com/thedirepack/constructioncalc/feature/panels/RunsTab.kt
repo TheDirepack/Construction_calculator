@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.electrical.RacewayBends
 import com.thedirepack.constructioncalc.core.ui.show
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.measure.Measure
@@ -227,7 +228,7 @@ private fun RunCard(
                     }
                     rd.smallestFitting?.let { Text("Smallest that fits: ${it.displayName}", style = MaterialTheme.typography.bodySmall) }
                     if (run.path.isEmpty()) {
-                        rd.bendDegrees?.let { Text("Saved bends: ${Wire.number(it, 1)}° of 360° between pull points", style = MaterialTheme.typography.bodySmall) }
+                        rd.bendDegrees?.let { Text("Saved bends: ${Wire.number(it, 1)}° of ${Wire.number(RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS, 0)}° between pull points", style = MaterialTheme.typography.bodySmall) }
                     }
                     rd.notes.forEach { note ->
                         if (note.isWarning) {
@@ -345,7 +346,7 @@ private fun PullSummary(run: Run, rd: RunDesign?, units: UnitSystem) {
         val sections = result.sectionDegrees
         Text(
             "Path: ${plural(run.path.size, "segment")} · bends " + sections.joinToString(" | ") { "${Wire.number(it, 1)}°" } +
-                if (sections.size > 1) " (per pull section, 360° max)" else " of 360° max",
+                if (sections.size > 1) " (per pull section, ${Wire.number(RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS, 0)}° max)" else " of ${Wire.number(RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS, 0)}° max",
             style = MaterialTheme.typography.bodySmall,
         )
         val summary = PullText.summary(result, units)

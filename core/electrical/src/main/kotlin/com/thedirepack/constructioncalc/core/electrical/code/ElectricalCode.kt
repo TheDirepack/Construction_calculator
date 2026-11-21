@@ -178,6 +178,12 @@ data class CodeValues(
     val ambientBasisC: Double,
     /** [CodeRule.ROOFTOP_ADDER]: °C added for raceways in sunlight less than 3/4 in. above a roof. */
     val rooftopAdderC: Double,
+    /**
+     * [CodeRule.ROOFTOP_ADDER]: the same adder as the code prints it in °F. It is a temperature
+     * difference, and the code rounds the conversion (33 °C is printed as 60 °F, not 59.4 °F), so the
+     * printed value is stored rather than converted.
+     */
+    val rooftopAdderF: Double,
     /** [CodeRule.BRANCH_CONDUCTOR_CONTINUOUS], [CodeRule.FEEDER_CONDUCTOR_CONTINUOUS]: continuous load multiplier (1.25). */
     val continuousLoadFactor: Double,
     /** [CodeRule.NEXT_SIZE_UP]: the next higher standard rating is allowed up to this many amperes. */
@@ -203,6 +209,8 @@ data class CodeValues(
     val fillNipplePercent: Int,
     /** [CodeRule.FILL_NIPPLES], [CodeRule.SHORT_RACEWAY_ADJUSTMENT]: longest raceway counted as a nipple, inches. */
     val nippleMaxLengthIn: Double,
+    /** [nippleMaxLengthIn] as the code prints it in millimetres (600 mm, not the converted 609.6). */
+    val nippleMaxLengthMm: Double,
     /** [CodeRule.FILL_ROUNDING]: a count's decimal part at or above this rounds up. */
     val note7RoundUpFraction: Double,
     /** [CodeRule.JAM_RATIO]: lower end of the jam range (raceway ID / conductor OD). */
@@ -249,6 +257,10 @@ data class CodeValues(
 
     /** [CodeRule.WORKING_SPACE_WIDTH]: minimum width, inches (or the equipment's width). */
     val workingSpaceMinWidthIn: Int,
+    /** [workingSpaceMinWidthIn] as the code prints it in millimetres. */
+    val workingSpaceMinWidthMm: Int,
     /** [CodeRule.WORKING_SPACE_HEIGHT]: minimum height, inches (or the equipment's height). */
     val workingSpaceMinHeightIn: Int,
+    /** [workingSpaceMinHeightIn] as the code prints it in millimetres. */
+    val workingSpaceMinHeightMm: Int,
 )

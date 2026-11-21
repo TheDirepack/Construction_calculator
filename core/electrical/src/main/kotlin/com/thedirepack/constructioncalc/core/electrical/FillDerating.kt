@@ -2,7 +2,10 @@ package com.thedirepack.constructioncalc.core.electrical
 
 import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+import com.thedirepack.constructioncalc.core.electrical.code.codeLength
 import com.thedirepack.constructioncalc.core.measure.Decimals
+import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 
 
 /** A conductor group as the derating needs it. [insulation] null means bare (never current-carrying). */
@@ -59,16 +62,17 @@ object FillDerating {
         material: ConductorMaterial,
         termination: TemperatureRating,
         nipple: Boolean,
+        units: UnitSystem = UnitSystem.IMPERIAL,
     ): DeratingResult {
         val ccc = groups.filter { it.currentCarrying && it.insulation != null }.sumOf { it.count }
         val adjustment = if (nipple) 1.0 else ConductorCountAdjustment.factor(ccc)
         val notes = mutableListOf<String>()
         notes += when {
-            nipple -> "Nipple ${Decimals.trim(Code.book.values.nippleMaxLengthIn)} in. or shorter: no adjustment for conductor count (${CodeRule.SHORT_RACEWAY_ADJUSTMENT.cite})."
+            nipple -> "Nipple ${Code.book.values.let { codeLength(it.nippleMaxLengthIn, it.nippleMaxLengthMm, units) }} or shorter: no adjustment for conductor count (${CodeRule.SHORT_RACEWAY_ADJUSTMENT.cite})."
             adjustment < 1.0 -> "$ccc current-carrying conductors: ×$adjustment (${CodeRule.CONDUCTOR_COUNT_ADJUSTMENT.cite})."
             else -> "$ccc current-carrying conductors: no count adjustment (${ConductorCountAdjustment.bands.first().from - 1} or fewer)."
         }
-        if (rooftop) notes += "Rooftop in sunlight under 3/4 in.: +${Decimals.trim(AmbientCorrection.ROOFTOP_ADDER_C)} °C (${CodeRule.ROOFTOP_ADDER.cite}); XHHW-2 is exempt."
+        if (rooftop) notes += "Rooftop in sunlight under 3/4 in.: ${AmbientCorrection.rooftopAdderText(units)} (${CodeRule.ROOFTOP_ADDER.cite}); XHHW-2 is exempt."
 
         val rows = groups.filter { it.insulation != null && it.currentCarrying }.map { g ->
             val rating = insulationRating(g.insulation!!)
@@ -83,7 +87,7 @@ object FillDerating {
         }
         if (rows.any { it.insulationRating == null }) notes += "Fixture wire (TFN) isn't rated in ${CodeRule.AMPACITY_TABLE.cite}."
         if (rows.any { it.insulationRating != null && it.ambientFactor == null }) notes += "Too hot for some insulation: no correction factor in ${CodeRule.AMBIENT_CORRECTION.cite}."
-        notes += "Ampacities from ${CodeRule.AMPACITY_TABLE.cite} (${Decimals.trim(Code.book.values.ambientBasisC)} °C basis), ${material.label.lowercase()}; terminals limited to ${termination.label} (${CodeRule.TERMINATION_TEMPERATURE.cite})."
+        notes += "Ampacities from ${CodeRule.AMPACITY_TABLE.cite} (${Measure.TEMPERATURE.format(Code.book.values.ambientBasisC, units, 0)} basis), ${material.label.lowercase()}; terminals limited to ${termination.label} (${CodeRule.TERMINATION_TEMPERATURE.cite})."
         return DeratingResult(ccc, adjustment, rows, notes)
     }
 
@@ -93,15 +97,15 @@ object FillDerating {
 }
 
 /** One line per group showing the arithmetic, e.g. `12 AWG THHN: 30 A × 0.96 (36 °C) × 0.8 = 23 A`. */
-fun DeratingResult.explanations(adjustmentLabel: Boolean = true): List<String> = rows.map { row ->
+fun DeratingResult.explanations(adjustmentLabel: Boolean = true, units: UnitSystem = UnitSystem.IMPERIAL): List<String> = rows.map { row ->
     val g = row.group
     val name = "${g.size.label} ${g.insulation?.code.orEmpty()}"
     when {
         row.insulationRating == null -> "$name: not rated in ${CodeRule.AMPACITY_TABLE.cite}."
         row.tableAmpacity == null -> "$name: no ${row.insulationRating.label} ampacity in ${CodeRule.AMPACITY_TABLE.cite}."
-        row.ambientFactor == null -> "$name: too hot at ${Decimals.trim(row.ambientC)} °C for ${row.insulationRating.label} insulation."
+        row.ambientFactor == null -> "$name: too hot at ${Measure.TEMPERATURE.format(row.ambientC, units, 0)} for ${row.insulationRating.label} insulation."
         else -> buildString {
-            append("$name: ${row.tableAmpacity} A (${row.insulationRating.label}) × ${Decimals.trim(row.ambientFactor)} (${Decimals.trim(row.ambientC)} °C)")
+            append("$name: ${row.tableAmpacity} A (${row.insulationRating.label}) × ${Decimals.trim(row.ambientFactor)} (${Measure.TEMPERATURE.format(row.ambientC, units, 0)})")
             if (adjustmentLabel) append(" × ${Decimals.trim(adjustmentFactor)}")
             append(" = ${Decimals.trim(row.adjusted!!)} A")
             if (row.usable != null && row.usable < row.adjusted - 1e-9) append(", limited to ${Decimals.trim(row.usable)} A by terminals")

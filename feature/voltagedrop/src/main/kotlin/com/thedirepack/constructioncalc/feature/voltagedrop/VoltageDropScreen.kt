@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop
 
+import com.thedirepack.constructioncalc.core.electrical.code.codePercentValue
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 
@@ -167,7 +169,7 @@ fun VoltageDropScreen(host: ToolHost) {
                     inputs.targetPercent,
                     { t -> vm.update { it.copy(targetPercent = t) } },
                     unit = "%",
-                    supportingText = "3% is the usual branch-circuit recommendation",
+                    supportingText = "${codePercentValue(Code.book.values.voltageDropBranchPercent, spaced = false)} is the usual branch-circuit recommendation",
                 )
             }
 

@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.conduitfill
 
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.BareConductorArea
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
@@ -70,9 +71,9 @@ data class ConduitFillInputs(
 
     val terminationRating: TemperatureRating get() = TemperatureRating.fromCelsius(termination) ?: TemperatureRating.C75
 
-    fun derating(): DeratingResult? {
+    fun derating(units: UnitSystem = UnitSystem.IMPERIAL): DeratingResult? {
         val ambient = ambientC.trim().replace(',', '.').toDoubleOrNull() ?: return null
-        return FillDerating.compute(deratingGroups(), ambient, rooftop, conductorMaterial, terminationRating, nipple)
+        return FillDerating.compute(deratingGroups(), ambient, rooftop, conductorMaterial, terminationRating, nipple, units)
     }
 }
 

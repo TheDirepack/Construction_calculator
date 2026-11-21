@@ -3,6 +3,8 @@ package com.thedirepack.constructioncalc.core.electrical
 import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.measure.Decimals
+import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 
 /**
  * Inputs for choosing the minimum conductor for one circuit.
@@ -67,11 +69,12 @@ data class WireSizingResult(
  */
 object ConductorSizing {
 
-    fun minimumSize(request: WireSizingRequest): WireSizingResult {
+    /** [units] only changes the temperatures in the notes; the sizing is the same. */
+    fun minimumSize(request: WireSizingRequest, units: UnitSystem = UnitSystem.IMPERIAL): WireSizingResult {
         val r = request
         val notes = mutableListOf<String>()
         val ambient = AmbientCorrection.effectiveAmbient(r.ambientC, r.rooftopUnder3_4In, r.xhhw2)
-        if (ambient != r.ambientC) notes += "Rooftop: +${AmbientCorrection.ROOFTOP_ADDER_C.toInt()} °C adder (${CodeRule.ROOFTOP_ADDER.cite})."
+        if (ambient != r.ambientC) notes += "Rooftop: ${AmbientCorrection.rooftopAdderText(units)} adder (${CodeRule.ROOFTOP_ADDER.cite})."
         val ambientFactor = AmbientCorrection.factor(ambient, r.insulation)
         val adjustment = ConductorCountAdjustment.factor(r.currentCarrying)
         val terminationColumn = if (r.termination.celsius < r.insulation.celsius) r.termination else r.insulation
@@ -80,7 +83,7 @@ object ConductorSizing {
             return WireSizingResult(
                 null, ambient, null, adjustment, null, null, null,
                 "Too hot",
-                notes + "No ${r.insulation.label} correction factor at ${ambient.toInt()} °C (${CodeRule.AMBIENT_CORRECTION.cite}).",
+                notes + "No ${r.insulation.label} correction factor at ${Measure.TEMPERATURE.format(ambient, units, 0)} (${CodeRule.AMBIENT_CORRECTION.cite}).",
             )
         }
 
@@ -120,7 +123,7 @@ object ConductorSizing {
             val adjusted = table * ambientFactor * adjustment
             val usable = minOf(adjusted, termination.toDouble())
             if (adjustment < 1.0) notes += "${r.currentCarrying} current-carrying conductors: ×$adjustment (${CodeRule.CONDUCTOR_COUNT_ADJUSTMENT.cite})."
-            if (ambientFactor != 1.0) notes += "${fmt(ambient)} °C ambient: ×$ambientFactor (${CodeRule.AMBIENT_CORRECTION.cite})."
+            if (ambientFactor != 1.0) notes += "${Measure.TEMPERATURE.format(ambient, units, 1)} ambient: ×$ambientFactor (${CodeRule.AMBIENT_CORRECTION.cite})."
             SmallConductorLimit.conditions(size, r.material)?.let(notes::add)
             if (usable < r.ocpdAmps) notes += "Ampacity ${fmt(usable)} A is below the ${r.ocpdAmps} A OCPD; allowed by ${CodeRule.NEXT_SIZE_UP.cite} next size up."
             return WireSizingResult(size, ambient, ambientFactor, adjustment, adjusted, termination, usable, lastFailure, notes)

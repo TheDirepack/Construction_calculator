@@ -1,6 +1,11 @@
 package com.thedirepack.constructioncalc.feature.conduitfill
 
+import com.thedirepack.constructioncalc.core.electrical.AmbientCorrection
+import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.codeLength
+import com.thedirepack.constructioncalc.core.electrical.code.codePercentValue
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 
@@ -83,7 +88,7 @@ fun ConduitFillScreen(host: ToolHost) {
     val inputs = vm.inputs
     val parsed = remember(inputs) { inputs.toRequest() }
     val report = remember(parsed, settings) { parsed.request?.let { ConduitFillReport.build(it, settings) } }
-    val derating = remember(inputs) { inputs.derating() }
+    val derating = remember(inputs, settings.unitSystem) { inputs.derating(settings.unitSystem) }
     val deratingResults = remember(derating) { derating?.toResults().orEmpty() }
     val results = report?.results.orEmpty() + deratingResults
 
@@ -135,7 +140,7 @@ fun ConduitFillScreen(host: ToolHost) {
             Text("Ampacity derating", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             ResultCard(
                 results = deratingResults,
-                notices = derating?.let { d -> d.noticeTexts(settings).map { Notice(it, NoticeLevel.INFO) } }
+                notices = derating?.let { d -> d.noticeTexts(settings.unitSystem).map { Notice(it, NoticeLevel.INFO) } }
                     ?: listOf(Notice("Enter the ambient temperature to see derating.", NoticeLevel.ERROR)),
                 emptyText = "Mark at least one insulated group as current-carrying to see derating.",
             )
@@ -173,8 +178,8 @@ private fun ConduitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel, 
             supportingText = "Inside diameter ${settings.show(Measure.SMALL_LENGTH, selected.internalDiameterIn)}, area ${settings.show(Measure.SMALL_AREA, selected.area100SqIn, if (settings.isMetric) 0 else 3)} (${CodeRule.CONDUIT_DIMENSIONS.cite})",
         )
         ToggleRow(
-            title = "Nipple, 24 in. or shorter",
-            detail = "Between boxes or cabinets: 60% fill allowed (${CodeRule.FILL_NIPPLES.cite})",
+            title = "Nipple, ${Code.book.values.let { codeLength(it.nippleMaxLengthIn, it.nippleMaxLengthMm, settings.unitSystem) }} or shorter",
+            detail = "Between boxes or cabinets: ${codePercentValue(Code.book.values.fillNipplePercent, spaced = false)} fill allowed (${CodeRule.FILL_NIPPLES.cite})",
             checked = inputs.nipple,
             onCheckedChange = vm::setNipple,
         )
@@ -292,11 +297,11 @@ private fun DeratingSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel,
             value = inputs.ambientC,
             onValueChange = vm::setAmbient,
             pickKinds = setOf(ValueKind.TEMPERATURE),
-            supportingText = "NEC tables are based on ${settings.show(Measure.TEMPERATURE, 30.0, 0)} (${if (settings.isMetric) "86 °F" else "30 °C"})",
+            supportingText = "NEC tables are based on ${settings.show(Measure.TEMPERATURE, Code.book.values.ambientBasisC, 0)} (${Measure.TEMPERATURE.format(Code.book.values.ambientBasisC, if (settings.isMetric) UnitSystem.IMPERIAL else UnitSystem.METRIC, 0)})",
         )
         ToggleRow(
             title = "Rooftop, in sunlight",
-            detail = "Less than 3/4 in. above the roof: ${if (settings.isMetric) "+33 °C" else "+60 °F"} (${CodeRule.ROOFTOP_ADDER.cite}); XHHW-2 is exempt",
+            detail = "Less than 3/4 in. above the roof: ${AmbientCorrection.rooftopAdderText(settings.unitSystem)} (${CodeRule.ROOFTOP_ADDER.cite}); XHHW-2 is exempt",
             checked = inputs.rooftop,
             onCheckedChange = vm::setRooftop,
         )
