@@ -73,7 +73,7 @@ fun ConversionsScreen(host: ToolHost) {
                 options = ConversionCategory.entries,
                 selected = inputs.category,
                 onSelect = { c ->
-                    vm.update { it.copy(category = c, fromUnit = UnitTable.defaultUnitId(c)) }
+                    vm.update { it.copy(category = c, fromUnit = UnitTable.defaultUnitId(c, settings.unitSystem)) }
                 },
                 optionLabel = { it.label },
             )

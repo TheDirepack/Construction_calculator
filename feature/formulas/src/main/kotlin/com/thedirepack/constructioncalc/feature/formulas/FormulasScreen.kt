@@ -49,9 +49,10 @@ fun FormulasScreen(host: ToolHost) {
             vm.prefill(t) { FormulaCatalog.find(t.topicId.removePrefix("formula:"))?.let { f -> FormulaInputs.start(f) } }
         }
     }
+    val settings = com.thedirepack.constructioncalc.core.ui.rememberAppSettings()
     val inputs = vm.inputs
     val formula = inputs.formula
-    val output = remember(inputs) { formulasOutput(inputs) }
+    val output = remember(inputs, settings) { formulasOutput(inputs, settings) }
     val summary = output.results.take(3).joinToString(" · ") { "${it.label.substringBefore(" (")} ${it.text}" }
 
     LaunchedEffect(output.results) {
@@ -93,10 +94,10 @@ fun FormulasScreen(host: ToolHost) {
                     VariableRow(
                         variable = v,
                         text = inputs.values[v.id].orEmpty(),
-                        unitIndex = inputs.unitIndex(v.id),
+                        unitIndex = inputs.unitIndex(v.id, settings.unitSystem),
                         computed = output.computedText[v.id]?.takeIf { inputs.values[v.id].isNullOrBlank() },
                         onText = { t -> vm.update { it.withValue(v.id, t) } },
-                        onUnit = { u -> vm.update { it.withUnit(v.id, u) } },
+                        onUnit = { u -> vm.update { it.withUnit(v.id, u, settings.unitSystem) } },
                     )
                 }
             }
@@ -130,7 +131,8 @@ private fun VariableRow(
     onText: (String) -> Unit,
     onUnit: (Int) -> Unit,
 ) {
-    val unit = variable.units[unitIndex]
+    val units = variable.shownUnits
+    val unit = units[unitIndex]
     val kind = valueKind(variable.quantity)
     Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         NumberField(
@@ -138,7 +140,7 @@ private fun VariableRow(
             value = text,
             onValueChange = onText,
             modifier = Modifier.weight(1f),
-            unit = if (variable.units.size == 1) unit.label else "",
+            unit = if (units.size == 1) unit.label else "",
             supportingText = computed?.let { "Solved: $it" } ?: variable.hint,
             allowNegative = variable.min == null || variable.min!! < 0,
             pickKinds = if (kind == ValueKind.NUMBER) emptySet() else setOf(kind),
@@ -148,13 +150,13 @@ private fun VariableRow(
                 }
             },
         )
-        if (variable.units.size > 1) {
+        if (units.size > 1) {
             ChoiceField(
                 label = "Unit",
-                options = variable.units.indices.toList(),
+                options = units.indices.toList(),
                 selected = unitIndex,
                 onSelect = onUnit,
-                optionLabel = { variable.units[it].label },
+                optionLabel = { units[it].label },
                 modifier = Modifier.width(104.dp).padding(top = 8.dp),
             )
         }

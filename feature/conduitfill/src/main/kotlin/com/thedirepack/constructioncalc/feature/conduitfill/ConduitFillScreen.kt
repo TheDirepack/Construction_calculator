@@ -7,6 +7,15 @@ import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 import com.thedirepack.constructioncalc.core.ui.components.ToggleRow
 
 import com.thedirepack.constructioncalc.feature.conduitfill.domain.toResults
+import com.thedirepack.constructioncalc.feature.conduitfill.domain.noticeTexts
+import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
+import com.thedirepack.constructioncalc.core.ui.tradeSizeLabel
+import com.thedirepack.constructioncalc.core.ui.conductorSizeLabel
+import com.thedirepack.constructioncalc.core.ui.show
+import com.thedirepack.constructioncalc.core.ui.isMetric
+import com.thedirepack.constructioncalc.core.ui.components.UnitField
+import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.electrical.explanations
 import com.thedirepack.constructioncalc.core.ui.components.SegmentedChoice
 import com.thedirepack.constructioncalc.core.model.ValueKind
@@ -70,9 +79,10 @@ fun ConduitFillScreen(host: ToolHost) {
         }
     }
 
+    val settings = rememberAppSettings()
     val inputs = vm.inputs
     val parsed = remember(inputs) { inputs.toRequest() }
-    val report = remember(parsed) { parsed.request?.let { ConduitFillReport.build(it) } }
+    val report = remember(parsed, settings) { parsed.request?.let { ConduitFillReport.build(it, settings) } }
     val derating = remember(inputs) { inputs.derating() }
     val deratingResults = remember(derating) { derating?.toResults().orEmpty() }
     val results = report?.results.orEmpty() + deratingResults
@@ -90,7 +100,7 @@ fun ConduitFillScreen(host: ToolHost) {
                 host.saveToProject(
                     ItemDraft(
                         toolId = ConduitFillTool.ID,
-                        title = "Conduit fill: ${conduit.displayName}",
+                        title = "Conduit fill: ${ConduitFillReport.conduitName(conduit, settings)}",
                         inputs = ToolInputs.encode(inputs),
                         results = results,
                         summary = r.summary,
@@ -107,10 +117,10 @@ fun ConduitFillScreen(host: ToolHost) {
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            ConduitSection(inputs, vm)
-            ConductorsSection(inputs, vm)
-            FitSection(inputs, vm)
-            DeratingSection(inputs, vm)
+            ConduitSection(inputs, vm, settings)
+            ConductorsSection(inputs, vm, settings)
+            FitSection(inputs, vm, settings)
+            DeratingSection(inputs, vm, settings)
 
             val notices = if (parsed.problems.isNotEmpty()) {
                 parsed.problems.map { Notice(it, NoticeLevel.ERROR) }
@@ -125,7 +135,7 @@ fun ConduitFillScreen(host: ToolHost) {
             Text("Ampacity derating", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             ResultCard(
                 results = deratingResults,
-                notices = derating?.let { d -> (d.explanations() + d.notes).map { Notice(it, NoticeLevel.INFO) } }
+                notices = derating?.let { d -> d.noticeTexts(settings).map { Notice(it, NoticeLevel.INFO) } }
                     ?: listOf(Notice("Enter the ambient temperature to see derating.", NoticeLevel.ERROR)),
                 emptyText = "Mark at least one insulated group as current-carrying to see derating.",
             )
@@ -140,7 +150,7 @@ private fun ReportSeverity.toLevel() = when (this) {
 }
 
 @Composable
-private fun ConduitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) {
+private fun ConduitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel, settings: AppSettings) {
     val type = ConduitType.fromCode(inputs.conduitType) ?: ConduitType.EMT
     val sizes = ConduitTable.sizes(type)
     val selected = TradeSize.fromLabel(inputs.tradeSize)?.let { ConduitTable.find(type, it) } ?: ConduitTable.nearest(type, TradeSize.S_3_4)
@@ -159,8 +169,8 @@ private fun ConduitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) 
             options = sizes,
             selected = selected,
             onSelect = { vm.setTradeSize(it.tradeSize) },
-            optionLabel = ::tradeSizeLabel,
-            supportingText = "Inside diameter ${fmt(selected.internalDiameterIn, 3)} in, area ${fmt(selected.area100SqIn, 3)} in² (${CodeRule.CONDUIT_DIMENSIONS.cite})",
+            optionLabel = { settings.tradeSizeLabel(it.tradeSize) },
+            supportingText = "Inside diameter ${settings.show(Measure.SMALL_LENGTH, selected.internalDiameterIn)}, area ${settings.show(Measure.SMALL_AREA, selected.area100SqIn, if (settings.isMetric) 0 else 3)} (${CodeRule.CONDUIT_DIMENSIONS.cite})",
         )
         ToggleRow(
             title = "Nipple, 24 in. or shorter",
@@ -172,7 +182,7 @@ private fun ConduitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) 
 }
 
 @Composable
-private fun ConductorsSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) {
+private fun ConductorsSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel, settings: AppSettings) {
     FormSection("Conductors") {
         inputs.groups.forEachIndexed { index, group ->
             OutlinedCard(Modifier.fillMaxWidth()) {
@@ -198,7 +208,7 @@ private fun ConductorsSection(inputs: ConduitFillInputs, vm: ConduitFillViewMode
                             options = sizesFor(group.insulation),
                             selected = size,
                             onSelect = { vm.setSize(index, it) },
-                            optionLabel = ::sizeLabel,
+                            optionLabel = { sizeLabel(it, settings) },
                             modifier = Modifier.weight(0.62f),
                         )
                     }
@@ -232,7 +242,7 @@ private fun ConductorsSection(inputs: ConduitFillInputs, vm: ConduitFillViewMode
 }
 
 @Composable
-private fun FitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) {
+private fun FitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel, settings: AppSettings) {
     val size = ConductorSize.fromLabel(inputs.fitSize) ?: ConductorSize.AWG_12
     FormSection("How many fit") {
         Text(
@@ -254,7 +264,7 @@ private fun FitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) {
                 options = sizesFor(inputs.fitInsulation),
                 selected = size,
                 onSelect = vm::setFitSize,
-                optionLabel = ::sizeLabel,
+                optionLabel = { sizeLabel(it, settings) },
                 modifier = Modifier.weight(0.4f),
             )
         }
@@ -267,32 +277,26 @@ private val insulationCodes: List<String> = InsulationType.entries.map { it.code
 private fun insulationLabel(code: String) =
     if (code == BARE_CODE) "Bare / equipment ground" else InsulationType.fromCode(code)?.label ?: code
 
-private fun tradeSizeLabel(size: ConduitSize) = "${size.tradeSize.display} (metric ${size.tradeSize.metricDesignator})"
 
 // "1/0 AWG" would be typeset as the fraction 1⁄0 by the shared fraction formatter; a division slash avoids that.
-private fun sizeLabel(size: ConductorSize) = size.label.replace("/0", "∕0")
+private fun sizeLabel(size: ConductorSize, settings: AppSettings) = settings.conductorSizeLabel(size).replace("/0", "∕0")
 
 private fun fmt(value: Double, decimals: Int) = com.thedirepack.constructioncalc.core.measure.Decimals.fixed(value, decimals)
 
 @Composable
-private fun DeratingSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) {
+private fun DeratingSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel, settings: AppSettings) {
     FormSection("Derating conditions") {
-        NumberField(
+        UnitField(
             label = "Ambient temperature",
+            measure = Measure.TEMPERATURE,
             value = inputs.ambientC,
             onValueChange = vm::setAmbient,
-            unit = "°C",
-            allowNegative = true,
             pickKinds = setOf(ValueKind.TEMPERATURE),
-            onPick = { picked ->
-                // Shared temperatures are °F; convert to °C for the NEC tables.
-                picked.rational?.toDouble()?.let { f -> vm.setAmbient(fmt((f - 32) * 5 / 9, 1)) }
-            },
-            supportingText = "NEC tables are based on 30 °C (86 °F)",
+            supportingText = "NEC tables are based on ${settings.show(Measure.TEMPERATURE, 30.0, 0)} (${if (settings.isMetric) "86 °F" else "30 °C"})",
         )
         ToggleRow(
             title = "Rooftop, in sunlight",
-            detail = "Less than 3/4 in. above the roof: +33 °C (${CodeRule.ROOFTOP_ADDER.cite}); XHHW-2 is exempt",
+            detail = "Less than 3/4 in. above the roof: ${if (settings.isMetric) "+33 °C" else "+60 °F"} (${CodeRule.ROOFTOP_ADDER.cite}); XHHW-2 is exempt",
             checked = inputs.rooftop,
             onCheckedChange = vm::setRooftop,
         )

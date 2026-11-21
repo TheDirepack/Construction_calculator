@@ -6,6 +6,8 @@ import com.thedirepack.constructioncalc.core.model.ValueKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
+import com.thedirepack.constructioncalc.core.data.AppSettings
 
 class FormulasOutputTest {
     private fun inputs(id: String, vararg values: Pair<String, String>) =
@@ -69,5 +71,23 @@ class FormulasOutputTest {
         assertEquals("12.35", FormulasText.number(12.3456))
         assertEquals("83138.4", FormulasText.number(83138.43))
         assertEquals("0", FormulasText.number(0.0))
+    }
+
+    @Test
+    fun lengthDefaultsToMetersInMetric() {
+        val metric = AppSettings(unitSystem = UnitSystem.METRIC)
+        val i = inputs("voltage-drop-single-phase", "I" to "20", "CM" to "6530", "VD" to "3.6")
+        val imperial = formulasOutput(i)
+        val si = formulasOutput(i, metric)
+        assertEquals("ft", imperial.results.first { it.key.endsWith(".L") }.text.substringAfterLast(' '))
+        assertEquals("m", si.results.first { it.key.endsWith(".L") }.text.substringAfterLast(' '))
+        // published exact value (inches) is identical
+        assertEquals(imperial.results.first { it.key.endsWith(".L") }.exact, si.results.first { it.key.endsWith(".L") }.exact)
+        // typed meters become feet: 30.48 m = 100 ft
+        val typed = inputs("voltage-drop-single-phase", "L" to "30.48")
+        assertEquals(100.0, typed.given(UnitSystem.METRIC)["L"]!!, 1e-9)
+        assertEquals(30.48, typed.given(UnitSystem.IMPERIAL)["L"]!!, 1e-9)
+        assertEquals(1, typed.unitIndex("L", UnitSystem.METRIC))
+        assertEquals(0, typed.unitIndex("L", UnitSystem.IMPERIAL))
     }
 }

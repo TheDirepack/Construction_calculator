@@ -12,6 +12,7 @@ import com.thedirepack.constructioncalc.feature.conversions.domain.UnitTable
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -78,8 +79,8 @@ class ConversionsOutputTest {
         assertEquals(setOf(ValueKind.NUMBER), kindOf(ConversionCategory.SPEED, "mph"))
         assertEquals(setOf(ValueKind.NUMBER), kindOf(ConversionCategory.RESISTANCE_LENGTH, "okft"))
 
-        // exact values are in the base unit: 100 °C is 212 °F, 1 US gal is 231 cu in, 1 hp ≈ 745.7 W
-        assertEquals(Rational.of(212), table(ConversionCategory.TEMPERATURE, "c", "100").results.first().rational)
+        // exact values are in the base unit: 100 °C is the base value 100 (°C), 1 US gal is 231 cu in, 1 hp ≈ 745.7 W
+        assertEquals(Rational.of(100), table(ConversionCategory.TEMPERATURE, "c", "100").results.first().rational)
         assertEquals(Rational.of(231), table(ConversionCategory.VOLUME, "gal", "1").results.first().rational)
         assertEquals(745.7, table(ConversionCategory.POWER, "hp", "1").results.first().rational!!.toDouble(), 0.001)
         assertEquals(Rational.of(144), table(ConversionCategory.AREA, "sqft", "1").results.first().rational)
@@ -88,6 +89,26 @@ class ConversionsOutputTest {
         assertEquals(Rational.ONE, energy.first { it.key == "kwh" }.rational)
         assertEquals(Rational.of(3600), energy.first { it.key == "kj" }.rational)
         assertEquals("3600 kJ", energy.first { it.key == "kj" }.text)
+    }
+
+    @Test fun temperatureBasePublishedInCelsiusFromFahrenheitToo() {
+        assertEquals(Rational.of(100), table(ConversionCategory.TEMPERATURE, "f", "212").results.first().rational)
+        assertEquals(Rational.of(-40), table(ConversionCategory.TEMPERATURE, "f", "-40").results.first().rational)
+    }
+
+    @Test fun outputIsTheSameInBothSystems() {
+        val metric = AppSettings(unitSystem = UnitSystem.METRIC)
+        val inputs = ConversionsInputs(category = ConversionCategory.TEMPERATURE, fromUnit = "c", value = "100")
+        assertEquals(conversionsOutput(inputs, settings).results.map { it.text }, conversionsOutput(inputs, metric).results.map { it.text })
+    }
+
+    @Test fun defaultUnitsFollowTheSystem() {
+        assertEquals("sqft", UnitTable.defaultUnitId(ConversionCategory.AREA))
+        assertEquals("m2", UnitTable.defaultUnitId(ConversionCategory.AREA, UnitSystem.METRIC))
+        assertEquals("c", UnitTable.defaultUnitId(ConversionCategory.TEMPERATURE, UnitSystem.METRIC))
+        assertEquals("f", UnitTable.defaultUnitId(ConversionCategory.TEMPERATURE, UnitSystem.IMPERIAL))
+        assertEquals(UnitTable.CALCULATOR_ID, UnitTable.defaultUnitId(ConversionCategory.LENGTH, UnitSystem.METRIC))
+        assertEquals("kw", UnitTable.defaultUnitId(ConversionCategory.POWER, UnitSystem.METRIC))
     }
 
     @Test fun temperatureBelowAbsoluteZeroIsRejected() {

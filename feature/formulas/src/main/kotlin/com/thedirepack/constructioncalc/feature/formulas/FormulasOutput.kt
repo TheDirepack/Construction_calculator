@@ -5,6 +5,7 @@ import com.thedirepack.constructioncalc.core.electrical.formula.FormulaQuantity
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaSolution
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaSolver
 import com.thedirepack.constructioncalc.core.electrical.formula.Variable
+import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ValueKind
@@ -37,7 +38,7 @@ object FormulasText {
 
     /** [base] (in the variable's base unit) in the unit at [unitIndex], with its label: `83.14 kVA`. */
     fun withUnit(variable: Variable, base: Double, unitIndex: Int): String {
-        val unit = variable.units[unitIndex]
+        val unit = variable.shownUnits[unitIndex]
         val shown = number(base / unit.factor)
         return if (unit.label.isEmpty()) shown else if (unit.label.startsWith("$/") || unit.label.startsWith("/")) "$shown ${unit.label}"
         else if (unit.label == "$") "$$shown" else "$shown ${unit.label}"
@@ -62,10 +63,11 @@ internal fun publishedValue(q: FormulaQuantity, base: Double): Double = if (q ==
 /** A picked result's exact value → this variable's base unit. */
 internal fun fromPublished(q: FormulaQuantity, exact: Double): Double = if (q == FormulaQuantity.LENGTH) exact / 12 else exact
 
-fun formulasOutput(inputs: FormulaInputs): FormulasOutput {
+fun formulasOutput(inputs: FormulaInputs, settings: AppSettings = AppSettings()): FormulasOutput {
+    val system = settings.unitSystem
     val formula = inputs.formula
-    val solution = FormulaSolver.solve(formula, inputs.given())
-    fun text(id: String, base: Double) = FormulasText.withUnit(formula.variable(id), base, inputs.unitIndex(id))
+    val solution = FormulaSolver.solve(formula, inputs.given(system))
+    fun text(id: String, base: Double) = FormulasText.withUnit(formula.variable(id), base, inputs.unitIndex(id, system))
 
     val ordered = solution.steps.map { it.variableId }.distinct() + formula.variables.map { it.id }.filter { it !in solution.computed }
     val results = ordered.mapNotNull { id ->
@@ -75,7 +77,7 @@ fun formulasOutput(inputs: FormulaInputs): FormulasOutput {
         val shown = text(id, base)
         val label = "${v.name} (${v.symbol})"
         if (kind == ValueKind.NUMBER) {
-            ResultValue.number("${formula.id}.${v.id}", label, kind, base / v.units[inputs.unitIndex(id)].factor, shown)
+            ResultValue.number("${formula.id}.${v.id}", label, kind, base / v.shownUnits[inputs.unitIndex(id, system)].factor, shown)
         } else {
             ResultValue.number("${formula.id}.${v.id}", label, kind, publishedValue(v.quantity, base), shown)
         }
@@ -89,7 +91,7 @@ fun formulasOutput(inputs: FormulaInputs): FormulasOutput {
             add(Notice("The entered values don't agree with ${solution.conflicts.joinToString(", ")}. Clear one of them to solve for it.", NoticeLevel.WARNING))
         }
         if (solution.steps.isEmpty() && solution.unknown.isNotEmpty()) {
-            add(Notice(needMore(formula, inputs), NoticeLevel.INFO))
+            add(Notice(needMore(formula, inputs, system), NoticeLevel.INFO))
         } else if (solution.unknown.isNotEmpty()) {
             add(Notice("Not enough to find ${solution.unknown.joinToString(", ") { formula.variable(it).name.lowercase() }}.", NoticeLevel.INFO))
         }
@@ -99,5 +101,5 @@ fun formulasOutput(inputs: FormulaInputs): FormulasOutput {
     return FormulasOutput(solution, results, steps, notices, computed)
 }
 
-private fun needMore(formula: Formula, inputs: FormulaInputs): String =
-    if (inputs.given().isEmpty()) "Enter the values you know; the empty ones are solved for." else "Enter one more value to solve."
+private fun needMore(formula: Formula, inputs: FormulaInputs, system: com.thedirepack.constructioncalc.core.measure.UnitSystem): String =
+    if (inputs.given(system).isEmpty()) "Enter the values you know; the empty ones are solved for." else "Enter one more value to solve."

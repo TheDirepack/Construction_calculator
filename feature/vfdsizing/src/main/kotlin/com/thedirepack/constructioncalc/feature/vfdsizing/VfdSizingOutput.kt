@@ -10,6 +10,10 @@ import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.ui.components.Notice
 import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import com.thedirepack.constructioncalc.core.ui.formatDecimal
+import com.thedirepack.constructioncalc.core.ui.show
+import com.thedirepack.constructioncalc.core.ui.isMetric
+import com.thedirepack.constructioncalc.core.data.AppSettings
+import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.LoadType
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.OutputBasis
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.RatingUnit
@@ -38,7 +42,14 @@ private fun currentResult(key: String, label: String, value: Double) =
 private fun percentResult(key: String, label: String, value: Double) =
     decimalResult(key, label, ValueKind.PERCENT, value, formatDecimal(value, 1) + " %")
 
-internal fun vfdSizingOutput(inputs: VfdSizingInputs): VfdSizingOutput {
+/** A temperature in the user's system: `75 °C` or `167 °F`. */
+internal fun tempLabel(celsius: Int, settings: AppSettings) = settings.show(Measure.TEMPERATURE, celsius.toDouble(), 0)
+
+/** A temperature rise (a difference): 40 °C is 72 °F, no +32. */
+internal fun riseLabel(celsius: Int, settings: AppSettings) =
+    if (settings.isMetric) "$celsius °C" else "${celsius * 9 / 5} °F"
+
+internal fun vfdSizingOutput(inputs: VfdSizingInputs, settings: AppSettings = AppSettings()): VfdSizingOutput {
     val parsed = inputs.parse()
     val errors = parsed.problems.map { Notice(it, NoticeLevel.ERROR) }
     val request = parsed.request ?: return VfdSizingOutput(emptyList(), errors, "")
@@ -76,7 +87,7 @@ internal fun vfdSizingOutput(inputs: VfdSizingInputs): VfdSizingOutput {
         add(ResultValue.text("fuse_max", "Max dual-element fuse (175 %)", result.fuseMax?.let { "$it A" } ?: BEYOND_OCPD))
     }
 
-    return VfdSizingOutput(results, notices(inputs, parsed.convertedHp, request, result, errors), summary(request, result))
+    return VfdSizingOutput(results, notices(inputs, parsed.convertedHp, request, result, errors, settings), summary(request, result))
 }
 
 private val BEYOND_TABLE = "Larger than ${CodeRule.AMPACITY_TABLE.cite} allows"
@@ -88,6 +99,7 @@ private fun notices(
     request: VfdRequest,
     result: VfdResult,
     errors: List<Notice>,
+    settings: AppSettings,
 ): List<Notice> = buildList {
     addAll(errors)
     val hpText = MotorFullLoadCurrent.label(request.hp)
@@ -157,7 +169,7 @@ private fun notices(
     }
     add(
         Notice(
-            "Ampacity from ${Code.label} ${CodeRule.AMPACITY_TABLE.cite} (${request.material.label.lowercase()}, ${request.termination.label} column, 30 °C ambient, not more than three " +
+            "Ampacity from ${Code.label} ${CodeRule.AMPACITY_TABLE.cite} (${request.material.label.lowercase()}, ${request.termination.label} column, ${tempLabel(30, settings)} ambient, not more than three " +
                 "current-carrying conductors). Ambient and conductor-count adjustment factors are not applied, and ${CodeRule.TERMINATION_TEMPERATURE.cite} termination limits are applied only through the column you chose.",
         ),
     )
@@ -178,7 +190,7 @@ private fun notices(
     add(
         Notice(
             "Overload: the drive's electronic overload usually serves (${CodeRule.DRIVE_OVERLOAD.cite}). When set from the nameplate, 125 % of FLA applies to motors with service factor 1.15 or more " +
-                "or marked temperature rise of 40 °C or less, otherwise 115 % (${CodeRule.MOTOR_OVERLOAD.cite}). Edition: ${Code.label} (NFPA 70); your jurisdiction may use another.",
+                "or marked temperature rise of ${riseLabel(40, settings)} or less, otherwise 115 % (${CodeRule.MOTOR_OVERLOAD.cite}). Edition: ${Code.label} (NFPA 70); your jurisdiction may use another.",
         ),
     )
 }

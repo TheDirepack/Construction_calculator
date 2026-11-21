@@ -10,6 +10,8 @@ import com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillInputs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
+import com.thedirepack.constructioncalc.core.data.AppSettings
 
 /** Hand-checked against NEC 2023 Tables 310.16, 310.15(B)(1)(1), 310.15(C)(1) and 240.4(B)/(D). */
 class FillDeratingTest {
@@ -72,5 +74,17 @@ class FillDeratingTest {
         val d = ConduitFillInputs().derating()!!
         assertEquals(3, d.currentCarrying)
         assertNull(ConduitFillInputs(ambientC = "hot").derating())
+    }
+
+    @Test fun temperatureTextFollowsTheSystem() {
+        val imperial = AppSettings()
+        val metric = AppSettings(unitSystem = UnitSystem.METRIC)
+        val rooftop = "Rooftop in sunlight under 3/4 in.: +33 °C (310.15(B)(2))."
+        assertEquals("Rooftop in sunlight under 3/4 in.: +60 °F (310.15(B)(2)).", localizeTemperatures(rooftop, imperial))
+        assertEquals(rooftop, localizeTemperatures(rooftop, metric))
+        assertEquals("× 0.96 (97 °F)", localizeTemperatures("× 0.96 (36 °C)", imperial))
+        assertEquals("× 0.96 (36 °C)", localizeTemperatures("× 0.96 (36 °C)", metric))
+        assertEquals("(86 °F basis)", localizeTemperatures("(30 °C basis)", imperial))
+        assertEquals("terminals limited to 75 °C", localizeTemperatures("terminals limited to 75 °C", imperial, keepRatings = true))
     }
 }

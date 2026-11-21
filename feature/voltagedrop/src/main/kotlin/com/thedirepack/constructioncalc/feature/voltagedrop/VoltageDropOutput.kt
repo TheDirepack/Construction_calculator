@@ -13,6 +13,10 @@ import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.ui.components.Notice
 import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import com.thedirepack.constructioncalc.core.ui.format
+import com.thedirepack.constructioncalc.core.ui.conductorSizeLabel
+import com.thedirepack.constructioncalc.core.ui.show
+import com.thedirepack.constructioncalc.core.ui.isMetric
+import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.ui.formatDecimal
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.Method
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDrop
@@ -29,11 +33,15 @@ internal data class VoltageDropOutput(
     val summary: String,
 )
 
+/** A table temperature in the user's system; imperial keeps the NEC's °C beside it: `167 °F (75 °C)`. */
+internal fun tempBoth(celsius: Double, settings: AppSettings) =
+    if (settings.isMetric) settings.show(Measure.TEMPERATURE, celsius, 0) else Measure.TEMPERATURE.formatBoth(celsius, settings.unitSystem, 0)
+
 internal fun materialShort(material: ConductorMaterial) = material.shortLabel
 
-internal fun sizeText(request: VoltageDropRequest, size: com.thedirepack.constructioncalc.core.electrical.ConductorSize) =
+internal fun sizeText(request: VoltageDropRequest, size: com.thedirepack.constructioncalc.core.electrical.ConductorSize, settings: AppSettings) =
     buildString {
-        append(size.label).append(' ').append(materialShort(request.material))
+        append(settings.conductorSizeLabel(size)).append(' ').append(materialShort(request.material))
         if (request.parallelSets > 1) append(" × ").append(request.parallelSets).append(" sets")
     }
 
@@ -54,7 +62,7 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
             ResultValue.text(
                 "min_size",
                 "Smallest size for ${formatDecimal(request.targetPercent, 2)} %",
-                smallest?.let { sizeText(request, it) } ?: "None up to ${VoltageDrop.supportedSizes(request.material, request.method).last().label}",
+                smallest?.let { sizeText(request, it, settings) } ?: "None up to ${VoltageDrop.supportedSizes(request.material, request.method).last().label}",
             ),
         )
         add(maxLengthResult(result, settings))
@@ -67,7 +75,7 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
                 Notice(
                     "Drop is ${formatDecimal(result.percent, 2)} %, above your ${formatDecimal(request.targetPercent, 2)} % target." +
                         when {
-                            smallest != null -> " ${sizeText(request, smallest)} would meet it."
+                            smallest != null -> " ${sizeText(request, smallest, settings)} would meet it."
                             request.parallelSets < VoltageDrop.MAX_SETS -> " No single size is large enough; try more parallel sets."
                             else -> " No listed size is large enough."
                         },
@@ -75,7 +83,7 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
                 ),
             )
         }
-        add(Notice("Assumes conductors at ${VoltageDrop.CONDUCTOR_TEMPERATURE_C} °C and a balanced load.", NoticeLevel.INFO))
+        add(Notice("Assumes conductors at ${tempBoth(VoltageDrop.CONDUCTOR_TEMPERATURE_C.toDouble(), settings)} and a balanced load.", NoticeLevel.INFO))
         add(
             Notice(
                 when (request.method) {
@@ -83,7 +91,7 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
                         "Impedance from NEC ${CodeRule.AC_IMPEDANCE.cite} (${request.conduit.label} conduit, ${request.material.label.lowercase()}), " +
                             "effective Z at power factor ${formatDecimal(request.powerFactor, 3)}."
                     Method.DC_TABLE_8 ->
-                        "Resistance from NEC ${CodeRule.CONDUCTOR_PROPERTIES.cite}, DC at 75 °C, ${request.stranding.label.lowercase()} " +
+                        "Resistance from NEC ${CodeRule.CONDUCTOR_PROPERTIES.cite}, DC at ${tempBoth(75.0, settings)}, ${request.stranding.label.lowercase()} " +
                             "${request.material.label.lowercase()}. Ignores reactance."
                 },
                 NoticeLevel.INFO,
@@ -114,7 +122,7 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
         append(if (request.system == AcPhases.SINGLE) "1-phase" else "3-phase").append(", ")
         append(formatDecimal(request.amps, 2)).append(" A, ")
         append(settings.format(Quantity.feet(Rational.of(request.lengthFeet)))).append(" of ")
-        append(sizeText(request, request.size)).append(": ")
+        append(sizeText(request, request.size, settings)).append(": ")
         append(formatDecimal(result.dropVolts, 2)).append(" V (").append(formatDecimal(result.percent, 2)).append(" %)")
     }
     return VoltageDropOutput(results, notices, summary)

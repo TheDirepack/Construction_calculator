@@ -17,6 +17,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 
 class VoltageDropInputsTest {
     private val filled = VoltageDropInputs(
@@ -111,5 +112,19 @@ class VoltageDropInputsTest {
         assertEquals("1000 kcmil", vm.inputs.size)
         vm.update { it.copy(size = "14 AWG", material = "ALUMINUM") }
         assertEquals("12 AWG", vm.inputs.size)
+    }
+
+    @Test fun lengthsAndTemperaturesFollowTheSystem() {
+        val metric = AppSettings(unitSystem = UnitSystem.METRIC)
+        val imperial = voltageDropOutput(filled, AppSettings())
+        val si = voltageDropOutput(filled, metric)
+        assertTrue(imperial.notices.any { it.text.contains("167 °F (75 °C)") })
+        assertTrue(si.notices.any { it.text.contains("75 °C") && !it.text.contains("°F") })
+        assertTrue(imperial.summary, imperial.summary.contains("100'"))
+        assertTrue(si.summary, si.summary.contains(" m of "))
+        assertTrue(si.results.first { it.key == "max_length" }.text.endsWith(" m"))
+        // exact values and electrical results don't change with the system
+        assertEquals(imperial.results.map { it.exact }, si.results.map { it.exact })
+        assertEquals(imperial.results.first().text, si.results.first().text)
     }
 }

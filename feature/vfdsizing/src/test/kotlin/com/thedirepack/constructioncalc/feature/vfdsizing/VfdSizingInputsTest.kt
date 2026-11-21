@@ -13,6 +13,8 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
+import com.thedirepack.constructioncalc.core.data.AppSettings
 
 class VfdSizingInputsTest {
     @Test fun savedInputsRoundTripAndDefaultsDecode() {
@@ -68,5 +70,19 @@ class VfdSizingInputsTest {
         val out = vfdSizingOutput(VfdSizingInputs(unit = RatingUnit.KW))
         assertTrue(out.results.isEmpty())
         assertEquals("", out.summary)
+    }
+
+    @Test fun temperaturesFollowTheSystem() {
+        val inputs = VfdSizingInputs(hp = 10.0, volts = 460, nameplateFla = "13")
+        val imperial = vfdSizingOutput(inputs, AppSettings())
+        val si = vfdSizingOutput(inputs, AppSettings(unitSystem = UnitSystem.METRIC))
+        assertTrue(imperial.notices.any { it.text.contains("86 °F ambient") })
+        assertTrue(imperial.notices.any { it.text.contains("rise of 72 °F") })
+        assertTrue(si.notices.any { it.text.contains("30 °C ambient") })
+        assertTrue(si.notices.any { it.text.contains("rise of 40 °C") })
+        assertEquals(imperial.results.map { it.exact }, si.results.map { it.exact })
+        assertEquals("212 °F", tempLabel(100, AppSettings()))
+        assertEquals("40 °C", riseLabel(40, AppSettings(unitSystem = UnitSystem.METRIC)))
+        assertEquals("72 °F", riseLabel(40, AppSettings()))
     }
 }
