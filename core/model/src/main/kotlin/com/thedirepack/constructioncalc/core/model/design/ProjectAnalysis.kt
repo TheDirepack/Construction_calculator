@@ -16,6 +16,7 @@ import com.thedirepack.constructioncalc.core.electrical.CurrentCarryingConductor
 import com.thedirepack.constructioncalc.core.electrical.EquipmentGroundingConductor
 import com.thedirepack.constructioncalc.core.electrical.InsulatedConductorArea
 import com.thedirepack.constructioncalc.core.electrical.InsulationType
+import com.thedirepack.constructioncalc.core.electrical.RacewayBends
 import com.thedirepack.constructioncalc.core.electrical.Table9Conduit
 import com.thedirepack.constructioncalc.core.electrical.WireSizingRequest
 import com.thedirepack.constructioncalc.core.electrical.WireSizingResult
@@ -26,6 +27,7 @@ import com.thedirepack.constructioncalc.core.model.ConductorSpec
 import com.thedirepack.constructioncalc.core.model.Panel
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.Run
+import com.thedirepack.constructioncalc.core.model.RunPath
 import kotlin.math.sqrt
 
 /** How much a design note matters: [WARNING]s are problems to fix; [INFO] explains a figure. */
@@ -104,8 +106,10 @@ data class RunDesign(
     val fillPercent: Double?,
     val smallestFitting: ConduitSize?,
     val notes: List<DesignNote>,
-    /** Total degrees of the bends saved to this run from Conduit Bending, or null if none were saved. */
+    /** Total degrees of the run's path bends (or, without a path, the bends saved from Conduit Bending); null if none. */
     val bendDegrees: Double? = null,
+    /** Bend degrees in each section between pull points (one entry without pull points); empty if no bends are known. */
+    val sectionDegrees: List<Double> = emptyList(),
 )
 
 data class PanelDesign(
@@ -142,8 +146,8 @@ object ProjectAnalysis {
     const val BEND_TOOL_ID = "conduit-bending"
     const val BEND_DEGREES_KEY = "bend_degrees"
 
-    /** Most raceway articles allow at most 360° of bends between pull points (358.26, 344.26, 352.26…). */
-    const val MAX_BEND_DEGREES = 360.0
+    /** Raceway articles allow at most 360° of bends between pull points (NEC 2023 358.24(B), 344.24(B)…; see [RacewayBends]). */
+    const val MAX_BEND_DEGREES = RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS
     private data class DropSegment(val lengthInches: Double, val conduit: Table9Conduit)
 
     private data class PhaseLoad(
@@ -503,13 +507,27 @@ object ProjectAnalysis {
             conduit == null -> FillStatus.TOO_MANY_FOR_ANY_SIZE
             else -> FillStatus.OK
         }
-        val bends = run.items.filter { it.toolId == BEND_TOOL_ID }
-            .mapNotNull { item -> item.results.firstOrNull { it.key == BEND_DEGREES_KEY }?.rational?.toDouble() }
-        val bendDegrees = bends.takeIf { it.isNotEmpty() }?.sum()
-        if (bendDegrees != null && bendDegrees > MAX_BEND_DEGREES + 1e-9) {
-            notes += warn("Saved bends total ${fmt(bendDegrees)}°: more than ${MAX_BEND_DEGREES.toInt()}° between pull points (e.g. NEC 358.26, 344.26). Add a pull point.")
+        // Bends: the run's path when it has one (split at its pull points), else the bends saved from Conduit Bending.
+        val sectionDegrees = if (run.path.isNotEmpty()) {
+            RunPath.degreesPerSection(run.path)
+        } else {
+            run.items.filter { it.toolId == BEND_TOOL_ID }
+                .mapNotNull { item -> item.results.firstOrNull { it.key == BEND_DEGREES_KEY }?.rational?.toDouble() }
+                .takeIf { it.isNotEmpty() }?.let { listOf(it.sum()) }.orEmpty()
         }
-        return RunDesign(run, members, ccc, adjustment, ambient, ambientFactor, status, entries, total, area, limit, conduit, fill, smallest, notes, bendDegrees)
+        val bendDegrees = sectionDegrees.takeIf { it.isNotEmpty() }?.sum()
+        val section = RacewayBends.section(raceway?.conduitType ?: ConduitType.EMT)
+        sectionDegrees.forEachIndexed { i, degrees ->
+            if (degrees > MAX_BEND_DEGREES + 1e-9) {
+                val where = when {
+                    run.path.isEmpty() -> "Saved bends total"
+                    sectionDegrees.size == 1 -> "The path's bends total"
+                    else -> "Pull section ${i + 1} has"
+                }
+                notes += warn("$where ${fmt(degrees)}°: more than ${MAX_BEND_DEGREES.toInt()}° between pull points (NEC $section). Add a pull point.")
+            }
+        }
+        return RunDesign(run, members, ccc, adjustment, ambient, ambientFactor, status, entries, total, area, limit, conduit, fill, smallest, notes, bendDegrees, sectionDegrees)
     }
 
     private fun designPanel(panel: Panel, loads: Map<CircuitRef, Load?>): PanelDesign {

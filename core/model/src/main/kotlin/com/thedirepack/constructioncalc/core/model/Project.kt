@@ -90,10 +90,16 @@ data class Project(
         updatedAt = now,
     )
 
-    fun removeItem(itemId: String, now: Long) = copy(
-        runs = runs.map { run -> run.copy(items = run.items.filterNot { it.id == itemId }) },
-        updatedAt = now,
-    )
+    /** Removes an item, and any bends it added to its run's path (keeping the run length in step). */
+    fun removeItem(itemId: String, now: Long): Project {
+        val owner = item(itemId)?.first
+        val removed = copy(
+            runs = runs.map { run -> run.copy(items = run.items.filterNot { it.id == itemId }) },
+            updatedAt = now,
+        )
+        if (owner == null || !RunPath.hasSource(owner.path, itemId)) return removed
+        return removed.withRunPath(owner.id, RunPath.removeSource(owner.path, itemId), now)
+    }
 
     fun moveItem(itemId: String, toRunId: String, toIndex: Int, now: Long): Project {
         val (_, item) = item(itemId) ?: return this
@@ -118,7 +124,14 @@ data class Project(
         updatedAt = now,
         archived = false,
         archivedAt = null,
-        runs = runs.map { run -> run.copy(items = run.items.map { it.copy(id = newId()) }) },
+        runs = runs.map { run ->
+            val ids = run.items.associate { it.id to newId() }
+            run.copy(
+                items = run.items.map { it.copy(id = ids.getValue(it.id)) },
+                // Path bends follow their source item to its new id.
+                path = run.path.map { s -> if (s is PathSegment.Bend && s.sourceItemId != null) s.copy(sourceItemId = ids[s.sourceItemId]) else s },
+            )
+        },
         // Run, panel and circuit ids are kept: they're only referenced inside this project.
     )
 
@@ -130,7 +143,7 @@ data class Project(
 }
 
 /**
- * A run inside a project. Usually a conduit run ([raceway] set) whose circuits, bends, fill and
+ * A run inside a project. Usually a conduit run ([raceway] set) whose circuits, path, bends, fill and
  * pull results all live together; or just a group of saved results (a wall, a room) when
  * [raceway] is null.
  */
@@ -141,7 +154,17 @@ data class Run(
     val note: String = "",
     val items: List<ProjectItem> = emptyList(),
     val raceway: Raceway? = null,
-)
+    /**
+     * The conduit's route from start to end: straights, bends and pull points. Shared by Conduit
+     * Bending, Panels and the Wire Pull Planner. When it isn't empty, [Raceway.length] is its
+     * routed length (see [withRunPath]).
+     */
+    val path: List<PathSegment> = emptyList(),
+) {
+    init {
+        require(path.size <= RunPath.MAX_SEGMENTS) { "Run path has too many segments" }
+    }
+}
 
 /**
  * A saved result from a tool.
