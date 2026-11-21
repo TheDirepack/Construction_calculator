@@ -20,6 +20,7 @@ enum class ReelMode(val label: String) {
 enum class DrumMeasurement(val label: String) {
     DIAMETER("Diameter"),
     CIRCUMFERENCE("Circumference"),
+    FLANGE_TO_CORE("Depth from flange rim"),
 }
 
 /** What a saved Reel Length item stores in `ProjectItem.inputs`. Never rename a field. */
@@ -41,6 +42,7 @@ data class ReelLengthInputs(
     val packingFactor: String = "1",
     val drumMeasurement: DrumMeasurement = DrumMeasurement.DIAMETER,
     val drumCircumference: StoredQuantity? = null,
+    val flangeToCore: StoredQuantity? = null,
 ) {
     companion object {
         val DEFAULT_CLEARANCE: StoredQuantity = StoredQuantity.of(Quantity.inches(Rational.of(2)))
@@ -66,9 +68,13 @@ fun ReelLengthInputs.parse(): ParsedReel {
     }
 
     val f = inches(flange, "Flange diameter")
+    val depth = if (drumMeasurement == DrumMeasurement.FLANGE_TO_CORE) {
+        inches(flangeToCore, "Depth from flange rim to bare core")
+    } else null
     val d = when (drumMeasurement) {
         DrumMeasurement.DIAMETER -> inches(drum, "Drum diameter")
         DrumMeasurement.CIRCUMFERENCE -> inches(drumCircumference, "Drum circumference")?.div(PI)
+        DrumMeasurement.FLANGE_TO_CORE -> if (f != null && depth != null) f - 2 * depth else null
     }
     val w = inches(traverse, "Traverse")
     val x = if (mode == ReelMode.REMAINING) inches(distance, "Distance from flange edge") else inches(clearance, "Clearance")
@@ -76,6 +82,9 @@ fun ReelLengthInputs.parse(): ParsedReel {
     val packing = if (packingFactor.isBlank()) 1.0 else parseNumber(packingFactor)
 
     if (packing == null) return ParsedReel(null, missing, listOf("Packing factor isn't a number."))
+    if (depth != null && (depth <= 0 || (f != null && depth >= f / 2))) {
+        return ParsedReel(null, missing, listOf("The depth to the bare core must be above zero and less than the flange radius."))
+    }
     if (missing.isNotEmpty()) return ParsedReel(null, missing, emptyList())
     val request = ReelRequest(f!!, d!!, w!!, od!!, x!!, packing)
     val problems = ReelLength.problems(request)

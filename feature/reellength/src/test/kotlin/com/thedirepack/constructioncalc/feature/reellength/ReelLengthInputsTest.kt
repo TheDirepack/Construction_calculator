@@ -56,6 +56,22 @@ class ReelLengthInputsTest {
         assertEquals(listOf("Drum circumference"), circumference.copy(drumCircumference = null).parse().missing)
     }
 
+    @Test fun flangeToCoreDepthUsesTheRadialDistanceTwice() {
+        val depth = filled.copy(
+            drum = null,
+            drumMeasurement = DrumMeasurement.FLANGE_TO_CORE,
+            flangeToCore = inches(9), // 30 in flange − 2 × 9 in depth = 12 in core
+        )
+        val restored = ToolInputs.decode<ReelLengthInputs>(ToolInputs.encode(depth))!!
+        assertEquals(depth, restored)
+        assertEquals(12.0, restored.parse().request!!.drumDiameter, 1e-9)
+        assertEquals(reelLengthOutput(filled, AppSettings()).results, reelLengthOutput(restored, AppSettings()).results)
+        for (invalidDepth in listOf(inches(-1), inches(0), inches(15))) {
+            assertNull(depth.copy(flangeToCore = invalidDepth).parse().request)
+            assertTrue(depth.copy(flangeToCore = invalidDepth).parse().problems.isNotEmpty())
+        }
+    }
+
     @Test fun remainingResults() {
         val out = reelLengthOutput(filled, AppSettings())
         val byKey = out.results.associateBy { it.key }
@@ -80,5 +96,12 @@ class ReelLengthInputsTest {
         assertEquals(NoticeLevel.ERROR, tooDeep.notices.single().level)
         assertEquals(listOf("Packing factor isn't a number."), filled.copy(packingFactor = "1.2.3").parse().problems)
         assertTrue(filled.copy(cableDiameter = inches(0)).parse().problems.isNotEmpty())
+    }
+
+    @Test fun outOfRangeEstimateShowsAnErrorInsteadOfFormattingInfinity() {
+        val largeFlange = Quantity.inches(Rational.of(1e200)).stored()
+        val output = reelLengthOutput(filled.copy(flange = largeFlange), AppSettings())
+        assertTrue(output.results.isEmpty())
+        assertEquals(NoticeLevel.ERROR, output.notices.single().level)
     }
 }

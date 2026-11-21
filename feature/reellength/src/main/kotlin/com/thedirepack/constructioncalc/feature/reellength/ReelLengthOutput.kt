@@ -32,9 +32,10 @@ private fun exact(value: Double): Rational = Rational.of(BigDecimal(value).setSc
 internal fun reelLengthOutput(inputs: ReelLengthInputs, settings: AppSettings): ReelLengthOutput {
     val parsed = inputs.parse()
     val errors = parsed.problems.map { Notice(it, NoticeLevel.ERROR) }
-    val request = parsed.request
-    val result = request?.let { ReelLength.calculate(it) }
-    if (request == null || result == null) return ReelLengthOutput(emptyList(), errors, "")
+    val request = parsed.request ?: return ReelLengthOutput(emptyList(), errors, "")
+    val result = ReelLength.calculate(request) ?: return ReelLengthOutput(
+        emptyList(), listOf(Notice("The reel estimate is outside the supported range.", NoticeLevel.ERROR)), "",
+    )
 
     val capacity = inputs.mode == ReelMode.CAPACITY
     val lengthLabel = if (capacity) "Reel capacity" else "Cable remaining"

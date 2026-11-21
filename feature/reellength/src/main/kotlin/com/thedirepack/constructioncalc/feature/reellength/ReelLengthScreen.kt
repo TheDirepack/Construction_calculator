@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.ui.tool.toolViewModel
 import com.thedirepack.constructioncalc.core.model.ToolInputs
 import com.thedirepack.constructioncalc.core.model.stored
+import com.thedirepack.constructioncalc.core.ui.components.ChoiceField
 import com.thedirepack.constructioncalc.core.ui.components.FormSection
 import com.thedirepack.constructioncalc.core.ui.components.MeasureField
 import com.thedirepack.constructioncalc.core.ui.components.Notice
@@ -77,7 +78,7 @@ fun ReelLengthScreen(host: ToolHost) {
                     { q -> vm.update { it.copy(flange = q?.stored()) } },
                     supportingText = "Outside diameter of the flange",
                 )
-                SegmentedChoice(
+                ChoiceField(
                     options = DrumMeasurement.entries,
                     selected = inputs.drumMeasurement,
                     onSelect = { method -> vm.update { it.copy(drumMeasurement = method) } },
@@ -96,6 +97,12 @@ fun ReelLengthScreen(host: ToolHost) {
                         inputs.drumCircumference?.toQuantity(),
                         { q -> vm.update { it.copy(drumCircumference = q?.stored()) } },
                         supportingText = "Wrap a tape around the bare core. The app converts this to diameter.",
+                    )
+                    DrumMeasurement.FLANGE_TO_CORE -> MeasureField(
+                        "Depth from flange rim to bare core",
+                        inputs.flangeToCore?.toQuantity(),
+                        { q -> vm.update { it.copy(flangeToCore = q?.stored()) } },
+                        supportingText = "Measure straight in from the flange rim to the bare core. Enter the separate distance to the cable surface below.",
                     )
                 }
                 MeasureField(

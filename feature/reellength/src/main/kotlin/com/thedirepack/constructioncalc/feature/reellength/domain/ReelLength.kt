@@ -80,13 +80,16 @@ object ReelLength {
         if (problems(r).isNotEmpty()) return null
         val h = woundDepth(r)
         val d = r.cableDiameter
-        val inches = PI * (r.drumDiameter + h) * h * r.traverse / (d * d) * r.packingFactor
+        val layers = h / d
+        val turns = r.traverse / d
+        val inches = PI * (r.drumDiameter + h) * layers * turns * r.packingFactor
+        if (!inches.isFinite() || !layers.isFinite() || !turns.isFinite()) return null
         return ReelResult(
             woundDepth = h,
             lengthInches = inches,
             lengthFeet = inches / 12,
-            layers = h / d,
-            turnsPerLayer = r.traverse / d,
+            layers = layers,
+            turnsPerLayer = turns,
         )
     }
 }

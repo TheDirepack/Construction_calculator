@@ -25,13 +25,21 @@ Feature-inventory notes only; paraphrased.
 - Review themes: needs more explanation for one field; freezes during entry (older reviews).
 - No export/share, unit toggle or capacity mode is mentioned.
 
+## Observed Android measuring method
+
+The manual-entry wizard in Android 2.3.4 illustrates the flange diameter. Its alternate drum
+method asks for the radial distance from the flange rim to the bare drum. Construction Calc now
+offers that input alongside direct diameter and circumference. The depth method derives the
+drum diameter as flange diameter minus twice the depth. The distance to the cable surface is
+a separate measurement.
+
 ## Gap vs. our app
-Ours: `feature/reellength`. Two modes (cable on reel, reel capacity) from flange diameter, drum diameter, traverse, cable OD, distance from flange edge (or clearance), packing factor; outputs wound depth, length (in, ft), layers and turns per layer; unit-aware length entry; input validation messages; saved items.
+Construction Calc's `feature/reellength` estimates cable remaining or reel capacity. Enter the core diameter directly or derive it from circumference or radial depth. Results include length, wound depth, layers and turns per layer and can be saved to a project.
 
 **They have, we lack**
 - A built-in library of real reel types (flange/drum/traverse presets) and cable types (OD presets), so users pick instead of measuring.
 - User-saved favorite reel+cable combinations.
-- Multiple drum-diameter measuring methods (for example from a circumference reading) with guidance images.
+- Illustrated guidance for locating each measurement on the reel.
 
 **We have, they lack**
 - Capacity mode, packing factor, layers/turns output, wound-depth output.
