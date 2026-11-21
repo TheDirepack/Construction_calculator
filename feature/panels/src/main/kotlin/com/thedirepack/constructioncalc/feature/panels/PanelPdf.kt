@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.Circuit
 import com.thedirepack.constructioncalc.core.model.CircuitKind
 import com.thedirepack.constructioncalc.core.model.Panel
@@ -37,6 +38,7 @@ internal object PanelPdf {
         header: List<String>,
         date: String,
         length: (Quantity) -> String,
+        units: UnitSystem = UnitSystem.IMPERIAL,
     ) {
         val panels = panelIds?.mapNotNull(project::panel) ?: project.panels
         val doc = PdfDocument()
@@ -52,7 +54,7 @@ internal object PanelPdf {
                 doc.finishPage(page)
             }
             // Project-wide pages: pulls and the material takeoff, as plain lines.
-            val extras = ScheduleText.projectExtras(project, design)
+            val extras = ScheduleText.projectExtras(project, design, units)
             if (extras.isNotEmpty()) {
                 var pageNumber = maxOf(panels.size, 1)
                 val body = paint(10f)

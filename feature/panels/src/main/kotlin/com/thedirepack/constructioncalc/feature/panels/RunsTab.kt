@@ -1,5 +1,8 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.ui.show
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
+import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.model.withRaceway
 import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
@@ -208,7 +211,7 @@ private fun RunCard(
                         "${rd.currentCarrying} current-carrying conductors" + if (nipple) " (nipple: no derating)" else "",
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    val area = "${rd.totalConductors} conductors, ${Wire.number(rd.totalAreaSqIn, 3)} sq in"
+                    val area = "${rd.totalConductors} conductors, ${settings.show(Measure.SMALL_AREA, rd.totalAreaSqIn, 3)}"
                     Text(
                         if (rd.fillStatus == FillStatus.INCOMPLETE) "Fill incomplete. Known conductors: $area" else "$area total",
                         style = MaterialTheme.typography.bodySmall,
@@ -235,7 +238,7 @@ private fun RunCard(
                     }
                 }
             }
-            if (run.raceway != null) PullSummary(run, rd)
+            if (run.raceway != null) PullSummary(run, rd, settings.unitSystem)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (!ctx.readOnly) {
                     TextButton(onClick = onConduit) { Text(if (run.raceway == null) "Set conduit…" else "Edit conduit…") }
@@ -332,8 +335,8 @@ private fun AssignCircuitsSheet(ctx: PanelsContext, run: Run, onDismiss: () -> U
 
 /** The run's path and pull: max tension against its limit, worst sidewall pressure, degrees per section and warnings. */
 @Composable
-private fun PullSummary(run: Run, rd: RunDesign?) {
-    val result = remember(run, rd) { PullAnalysis.analyze(run, rd) }
+private fun PullSummary(run: Run, rd: RunDesign?, units: UnitSystem) {
+    val result = remember(run, rd, units) { PullAnalysis.analyze(run, rd, units) }
     Column(Modifier.padding(end = 12.dp, top = 6.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
         if (run.path.isEmpty()) {
             Text("No path yet. Plan the pull to add straights, bends and pull points.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -345,7 +348,7 @@ private fun PullSummary(run: Run, rd: RunDesign?) {
                 if (sections.size > 1) " (per pull section, 360° max)" else " of 360° max",
             style = MaterialTheme.typography.bodySmall,
         )
-        val summary = PullText.summary(result)
+        val summary = PullText.summary(result, units)
         if (summary != null) {
             Text(summary, style = MaterialTheme.typography.bodyMedium, color = if (result.overTension || result.overPressure) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
         } else {

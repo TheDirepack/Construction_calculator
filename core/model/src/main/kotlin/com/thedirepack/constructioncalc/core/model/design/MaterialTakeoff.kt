@@ -5,6 +5,7 @@ import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.Project
 
 /** Wire of one size, insulation and metal across the project, in feet. */
@@ -21,7 +22,11 @@ data class WireTakeoff(
 
 /** Conduit of one type and size across the project, in feet; [size] null when no size is chosen or designed. */
 data class ConduitTakeoff(val type: ConduitType, val size: TradeSize?, val feet: Double, val runNames: List<String>) {
-    val label: String get() = listOfNotNull(size?.display, type.displayName).joinToString(" ")
+    val label: String get() = label(UnitSystem.IMPERIAL)
+
+    /** `3/4" EMT`, or `3/4" (21) EMT` in metric. */
+    fun label(units: UnitSystem): String =
+        listOfNotNull(size?.let { if (units == UnitSystem.METRIC) "${it.display} (${it.metricDesignator})" else it.display }, type.displayName).joinToString(" ")
 }
 
 data class MaterialTakeoff(val wire: List<WireTakeoff>, val conduit: List<ConduitTakeoff>, val notes: List<DesignNote>) {

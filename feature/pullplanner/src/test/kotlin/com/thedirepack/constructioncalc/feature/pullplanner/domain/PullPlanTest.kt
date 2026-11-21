@@ -107,4 +107,24 @@ class PullPlanTest {
         assertEquals(TradeSize.S_3_4, p2.run(runId)!!.raceway!!.tradeSize)
         assertEquals(480.0, p2.run(runId)!!.raceway!!.length!!.toQuantity().value.toDouble(), 1e-9)
     }
+
+    @Test fun resultsAndSummaryFollowTheUnitSystemButKeepBaseValues() {
+        val run = Run(
+            name = "Feeder", raceway = Raceway(ConduitType.EMT, TradeSize.S_2), path = path,
+            pull = PullSetup(cablesFromCircuits = false, cables = listOf(PullCable(3, ConductorSize.AWG_4_0, weightLbPerFt = 0.7, diameterIn = 0.6)), equipment = listOf(EquipmentRating("Rope", 2000.0))),
+        )
+        val metric = com.thedirepack.constructioncalc.core.measure.UnitSystem.METRIC
+        val r = PullAnalysis.analyze(run, null, metric)
+        val imperialResults = PullReport.results(PullAnalysis.analyze(run, null)) { "x" }.associateBy { it.key }
+        val metricResults = PullReport.results(r, metric) { "x" }.associateBy { it.key }
+        assertEquals(imperialResults.getValue(PullReport.KEY_MAX_TENSION).exact, metricResults.getValue(PullReport.KEY_MAX_TENSION).exact)
+        assertTrue(imperialResults.getValue(PullReport.KEY_MAX_TENSION).text.endsWith(" lb"))
+        assertTrue(metricResults.getValue(PullReport.KEY_MAX_TENSION).text.endsWith(" N"))
+        assertTrue(metricResults.getValue(PullReport.KEY_MAX_PRESSURE).text.endsWith(" kN/m"))
+        assertTrue(metricResults.getValue(PullReport.KEY_MAX_PRESSURE).label.contains("kN/m"))
+        assertEquals("8,896 N", PullReport.lb(2000.0, metric))
+        val summary = PullReport.summary(r, metric)
+        assertTrue(summary, "Tension limit: Rope 8,896 N" in summary)
+        assertTrue(summary, !summary.contains("2,000 lb") && "Pull " in summary)
+    }
 }

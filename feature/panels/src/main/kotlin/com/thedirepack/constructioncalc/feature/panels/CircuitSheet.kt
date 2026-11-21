@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.ui.show
+import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
@@ -125,8 +127,8 @@ internal fun CircuitSheet(
 
     val vaValue = loadText.toDecimalOrNull()?.let { if (loadUnit == LoadUnit.VA) it else LoadMath.va(panel.system, draft.poles, it) }
     val effective = draft.copy(loadVa = if (draft.kind == CircuitKind.LOAD) vaValue else null)
-    val design: CircuitDesign? = remember(ctx.project, panelId, effective) {
-        ProjectAnalysis.analyze(ctx.project.upsertCircuit(panelId, effective, 0L)).circuits[effective.id]
+    val design: CircuitDesign? = remember(ctx.project, panelId, effective, settings.unitSystem) {
+        ProjectAnalysis.analyze(ctx.project.upsertCircuit(panelId, effective, 0L), settings.unitSystem).circuits[effective.id]
     }
     LaunchedEffect(design) {
         if (design != null) {
@@ -446,6 +448,7 @@ internal fun ConductorFields(spec: ConductorSpec, onChange: (ConductorSpec) -> U
 /** The engine's answer for a circuit: the wire, every figure behind it, the governing rule and notes. */
 @Composable
 internal fun DesignResult(d: CircuitDesign?) {
+    val settings = rememberAppSettings()
     if (d == null) {
         Text("Nothing to size yet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
@@ -459,7 +462,7 @@ internal fun DesignResult(d: CircuitDesign?) {
         d.groundSize?.let { add(ResultValue.text("ground", "Equipment ground", it.label)) }
         add(ResultValue.text("ccc", "Current-carrying conductors", d.currentCarrying.toString()))
         sizing?.let {
-            add(ResultValue.text("ambient", "Ambient used", "${Wire.number(it.effectiveAmbientC)} °C"))
+            add(ResultValue.text("ambient", "Ambient used", settings.show(Measure.TEMPERATURE, it.effectiveAmbientC, 1)))
             it.ambientFactor?.let { f -> add(ResultValue.text("af", "Ambient correction", Wire.number(f, 2))) }
             add(ResultValue.text("adj", "Conductor-count adjustment", Wire.number(it.adjustmentFactor, 2)))
             it.adjustedAmpacity?.let { a -> add(ResultValue.text("adjamp", "Adjusted ampacity", Wire.amps(a))) }

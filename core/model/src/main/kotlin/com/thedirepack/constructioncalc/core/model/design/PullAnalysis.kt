@@ -19,6 +19,8 @@ import com.thedirepack.constructioncalc.core.electrical.PullFormulas
 import com.thedirepack.constructioncalc.core.electrical.PullRatings
 import com.thedirepack.constructioncalc.core.electrical.RacewayBends
 import com.thedirepack.constructioncalc.core.measure.Decimals
+import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.BendPlane
 import com.thedirepack.constructioncalc.core.model.PathSegment
 import com.thedirepack.constructioncalc.core.model.Project
@@ -155,12 +157,12 @@ data class PullResult(
  */
 object PullAnalysis {
 
-    fun analyze(project: Project, runId: String, design: ProjectDesign = ProjectAnalysis.analyze(project)): PullResult? {
+    fun analyze(project: Project, runId: String, design: ProjectDesign = ProjectAnalysis.analyze(project), units: UnitSystem = UnitSystem.IMPERIAL): PullResult? {
         val run = project.run(runId) ?: return null
-        return analyze(run, design.runs[runId])
+        return analyze(run, design.runs[runId], units)
     }
 
-    fun analyze(run: Run, runDesign: RunDesign?): PullResult {
+    fun analyze(run: Run, runDesign: RunDesign?, units: UnitSystem = UnitSystem.IMPERIAL): PullResult {
         val setup = run.pull ?: PullSetup()
         val notes = mutableListOf<DesignNote>()
         val raceway = run.raceway
@@ -184,7 +186,7 @@ object PullAnalysis {
         val jam = if (id != null && od != null && count > 0) PullFormulas.jamRatio(id, od) else null
         val jamWarning = jam != null && count == 3 && PullFormulas.inJamRange(jam)
         val clearance = if (id != null && od != null && count > 0) PullFormulas.clearance(count, id, od) else null
-        if (id != null && od != null && count > 0) notes += fitNotes(id, od, count)
+        if (id != null && od != null && count > 0) notes += fitNotes(id, od, count, units)
 
         // Fill: the same Chapter 9 check as Conduit Fill and the design engine.
         if (conduit != null && count > 0) {
@@ -228,11 +230,11 @@ object PullAnalysis {
         listOfNotNull(forward, reverse).forEach { p ->
             val peak = p.peakTension
             if (tensionLimit != null && peak > tensionLimit.value) {
-                notes += warn("${p.direction.label}: peak tension ${lb(peak)} is over the ${lb(tensionLimit.value)} limit (${tensionLimit.label}).")
+                notes += warn("${p.direction.label}: peak tension ${lb(peak, units)} is over the ${lb(tensionLimit.value, units)} limit (${tensionLimit.label}).")
             }
             val peakP = p.peakPressure
             if (pressureLimit != null && peakP != null && peakP > pressureLimit.value) {
-                notes += warn("${p.direction.label}: sidewall pressure ${fmt(peakP, 0)} lb/ft is over the ${fmt(pressureLimit.value, 0)} lb/ft limit (${pressureLimit.label}).")
+                notes += warn("${p.direction.label}: sidewall pressure ${pressure(peakP, units)} is over the ${pressure(pressureLimit.value, units)} limit (${pressureLimit.label}).")
             }
         }
 
@@ -253,7 +255,7 @@ object PullAnalysis {
         if (path.any { it is PathSegment.Bend && it.plane != BendPlane.HORIZONTAL }) {
             notes += info("Vertical bends assume the tension holds the cable against the inside of the bend.")
         }
-        if (forward != null && setup.incomingTension.all { it == 0.0 }) notes += info("Incoming tension is 0 lb. Add the feed-in (reel back) tension if you know it.")
+        if (forward != null && setup.incomingTension.all { it == 0.0 }) notes += info("Incoming tension is 0 ${Measure.FORCE.unit(units).symbol}. Add the feed-in (reel back) tension if you know it.")
 
         val routed = if (path.isNotEmpty()) RunPath.lengthInches(path, raceway?.conduitType, size) else raceway?.length?.toQuantity()?.value?.toDouble()
         val slack = setup.slackPerEnd?.toQuantity()?.value?.toDouble() ?: 0.0
@@ -267,7 +269,7 @@ object PullAnalysis {
     }
 
     /** Jam and clearance notes for [count] cables of [cableOd] in a conduit of [conduitId] (IEEE 1185). */
-    fun fitNotes(conduitId: Double, cableOd: Double, count: Int): List<DesignNote> = buildList {
+    fun fitNotes(conduitId: Double, cableOd: Double, count: Int, units: UnitSystem = UnitSystem.IMPERIAL): List<DesignNote> = buildList {
         val jam = PullFormulas.jamRatio(conduitId, cableOd)
         if (count == 3 && PullFormulas.inJamRange(jam)) {
             add(warn("Jam ratio ${fmt(jam, 2)} (1.05 × D/d) is between 2.8 and 3.2: three cables can jam in a bend (NEC ${CodeRule.JAM_RATIO.cite}; IEEE 1185)."))
@@ -275,8 +277,8 @@ object PullAnalysis {
         val clearance = PullFormulas.clearance(count, conduitId, cableOd)
         when {
             clearance == null -> {}
-            clearance < PullFormulas.CLEARANCE_MINIMUM_IN -> add(warn("Clearance ${fmt(clearance, 2)} in. is under the 1/4 in. minimum (IEEE 1185)."))
-            clearance < PullFormulas.CLEARANCE_RECOMMENDED_IN -> add(info("Clearance ${fmt(clearance, 2)} in. is under the recommended 1/2 in. (IEEE 1185)."))
+            clearance < PullFormulas.CLEARANCE_MINIMUM_IN -> add(warn("Clearance ${smallLength(clearance, units, 2)} is under the ${if (units == UnitSystem.METRIC) smallLength(PullFormulas.CLEARANCE_MINIMUM_IN, units, 2) else "1/4 in."} minimum (IEEE 1185)."))
+            clearance < PullFormulas.CLEARANCE_RECOMMENDED_IN -> add(info("Clearance ${smallLength(clearance, units, 2)} is under the recommended ${if (units == UnitSystem.METRIC) smallLength(PullFormulas.CLEARANCE_RECOMMENDED_IN, units, 2) else "1/2 in."} (IEEE 1185)."))
         }
     }
 
@@ -404,17 +406,27 @@ object PullAnalysis {
     private fun info(text: String) = DesignNote(text, NoteLevel.INFO)
     private fun warn(text: String) = DesignNote(text, NoteLevel.WARNING)
     internal fun fmt(v: Double, decimals: Int) = Decimals.trim(v, decimals)
-    fun lb(v: Double) = String.format(java.util.Locale.US, "%,.0f lb", v)
+    fun lb(v: Double, units: UnitSystem = UnitSystem.IMPERIAL) =
+        if (units == UnitSystem.METRIC) String.format(java.util.Locale.US, "%,.0f N", Measure.FORCE.fromBase(v, units))
+        else String.format(java.util.Locale.US, "%,.0f lb", v)
+
+    /** A sidewall pressure given in lb/ft: `320 lb/ft`, or `4.67 kN/m`. */
+    fun pressure(v: Double, units: UnitSystem = UnitSystem.IMPERIAL): String =
+        if (units == UnitSystem.METRIC) Measure.SIDEWALL_PRESSURE.format(v, units) else "${fmt(v, 0)} lb/ft"
+
+    /** A short length given in inches: `0.25 in.`, or `6.4 mm`. */
+    fun smallLength(inches: Double, units: UnitSystem = UnitSystem.IMPERIAL, decimals: Int = 2): String =
+        if (units == UnitSystem.METRIC) Measure.SMALL_LENGTH.format(inches, units, decimals - 1) else "${fmt(inches, decimals)} in."
 }
 
 /** One-line pull summaries shared by Panels › Runs, project text and the pull report. */
 object PullText {
     /** `Pull 1,234 lb of 1,500 lb (Rope) · SWBP 320 of 1,000 lb/ft · bends 90°, 180° · toward the end`, or null with no path. */
-    fun summary(r: PullResult): String? {
+    fun summary(r: PullResult, units: UnitSystem = UnitSystem.IMPERIAL): String? {
         val pass = r.recommendedPass ?: return null
         val parts = buildList {
-            add("Pull ${PullAnalysis.lb(pass.peakTension)}" + (r.tensionLimit?.let { " of ${PullAnalysis.lb(it.value)} (${it.label})" } ?: ""))
-            pass.peakPressure?.let { p -> add("SWBP ${PullAnalysis.fmt(p, 0)}" + (r.pressureLimit?.let { " of ${PullAnalysis.fmt(it.value, 0)}" } ?: "") + " lb/ft") }
+            add("Pull ${PullAnalysis.lb(pass.peakTension, units)}" + (r.tensionLimit?.let { " of ${PullAnalysis.lb(it.value, units)} (${it.label})" } ?: ""))
+            pass.peakPressure?.let { p -> add("SWBP ${PullAnalysis.pressure(p, units)}" + (r.pressureLimit?.let { " of ${PullAnalysis.pressure(it.value, units)}" } ?: "")) }
             if (r.sectionDegrees.isNotEmpty()) add("bends " + r.sectionDegrees.joinToString(", ") { "${PullAnalysis.fmt(it, 1)}°" })
             add("pull ${pass.direction.label.lowercase()}")
             if (r.jamWarning) add("jam risk")

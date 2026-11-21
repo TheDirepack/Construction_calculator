@@ -104,11 +104,11 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
     val isActive = settings.activeProjectId == project.id
     val readOnly = project.archived
     // Conduit runs show their circuit count and (when the size is Auto) the size the design picked.
-    val runDesigns = remember(project) {
-        if (project.runs.any { it.raceway != null } || project.panels.isNotEmpty()) ProjectAnalysis.analyze(project).runs else emptyMap()
+    val runDesigns = remember(project, settings.unitSystem) {
+        if (project.runs.any { it.raceway != null } || project.panels.isNotEmpty()) ProjectAnalysis.analyze(project, settings.unitSystem).runs else emptyMap()
     }
 
-    val toText = { ProjectText.render(project, tools::titleOf, header = settings.company.headerLines(), length = { settings.format(it) }) }
+    val toText = { ProjectText.render(project, tools::titleOf, header = settings.company.headerLines(), length = { settings.format(it) }, units = settings.unitSystem) }
     val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ProjectCodec.MIME_TYPE)) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {

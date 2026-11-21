@@ -2,6 +2,7 @@ package com.thedirepack.constructioncalc.core.model.design
 
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ValueKind
 
@@ -41,24 +42,24 @@ object PublishedValues {
      * A conduit run's length, if set; for a run with a path, also the cable a pull needs per
      * conductor (routed length plus slack, for Reel Length) and the pull's max tension.
      */
-    fun run(d: RunDesign, lengthText: (Quantity) -> String): List<ResultValue> {
+    fun run(d: RunDesign, units: UnitSystem = UnitSystem.IMPERIAL, lengthText: (Quantity) -> String): List<ResultValue> {
         val q = d.run.raceway?.length?.toQuantity() ?: return emptyList()
         return buildList {
             add(ResultValue.of("run_${d.run.id}_length", "${d.run.name} length", q, lengthText(q)))
             if (d.run.path.isNotEmpty()) {
-                val pull = PullAnalysis.analyze(d.run, d)
+                val pull = PullAnalysis.analyze(d.run, d, units)
                 pull.cableLengthIn?.let {
                     val needed = Quantity.inches(Rational.of(it))
                     add(ResultValue.of("run_${d.run.id}_cable_needed", "${d.run.name} cable needed per conductor", needed, lengthText(needed)))
                 }
-                pull.maxTension?.let { add(ResultValue.number("run_${d.run.id}_max_tension", "${d.run.name} max pulling tension", ValueKind.FORCE, it, PullAnalysis.lb(it))) }
+                pull.maxTension?.let { add(ResultValue.number("run_${d.run.id}_max_tension", "${d.run.name} max pulling tension", ValueKind.FORCE, it, PullAnalysis.lb(it, units))) }
             }
         }
     }
 
     /** Everything [design] offers: panel loads, circuit wire, length, current and load, run lengths. */
-    fun all(design: ProjectDesign, lengthText: (Quantity) -> String): List<ResultValue> =
+    fun all(design: ProjectDesign, units: UnitSystem = UnitSystem.IMPERIAL, lengthText: (Quantity) -> String): List<ResultValue> =
         design.panels.flatMap(::panel) +
             design.circuits.values.flatMap { circuit(it, lengthText) } +
-            design.runs.values.flatMap { run(it, lengthText) }
+            design.runs.values.flatMap { run(it, units, lengthText) }
 }

@@ -135,4 +135,17 @@ class ScheduleTextTest {
         assertEquals("600", circuit[1].exact) // 50 ft in inches
         assertNotNull(circuit[2].rational)
     }
+
+    @Test fun extrasFollowTheUnitSystem() {
+        val base = sample()
+        val run = base.runs.single().copy(path = listOf(com.thedirepack.constructioncalc.core.model.PathSegment.Straight(Quantity.feet(Rational.of(100)).stored())))
+        val project = base.copy(runs = listOf(run))
+        val imperial = com.thedirepack.constructioncalc.core.measure.UnitSystem.IMPERIAL
+        val metric = com.thedirepack.constructioncalc.core.measure.UnitSystem.METRIC
+        val i = ScheduleText.projectExtras(project, ProjectAnalysis.analyze(project, imperial), imperial).joinToString("\n")
+        val m = ScheduleText.projectExtras(project, ProjectAnalysis.analyze(project, metric), metric).joinToString("\n")
+        assertTrue(i, Regex("Home run: Pull [\\d,]+ lb").containsMatchIn(i) && Regex("Wire .*: \\d+ ft").containsMatchIn(i))
+        assertTrue(m, Regex("Home run: Pull [\\d,]+ N").containsMatchIn(m) && Regex("Conduit .*: 30 m").containsMatchIn(m))
+        assertTrue(m, !m.contains(" ft") && !m.contains(" lb"))
+    }
 }

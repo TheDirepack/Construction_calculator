@@ -4,14 +4,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thedirepack.constructioncalc.core.data.ModuleSettings
 import com.thedirepack.constructioncalc.core.electrical.FrictionPreset
 import com.thedirepack.constructioncalc.core.measure.Decimals
+import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.ui.components.ChoiceRow
 import com.thedirepack.constructioncalc.core.ui.components.SettingsGroup
-import com.thedirepack.constructioncalc.core.ui.components.TextSettingRow
+import com.thedirepack.constructioncalc.core.ui.components.UnitField
 import com.thedirepack.constructioncalc.core.model.DEFAULT_INCOMING_LB
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 import com.thedirepack.constructioncalc.feature.pullplanner.domain.PullDefaults
@@ -50,8 +50,8 @@ fun PullPlannerSettingsPage() {
                 optionLabel = { "${it.label.substringBefore(' ')} ${Decimals.trim(it.coefficient, 2)}" },
                 subtitle = "Design guidance, not a code value. Each run can use its own value.",
             )
-            TextSettingRow("Slack at each end (ft)", store.getString(KEY_SLACK, ""), KeyboardType.Decimal) { store.setString(KEY_SLACK, it) }
-            TextSettingRow("Incoming tension (lb)", store.getString(KEY_INCOMING, ""), KeyboardType.Decimal) { store.setString(KEY_INCOMING, it) }
+            UnitField("Slack at each end", Measure.RUN_LENGTH, store.getString(KEY_SLACK, ""), { store.setString(KEY_SLACK, it) })
+            UnitField("Incoming tension", Measure.FORCE, store.getString(KEY_INCOMING, ""), { store.setString(KEY_INCOMING, it) })
         }
     }
 }
