@@ -3,6 +3,9 @@ package com.thedirepack.constructioncalc.feature.vfdsizing.domain
 import com.thedirepack.constructioncalc.core.electrical.Ampacity
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
+import com.thedirepack.constructioncalc.core.electrical.MotorProtection
+import com.thedirepack.constructioncalc.core.electrical.MotorProtectiveDevice
+import com.thedirepack.constructioncalc.core.electrical.MotorType
 import com.thedirepack.constructioncalc.core.electrical.MotorFullLoadCurrent
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.StandardOcpd
@@ -88,10 +91,10 @@ object VfdSizing {
     const val CONDUCTOR_FACTOR = 1.25
     /** 430.128 disconnecting means factor. */
     const val DISCONNECT_FACTOR = 1.15
-    /** Table 430.52(C)(1), inverse-time circuit breaker. */
-    const val BREAKER_FACTOR = 2.5
-    /** Table 430.52(C)(1), time-delay (dual-element) fuse. */
-    const val DUAL_ELEMENT_FUSE_FACTOR = 1.75
+    /** Table 430.52(C)(1), inverse-time circuit breaker, three-phase induction motor. */
+    val BREAKER_FACTOR = MotorProtection.factor(MotorType.POLYPHASE_AC, MotorProtectiveDevice.INVERSE_TIME_BREAKER)
+    /** Table 430.52(C)(1), time-delay (dual-element) fuse, three-phase induction motor. */
+    val DUAL_ELEMENT_FUSE_FACTOR = MotorProtection.factor(MotorType.POLYPHASE_AC, MotorProtectiveDevice.DUAL_ELEMENT_FUSE)
     /** Overload device maximum, motors with service factor 1.15 or more or ≤ 40 °C rise (430.32(A)(1)). */
     const val OVERLOAD_FACTOR = 1.25
     /** Rule of thumb only, not a code requirement. */
