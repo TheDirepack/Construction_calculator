@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.pullplanner
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.heightIn
@@ -85,7 +86,7 @@ internal fun PullSegmentDialog(
             }
             SegmentKind.BEND -> {
                 NumberField("Bend angle", angle, { angle = it }, unit = "°", supportingText = "Above 0° and at most 180°.")
-                MeasureField("Centerline radius", radius, { radius = it }, supportingText = "Leave blank to use the Table 2 radius.")
+                MeasureField("Centerline radius", radius, { radius = it }, supportingText = "Leave blank to use the ${CodeRule.BEND_RADIUS.cite} radius.")
                 ChoiceField("Bend plane", BendPlane.entries, plane, { plane = it }, optionLabel = { it.label })
             }
             SegmentKind.PULL_POINT ->

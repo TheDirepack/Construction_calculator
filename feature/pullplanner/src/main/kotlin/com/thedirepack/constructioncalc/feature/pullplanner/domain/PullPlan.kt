@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.pullplanner.domain
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.FrictionPreset
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
@@ -124,8 +125,8 @@ object PullReport {
                 BendPlane.VERTICAL_DOWN -> ", vertical hump"
             }
             val radius = segment.radius?.let { "R ${lengthText(it.toQuantity())}" }
-                ?: RunPath.radiusInches(segment, type, size)?.let { "R ${lengthText(Quantity.inches(Rational.of(it)))} (Table 2)" }
-                ?: "R from Table 2 once the size is known"
+                ?: RunPath.radiusInches(segment, type, size)?.let { "R ${lengthText(Quantity.inches(Rational.of(it)))} (${CodeRule.BEND_RADIUS.cite})" }
+                ?: "R from ${CodeRule.BEND_RADIUS.cite} once the size is known"
             "Bend ${num(segment.angleDegrees)}°$plane, $radius" + if (segment.sourceItemId != null) " · from Bending" else ""
         }
         is PathSegment.PullPoint -> "Pull point" + segment.label.takeIf { it.isNotBlank() }?.let { " $it" }.orEmpty()

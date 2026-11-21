@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.core.model.design
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.AmbientCorrection
 import com.thedirepack.constructioncalc.core.electrical.ConductorCountAdjustment
 import com.thedirepack.constructioncalc.core.electrical.ConductorImpedance
@@ -297,7 +298,7 @@ object ProjectAnalysis {
         val ambient = if (runs.isEmpty()) project.design.ambientC else runs.maxOf { runAmbient(project, it, xhhw2) }
         val hottest = runs.maxByOrNull { runAmbient(project, it, xhhw2) }
         if (hottest?.raceway?.rooftop == true && !xhhw2) {
-            notes += info("${hottest.name} is on a rooftop: +${AmbientCorrection.ROOFTOP_ADDER_C.toInt()} °C adder (310.15(B)(2)).")
+            notes += info("${hottest.name} is on a rooftop: +${AmbientCorrection.ROOFTOP_ADDER_C.toInt()} °C adder (${CodeRule.ROOFTOP_ADDER.cite}).")
         }
         val runConduits = runs.map { it.raceway?.conduitType?.let(::table9Conduit) ?: Table9Conduit.PVC }
         val runSegments = runs.zip(runConduits).mapNotNull { (run, conduit) ->
@@ -450,7 +451,7 @@ object ProjectAnalysis {
             val area = InsulatedConductorArea.area(insulation, size)
             if (area == null) {
                 incomplete = true
-                notes += warn("No Table 5 area for ${size.label} ${insulation.code}.")
+                notes += warn("No ${CodeRule.CONDUCTOR_DIMENSIONS.cite} area for ${size.label} ${insulation.code}.")
                 return@forEach
             }
             val carrying = CurrentCarryingConductors.count(c.poles, c.neutral, panel.system.supply, c.nonlinear).coerceAtMost(wires)
@@ -461,11 +462,11 @@ object ProjectAnalysis {
             val groundArea = InsulatedConductorArea.area(ins, g)
             if (groundArea == null) {
                 incomplete = true
-                notes += warn("No Table 5 area for the ${g.label} ${ins.code} equipment grounding conductor.")
+                notes += warn("No ${CodeRule.CONDUCTOR_DIMENSIONS.cite} area for the ${g.label} ${ins.code} equipment grounding conductor.")
             } else {
                 entries += FillEntry(1, g, ins, groundArea, ground = true, material = material)
             }
-            if (loads.size > 1 && !incomplete) notes += info("One equipment grounding conductor (${g.label}) sized for the largest circuit (250.122(C)).")
+            if (loads.size > 1 && !incomplete) notes += info("One equipment grounding conductor (${g.label}) sized for the largest circuit (${CodeRule.EGC_MULTIPLE_CIRCUITS.cite}).")
         }
         val total = entries.sumOf { it.count }
         val area = entries.sumOf { it.count * it.areaEach }
@@ -477,7 +478,7 @@ object ProjectAnalysis {
         val smallest = raceway?.takeIf { !incomplete && total > 0 }?.let { ConduitFill.minimumConduit(it.conduitType, groups, nipple) }
         val chosen = raceway?.tradeSize?.let { ConduitTable.find(raceway.conduitType, it) }
         if (raceway?.tradeSize != null && chosen == null) {
-            notes += warn("${raceway.conduitType.displayName} has no ${raceway.tradeSize.display} size in Table 4; using the smallest that fits.")
+            notes += warn("${raceway.conduitType.displayName} has no ${raceway.tradeSize.display} size in ${CodeRule.CONDUIT_DIMENSIONS.cite}; using the smallest that fits.")
         }
         val conduit = chosen ?: smallest
         val analysis = conduit?.takeUnless { incomplete || total == 0 }?.let { ConduitFill.analyze(it, groups, nipple) }
@@ -485,9 +486,9 @@ object ProjectAnalysis {
         val over = analysis != null && !analysis.withinLimit
         if (raceway == null && members.isNotEmpty()) notes += warn("Set the conduit for this run to check fill.")
         if (over) {
-            notes += warn("Over ${limit}% fill (${fmt(fill!!)}%). Smallest that fits: ${smallest?.displayName ?: "none in Table 4"}.")
+            notes += warn("Over ${limit}% fill (${fmt(fill!!)}%). Smallest that fits: ${smallest?.displayName ?: "none in ${CodeRule.CONDUIT_DIMENSIONS.cite}"}.")
         } else if (analysis?.permittedByNote7 == true) {
-            notes += info("Fits only by Chapter 9 Table 1 Note 7 rounding (all conductors the same size).")
+            notes += info("Fits only by ${CodeRule.FILL_ROUNDING.cite} rounding (all conductors the same size).")
         }
         if (raceway != null && !incomplete && smallest == null && area > 0) notes += warn("Too many conductors for any ${raceway.conduitType.displayName}.")
         // Jam and clearance for pulling (IEEE 1185), from the largest conductor's Table 5 diameter.
@@ -498,10 +499,10 @@ object ProjectAnalysis {
         val ambientFactor = AmbientCorrection.factor(ambient, insulation.insulationRating)
         val adjustment = if (raceway?.nipple == true) 1.0 else ConductorCountAdjustment.factor(ccc)
         if (adjustment < 1.0) {
-            notes += info("$ccc current-carrying conductors: ampacity ×$adjustment (Table 310.15(C)(1)) for every circuit in this run.")
+            notes += info("$ccc current-carrying conductors: ampacity ×$adjustment (${CodeRule.CONDUCTOR_COUNT_ADJUSTMENT.cite}) for every circuit in this run.")
         }
         if (ambientFactor != null && ambientFactor != 1.0) {
-            notes += info("${fmt(ambient)} °C: ampacity ×$ambientFactor (Table 310.15(B)(1)(1), ${insulation.insulationRating.label} column).")
+            notes += info("${fmt(ambient)} °C: ampacity ×$ambientFactor (${CodeRule.AMBIENT_CORRECTION.cite}, ${insulation.insulationRating.label} column).")
         }
         val status = when {
             incomplete -> FillStatus.INCOMPLETE

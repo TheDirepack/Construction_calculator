@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
@@ -79,10 +80,10 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
             Notice(
                 when (request.method) {
                     Method.AC_TABLE_9 ->
-                        "Impedance from NEC Chapter 9 Table 9 (${request.conduit.label} conduit, ${request.material.label.lowercase()}), " +
+                        "Impedance from NEC ${CodeRule.AC_IMPEDANCE.cite} (${request.conduit.label} conduit, ${request.material.label.lowercase()}), " +
                             "effective Z at power factor ${formatDecimal(request.powerFactor, 3)}."
                     Method.DC_TABLE_8 ->
-                        "Resistance from NEC Chapter 9 Table 8, DC at 75 °C, ${request.stranding.label.lowercase()} " +
+                        "Resistance from NEC ${CodeRule.CONDUCTOR_PROPERTIES.cite}, DC at 75 °C, ${request.stranding.label.lowercase()} " +
                             "${request.material.label.lowercase()}. Ignores reactance."
                 },
                 NoticeLevel.INFO,
@@ -93,7 +94,7 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
             Method.DC_TABLE_8 -> !ConductorResistance.hasOwnColumn(request.material)
         }
         if (substituted) {
-            val table = if (request.method == Method.AC_TABLE_9) "Table 9" else "Table 8"
+            val table = if (request.method == Method.AC_TABLE_9) CodeRule.AC_IMPEDANCE.cite else CodeRule.CONDUCTOR_PROPERTIES.cite
             add(
                 Notice(
                     "$table has no ${request.material.label.lowercase()} column; " +

@@ -45,6 +45,7 @@ object Nec2023 : CodeBook {
         MOTOR_OVERLOAD to "430.32(A)(1)",
         MOTOR_BRANCH_PROTECTION to "Table 430.52(C)(1)",
         MOTOR_NEXT_HIGHER_RATING to "430.52(C)(1)(a)",
+        MOTOR_OVERTEMPERATURE to "430.126",
         MOTOR_FLC_SINGLE_PHASE to "Table 430.248",
         MOTOR_FLC_THREE_PHASE to "Table 430.250",
         DRIVE_INPUT_CONDUCTORS to "430.122(A)",

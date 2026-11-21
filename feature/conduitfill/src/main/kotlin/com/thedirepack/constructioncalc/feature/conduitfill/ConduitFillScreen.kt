@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.conduitfill
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 
@@ -159,11 +160,11 @@ private fun ConduitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) 
             selected = selected,
             onSelect = { vm.setTradeSize(it.tradeSize) },
             optionLabel = ::tradeSizeLabel,
-            supportingText = "Inside diameter ${fmt(selected.internalDiameterIn, 3)} in, area ${fmt(selected.area100SqIn, 3)} in² (Table 4)",
+            supportingText = "Inside diameter ${fmt(selected.internalDiameterIn, 3)} in, area ${fmt(selected.area100SqIn, 3)} in² (${CodeRule.CONDUIT_DIMENSIONS.cite})",
         )
         ToggleRow(
             title = "Nipple, 24 in. or shorter",
-            detail = "Between boxes or cabinets: 60% fill allowed (Table 1 Note 4)",
+            detail = "Between boxes or cabinets: 60% fill allowed (${CodeRule.FILL_NIPPLES.cite})",
             checked = inputs.nipple,
             onCheckedChange = vm::setNipple,
         )
@@ -207,12 +208,12 @@ private fun ConductorsSection(inputs: ConduitFillInputs, vm: ConduitFillViewMode
                         selected = group.insulation,
                         onSelect = { vm.setInsulation(index, it) },
                         optionLabel = ::insulationLabel,
-                        supportingText = if (group.insulation == BARE_CODE) "Bare equipment grounding conductor (Table 8, stranded)" else null,
+                        supportingText = if (group.insulation == BARE_CODE) "Bare equipment grounding conductor (${CodeRule.CONDUCTOR_PROPERTIES.cite}, stranded)" else null,
                     )
                     if (group.insulation != BARE_CODE) {
                         ToggleRow(
                             title = "Carries current",
-                            detail = "Counts for derating. Off for grounds and neutrals that carry only unbalanced current (310.15(E), (F)).",
+                            detail = "Counts for derating. Off for grounds and neutrals that carry only unbalanced current (${CodeRule.NEUTRAL_COUNTING.cite}, ${CodeRule.GROUNDING_COUNTING.cite}).",
                             checked = group.currentCarrying,
                             onCheckedChange = { vm.setCurrentCarrying(index, it) },
                         )
@@ -235,7 +236,7 @@ private fun FitSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel) {
     val size = ConductorSize.fromLabel(inputs.fitSize) ?: ConductorSize.AWG_12
     FormSection("How many fit") {
         Text(
-            "The most of one wire that fit alone in the conduit above, as in NEC Annex C.",
+            "The most of one wire that fit alone in the conduit above, as in NEC ${CodeRule.CONDUCTORS_IN_CONDUIT.cite}.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -291,7 +292,7 @@ private fun DeratingSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel)
         )
         ToggleRow(
             title = "Rooftop, in sunlight",
-            detail = "Less than 3/4 in. above the roof: +33 °C (310.15(B)(2)); XHHW-2 is exempt",
+            detail = "Less than 3/4 in. above the roof: +33 °C (${CodeRule.ROOFTOP_ADDER.cite}); XHHW-2 is exempt",
             checked = inputs.rooftop,
             onCheckedChange = vm::setRooftop,
         )
@@ -303,7 +304,7 @@ private fun DeratingSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel)
             optionLabel = { it.label },
         )
         SegmentedChoice(
-            label = "Terminal temperature rating (110.14(C))",
+            label = "Terminal temperature rating (${CodeRule.TERMINATION_TEMPERATURE.cite})",
             options = TemperatureRating.entries,
             selected = inputs.terminationRating,
             onSelect = vm::setTermination,

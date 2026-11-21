@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.panels.domain
 
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.model.ProjectText
 import com.thedirepack.constructioncalc.core.model.design.MaterialTakeoffs
 import com.thedirepack.constructioncalc.core.model.design.PullAnalysis
@@ -86,7 +87,7 @@ object ScheduleText {
                 extras.forEach(::appendLine)
             }
             appendLine()
-            append("— Construction Calc · wire sizes follow NEC 2023; verify before installing.")
+            append("— Construction Calc · wire sizes follow ${Code.label}; verify before installing.")
         }
     }
 

@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.core.electrical
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize.*
 
 /**
@@ -95,10 +96,10 @@ object SmallConductorLimit {
     }
 
     fun conditions(size: ConductorSize, material: ConductorMaterial): String? = when {
-        material.isCopper && size == AWG_18 -> "18 AWG Cu: continuous load ≤ 5.6 A and devices listed for 18 AWG (240.4(D)(1))."
-        material.isCopper && size == AWG_16 -> "16 AWG Cu: continuous load ≤ 8 A and devices listed for 16 AWG (240.4(D)(2))."
+        material.isCopper && size == AWG_18 -> "18 AWG Cu: continuous load ≤ 5.6 A and devices listed for 18 AWG (${CodeRule.SMALL_CONDUCTOR_18_CU.cite})."
+        material.isCopper && size == AWG_16 -> "16 AWG Cu: continuous load ≤ 8 A and devices listed for 16 AWG (${CodeRule.SMALL_CONDUCTOR_16_CU.cite})."
         material == ConductorMaterial.COPPER_CLAD_ALUMINUM && size == AWG_14 ->
-            "14 AWG CCA: continuous load ≤ 8 A and devices listed for 14 AWG CCA (240.4(D)(3))."
+            "14 AWG CCA: continuous load ≤ 8 A and devices listed for 14 AWG CCA (${CodeRule.SMALL_CONDUCTOR_14_CCA.cite})."
         else -> null
     }
 }

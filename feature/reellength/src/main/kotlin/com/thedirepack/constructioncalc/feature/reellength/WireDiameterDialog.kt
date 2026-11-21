@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.reellength
 
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.AlertDialog
@@ -37,8 +38,8 @@ internal fun WireDiameterDialog(onPick: (Quantity) -> Unit, onDismiss: () -> Uni
                 ChoiceField("Insulation", InsulationType.entries, type, { type = it }, optionLabel = { it.label })
                 ChoiceField("Size", sizes, chosen, { size = it }, optionLabel = { it.label })
                 Text(
-                    diameter?.let { "Approximate outside diameter ${it} in (NEC Chapter 9 Table 5). For a multiconductor cable, enter its own OD instead." }
-                        ?: "Table 5 has no diameter for this wire.",
+                    diameter?.let { "Approximate outside diameter ${it} in (NEC ${CodeRule.CONDUCTOR_DIMENSIONS.cite}). For a multiconductor cable, enter its own OD instead." }
+                        ?: "${CodeRule.CONDUCTOR_DIMENSIONS.cite} has no diameter for this wire.",
                 )
             }
         },
