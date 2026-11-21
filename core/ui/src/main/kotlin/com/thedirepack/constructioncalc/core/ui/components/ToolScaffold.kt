@@ -28,7 +28,8 @@ import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 /**
  * The standard frame for a tool: menu (or back, when editing a saved item or when [onBack] is
  * given), title, the app-wide [ProjectSwitcher] under it (unless a [subtitle] replaces it), a
- * Save-to-project action when [onSave] is given, and any extra [actions].
+ * Save-to-project action when [onSave] is given, any extra [actions], and a Reference action when
+ * the Reference has entries about this tool ([ToolHost.hasReference]).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,6 +81,11 @@ fun ToolScaffold(
                 },
                 actions = {
                     actions()
+                    if (host.hasReference) {
+                        IconButton(onClick = { host.openReference() }) {
+                            Icon(painterResource(R.drawable.ic_book), contentDescription = "Reference for this tool")
+                        }
+                    }
                     if (onSave != null) {
                         IconButton(onClick = onSave) {
                             Icon(painterResource(R.drawable.ic_save), contentDescription = "Save to project")

@@ -14,7 +14,7 @@ one integrated system, one settings screen.
   314.28). D2 pairs naturally with the Pull Planner's pull points.
 - **Grounding and motors:** GEC and bonding jumpers (D3, Table 250.66). Across-the-line motor
   circuits (D5), reusing VFD Sizing's Article 430 tables.
-- **Quick math:** an electrical formula sheet (D6): Ohm's law, power, PF, three-phase.
+- **Quick math:** an electrical formula sheet (D6): done as Electrical Formulas + the Reference formula sheet.
 - **Loads:** Article 220 feeder and service loads with demand factors (F1, already planned).
   Parallel-feeder and Cu/Al what-if comparisons (F2, F3 / L6).
 - **Materials:** a project-wide bill of materials and CSV export (I1, I7), extending the existing
@@ -30,8 +30,9 @@ one integrated system, one settings screen.
   recalculates; saved items and exports don't yet.
 
 **Later: valuable, but each is a large new subsystem or needs a permission**
-- A reference hub and field handbook (A1, A4–A8, A10–A11).
-- Code-edition versioning (A2): needed before adding NEC 2026.
+- Reference hub (A1, A4–A8): v1 done, see ROADMAP "Reference and formulas". A10–A11 remain.
+- Code-edition versioning (A2): citations done (`CodeRule`, docs/CODE_UPDATES.md); per-project
+  edition selection remains.
 - PDF viewing, plan calibration, takeoff and markups (B).
 - Camera capture and offline OCR (M): needs the camera permission, requested only when used.
 - Field records and commissioning (J1–J5, J9).
@@ -43,7 +44,11 @@ one integrated system, one settings screen.
 - Reel allocation and pull records (G4–G7).
 - Platform extras (L4–L9).
 
-**Probably not, unless there's a clear need**
+**Optional modules (off by default, switched on in Settings)**
+
+The user's rule (2026-11-21): these are optional extras, never needed for the core app to work.
+Each would be a module that's hidden until enabled in Settings and may need a permission or
+Google Play services only when it's on.
 - AR room measurement (C9): needs Google Play services.
 - Location features and geofencing (N3, N4).
 - Bluetooth laser meters (C7), unless a specific model is chosen.

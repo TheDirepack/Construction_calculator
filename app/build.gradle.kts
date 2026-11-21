@@ -53,6 +53,8 @@ dependencies {
     implementation(project(":feature:reellength"))
     implementation(project(":feature:conversions"))
     implementation(project(":feature:vfdsizing"))
+    implementation(project(":feature:formulas"))
+    implementation(project(":feature:reference"))
     implementation(project(":feature:wellpump"))
 
     implementation(libs.androidx.core.ktx)

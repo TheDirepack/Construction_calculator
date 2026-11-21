@@ -1,6 +1,5 @@
 package com.thedirepack.constructioncalc.feature.conversions.domain
 
-import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -50,39 +49,5 @@ class ElectricalTest {
             assertEquals(it, WireSizes.fromCircularMils(it.circularMils.toDouble()).size)
             assertEquals(it.circularMils.toDouble(), WireSizes.mm2ToCmil(it.squareMillimeters), 1e-6)
         }
-    }
-
-    @Test fun threePhase480V100AAtPf09() {
-        val r = CurrentPower.calculate(PowerTerm.AMPS, 100.0, AcPhases.THREE, 480.0, 0.9)
-        assertEquals(74.8, r.kw, 0.05)
-        assertEquals(83.1, r.kva, 0.05)
-        assertEquals(100.0, r.amps, 0.0)
-    }
-
-    @Test fun reverseFromKwAndKva() {
-        val forward = CurrentPower.calculate(PowerTerm.AMPS, 100.0, AcPhases.THREE, 480.0, 0.9)
-        val fromKw = CurrentPower.calculate(PowerTerm.KW, forward.kw, AcPhases.THREE, 480.0, 0.9)
-        assertEquals(100.0, fromKw.amps, 1e-9)
-        assertEquals(forward.kva, fromKw.kva, 1e-9)
-        val fromKva = CurrentPower.calculate(PowerTerm.KVA, forward.kva, AcPhases.THREE, 480.0, 0.9)
-        assertEquals(100.0, fromKva.amps, 1e-9)
-        assertEquals(forward.kw, fromKva.kw, 1e-9)
-        assertEquals(100.0, CurrentPower.calculate(PowerTerm.KW, 74.8, AcPhases.THREE, 480.0, 0.9).amps, 0.1)
-    }
-
-    @Test fun singlePhase() {
-        val r = CurrentPower.calculate(PowerTerm.AMPS, 20.0, AcPhases.SINGLE, 240.0, 1.0)
-        assertEquals(4.8, r.kw, 1e-12)
-        assertEquals(4.8, r.kva, 1e-12)
-        assertEquals(20.0, CurrentPower.calculate(PowerTerm.KVA, 4.8, AcPhases.SINGLE, 240.0, 1.0).amps, 1e-12)
-        assertEquals(41.67, CurrentPower.calculate(PowerTerm.KW, 5.0, AcPhases.SINGLE, 120.0, 1.0).amps, 0.005)
-    }
-
-    @Test fun invalidInputs() {
-        assertTrue(CurrentPower.problems(10.0, 240.0, 1.0).isEmpty())
-        assertEquals(1, CurrentPower.problems(10.0, 0.0, 1.0).size)
-        assertEquals(1, CurrentPower.problems(10.0, 240.0, 1.2).size)
-        assertEquals(1, CurrentPower.problems(10.0, 240.0, 0.0).size)
-        assertEquals(1, CurrentPower.problems(-1.0, 240.0, 1.0).size)
     }
 }

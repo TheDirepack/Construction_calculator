@@ -15,6 +15,9 @@ object Nec2023 : CodeBook {
     private val citations: Map<CodeRule, String> = mapOf(
         TERMINATION_TEMPERATURE to "110.14(C)",
         WORKING_SPACE to "Table 110.26(A)(1)",
+        GROUNDED_IDENTIFICATION to "200.6",
+        UNGROUNDED_IDENTIFICATION to "210.5(C)",
+        FEEDER_IDENTIFICATION to "215.12(C)",
 
         BRANCH_CONDUCTOR_SIZE to "210.19",
         BRANCH_CONDUCTOR_CONTINUOUS to "210.19(A)(1)(a)",
@@ -29,6 +32,7 @@ object Nec2023 : CodeBook {
 
         EGC_SIZE to "Table 250.122",
         EGC_INCREASED to "250.122(B)",
+        EGC_IDENTIFICATION to "250.119",
         EGC_MULTIPLE_CIRCUITS to "250.122(C)",
 
         PARALLEL_CONDUCTORS to "310.10(G)",
@@ -42,6 +46,8 @@ object Nec2023 : CodeBook {
         GROUNDING_COUNTING to "310.15(F)",
 
         MOTOR_TABLE_FLC to "430.6(A)(1)",
+        MOTOR_CONDUCTORS to "430.22",
+        MOTOR_DISCONNECT_RATING to "430.110(A)",
         MOTOR_OVERLOAD to "430.32(A)(1)",
         MOTOR_BRANCH_PROTECTION to "Table 430.52(C)(1)",
         MOTOR_NEXT_HIGHER_RATING to "430.52(C)(1)(a)",

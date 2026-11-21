@@ -131,6 +131,9 @@ object EquipmentGroundingConductor {
         Triple(6000, KCMIL_800, KCMIL_1250),
     )
 
+    /** The table's rows: (rating or setting not exceeding, copper, aluminum or copper-clad aluminum). */
+    val table: List<Triple<Int, ConductorSize, ConductorSize>> get() = rows
+
     /** Minimum EGC for an OCPD of [ocpdAmps]; null above 6000 A. */
     fun size(ocpdAmps: Int, material: ConductorMaterial): ConductorSize? {
         val row = rows.firstOrNull { ocpdAmps <= it.first } ?: return null

@@ -4,10 +4,11 @@ import androidx.compose.runtime.Composable
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.tool.ToolCategory
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
+import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import com.thedirepack.constructioncalc.core.ui.tool.ToolModule
 
 object VfdSizingTool : ToolModule {
-    const val ID = "vfd-sizing"
+    const val ID = ToolIds.VFD_SIZING
 
     override val id = ID
     override val title = "VFD Sizing"

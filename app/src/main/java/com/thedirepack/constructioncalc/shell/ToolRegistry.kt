@@ -5,10 +5,12 @@ import com.thedirepack.constructioncalc.feature.conduitbending.ConduitBendingToo
 import com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillTool
 import com.thedirepack.constructioncalc.feature.conversions.ConversionsTool
 import com.thedirepack.constructioncalc.feature.footinch.FootInchTool
+import com.thedirepack.constructioncalc.feature.formulas.FormulasTool
 import com.thedirepack.constructioncalc.feature.panels.PanelsTool
 import com.thedirepack.constructioncalc.feature.projects.ProjectsTool
 import com.thedirepack.constructioncalc.feature.pullplanner.PullPlannerTool
 import com.thedirepack.constructioncalc.feature.reellength.ReelLengthTool
+import com.thedirepack.constructioncalc.feature.reference.ReferenceTool
 import com.thedirepack.constructioncalc.feature.vfdsizing.VfdSizingTool
 import com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropTool
 import com.thedirepack.constructioncalc.feature.wellpump.WellPumpTool
@@ -25,6 +27,8 @@ object ToolRegistry {
         PullPlannerTool,
         ReelLengthTool,
         VfdSizingTool,
+        FormulasTool,
+        ReferenceTool,
         ConversionsTool,
         WellPumpTool,
     )

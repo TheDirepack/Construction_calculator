@@ -207,7 +207,7 @@ object UnitTable {
         ConversionCategory.FLOW -> flow
         ConversionCategory.ANGLE -> angle
         ConversionCategory.RESISTANCE_LENGTH -> resistanceLength
-        ConversionCategory.WIRE_SIZE, ConversionCategory.CURRENT_POWER -> emptyList()
+        ConversionCategory.WIRE_SIZE -> emptyList()
     }
 
     /** Id of the unit the category starts on. */
@@ -224,7 +224,7 @@ object UnitTable {
         ConversionCategory.FLOW -> "gpm"
         ConversionCategory.ANGLE -> "deg"
         ConversionCategory.RESISTANCE_LENGTH -> "okft"
-        ConversionCategory.WIRE_SIZE, ConversionCategory.CURRENT_POWER -> ""
+        ConversionCategory.WIRE_SIZE -> ""
     }
 
     /**

@@ -1,11 +1,12 @@
 package com.thedirepack.constructioncalc.feature.conversions
 
-import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -16,6 +17,7 @@ import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ToolInputs
+import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.model.stored
 import com.thedirepack.constructioncalc.core.ui.components.ChoiceField
@@ -29,8 +31,8 @@ import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.toFieldText
 import com.thedirepack.constructioncalc.core.ui.tool.ItemDraft
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
+import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import com.thedirepack.constructioncalc.feature.conversions.domain.ConversionCategory
-import com.thedirepack.constructioncalc.feature.conversions.domain.PowerTerm
 import com.thedirepack.constructioncalc.feature.conversions.domain.UnitTable
 
 private val SQ_IN_PER_MM2 = Rational.of(64516, 100)
@@ -75,9 +77,11 @@ fun ConversionsScreen(host: ToolHost) {
                 },
                 optionLabel = { it.label },
             )
+            TextButton(onClick = { host.openTool(ToolIds.FORMULAS, target = ToolTarget.OfTopic("power-three-phase")) }) {
+                Text("Amps ↔ kW ↔ kVA: open Electrical Formulas")
+            }
             when (inputs.category) {
                 ConversionCategory.WIRE_SIZE -> WireSizeForm(inputs, vm)
-                ConversionCategory.CURRENT_POWER -> CurrentPowerForm(inputs, vm)
                 else -> TableForm(inputs, vm)
             }
             ResultCard(results, notices = output.notices)
@@ -161,58 +165,5 @@ private fun WireSizeForm(inputs: ConversionsInputs, vm: ConversionsViewModel) {
                 },
             )
         }
-    }
-}
-
-@Composable
-private fun CurrentPowerForm(inputs: ConversionsInputs, vm: ConversionsViewModel) {
-    FormSection("Load") {
-        SegmentedChoice(
-            options = AcPhases.entries,
-            selected = inputs.phase,
-            onSelect = { p -> vm.update { it.copy(phase = p) } },
-            label = "System",
-            optionLabel = { it.label },
-        )
-        SegmentedChoice(
-            options = PowerTerm.entries,
-            selected = inputs.powerFrom,
-            onSelect = { t -> vm.update { it.copy(powerFrom = t, value = "") } },
-            label = "Convert from",
-            optionLabel = { it.label },
-        )
-        val kinds = when (inputs.powerFrom) {
-            PowerTerm.AMPS -> setOf(ValueKind.CURRENT)
-            PowerTerm.KW -> setOf(ValueKind.POWER)
-            PowerTerm.KVA -> setOf(ValueKind.APPARENT_POWER)
-        }
-        NumberField(
-            label = inputs.powerFrom.label,
-            value = inputs.value,
-            onValueChange = { t -> vm.update { it.copy(value = t) } },
-            unit = inputs.powerFrom.unit,
-            pickKinds = kinds,
-            onPick = { picked ->
-                picked.rational?.let { base ->
-                    // Power kinds are published in W and VA; show kW and kVA.
-                    val shown = if (inputs.powerFrom == PowerTerm.AMPS) base else base / Rational.of(1000)
-                    vm.update { it.copy(value = shown.toFieldText(4)) }
-                }
-            },
-        )
-        NumberField(
-            label = "Voltage",
-            value = inputs.voltage,
-            onValueChange = { t -> vm.update { it.copy(voltage = t) } },
-            unit = "V",
-            supportingText = if (inputs.phase == AcPhases.THREE) "Line-to-line" else null,
-            pickKinds = setOf(ValueKind.VOLTAGE),
-        )
-        NumberField(
-            label = "Power factor",
-            value = inputs.powerFactor,
-            onValueChange = { t -> vm.update { it.copy(powerFactor = t) } },
-            supportingText = "0 to 1. Use 1 for resistive loads",
-        )
     }
 }

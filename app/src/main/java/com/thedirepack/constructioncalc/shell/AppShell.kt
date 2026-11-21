@@ -61,6 +61,7 @@ import com.thedirepack.constructioncalc.core.ui.tool.ToolCategory
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 import com.thedirepack.constructioncalc.core.ui.tool.ToolModule
 import com.thedirepack.constructioncalc.feature.projects.ProjectsTool
+import com.thedirepack.constructioncalc.feature.reference.ReferenceTool
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -289,6 +290,9 @@ private class ShellHost(
     override fun shareText(subject: String, text: String) = onShareText(subject, text)
     override fun showMessage(message: String) = onMessage(message)
     override fun openFile() = onOpenFile()
+    override val hasReference: Boolean get() = ReferenceTool.hasEntriesFor(tool.id)
+    override fun openReference(topic: String?) =
+        onOpenTool(ReferenceTool.ID, null, ToolTarget.OfTopic(topic ?: ReferenceTool.topicFor(tool.id)))
 }
 
 @Composable

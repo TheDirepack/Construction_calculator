@@ -1,10 +1,8 @@
 package com.thedirepack.constructioncalc.feature.conversions
 
-import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.model.StoredQuantity
 import com.thedirepack.constructioncalc.feature.conversions.domain.ConversionCategory
-import com.thedirepack.constructioncalc.feature.conversions.domain.PowerTerm
 import com.thedirepack.constructioncalc.feature.conversions.domain.UnitTable
 import kotlinx.serialization.Serializable
 
@@ -22,17 +20,13 @@ data class ConversionsInputs(
     val category: ConversionCategory = ConversionCategory.LENGTH,
     /** Id of the unit being entered ([UnitTable.CALCULATOR_ID] for Length's feet-inch calculator). */
     val fromUnit: String = UnitTable.defaultUnitId(ConversionCategory.LENGTH),
-    /** The number typed for table categories, wire area, or the current/power amount. */
+    /** The number typed for table categories, or wire area. */
     val value: String = "",
     /** Length entered through the feet-inch calculator. */
     val length: StoredQuantity? = null,
     val wireFrom: WireFrom = WireFrom.SIZE,
     /** A [com.thedirepack.constructioncalc.core.electrical.ConductorSize] label. */
     val wireSize: String = "12 AWG",
-    val phase: AcPhases = AcPhases.SINGLE,
-    val powerFrom: PowerTerm = PowerTerm.AMPS,
-    val voltage: String = "240",
-    val powerFactor: String = "1",
 ) {
     /** True when Length is entered with the feet-inch calculator rather than a number. */
     val usesCalculator: Boolean

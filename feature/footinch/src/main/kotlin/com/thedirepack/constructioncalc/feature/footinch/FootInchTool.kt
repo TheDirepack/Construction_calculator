@@ -6,10 +6,11 @@ import com.thedirepack.constructioncalc.core.data.ToolBackup
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.tool.ToolCategory
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
+import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import com.thedirepack.constructioncalc.core.ui.tool.ToolModule
 
 object FootInchTool : ToolModule {
-    const val ID = "foot-inch"
+    const val ID = ToolIds.FOOT_INCH
 
     override val id = ID
     override val title = "Foot-Inch Calculator"

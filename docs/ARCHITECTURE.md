@@ -17,7 +17,12 @@ contract for building a tool.
                      the design engine: ampacity, corrections, ConductorSizing, ConductorProtection
                      (240.4), ConduitFill (Chapter 9, Note 7), FillDerating, Table 8/9, motors, AcPhases,
                      RacewayBends (Table 2 radii, the 360° sections), PullFormulas and PullRatings
-                     (pulling tension, sidewall pressure, limits), CableWeight.
+                     (pulling tension, sidewall pressure, limits), CableWeight, MotorProtection
+                     (430.52), WorkingSpace (110.26).
+                     code/: CodeRule (a stable id for every code rule the app cites), Nec2023 (the
+                     edition's numbers), Code.book (the edition in use). See CODE_UPDATES.md.
+                     formula/: Formula, FormulaSolver (solve any unknown), FormulaCatalog (the one
+                     list behind Electrical Formulas and the Reference formula sheet).
 :core:model          Pure Kotlin + kotlinx.serialization. Project → Run → ProjectItem, panels/circuits,
                      run paths (RunPath, PathSegment) and pull settings (PullSetup), the design engine
                      (design/: ProjectAnalysis, PullAnalysis, MaterialTakeoff, Wire, PublishedValues), ResultValue
@@ -189,8 +194,12 @@ fun VoltageDropScreen(host: ToolHost) {
   (Before the first release, add file versioning and migrations.)
 - **Show assumptions and limits** with `Notice`s (code tables used, derating not applied,
   above recommended limits). These calculators guide fieldwork; say what they don't cover.
-- **Reference data cites its source** (e.g. "NEC 2023 Chapter 9 Table 8") and has spot-check
-  tests against published values. Shared tables go in `:core:electrical`. Manufacturer figures
+- **Reference data cites its source** through `CodeRule`, never a literal section number:
+  `"(${CodeRule.CONDUCTOR_PROPERTIES.cite})"`, `Code.label` for "NEC 2023". Add a rule id to
+  `CodeRule`/`Nec2023` when a new one is needed. Tables have spot-check tests against the book.
+- **Code tables and formulas are shown in the Reference, not re-typed in tools.** A tool links to
+  its entries through the top-bar book icon (automatic when the Reference lists the tool in an
+  entry's `tools`) or `host.openReference(id)`. Shared tables go in `:core:electrical`. Manufacturer figures
   (a sidewall pressure preset, friction values) are labelled guidance in the UI, with their source,
   and a user value replaces them.
 - **Validate on construction.** Model classes that come from files (`Circuit`, `PathSegment`,

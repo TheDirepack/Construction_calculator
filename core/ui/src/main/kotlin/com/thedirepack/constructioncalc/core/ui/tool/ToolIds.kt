@@ -6,10 +6,14 @@ package com.thedirepack.constructioncalc.core.ui.tool
  */
 object ToolIds {
     const val PROJECTS = "projects"
+    const val FOOT_INCH = "foot-inch"
     const val PANELS = "panels"
     const val CONDUIT_BENDING = "conduit-bending"
     const val CONDUIT_FILL = "conduit-fill"
     const val VOLTAGE_DROP = "voltage-drop"
     const val REEL_LENGTH = "reel-length"
     const val PULL_PLANNER = "pull-planner"
+    const val VFD_SIZING = "vfd-sizing"
+    const val FORMULAS = "formulas"
+    const val REFERENCE = "reference"
 }

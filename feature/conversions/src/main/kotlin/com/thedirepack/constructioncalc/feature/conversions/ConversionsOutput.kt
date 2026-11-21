@@ -14,9 +14,7 @@ import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.feature.conversions.domain.ConversionCategory
 import com.thedirepack.constructioncalc.feature.conversions.domain.Conversions
-import com.thedirepack.constructioncalc.feature.conversions.domain.CurrentPower
 import com.thedirepack.constructioncalc.feature.conversions.domain.NumberText
-import com.thedirepack.constructioncalc.feature.conversions.domain.PowerTerm
 import com.thedirepack.constructioncalc.feature.conversions.domain.UnitTable
 import com.thedirepack.constructioncalc.feature.conversions.domain.WireSizeResult
 import com.thedirepack.constructioncalc.feature.conversions.domain.WireSizes
@@ -41,7 +39,6 @@ private fun empty(vararg notices: Notice) = ConversionsOutput(emptyList(), notic
 internal fun conversionsOutput(inputs: ConversionsInputs, settings: AppSettings): ConversionsOutput =
     when (inputs.category) {
         ConversionCategory.WIRE_SIZE -> wireSizeOutput(inputs)
-        ConversionCategory.CURRENT_POWER -> currentPowerOutput(inputs)
         else -> tableOutput(inputs, settings)
     }
 
@@ -151,41 +148,4 @@ private fun wireSizeOutput(inputs: ConversionsInputs): ConversionsOutput {
     val summary = if (size == null) "Wire area ${NumberText.significant(Rational.of(result.squareMillimeters), 4)} mm²"
     else "${size.label} = ${NumberText.significant(Rational.of(size.circularMils.toLong()), 6)} cmil = ${NumberText.significant(Rational.of(size.squareMillimeters), 4)} mm²"
     return ConversionsOutput(results, notices, summary)
-}
-
-private fun currentPowerOutput(inputs: ConversionsInputs): ConversionsOutput {
-    val value = parseRational(inputs.value)?.toDouble()
-    val volts = parseRational(inputs.voltage)?.toDouble()
-    val pf = parseRational(inputs.powerFactor)?.toDouble()
-    val missing = buildList {
-        if (value == null) add(inputs.powerFrom.label)
-        if (volts == null) add("Voltage")
-        if (pf == null) add("Power factor")
-    }
-    if (value == null || volts == null || pf == null) {
-        return empty(Notice("Still needed: " + missing.joinToString(", ") + "."))
-    }
-    val problems = CurrentPower.problems(value, volts, pf)
-    if (problems.isNotEmpty()) return empty(*problems.map { Notice(it, NoticeLevel.ERROR) }.toTypedArray())
-
-    val r = CurrentPower.calculate(inputs.powerFrom, value, inputs.phase, volts, pf)
-    val watts = r.kw * 1000
-    val voltAmps = r.kva * 1000
-    if (!r.amps.isFinite() || !watts.isFinite() || !voltAmps.isFinite()) {
-        return empty(Notice("The calculated current or power is outside the supported range.", NoticeLevel.ERROR))
-    }
-    fun text(x: Double, unit: String) = NumberText.significant(Rational.of(x), 4) + " $unit"
-    val results = listOf(
-        ResultValue.number("amps", "Current", ValueKind.CURRENT, exact(r.amps), text(r.amps, "A")),
-        ResultValue.number("kw", "Real power", ValueKind.POWER, exact(watts), text(r.kw, "kW")),
-        ResultValue.number("kva", "Apparent power", ValueKind.APPARENT_POWER, exact(voltAmps), text(r.kva, "kVA")),
-    )
-    val notices = listOf(
-        Notice("Balanced ${inputs.phase.label.lowercase()} load" + (if (inputs.phase.powerFactorK > 1) ", line-to-line voltage" else "") + ". kVA = V × A" + (if (inputs.phase.powerFactorK > 1) " × √3" else "") + " ÷ 1000; kW = kVA × power factor."),
-        Notice("Load power factor only: motor nameplate hp or output kW also depends on efficiency."),
-    )
-    val entered = text(value, inputs.powerFrom.unit)
-    val summary = "${inputs.phase.label} ${NumberText.significant(Rational.of(volts), 4)} V, PF ${NumberText.significant(Rational.of(pf), 3)}: " +
-        listOf(PowerTerm.AMPS to results[0], PowerTerm.KW to results[1], PowerTerm.KVA to results[2]).joinToString(" = ") { it.second.text }
-    return ConversionsOutput(results, notices + Notice("Entered $entered."), summary)
 }

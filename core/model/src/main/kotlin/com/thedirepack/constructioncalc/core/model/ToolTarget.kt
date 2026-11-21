@@ -1,21 +1,28 @@
 package com.thedirepack.constructioncalc.core.model
 
 /**
- * What a tool was opened *for*, besides a saved item: a project's page, or one circuit or run of a
- * project so the tool can start from it (Voltage Drop for a circuit, Conduit Fill for a run…).
- * Travels with the app's back stack as a short string ([encode]).
+ * What a tool was opened *for*, besides a saved item: a project's page, one circuit or run of a
+ * project so the tool can start from it (Voltage Drop for a circuit, Conduit Fill for a run…), or a
+ * topic (a Reference entry, a formula). Travels with the app's back stack as a short string ([encode]).
  */
 sealed interface ToolTarget {
-    val projectId: String
+    /** The project this target belongs to; null for a [OfTopic]. */
+    val projectId: String?
 
     data class OfProject(override val projectId: String) : ToolTarget
     data class OfCircuit(override val projectId: String, val circuitId: String) : ToolTarget
     data class OfRun(override val projectId: String, val runId: String) : ToolTarget
 
+    /** A Reference entry or a formula id, or `tool:<toolId>` for the Reference entries about a tool. */
+    data class OfTopic(val topicId: String) : ToolTarget {
+        override val projectId: String? get() = null
+    }
+
     fun encode(): String = when (this) {
         is OfProject -> "project$SEP$projectId"
         is OfCircuit -> "circuit$SEP$projectId$SEP$circuitId"
         is OfRun -> "run$SEP$projectId$SEP$runId"
+        is OfTopic -> "topic$SEP$topicId"
     }
 
     companion object {
@@ -28,6 +35,7 @@ sealed interface ToolTarget {
                 parts.size == 2 && parts[0] == "project" -> OfProject(parts[1])
                 parts.size == 3 && parts[0] == "circuit" -> OfCircuit(parts[1], parts[2])
                 parts.size == 3 && parts[0] == "run" -> OfRun(parts[1], parts[2])
+                parts.size == 2 && parts[0] == "topic" -> OfTopic(parts[1])
                 else -> null
             }.takeIf { t -> t != null && parts.drop(1).all { it.isNotEmpty() } }
         }

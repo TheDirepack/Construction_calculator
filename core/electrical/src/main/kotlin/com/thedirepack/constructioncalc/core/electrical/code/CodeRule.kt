@@ -20,6 +20,9 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
     // General
     TERMINATION_TEMPERATURE("Temperature limits of terminations"),
     WORKING_SPACE("Working space depth in front of equipment", isTable = true),
+    GROUNDED_IDENTIFICATION("Identifying grounded (neutral) conductors"),
+    UNGROUNDED_IDENTIFICATION("Identifying ungrounded branch-circuit conductors"),
+    FEEDER_IDENTIFICATION("Identifying ungrounded feeder conductors"),
 
     // Branch circuits and overcurrent protection
     BRANCH_CONDUCTOR_SIZE("Branch-circuit conductor minimum ampacity and size"),
@@ -36,6 +39,7 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
     // Grounding
     EGC_SIZE("Minimum size of equipment grounding conductors", isTable = true),
     EGC_INCREASED("Equipment grounding conductor increased with the ungrounded conductors"),
+    EGC_IDENTIFICATION("Identifying wire-type equipment grounding conductors"),
     EGC_MULTIPLE_CIRCUITS("One equipment grounding conductor for several circuits in a raceway"),
 
     // Conductors
@@ -51,6 +55,8 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
 
     // Motors and drives
     MOTOR_TABLE_FLC("Use the table full-load current, not the nameplate"),
+    MOTOR_CONDUCTORS("Conductors for a single motor: 125% of full-load current"),
+    MOTOR_DISCONNECT_RATING("Motor disconnecting means: at least 115% of full-load current"),
     MOTOR_OVERLOAD("Motor overload protection, continuous-duty motors over 1 hp"),
     MOTOR_BRANCH_PROTECTION("Maximum rating of motor branch-circuit short-circuit and ground-fault devices", isTable = true),
     MOTOR_NEXT_HIGHER_RATING("Motor short-circuit device: next higher standard rating allowed"),

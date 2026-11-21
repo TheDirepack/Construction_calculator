@@ -40,6 +40,8 @@ inventory of features, never as a source of code, art or text.
 | VFD Sizing | **done** (v1, tables checked vs NEC 2023) | Southwire VFD Sizing (`com.southwire.VFDSizingCalculator`) |
 | Well & Pump | last (after everything else) | Well Drilling (`com.welldrilling`) |
 | Panels & Circuits | **done** (v1: schedules, feeders, design engine, PDF/text, links to the other tools) | Original: panel schedules linked to runs, wire sizing |
+| Electrical Formulas | **done** (v1: 18 formulas, solve for any blank; [tool notes](tools/formulas.md)) | Ugly's-style formula pages, Southwire Power Conversion |
+| Reference | **done** (v1: NEC tables generated from the engine data, formula sheet, field references; [tool notes](tools/reference.md)) | Original; edition-aware via `CodeRule` ([CODE_UPDATES.md](CODE_UPDATES.md)) |
 | Projects & Runs | **done** (circuits and runs open Voltage Drop, Conduit Fill, Bending and Panels; shared text includes the design) | Original to this app: links all of the above |
 
 ## 1. Foot-Inch Calculator (done: v0.1)
@@ -131,7 +133,7 @@ Next:
 ## 7. Unit Conversions
 
 - Length, area, volume, weight, temperature, pressure, power (HP ↔ kW), energy, speed
-- Electrical: kcmil ↔ mm², AWG ↔ mm² ↔ circular mils, amps ↔ kW/kVA (single- or three-phase, PF), Ω/kft ↔ Ω/km
+- Electrical: kcmil ↔ mm², AWG ↔ mm² ↔ circular mils, Ω/kft ↔ Ω/km. Amps ↔ kW/kVA moved to Electrical Formulas (one calculator per rule).
 - Uses the same exact-fraction engine where it makes sense
 
 Further examples from the [Southwire calculator catalog](https://www.southwire.com/calculators):
@@ -142,8 +144,7 @@ Further examples from the [Southwire calculator catalog](https://www.southwire.c
 - **Copper and aluminum comparison.** Compare candidate conductors for the same circuit and
   show the effects on ampacity, voltage drop and conduit fill.
   [Conductor Conversion Calculator](https://www.southwire.com/calculators/re3-conversion-calculator)
-- **DC power conversion.** Extend the current and power calculator's single- and three-phase
-  AC modes with a DC mode for voltage, current and power.
+- **DC power conversion.** Done in Electrical Formulas (Ohm's law and power covers DC).
   [Power Conversion Calculator](https://www.southwire.com/calculators/power-conversion-calculator)
 
 ## 8. VFD Sizing
@@ -197,6 +198,21 @@ Panels, circuits and conduit runs live in the project and are linked:
 
 Next: feeder and service load calculations (Article 220), demand factors, available fault current,
 series ratings, and selective coordination notes.
+
+## Reference and formulas (done: v1)
+
+- [x] Code-edition registry: every NEC citation in the app goes through `CodeRule` / `Nec2023`
+- [x] Reference hub: search, sections, favorites, recently opened, a Reference action in every
+  tool's top bar for its own entries, links from entries into tools
+- [x] Code tables generated from `core:electrical` (ampacity, correction, adjustment, EGC, small
+  conductors, standard OCPD, fill, Tables 4, 5, 8, 9, 2, wires-in-conduit, motors, 430.52, working space)
+- [x] Formula sheet and Electrical Formulas tool from one catalog
+- [x] Field references: offsets and saddles, NEMA configurations, conductor colors, knockouts,
+  voltage systems, abbreviations, fractions
+- [ ] Box fill (314.16) and pull box sizing (314.28) entries, with calculators
+- [ ] Burial depth (Table 300.5), support spacing, GEC (Table 250.66) entries
+- [ ] Editable local conventions (phase colors) and user notes on entries
+- [ ] Deep links from individual notices (tap a citation to open its entry)
 
 ## Idea backlog
 

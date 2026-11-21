@@ -1,6 +1,5 @@
 package com.thedirepack.constructioncalc.feature.conversions
 
-import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
@@ -9,7 +8,6 @@ import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.model.stored
 import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import com.thedirepack.constructioncalc.feature.conversions.domain.ConversionCategory
-import com.thedirepack.constructioncalc.feature.conversions.domain.PowerTerm
 import com.thedirepack.constructioncalc.feature.conversions.domain.UnitTable
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
@@ -27,8 +25,8 @@ class ConversionsOutputTest {
 
     @Test fun savedInputsRoundTripAndDefaultsDecode() {
         val custom = ConversionsInputs(
-            category = ConversionCategory.CURRENT_POWER, phase = AcPhases.THREE, powerFrom = PowerTerm.KW,
-            value = "75", voltage = "480", powerFactor = "0.9", length = Quantity.inches(Rational.of(30)).stored(),
+            category = ConversionCategory.WIRE_SIZE, wireFrom = WireFrom.MM2,
+            value = "75", length = Quantity.inches(Rational.of(30)).stored(),
         )
         assertEquals(custom, ToolInputs.decode<ConversionsInputs>(ToolInputs.encode(custom)))
         assertEquals(ConversionsInputs(), ToolInputs.decode<ConversionsInputs>(JsonObject(emptyMap())))
@@ -131,49 +129,6 @@ class ConversionsOutputTest {
     @Test fun wireAreaOverflowProducesAnErrorInsteadOfCrashing() {
         val input = ConversionsInputs(category = ConversionCategory.WIRE_SIZE, wireFrom = WireFrom.MM2)
         for (value in listOf("1e309", "1e307")) {
-            val output = out(input.copy(value = value))
-            assertTrue(output.results.isEmpty())
-            assertEquals(NoticeLevel.ERROR, output.notices.single().level)
-        }
-    }
-
-    @Test fun currentPowerThreePhase() {
-        val o = out(
-            ConversionsInputs(
-                category = ConversionCategory.CURRENT_POWER, phase = AcPhases.THREE, powerFrom = PowerTerm.AMPS,
-                value = "100", voltage = "480", powerFactor = "0.9",
-            ),
-        )
-        assertEquals("100 A", o.results.first { it.key == "amps" }.text)
-        assertEquals("74.82 kW", o.results.first { it.key == "kw" }.text)
-        assertEquals("83.14 kVA", o.results.first { it.key == "kva" }.text)
-        assertEquals(ValueKind.CURRENT, o.results.first { it.key == "amps" }.kind)
-        assertEquals(ValueKind.POWER, o.results.first { it.key == "kw" }.kind)
-        assertEquals(74.82, o.results.first { it.key == "kw" }.rational!!.toDouble() / 1000, 0.005)
-        assertEquals(ValueKind.APPARENT_POWER, o.results.first { it.key == "kva" }.kind)
-        assertNotNull(o.summary.takeIf { it.isNotBlank() })
-    }
-
-    @Test fun currentPowerReverseAndErrors() {
-        val base = ConversionsInputs(category = ConversionCategory.CURRENT_POWER, phase = AcPhases.THREE, voltage = "480", powerFactor = "0.9")
-        val reverse = out(base.copy(powerFrom = PowerTerm.KW, value = "74.8246"))
-        assertEquals("100 A", reverse.results.first { it.key == "amps" }.text)
-        val bad = out(base.copy(value = "100", powerFactor = "1.5"))
-        assertTrue(bad.results.isEmpty())
-        assertEquals(NoticeLevel.ERROR, bad.notices.single().level)
-        val missing = out(base.copy(value = "100", voltage = ""))
-        assertTrue(missing.results.isEmpty())
-        assertTrue(missing.notices.single().text.contains("Voltage"))
-    }
-
-    @Test fun currentPowerOverflowProducesAnErrorInsteadOfCrashing() {
-        val input = ConversionsInputs(
-            category = ConversionCategory.CURRENT_POWER,
-            powerFrom = PowerTerm.KVA,
-            voltage = "240",
-            powerFactor = "1",
-        )
-        for (value in listOf("9".repeat(309), "9".repeat(307))) {
             val output = out(input.copy(value = value))
             assertTrue(output.results.isEmpty())
             assertEquals(NoticeLevel.ERROR, output.notices.single().level)

@@ -120,6 +120,15 @@ interface ToolHost {
     fun openFile()
 
     fun showMessage(message: String)
+
+    /** True when the Reference has entries about this tool (its code tables, formulas…). */
+    val hasReference: Boolean get() = false
+
+    /**
+     * Opens the Reference at [topic] (an entry id, see the Reference tool), or at this tool's entries
+     * when null. Code tables, formulas and field references live there, not in each tool.
+     */
+    fun openReference(topic: String? = null) {}
 }
 
 /** A calculation ready to be saved as a [ProjectItem]. */

@@ -15,5 +15,6 @@ fun targetLabel(target: ToolTarget, projects: List<Project>): String? {
         }
         is ToolTarget.OfRun -> project.run(target.runId)?.let { "For run ${it.name} · ${project.name}" }
         is ToolTarget.OfProject -> project.name
+        is ToolTarget.OfTopic -> null
     }
 }
