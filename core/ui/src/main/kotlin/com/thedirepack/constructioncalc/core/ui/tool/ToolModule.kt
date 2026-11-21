@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.core.ui.tool
 
+import com.thedirepack.constructioncalc.core.model.PathSegment
+import com.thedirepack.constructioncalc.core.model.PullSetup
 import com.thedirepack.constructioncalc.core.model.Raceway
 
 import android.content.Context
@@ -48,6 +50,13 @@ interface ToolModule {
      * summary is blank.
      */
     fun describe(item: ProjectItem): String? = null
+
+    /**
+     * Optional: the bends a saved item of this tool puts in its run's path (Conduit Bending's
+     * offsets, saddles…), so Projects, Panels and the Wire Pull Planner can add them without
+     * importing this tool. Empty when the item has none.
+     */
+    fun pathBends(item: ProjectItem): List<PathSegment.Bend> = emptyList()
 
     /**
      * True if this tool has its own options. They appear as this tool's page in the one app
@@ -122,7 +131,17 @@ data class ItemDraft(
     val summary: String,
     /** The conduit this calculation was for (e.g. a bend); saving to a run offers it as the run's conduit. */
     val conduit: Raceway? = null,
+    /** Bends this calculation adds to the run's path (Conduit Bending); saving offers "Add to run path". */
+    val pathBends: List<PathSegment.Bend> = emptyList(),
+    /**
+     * A whole route for the run (the Wire Pull Planner working without a project): saving offers to
+     * make it the run's path and pull settings.
+     */
+    val route: RunRoute? = null,
 )
+
+/** A run's route and pull settings, carried by a draft until it's saved into a run. */
+data class RunRoute(val path: List<PathSegment>, val pull: PullSetup?, val raceway: Raceway?)
 
 /** App-wide repositories, available to every tool's composables. */
 val LocalAppServices = staticCompositionLocalOf<AppServices> {

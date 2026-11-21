@@ -241,3 +241,35 @@ fun Project.withRunLength(runId: String, length: StoredQuantity?, now: Long): Pr
     val path = RunPath.withLength(run.path, length.toQuantity().value, raceway.conduitType, size) ?: return null
     return updateRun(runId, now) { it.copy(path = path, raceway = raceway.copy(length = length)) }
 }
+
+/**
+ * The project with [bends] from the saved item [sourceItemId] in [runId]'s path: they replace that
+ * item's earlier bends in place, or are added at the end. A run with a typed length and no path
+ * yet keeps that length: the rest of it becomes a straight after the bends.
+ */
+fun Project.addBendsToRunPath(runId: String, sourceItemId: String, bends: List<PathSegment.Bend>, now: Long): Project {
+    val run = run(runId) ?: return this
+    if (bends.isEmpty()) return this
+    val path = if (run.path.isEmpty() && run.raceway?.length != null) {
+        val tagged = bends.map { it.copy(sourceItemId = sourceItemId) }
+        val raceway = run.raceway
+        val size = raceway.tradeSize ?: ProjectAnalysis.analyze(this).runs[runId]?.conduit?.tradeSize
+        RunPath.withLength(tagged, raceway.length!!.toQuantity().value, raceway.conduitType, size) ?: tagged
+    } else {
+        RunPath.replaceSource(run.path, sourceItemId, bends)
+    }
+    return withRunPath(runId, path, now)
+}
+
+/**
+ * The project with [raceway] as [runId]'s conduit, keeping its length and path in step: a changed
+ * length moves the path's last straight ([withRunLength]); otherwise (or when the path can't be
+ * that short) the length follows the path for the new conduit size.
+ */
+fun Project.withRaceway(runId: String, raceway: Raceway, now: Long): Project {
+    val run = run(runId) ?: return this
+    val staged = updateRun(runId, now) { it.copy(raceway = raceway.copy(length = run.raceway?.length ?: raceway.length)) }
+    if (run.path.isEmpty()) return updateRun(runId, now) { it.copy(raceway = raceway) }
+    val lengthChanged = raceway.length != run.raceway?.length && raceway.length != null
+    return (if (lengthChanged) staged.withRunLength(runId, raceway.length, now) else null) ?: staged.syncRunLength(runId, now)
+}

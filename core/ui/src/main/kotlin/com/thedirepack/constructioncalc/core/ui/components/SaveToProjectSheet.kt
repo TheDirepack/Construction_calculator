@@ -1,6 +1,11 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
 import com.thedirepack.constructioncalc.core.model.Raceway
+import com.thedirepack.constructioncalc.core.model.RunPath
+import com.thedirepack.constructioncalc.core.model.addBendsToRunPath
+import com.thedirepack.constructioncalc.core.model.syncRunLength
+import com.thedirepack.constructioncalc.core.model.withRunPath
+import com.thedirepack.constructioncalc.core.ui.formatDecimal
 import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.data.activeTarget
 import androidx.compose.foundation.horizontalScroll
@@ -91,6 +96,12 @@ fun SaveToProjectSheet(
     // A calculation done for a conduit (a bend) can set the run's conduit, by default when it has none.
     val conduit = draft.conduit
     var useConduit by remember(projectId, runId) { mutableStateOf(conduit != null && project?.run(runId)?.raceway == null) }
+    // A bend can add its bends to the run's path (on by default when the run already has a path).
+    val bends = draft.pathBends
+    var addBends by remember(projectId, runId) { mutableStateOf(bends.isNotEmpty() && project?.run(runId)?.path?.isNotEmpty() == true) }
+    // A whole route (Pull Planner without a project) can become the run's path and pull settings.
+    val route = draft.route
+    var useRoute by remember(projectId, runId) { mutableStateOf(route != null && project?.run(runId)?.path.isNullOrEmpty()) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
@@ -177,6 +188,27 @@ fun SaveToProjectSheet(
                 )
             }
 
+            if (bends.isNotEmpty() && !updateExisting) {
+                ToggleRow(
+                    title = "Add to run path",
+                    checked = addBends,
+                    onCheckedChange = { addBends = it },
+                    detail = "Adds its ${bends.size} bend${if (bends.size == 1) "" else "s"} (${bends.joinToString(", ") { formatDecimal(it.angleDegrees, 1) + "°" }}) to the run's route for the 360° check and the pull planner.",
+                )
+            }
+            if (route != null && !updateExisting) {
+                ToggleRow(
+                    title = "Use this path for the run",
+                    checked = useRoute,
+                    onCheckedChange = { useRoute = it },
+                    detail = if (project?.run(runId)?.path.isNullOrEmpty()) {
+                        "Saves the route and pull settings with the run, so Panels and other tools see them."
+                    } else {
+                        "Replaces the run's current path and pull settings."
+                    },
+                )
+            }
+
             OutlinedTextField(
                 value = note,
                 onValueChange = { note = it },
@@ -192,8 +224,15 @@ fun SaveToProjectSheet(
                         val itemTitle = title.trim().ifEmpty { draft.title }
                         if (updateExisting && editing != null && editingProject != null) {
                             services.projects.edit(editingProject.id) { p, t ->
-                                p.updateItem(editing.id, t) {
+                                val updated = p.updateItem(editing.id, t) {
                                     it.copy(title = itemTitle, note = note.trim(), inputs = draft.inputs, results = draft.results, summary = draft.summary)
+                                }
+                                // Bends this item put in its run's path follow the edit.
+                                val owner = updated.item(editing.id)?.first
+                                if (owner != null && bends.isNotEmpty() && RunPath.hasSource(owner.path, editing.id)) {
+                                    updated.addBendsToRunPath(owner.id, editing.id, bends, t)
+                                } else {
+                                    updated
                                 }
                             }
                             onSaved("Updated “$itemTitle”")
@@ -219,11 +258,20 @@ fun SaveToProjectSheet(
                             summary = draft.summary,
                         )
                         services.projects.addItem(targetProject.id, targetRun.id, item)
+                        if (addBends && bends.isNotEmpty()) {
+                            services.projects.edit(targetProject.id) { p, t -> p.addBendsToRunPath(targetRun.id, item.id, bends, t) }
+                        }
+                        if (useRoute && route != null) {
+                            services.projects.edit(targetProject.id) { p, t ->
+                                p.updateRun(targetRun.id, t) { r -> r.copy(pull = route.pull ?: r.pull, raceway = route.raceway ?: r.raceway) }
+                                    .withRunPath(targetRun.id, route.path, t)
+                            }
+                        }
                         if (useConduit && conduit != null) {
                             services.projects.edit(targetProject.id) { p, t ->
                                 p.updateRun(targetRun.id, t) { r ->
                                     r.copy(raceway = (r.raceway ?: Raceway()).copy(conduitType = conduit.conduitType, tradeSize = conduit.tradeSize))
-                                }
+                                }.syncRunLength(targetRun.id, t) // bend radii follow the new size
                             }
                         }
                         services.settings.setActiveTarget(targetProject.id, targetRun.id)

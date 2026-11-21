@@ -101,8 +101,12 @@ data class Project(
         return removed.withRunPath(owner.id, RunPath.removeSource(owner.path, itemId), now)
     }
 
+    /** Moves an item to another run; bends it added to its old run's path leave that path. */
     fun moveItem(itemId: String, toRunId: String, toIndex: Int, now: Long): Project {
-        val (_, item) = item(itemId) ?: return this
+        val (from, item) = item(itemId) ?: return this
+        if (from.id != toRunId && RunPath.hasSource(from.path, itemId)) {
+            return withRunPath(from.id, RunPath.removeSource(from.path, itemId), now).moveItem(itemId, toRunId, toIndex, now)
+        }
         val without = runs.map { run -> run.copy(items = run.items.filterNot { it.id == itemId }) }
         return copy(
             runs = without.map { run ->

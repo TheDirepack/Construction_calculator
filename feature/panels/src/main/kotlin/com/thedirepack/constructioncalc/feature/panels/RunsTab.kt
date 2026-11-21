@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.model.withRaceway
 import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import androidx.compose.foundation.layout.Arrangement
@@ -50,6 +51,8 @@ import com.thedirepack.constructioncalc.core.model.Raceway
 import com.thedirepack.constructioncalc.core.model.Run
 import com.thedirepack.constructioncalc.core.model.design.FillStatus
 import com.thedirepack.constructioncalc.core.model.design.RunDesign
+import com.thedirepack.constructioncalc.core.model.design.PullAnalysis
+import com.thedirepack.constructioncalc.core.model.design.PullText
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.components.ConfirmDialog
 import com.thedirepack.constructioncalc.core.ui.components.RacewayEditorSheet
@@ -117,10 +120,11 @@ internal fun RunsTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
             title = "Conduit for ${p.run.name}",
             initial = ctx.project.run(p.run.id)?.raceway,
             onSave = { raceway ->
-                ctx.edit { project, now -> project.updateRun(p.run.id, now) { it.copy(raceway = raceway) } }
+                ctx.edit { project, now -> project.withRaceway(p.run.id, raceway, now) }
                 prompt = null
             },
             onDismiss = { prompt = null },
+            routed = ctx.project.run(p.run.id)?.path?.isNotEmpty() == true,
             onRemove = ctx.project.run(p.run.id)?.raceway?.let {
                 {
                     ctx.edit { project, now -> project.updateRun(p.run.id, now) { it.copy(raceway = null) } }
@@ -219,7 +223,9 @@ private fun RunCard(
                         )
                     }
                     rd.smallestFitting?.let { Text("Smallest that fits: ${it.displayName}", style = MaterialTheme.typography.bodySmall) }
-                    rd.bendDegrees?.let { Text("Saved bends: ${Wire.number(it, 1)}° of 360° between pull points", style = MaterialTheme.typography.bodySmall) }
+                    if (run.path.isEmpty()) {
+                        rd.bendDegrees?.let { Text("Saved bends: ${Wire.number(it, 1)}° of 360° between pull points", style = MaterialTheme.typography.bodySmall) }
+                    }
                     rd.notes.forEach { note ->
                         if (note.isWarning) {
                             WarningText(note.text)
@@ -229,10 +235,14 @@ private fun RunCard(
                     }
                 }
             }
-            if (!ctx.readOnly) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (run.raceway != null) PullSummary(run, rd)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (!ctx.readOnly) {
                     TextButton(onClick = onConduit) { Text(if (run.raceway == null) "Set conduit…" else "Edit conduit…") }
                     TextButton(onClick = onAssign) { Text("Circuits…") }
+                }
+                if (run.raceway != null) {
+                    TextButton(onClick = { ctx.host.openTool(ToolIds.PULL_PLANNER, target = ToolTarget.OfRun(ctx.project.id, run.id)) }) { Text("Plan pull") }
                 }
             }
         }
@@ -317,5 +327,31 @@ private fun AssignCircuitsSheet(ctx: PanelsContext, run: Run, onDismiss: () -> U
                 }, modifier = Modifier.padding(start = 8.dp)) { Text("Save") }
             }
         }
+    }
+}
+
+/** The run's path and pull: max tension against its limit, worst sidewall pressure, degrees per section and warnings. */
+@Composable
+private fun PullSummary(run: Run, rd: RunDesign?) {
+    val result = remember(run, rd) { PullAnalysis.analyze(run, rd) }
+    Column(Modifier.padding(end = 12.dp, top = 6.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        if (run.path.isEmpty()) {
+            Text("No path yet. Plan the pull to add straights, bends and pull points.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            return@Column
+        }
+        val sections = result.sectionDegrees
+        Text(
+            "Path: ${plural(run.path.size, "segment")} · bends " + sections.joinToString(" | ") { "${Wire.number(it, 1)}°" } +
+                if (sections.size > 1) " (per pull section, 360° max)" else " of 360° max",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        val summary = PullText.summary(result)
+        if (summary != null) {
+            Text(summary, style = MaterialTheme.typography.bodyMedium, color = if (result.overTension || result.overPressure) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+        } else {
+            Text("Pull not calculated yet: open Plan pull for what's missing.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        val shown = rd?.notes.orEmpty().filter { it.isWarning }.map { it.text }.toSet()
+        PullText.warnings(result).filterNot { it in shown }.forEach { WarningText(it) }
     }
 }

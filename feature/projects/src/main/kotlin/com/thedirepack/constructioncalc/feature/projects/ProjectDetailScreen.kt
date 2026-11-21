@@ -1,5 +1,8 @@
 package com.thedirepack.constructioncalc.feature.projects
 
+import com.thedirepack.constructioncalc.core.model.RunPath
+import com.thedirepack.constructioncalc.core.model.addBendsToRunPath
+import com.thedirepack.constructioncalc.core.model.withRaceway
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import com.thedirepack.constructioncalc.core.model.design.PanelLayout
 import com.thedirepack.constructioncalc.core.model.ToolTarget
@@ -296,10 +299,11 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
             title = "Conduit for ${p.run.name}",
             initial = p.run.raceway,
             onSave = { raceway ->
-                services.projects.edit(project.id) { pr, now -> pr.updateRun(p.run.id, now) { it.copy(raceway = raceway) } }
+                services.projects.edit(project.id) { pr, now -> pr.withRaceway(p.run.id, raceway, now) }
                 prompt = null
             },
             onDismiss = { prompt = null },
+            routed = p.run.path.isNotEmpty(),
         )
         Prompt.DeleteProject -> ConfirmDialog(
             "Delete ${project.name}?",
@@ -372,6 +376,7 @@ private fun RunHeader(
                 if (conduitSummary != null) {
                     DropdownMenuItem(text = { Text("Check fill in Conduit Fill") }, onClick = { menu = false; onOpenTool(ToolIds.CONDUIT_FILL) })
                     DropdownMenuItem(text = { Text("Bend this conduit") }, onClick = { menu = false; onOpenTool(ToolIds.CONDUIT_BENDING) })
+                    DropdownMenuItem(text = { Text("Plan pull") }, onClick = { menu = false; onOpenTool(ToolIds.PULL_PLANNER) })
                 }
                 if (!readOnly) {
                     DropdownMenuItem(
@@ -435,6 +440,14 @@ private fun ItemSheet(project: Project, run: Run, item: ProjectItem, host: ToolH
                         onDismiss()
                         host.openTool(item.toolId, item)
                     }) { Text("Open in ${tool.title}") }
+                }
+                val bends = remember(item) { tool?.pathBends(item).orEmpty() }
+                if (bends.isNotEmpty() && !project.archived) {
+                    val inPath = RunPath.hasSource(run.path, item.id)
+                    AssistChip(onClick = {
+                        services.projects.edit(project.id) { p, now -> p.addBendsToRunPath(run.id, item.id, bends, now) }
+                        host.showMessage(if (inPath) "Updated its bends in ${run.name}'s path" else "Added ${bends.size} bend${if (bends.size == 1) "" else "s"} to ${run.name}'s path")
+                    }, label = { Text(if (inPath) "Update run path" else "Add to run path") })
                 }
                 AssistChip(onClick = {
                     context.getSystemService(ClipboardManager::class.java)

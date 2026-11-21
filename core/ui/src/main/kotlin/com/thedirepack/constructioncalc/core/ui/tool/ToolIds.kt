@@ -11,4 +11,5 @@ object ToolIds {
     const val CONDUIT_FILL = "conduit-fill"
     const val VOLTAGE_DROP = "voltage-drop"
     const val REEL_LENGTH = "reel-length"
+    const val PULL_PLANNER = "pull-planner"
 }

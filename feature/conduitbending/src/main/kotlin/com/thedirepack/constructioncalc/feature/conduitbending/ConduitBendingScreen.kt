@@ -61,6 +61,7 @@ import com.thedirepack.constructioncalc.feature.conduitbending.domain.BendType
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.Bendable
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.FigureKind
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.Severity
+import com.thedirepack.constructioncalc.feature.conduitbending.domain.PathBends
 
 @Composable
 fun ConduitBendingScreen(host: ToolHost) {
@@ -94,6 +95,7 @@ fun ConduitBendingScreen(host: ToolHost) {
                 ItemDraft(
                     ConduitBendingTool.ID, plan.type.label, ToolInputs.encode(inputs), results, summary,
                     conduit = Raceway(conduitType = inputs.conduit, tradeSize = inputs.tradeSize),
+                    pathBends = PathBends.of(inputs.toRequest(table), plan),
                 ),
             )
         }),

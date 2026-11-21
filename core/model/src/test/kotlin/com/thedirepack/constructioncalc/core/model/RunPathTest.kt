@@ -171,3 +171,53 @@ class RunPathTest {
         }
     }
 }
+
+class AddBendsToRunPathTest {
+    private fun ft(feet: Long) = Quantity.feet(Rational.of(feet)).stored()
+
+    @Test fun firstBendsKeepATypedLength() {
+        val p0 = Project.create("P", 0)
+        val runId = p0.runs.first().id
+        val typed = p0.updateRun(runId, 0) { it.copy(raceway = Raceway(ConduitType.EMT, TradeSize.S_3_4, length = ft(100))) }
+        val p = typed.addBendsToRunPath(runId, "item", listOf(PathSegment.Bend(30.0), PathSegment.Bend(30.0)), 1)
+        val run = p.run(runId)!!
+        assertEquals(3, run.path.size)
+        assertEquals(1200.0, run.raceway!!.length!!.toQuantity().value.toDouble(), 1e-6)
+        assertTrue(run.path.take(2).all { it is PathSegment.Bend && it.sourceItemId == "item" })
+        // Updating the item swaps its bends in place.
+        val again = p.addBendsToRunPath(runId, "item", listOf(PathSegment.Bend(45.0), PathSegment.Bend(45.0)), 2)
+        assertEquals(listOf(45.0, 45.0), again.run(runId)!!.path.filterIsInstance<PathSegment.Bend>().map { it.angleDegrees })
+    }
+
+    @Test fun movingAnItemTakesItsBendsOutOfTheOldPath() {
+        val p0 = Project.create("P", 0)
+        val a = p0.runs.first().id
+        val p1 = p0.addRun(Run(name = "B"), 0)
+        val b = p1.runs.last().id
+        val item = ProjectItem(toolId = "conduit-bending", title = "Kick", createdAt = 0)
+        val p2 = p1.addItem(a, item, 0).withRunPath(a, listOf(PathSegment.Straight(ft(10)), PathSegment.Bend(30.0, sourceItemId = item.id)), 1)
+        val moved = p2.moveItem(item.id, b, 0, 2)
+        assertFalse(RunPath.hasSource(moved.run(a)!!.path, item.id))
+        assertEquals(item.id, moved.run(b)!!.items.single().id)
+    }
+}
+
+class WithRacewayTest {
+    @Test fun conduitEditsKeepLengthAndPathInStep() {
+        val p0 = Project.create("P", 0)
+        val runId = p0.runs.first().id
+        val ten = Quantity.feet(Rational.of(10L)).stored()
+        val p1 = p0.withRunPath(runId, listOf(PathSegment.Straight(ten), PathSegment.Bend(90.0)), 1)
+            .withRaceway(runId, Raceway(ConduitType.EMT, TradeSize.S_1), 2)
+        assertEquals(120 + 5.75 * Math.PI / 2, p1.run(runId)!!.raceway!!.length!!.toQuantity().value.toDouble(), 1e-6)
+        // A bigger size changes the Table 2 radius and so the length.
+        val p2 = p1.withRaceway(runId, p1.run(runId)!!.raceway!!.copy(tradeSize = TradeSize.S_2), 3)
+        assertEquals(120 + 9.5 * Math.PI / 2, p2.run(runId)!!.raceway!!.length!!.toQuantity().value.toDouble(), 1e-6)
+        // A typed length moves the straight.
+        val p3 = p2.withRaceway(runId, p2.run(runId)!!.raceway!!.copy(length = Quantity.feet(Rational.of(20L)).stored()), 4)
+        assertEquals(240.0, RunPath.lengthInches(p3.run(runId)!!.path, ConduitType.EMT, TradeSize.S_2), 1e-6)
+        // Too short for the bends: the path wins.
+        val p4 = p3.withRaceway(runId, p3.run(runId)!!.raceway!!.copy(length = Quantity.inches(Rational.of(5L)).stored()), 5)
+        assertEquals(240.0, p4.run(runId)!!.raceway!!.length!!.toQuantity().value.toDouble(), 1e-6)
+    }
+}

@@ -51,6 +51,8 @@ fun RacewayEditorSheet(
     onSave: (Raceway) -> Unit,
     onDismiss: () -> Unit,
     onRemove: (() -> Unit)? = null,
+    /** The run has a path: its length is the routed length, and editing it moves the last straight. */
+    routed: Boolean = false,
 ) {
     var draft by remember { mutableStateOf(initial ?: Raceway()) }
     var ambientText by remember { mutableStateOf(initial?.ambientC?.let { formatDecimal(it, 1) }.orEmpty()) }
@@ -83,7 +85,11 @@ fun RacewayEditorSheet(
                 label = "Length of run",
                 value = draft.length?.toQuantity(),
                 onValueChange = { draft = draft.copy(length = it?.stored()) },
-                supportingText = "Used for voltage drop. Tap for the calculator or a value from another tool.",
+                supportingText = if (routed) {
+                    "The routed length of the run's path, used for voltage drop. Changing it lengthens or shortens the path's last straight."
+                } else {
+                    "Used for voltage drop. Tap for the calculator or a value from another tool."
+                },
             )
             NumberField(
                 label = "Ambient temperature",
