@@ -4,7 +4,11 @@ import com.thedirepack.constructioncalc.core.measure.LengthStyle
 import com.thedirepack.constructioncalc.core.measure.MeasureFormat
 import com.thedirepack.constructioncalc.core.measure.Precision
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.model.design.MaterialTakeoff
+import com.thedirepack.constructioncalc.core.model.design.MaterialTakeoffs
 import com.thedirepack.constructioncalc.core.model.design.PanelDesign
+import com.thedirepack.constructioncalc.core.model.design.PullAnalysis
+import com.thedirepack.constructioncalc.core.model.design.PullText
 import com.thedirepack.constructioncalc.core.model.design.PanelLayout
 import com.thedirepack.constructioncalc.core.model.design.ProjectAnalysis
 import com.thedirepack.constructioncalc.core.model.design.ProjectDesign
@@ -38,7 +42,10 @@ object ProjectText {
                 appendLine()
                 appendLine("■ ${run.name}")
                 if (run.note.isNotBlank()) appendLine("  ${run.note.trim()}")
-                design?.runs?.get(run.id)?.let { rd -> conduitLine(rd, length)?.let { appendLine("  $it") } }
+                design?.runs?.get(run.id)?.let { rd ->
+                    conduitLine(rd, length)?.let { appendLine("  $it") }
+                    pullLine(rd)?.let { appendLine("  $it") }
+                }
                 if (run.items.isEmpty()) appendLine("  (empty)")
                 run.items.forEach { item -> append(renderItem(item, toolTitle, indent = "  ")) }
             }
@@ -46,6 +53,13 @@ object ProjectText {
                 appendLine()
                 appendLine("PANELS")
                 design.panels.forEach { pd -> append(renderPanel(project, pd, design)) }
+            }
+            design?.let { d ->
+                val takeoff = MaterialTakeoffs.of(project, d)
+                if (!takeoff.isEmpty) {
+                    appendLine()
+                    append(takeoffText(takeoff))
+                }
             }
             appendLine()
             append("— Construction Calc · ").append(date(project.updatedAt, zone))
@@ -64,6 +78,24 @@ object ProjectText {
         }
         val warnings = rd.notes.filter { it.isWarning }.joinToString("") { "\n  ⚠ ${it.text}" }
         return "Conduit: " + parts.joinToString(" · ") + warnings
+    }
+
+    /** The run's pull, when it has a path: `Pull: 1,234 lb of 1,500 lb … ` plus its warnings not already on the conduit line. */
+    private fun pullLine(rd: RunDesign): String? {
+        if (rd.run.path.isEmpty()) return null
+        val result = PullAnalysis.analyze(rd.run, rd)
+        val summary = PullText.summary(result) ?: return "Path: ${rd.run.path.size} segments (pull not calculated)"
+        val shown = rd.notes.filter { it.isWarning }.map { it.text }.toSet()
+        val warnings = PullText.warnings(result).filterNot { it in shown }.joinToString("") { "\n  ⚠ $it" }
+        return "Pull: $summary$warnings"
+    }
+
+    /** MATERIAL TAKEOFF: wire by size and conduit by type, from every run's length. */
+    fun takeoffText(takeoff: MaterialTakeoff): String = buildString {
+        appendLine("MATERIAL TAKEOFF")
+        takeoff.wire.forEach { appendLine("  Wire ${it.label}: ${Wire.number(it.feet, 0)} ft") }
+        takeoff.conduit.forEach { appendLine("  Conduit ${it.label}: ${Wire.number(it.feet, 0)} ft") }
+        takeoff.notes.forEach { appendLine("  ⚠ ${it.text}") }
     }
 
     private fun renderPanel(project: Project, pd: PanelDesign, design: ProjectDesign): String = buildString {

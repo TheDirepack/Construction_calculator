@@ -160,6 +160,8 @@ data class Run(
      * routed length (see [withRunPath]).
      */
     val path: List<PathSegment> = emptyList(),
+    /** Pull settings for the Wire Pull Planner (friction, tensions, ratings, extra cables); null until set. */
+    val pull: PullSetup? = null,
 ) {
     init {
         require(path.size <= RunPath.MAX_SEGMENTS) { "Run path has too many segments" }

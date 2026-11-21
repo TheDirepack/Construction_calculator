@@ -4,6 +4,7 @@ import com.thedirepack.constructioncalc.core.electrical.AmbientCorrection
 import com.thedirepack.constructioncalc.core.electrical.ConductorCountAdjustment
 import com.thedirepack.constructioncalc.core.electrical.ConductorImpedance
 import com.thedirepack.constructioncalc.core.electrical.ConductorResistance
+import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.FillConductor
 import com.thedirepack.constructioncalc.core.electrical.ConduitFill
@@ -80,6 +81,7 @@ data class FillEntry(
     val ground: Boolean,
     /** How many of the [count] are current-carrying (310.15(E)/(F)): a neutral carrying only unbalanced current isn't. */
     val currentCarrying: Int = if (ground) 0 else count,
+    val material: ConductorMaterial = ConductorMaterial.COPPER,
 )
 
 /** Fill check result for a run's conduit. */
@@ -425,7 +427,7 @@ object ProjectAnalysis {
         val notes = mutableListOf<DesignNote>()
         val members = all.filter { (_, c) -> run.id in c.runIds }
         val entries = mutableListOf<FillEntry>()
-        var largestGround: Pair<ConductorSize, InsulationType>? = null
+        var largestGround: Triple<ConductorSize, InsulationType, ConductorMaterial>? = null
         var incomplete = false
         val loads = members.filter { (_, c) -> c.kind == CircuitKind.LOAD }
         loads.forEach { (panel, c) ->
@@ -441,7 +443,7 @@ object ProjectAnalysis {
                 incomplete = true
                 if (size != null) notes += info("${panel.name} ${PanelLayout.label(c)} has no calculated equipment grounding conductor size.")
             } else if (largestGround?.let { ground > it.first } != false) {
-                largestGround = ground to insulation
+                largestGround = Triple(ground, insulation, d.conductor.material)
             }
             if (size == null) return@forEach
             val wires = c.poles + if (c.neutral) 1 else 0
@@ -452,16 +454,16 @@ object ProjectAnalysis {
                 return@forEach
             }
             val carrying = CurrentCarryingConductors.count(c.poles, c.neutral, panel.system.supply, c.nonlinear).coerceAtMost(wires)
-            entries += FillEntry(wires, size, insulation, area, ground = false, currentCarrying = carrying)
+            entries += FillEntry(wires, size, insulation, area, ground = false, currentCarrying = carrying, material = d.conductor.material)
         }
         // One EGC sized for the largest circuit serves the raceway (250.122(C)).
-        largestGround?.let { (g, ins) ->
+        largestGround?.let { (g, ins, material) ->
             val groundArea = InsulatedConductorArea.area(ins, g)
             if (groundArea == null) {
                 incomplete = true
                 notes += warn("No Table 5 area for the ${g.label} ${ins.code} equipment grounding conductor.")
             } else {
-                entries += FillEntry(1, g, ins, groundArea, ground = true)
+                entries += FillEntry(1, g, ins, groundArea, ground = true, material = material)
             }
             if (loads.size > 1 && !incomplete) notes += info("One equipment grounding conductor (${g.label}) sized for the largest circuit (250.122(C)).")
         }
@@ -488,6 +490,9 @@ object ProjectAnalysis {
             notes += info("Fits only by Chapter 9 Table 1 Note 7 rounding (all conductors the same size).")
         }
         if (raceway != null && !incomplete && smallest == null && area > 0) notes += warn("Too many conductors for any ${raceway.conduitType.displayName}.")
+        // Jam and clearance for pulling (IEEE 1185), from the largest conductor's Table 5 diameter.
+        val largestOd = entries.mapNotNull { InsulatedConductorArea.diameter(it.insulation, it.size) }.maxOrNull()
+        if (conduit != null && !incomplete && total > 0 && largestOd != null) notes += PullAnalysis.fitNotes(conduit.internalDiameterIn, largestOd, total)
         val insulation = project.design.conductor
         val ambient = runAmbient(project, run, insulation.insulation == InsulationType.XHHW_2)
         val ambientFactor = AmbientCorrection.factor(ambient, insulation.insulationRating)
