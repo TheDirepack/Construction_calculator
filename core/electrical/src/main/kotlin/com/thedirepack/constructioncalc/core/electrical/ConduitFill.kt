@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.core.electrical
 
+import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import kotlin.math.abs
 import kotlin.math.floor
 
@@ -61,13 +63,14 @@ data class JamCheck(
 /**
  * Conduit fill by NEC (NFPA 70) Chapter 9: Table 1 percent limits, Table 4 conduit areas, Table 5
  * and Table 8 conductor areas, and the "how many fit" counts of Annex C, computed from the tables.
+ * Every percentage and threshold comes from [Code.book] (the values below are NEC 2023's).
  *
- * ### Table 1 limits
+ * ### Table 1 limits ([CodeRule.FILL_PERCENT])
  * 1 conductor 53%, 2 conductors 31%, more than 2 conductors 40% of the conduit's cross-section.
  * Conduit or tubing *nipples* no longer than 24 in. (600 mm) between boxes or similar enclosures
- * may be filled to 60% (Table 1 Note 4), for any number of conductors.
+ * may be filled to 60% ([CodeRule.FILL_NIPPLES]), for any number of conductors.
  *
- * ### Note 7 rounding
+ * ### Note 7 rounding ([CodeRule.FILL_ROUNDING])
  * When working out the maximum number of conductors that are **all the same size** (same total
  * cross-sectional area including insulation), the quotient `allowed area / conductor area` is
  * rounded **up** to the next whole number if its decimal part is **0.8 or more**, and is otherwise
@@ -80,26 +83,33 @@ data class JamCheck(
  * are tried first at 40%, then 2 at 31%, then 1 at 53%.
  */
 object ConduitFill {
-    const val NIPPLE_PERCENT = 60
-    const val JAM_LOW = 2.8
-    const val JAM_HIGH = 3.2
+    private val values get() = Code.book.values
+
+    /** [CodeRule.FILL_NIPPLES]: percent fill of a nipple. */
+    val NIPPLE_PERCENT: Int get() = values.fillNipplePercent
+
+    /** [CodeRule.JAM_RATIO]: lower end of the jam range. */
+    val JAM_LOW: Double get() = values.jamRatioLow
+
+    /** [CodeRule.JAM_RATIO]: upper end of the jam range. */
+    val JAM_HIGH: Double get() = values.jamRatioHigh
 
     private const val EPS = 1e-9
 
-    /** Table 1 percent for a conduit holding [conductorCount] conductors (nipple: 60%). */
+    /** Table 1 percent for a conduit holding [conductorCount] conductors (nipple: [NIPPLE_PERCENT]). */
     fun limitPercent(conductorCount: Int, nipple: Boolean = false): Int = when {
         nipple -> NIPPLE_PERCENT
-        conductorCount == 1 -> 53
-        conductorCount == 2 -> 31
-        else -> 40
+        conductorCount == 1 -> values.fillOneConductorPercent
+        conductorCount == 2 -> values.fillTwoConductorsPercent
+        else -> values.fillOverTwoConductorsPercent
     }
 
-    /** The Note 7 whole-number rule: round up when the decimal part is 0.8 or more, else truncate. */
+    /** The Note 7 whole-number rule: round up when the decimal part is at least the threshold (0.8), else truncate. */
     fun note7Round(quotient: Double): Int {
         if (quotient <= 0.0) return 0
         val whole = floor(quotient + EPS)
         val decimal = quotient - whole
-        return (if (decimal >= 0.8 - EPS && decimal < 1.0 - EPS) whole + 1 else whole).toInt()
+        return (if (decimal >= values.note7RoundUpFraction - EPS && decimal < 1.0 - EPS) whole + 1 else whole).toInt()
     }
 
     /**
@@ -110,10 +120,10 @@ object ConduitFill {
         require(areaEachSqIn > 0.0) { "Conductor area must be positive" }
         fun fits(percent: Int) = note7Round(conduit.allowedAreaSqIn(percent) / areaEachSqIn)
         if (nipple) return fits(NIPPLE_PERCENT)
-        val overTwo = fits(40)
+        val overTwo = fits(limitPercent(3))
         if (overTwo >= 3) return overTwo
-        if (fits(31) >= 2) return 2
-        return if (fits(53) >= 1) 1 else 0
+        if (fits(limitPercent(2)) >= 2) return 2
+        return if (fits(limitPercent(1)) >= 1) 1 else 0
     }
 
     /** Total area of every conductor in [groups], square inches. Groups the NEC has no row for add nothing. */

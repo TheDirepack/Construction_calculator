@@ -152,7 +152,7 @@ object ProjectAnalysis {
     const val BEND_DEGREES_KEY = "bend_degrees"
 
     /** Raceway articles allow at most 360° of bends between pull points (NEC 2023 358.24(B), 344.24(B)…; see [RacewayBends]). */
-    const val MAX_BEND_DEGREES = RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS
+    val MAX_BEND_DEGREES: Double get() = RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS
     private data class DropSegment(val lengthInches: Double, val conduit: Table9Conduit)
 
     private data class PhaseLoad(

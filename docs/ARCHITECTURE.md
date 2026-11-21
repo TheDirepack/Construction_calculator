@@ -13,14 +13,18 @@ contract for building a tool.
                      feet-inch parsing, the expression evaluator, formatting, the keypad
                      input state machine (CalcInput), and Decimals (how every number field parses
                      and prints plain decimals). The calculator brain, reusable by any tool.
-:core:electrical     Pure Kotlin. NEC tables and electrical rules shared by every electrical tool and
-                     the design engine: ampacity, corrections, ConductorSizing, ConductorProtection
-                     (240.4), ConduitFill (Chapter 9, Note 7), FillDerating, Table 8/9, motors, AcPhases,
-                     RacewayBends (Table 2 radii, the 360° sections), PullFormulas and PullRatings
-                     (pulling tension, sidewall pressure, limits), CableWeight, MotorProtection
-                     (430.52), WorkingSpace (110.26).
-                     code/: CodeRule (a stable id for every code rule the app cites), Nec2023 (the
-                     edition's numbers), Code.book (the edition in use). See CODE_UPDATES.md.
+:core:electrical     Pure Kotlin. Electrical rules shared by every electrical tool and the design
+                     engine, as math only: Ampacity, corrections, ConductorSizing, ConductorProtection
+                     (240.4), ConduitFill (Chapter 9, Note 7), FillDerating, Table 8/9 lookups, motors,
+                     AcPhases, RacewayBends (radii, the bends-between-pull-points limit), PullFormulas
+                     and PullRatings (pulling tension, sidewall pressure, limits; IEEE and
+                     manufacturer guidance, not code), CableWeight, MotorProtection, WorkingSpace.
+                     Every number the code defines is read from Code.book.
+                     code/: the one source for code values. CodeRule (a stable id for every rule the
+                     app cites), ElectricalCode (an edition: cite(rule), CodeValues for single values,
+                     and every table as typed rows), Code.book (the edition in use). code/nec2023/:
+                     Nec2023 and its data files (values, conductors, protection, raceways, motors,
+                     general), data only. A new edition is a copy of that package. See CODE_UPDATES.md.
                      formula/: Formula, FormulaSolver (solve any unknown), FormulaCatalog (the one
                      list behind Electrical Formulas and the Reference formula sheet).
 :core:model          Pure Kotlin + kotlinx.serialization. Project → Run → ProjectItem, panels/circuits,

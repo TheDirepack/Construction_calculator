@@ -1,13 +1,16 @@
 package com.thedirepack.constructioncalc.core.electrical
 
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+import com.thedirepack.constructioncalc.core.measure.Decimals
 
 /**
  * Inputs for choosing the minimum conductor for one circuit.
  *
  * @property ocpdAmps the breaker or fuse protecting the conductors.
  * @property loadAmps total load current, if known (null: size to the OCPD only).
- * @property continuousAmps the part of [loadAmps] that is continuous (3 h or more), taken at 125%.
+ * @property continuousAmps the part of [loadAmps] that is continuous (3 h or more), taken at the
+ *   code's continuous-load factor (125%).
  * @property terminalLoadAmps the largest per-phase load including the continuous multiplier,
  *   when an unbalanced load has been calculated phase by phase.
  * @property insulation conductor insulation rating (e.g. 90 °C for THHN/THWN-2): the column
@@ -25,7 +28,7 @@ data class WireSizingRequest(
     val continuousAmps: Double = 0.0,
     val insulation: TemperatureRating = TemperatureRating.C90,
     val termination: TemperatureRating = TemperatureRating.C75,
-    val ambientC: Double = 30.0,
+    val ambientC: Double = Code.book.values.ambientBasisC,
     val rooftopUnder3_4In: Boolean = false,
     val xhhw2: Boolean = false,
     val currentCarrying: Int = 3,
@@ -51,15 +54,15 @@ data class WireSizingResult(
 )
 
 /**
- * Minimum conductor size for a circuit, NEC 2023:
+ * Minimum conductor size for a circuit (every factor and limit from [Code.book]; NEC 2023 sections shown):
  * 1. Load at the terminals: 125% of continuous + noncontinuous ≤ ampacity in the termination
- *    column, before adjustment (210.19(A)(1)(a), 215.2(A)(1)(a), 110.14(C)).
+ *    column, before adjustment (210.19(A)(1), 215.2(A)(1), 110.14(C)).
  * 2. Load after correction/adjustment: load ≤ insulation-column ampacity × ambient (310.15(B)) ×
- *    count adjustment (310.15(C)(1)) (210.19(A)(1)(b)).
+ *    count adjustment (310.15(C)(1)) (210.19(A)(2)).
  * 3. Protection: usable ampacity ≥ OCPD, or the next standard rating above it for OCPD ≤ 800 A
  *    (240.4(B)); never above 240.4(D) small-conductor limits.
  *
- * Starts at 14 AWG copper / 12 AWG aluminum (the usual minimum for branch circuits and feeders).
+ * Starts at the code's minimum size (310.3(A): 14 AWG copper / 12 AWG aluminum).
  * Doesn't cover motors (Art. 430), 310.12 dwelling services, or special occupancies.
  */
 object ConductorSizing {
@@ -83,8 +86,9 @@ object ConductorSizing {
 
         val load = r.loadAmps
         val continuous = r.continuousAmps.coerceIn(0.0, load ?: r.continuousAmps)
-        val terminalLoad = r.terminalLoadAmps ?: load?.let { (it - continuous) + 1.25 * continuous }
-        val first = if (r.material.isCopper) ConductorSize.AWG_14 else ConductorSize.AWG_12
+        val values = Code.book.values
+        val terminalLoad = r.terminalLoadAmps ?: load?.let { (it - continuous) + values.continuousLoadFactor * continuous }
+        val first = if (r.material.isCopper) values.minimumSizeCopper else values.minimumSizeAluminum
 
         /** Why [size] is too small, or null if it works. */
         fun failure(size: ConductorSize): String? {
@@ -93,7 +97,7 @@ object ConductorSizing {
             val adjusted = table * ambientFactor * adjustment
             val usable = minOf(adjusted, termination.toDouble())
             if (terminalLoad != null && termination < terminalLoad - 1e-9) {
-                return "Load at ${terminationColumn.label} terminals: 125% continuous + noncontinuous (${CodeRule.BRANCH_CONDUCTOR_CONTINUOUS.cite}, ${CodeRule.TERMINATION_TEMPERATURE.cite})"
+                return "Load at ${terminationColumn.label} terminals: ${Decimals.trim(Code.book.values.continuousLoadFactor * 100)}% continuous + noncontinuous (${CodeRule.BRANCH_CONDUCTOR_CONTINUOUS.cite}, ${CodeRule.TERMINATION_TEMPERATURE.cite})"
             }
             if (load != null && adjusted < load - 1e-9) {
                 return "Load after temperature and conductor-count derating (${CodeRule.BRANCH_CONDUCTOR_ADJUSTED.cite}, ${CodeRule.AMPACITY.cite})"
@@ -123,10 +127,10 @@ object ConductorSizing {
         }
         return WireSizingResult(
             null, ambient, ambientFactor, adjustment, null, null, null,
-            "Larger than 2000 kcmil",
+            "Larger than ${ConductorSize.entries.last().label}",
             notes + "No single conductor is large enough; use parallel sets (${CodeRule.PARALLEL_CONDUCTORS.cite}).",
         )
     }
 
-    private fun fmt(v: Double) = com.thedirepack.constructioncalc.core.measure.Decimals.trim(v, 1)
+    private fun fmt(v: Double) = Decimals.trim(v, 1)
 }

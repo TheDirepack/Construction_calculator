@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.core.electrical.code
 
+import com.thedirepack.constructioncalc.core.electrical.code.nec2023.Nec2023
+
 /** A published code edition that the app's tables and rules come from. */
 enum class CodeEdition(val label: String, val year: Int) {
     NEC_2023("NEC 2023", 2023),
@@ -7,7 +9,7 @@ enum class CodeEdition(val label: String, val year: Int) {
 
 /**
  * Every code provision the app relies on, by a stable id that stays the same from edition to
- * edition. The section or table number for an id lives in the [CodeBook] for the edition
+ * edition. The section or table number for an id lives in the [ElectricalCode] for the edition
  * (e.g. [Nec2023]), so a renumbered rule in a new edition is a one-line change there instead of a
  * hunt through every tool's notes. See docs/CODE_UPDATES.md.
  *
@@ -20,14 +22,19 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
     // General
     TERMINATION_TEMPERATURE("Temperature limits of terminations"),
     WORKING_SPACE("Working space depth in front of equipment", isTable = true),
+    WORKING_SPACE_WIDTH("Working space width"),
+    WORKING_SPACE_HEIGHT("Working space height"),
     GROUNDED_IDENTIFICATION("Identifying grounded (neutral) conductors"),
     UNGROUNDED_IDENTIFICATION("Identifying ungrounded branch-circuit conductors"),
     FEEDER_IDENTIFICATION("Identifying ungrounded feeder conductors"),
 
-    // Branch circuits and overcurrent protection
+    // Branch circuits, feeders and overcurrent protection
     BRANCH_CONDUCTOR_SIZE("Branch-circuit conductor minimum ampacity and size"),
     BRANCH_CONDUCTOR_CONTINUOUS("Branch-circuit conductors: 125% of the continuous load"),
     BRANCH_CONDUCTOR_ADJUSTED("Branch-circuit conductors: load after correction and adjustment"),
+    FEEDER_CONDUCTOR_CONTINUOUS("Feeder conductors: 125% of the continuous load"),
+    VOLTAGE_DROP_BRANCH("Voltage drop recommendation: branch circuits, and feeders plus branch circuits"),
+    VOLTAGE_DROP_FEEDER("Voltage drop recommendation: feeders"),
     CONDUCTOR_PROTECTION("Protection of conductors"),
     NEXT_SIZE_UP("Overcurrent devices rated 800 A or less: next higher standard rating"),
     SMALL_CONDUCTORS("Small conductors: maximum overcurrent protection"),
@@ -43,6 +50,8 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
     EGC_MULTIPLE_CIRCUITS("One equipment grounding conductor for several circuits in a raceway"),
 
     // Conductors
+    MINIMUM_CONDUCTOR_SIZE("Minimum size of conductors"),
+    CONDUCTOR_INSULATION("Conductor applications and insulation temperature ratings"),
     PARALLEL_CONDUCTORS("Conductors in parallel"),
     AMPACITY("Ampacities for conductors rated 0–2000 volts"),
     AMPACITY_TABLE("Ampacities of insulated conductors: up to three current-carrying, 30 °C (86 °F) ambient", isTable = true),
@@ -63,6 +72,7 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
     MOTOR_OVERTEMPERATURE("Motor overtemperature protection"),
     MOTOR_FLC_SINGLE_PHASE("Full-load current, single-phase AC motors", isTable = true),
     MOTOR_FLC_THREE_PHASE("Full-load current, three-phase AC induction motors", isTable = true),
+    DRIVE_DISCONNECT_RATING("Power conversion equipment: disconnect at least 115% of rated input current"),
     DRIVE_INPUT_CONDUCTORS("Power conversion equipment: input conductors at 125% of rated input"),
     DRIVE_OUTPUT_CONDUCTORS("Power conversion equipment: output conductors"),
     DRIVE_OVERLOAD("Power conversion equipment: motor overload protection"),
@@ -87,17 +97,12 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
     val cite: String get() = Code.book.cite(this)
 }
 
-/** One edition's numbering for every [CodeRule]. */
-interface CodeBook {
-    val edition: CodeEdition
-
-    /** The section or table number, e.g. "310.15(B)(2)" or "Table 310.16". */
-    fun cite(rule: CodeRule): String
-}
-
-/** The code book the app's tables and rules follow. Change it here when moving to a new edition. */
+/**
+ * The code edition the app's tables and rules follow: every code value and citation is read from
+ * [book]. Change it here when moving to a new edition (docs/CODE_UPDATES.md).
+ */
 object Code {
-    val book: CodeBook = Nec2023
+    val book: ElectricalCode = Nec2023
 
     val edition: CodeEdition get() = book.edition
 
