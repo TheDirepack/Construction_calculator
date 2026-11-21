@@ -1,9 +1,12 @@
 /**
- * Shared electrical reference data and formulas (pure Kotlin), used by several tools:
- * conductor sizes and properties (NEC Chapter 9 Tables 5, 8, 9), conduit dimensions
- * (Chapter 9 Table 4), ampacity, motor full-load currents, etc.
+ * Shared electrical rules and formulas (pure Kotlin), used by several tools: ampacity, corrections,
+ * conductor sizing, conduit fill, conductor properties (NEC Chapter 9 Tables 5, 8, 9), conduit
+ * dimensions (Chapter 9 Table 4), motor full-load currents, etc.
  *
- * Every table must cite its source (code edition, table number) in a KDoc comment and be
- * covered by spot-check unit tests against published values.
+ * The code's values and section numbers live only in the edition source, `code/` (an
+ * [com.thedirepack.constructioncalc.core.electrical.code.ElectricalCode], read through
+ * `Code.book`); the objects here hold the math. Every table there cites its source (code edition,
+ * table number, printed page) in a KDoc comment and is covered by spot-check unit tests against
+ * the published values.
  */
 package com.thedirepack.constructioncalc.core.electrical

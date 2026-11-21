@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.core.electrical.code
 
+import com.thedirepack.constructioncalc.core.electrical.code.nec2023.Nec2023
 import org.junit.Test
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue

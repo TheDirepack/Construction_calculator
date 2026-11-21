@@ -1,7 +1,9 @@
 package com.thedirepack.constructioncalc.core.electrical.formula
 
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaQuantity.*
+import com.thedirepack.constructioncalc.core.measure.Decimals
 import kotlin.math.PI
 import kotlin.math.acos
 import kotlin.math.atan
@@ -346,6 +348,10 @@ object FormulaCatalog {
         keywords = listOf("power factor", "capacitor", "kvar", "correction"),
     )
 
+    // The table temperature and coefficients come from the code edition (Table 8 and its notes).
+    private val table8 get() = Code.book.values
+    private fun alpha(value: Double) = String.format(java.util.Locale.US, "%.5f", value)
+
     private val resistanceTemperature = Formula(
         id = "resistance-temperature",
         title = "Conductor resistance at temperature",
@@ -353,9 +359,18 @@ object FormulaCatalog {
         summary = "Corrects a conductor's resistance from one temperature to another.",
         variables = listOf(
             r("R1", "R1", "Resistance at T1"),
-            Variable("T1", "T1", "Known temperature", TEMPERATURE, listOf(FormulaUnit("°C")), min = -273.15, default = 75.0, hint = "NEC Chapter 9 Table 8 values are at 75 °C"),
+            Variable(
+                "T1", "T1", "Known temperature", TEMPERATURE, listOf(FormulaUnit("°C")), min = -273.15,
+                default = table8.resistanceReferenceC,
+                hint = "NEC Chapter 9 Table 8 values are at ${Decimals.trim(table8.resistanceReferenceC)} °C",
+            ),
             Variable("T2", "T2", "New temperature", TEMPERATURE, listOf(FormulaUnit("°C")), min = -273.15),
-            Variable("ALPHA", "α", "Temperature coefficient", COEFFICIENT, listOf(FormulaUnit("/°C")), default = 0.00323, hint = "Copper 0.00323, aluminum 0.00330 (at 75 °C)"),
+            Variable(
+                "ALPHA", "α", "Temperature coefficient", COEFFICIENT, listOf(FormulaUnit("/°C")),
+                default = table8.resistanceCoefficientCopper,
+                hint = "Copper ${alpha(table8.resistanceCoefficientCopper)}, aluminum ${alpha(table8.resistanceCoefficientAluminum)} " +
+                    "(at ${Decimals.trim(table8.resistanceReferenceC)} °C)",
+            ),
             r("R2", "R2", "Resistance at T2"),
         ),
         relations = listOf(
