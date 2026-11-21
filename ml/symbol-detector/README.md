@@ -53,6 +53,13 @@ Install `ultralytics` separately on your 6 GB NVIDIA training machine. Ensure it
 
 ## 1. Import and normalize source annotations
 
+Keep source images, annotations, and generated datasets in local storage. Use the
+ignored directories in the examples below for inputs and outputs inside this
+checkout. The repository includes scripts, test fixtures and format examples.
+
+To reproduce the local snapping demo, run `python scripts_make_demo.py`, then
+`python scripts_resolve_snaps.py --annotations examples/demo_annotations.json --walls examples/demo_verified_walls.json --output examples/demo_snaps.json`.
+
 ```bash
 python scripts_inspect_raw_datasets.py 'downloads/**/*' --out raw_inventory.json
 
