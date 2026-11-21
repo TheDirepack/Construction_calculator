@@ -37,6 +37,26 @@ The [PDF editor workflow research](../research/pdf-editor-workflows.md) covers t
 - **Files and adapters.** Store PDF bytes in app-managed files keyed by drawing revision, with file hashes for matching standalone JSON to the right source. Keep project metadata and drawing edits in versioned JSON. Reuse the app's picker, share sheet, and import conflict flow. Stage archive imports, check file paths, sizes and hashes, then make the project visible once its referenced files are in place. Use that same attachment storage for a full backup and restore. For annotated exports, test Jetpack's PDF save path on supported devices and a writer that can cover the app's API 26 minimum. Check that the exported copy preserves the original page content and existing annotations.
 - **Project handoff.** Use stable links from saved measurements and accepted routes back to their sheet, calibration and revision. Convert reviewed geometry into the existing run path model. Keep the calculation engines reading the same project data they already use. Recalibration and revision updates can propose a replacement while showing any field edits that would be affected.
 
+## Decisions from the user (2026-11-21)
+
+These came out of the FieldScale comparison ([research](../research/fieldscale.md)) and override
+anything above that disagrees.
+
+- **Measured values are approximate and say so.** A length or area taken off a plan carries its
+  full, unrounded value (like typed values, rounding is display-only) and is shown with ≈ wherever
+  it's reused: the value picker, the calculator, runs, takeoffs.
+- **Snapping.** CAD-exported PDFs snap to their vector lines. Scanned or raster plans snap by
+  contrast: find the two edges of the drawn line across the tap and snap to the **center** of the
+  line between them (also along the line's direction when tracing).
+- **Data inside the PDF too.** Besides the annotated layer, write the drawing's JSON *into* the
+  exported PDF (an embedded file), so one PDF carries its own editable measurements and the app can
+  read them back. Plain `drawing.json` export stays available.
+- **Projects.** A project can hold several PDFs. Exporting a project that has PDFs produces a ZIP
+  (project JSON plus the original PDFs); a project without PDFs stays a single JSON file.
+- **Scale.** Presets (architectural, engineering, metric ratios) and two-point calibration with a
+  "measure a second known dimension" check, offline only; no AI or internet calibration. Preset
+  scales are exact ratios; two-point scales are measured values.
+
 ## What we'll build first
 
 1. **Open a plan and save a measurement.** Attach and reopen several PDFs offline. Draw a scale zone, calibrate it using the existing keypad or a preset, measure a line, and find that value in the existing picker. Check that points and lengths survive page rotation, zooming, and reopening the app.
