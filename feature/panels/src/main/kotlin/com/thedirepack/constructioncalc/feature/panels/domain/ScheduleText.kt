@@ -7,6 +7,7 @@ import com.thedirepack.constructioncalc.core.model.design.PullAnalysis
 import com.thedirepack.constructioncalc.core.model.design.PullText
 import com.thedirepack.constructioncalc.core.model.design.Wire
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.Circuit
 import com.thedirepack.constructioncalc.core.model.design.CircuitDesign
 import com.thedirepack.constructioncalc.core.model.CircuitKind
@@ -65,6 +66,8 @@ object ScheduleText {
         header: List<String> = emptyList(),
         date: String,
         length: (Quantity) -> String = { it.value.toString() },
+        /** Imperial or metric: the units of the pull and takeoff lines. */
+        units: UnitSystem = UnitSystem.IMPERIAL,
     ): String {
         val panels = panelIds?.mapNotNull(project::panel) ?: project.panels
         return buildString {
@@ -81,7 +84,7 @@ object ScheduleText {
                 appendLine()
                 append(panelBlock(project, design, panel, pd, length))
             }
-            val extras = projectExtras(project, design)
+            val extras = projectExtras(project, design, units)
             if (extras.isNotEmpty()) {
                 appendLine()
                 extras.forEach(::appendLine)
@@ -95,9 +98,9 @@ object ScheduleText {
      * The project-wide part of the report: each run's pull (from its path) and the material takeoff
      * (wire by size, conduit by type and size). Empty when there's nothing to report.
      */
-    fun projectExtras(project: Project, design: ProjectDesign): List<String> = buildList {
+    fun projectExtras(project: Project, design: ProjectDesign, units: UnitSystem = UnitSystem.IMPERIAL): List<String> = buildList {
         val pulls = project.runs.filter { it.path.isNotEmpty() }.mapNotNull { run ->
-            PullText.summary(PullAnalysis.analyze(run, design.runs[run.id]))?.let { "  ${run.name}: $it" }
+            PullText.summary(PullAnalysis.analyze(run, design.runs[run.id], units), units)?.let { "  ${run.name}: $it" }
         }
         if (pulls.isNotEmpty()) {
             add("PULLS (manufacturer limits are guidance; see each pull report)")
@@ -106,7 +109,7 @@ object ScheduleText {
         val takeoff = MaterialTakeoffs.of(project, design)
         if (!takeoff.isEmpty) {
             if (pulls.isNotEmpty()) add("")
-            addAll(ProjectText.takeoffText(takeoff).trimEnd().lines())
+            addAll(ProjectText.takeoffText(takeoff, units).trimEnd().lines())
         }
     }
 

@@ -22,6 +22,10 @@ import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import com.thedirepack.constructioncalc.core.measure.Decimals
+import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.ui.components.UnitField
+import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
+import com.thedirepack.constructioncalc.core.ui.show
 import com.thedirepack.constructioncalc.core.model.BendPlane
 import com.thedirepack.constructioncalc.core.model.PathSegment
 import com.thedirepack.constructioncalc.core.model.PullCable
@@ -115,8 +119,8 @@ internal fun PullCableDialog(initial: PullCable, onSave: (PullCable) -> Unit, on
         ChoiceField("Wire size", ConductorSize.entries, size, { size = it }, optionLabel = { it.label })
         ChoiceField("Insulation", InsulationType.entries, insulation, { insulation = it }, optionLabel = { it.code })
         ChoiceField("Material", ConductorMaterial.entries, material, { material = it }, optionLabel = { it.label })
-        NumberField("Outside diameter", od, { od = it }, unit = "in", supportingText = "Leave blank to use the table value.")
-        NumberField("Weight per conductor", weight, { weight = it }, unit = "lb/ft", supportingText = "Leave blank for an estimate.")
+        UnitField("Outside diameter", Measure.SMALL_LENGTH, od, { od = it }, supportingText = "Leave blank to use the table value.")
+        UnitField("Weight per conductor", Measure.LINEAR_WEIGHT, weight, { weight = it }, supportingText = "Leave blank for an estimate.")
         ToggleRow("Bears pulling tension", bears, { bears = it })
     }
 }
@@ -154,19 +158,21 @@ internal fun PullRatingsDialog(
         NumberField("Friction override", friction, { friction = it }, supportingText = "Above 0 and at most 2. Leave blank for the preset (guidance, not a code value).")
         ChoiceField("Cable configuration", listOf(null) + CableConfiguration.entries, configuration,
             { configuration = it }, optionLabel = { it?.label ?: "Automatic" })
-        NumberField(
-            "Sidewall pressure limit", pressure, { pressure = it }, unit = "lb/ft",
-            supportingText = "The cable maker's rating. Blank uses Southwire's building-wire guidance: 500 lb/ft for 14–10 AWG, 1,000 lb/ft for 8 AWG and larger.",
+        val settings = rememberAppSettings()
+        UnitField(
+            "Sidewall pressure limit", Measure.SIDEWALL_PRESSURE, pressure, { pressure = it },
+            supportingText = "The cable maker's rating. Blank uses Southwire's building-wire guidance: " +
+                "${settings.show(Measure.SIDEWALL_PRESSURE, 500.0)} for 14–10 AWG, ${settings.show(Measure.SIDEWALL_PRESSURE, 1000.0)} for 8 AWG and larger.",
         )
         incoming.forEachIndexed { index, value ->
-            NumberField("Section ${index + 1} incoming tension", value, { updated ->
+            UnitField("Section ${index + 1} incoming tension", Measure.FORCE, value, { updated ->
                 incoming = incoming.toMutableList().also { it[index] = updated }
-            }, unit = "lb")
+            })
         }
         setup.equipment.forEachIndexed { index, rating ->
-            NumberField(rating.name, equipment[index], { updated ->
+            UnitField(rating.name, Measure.FORCE, equipment[index], { updated ->
                 equipment = equipment.toMutableList().also { it[index] = updated }
-            }, unit = "lb")
+            })
         }
     }
 }

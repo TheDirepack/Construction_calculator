@@ -1,5 +1,9 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.ui.components.UnitField
+import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
+import com.thedirepack.constructioncalc.core.ui.show
+import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.code.Code
 import kotlinx.coroutines.delay
@@ -69,15 +73,14 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
         }
         FormSection("Conditions") {
             if (ctx.readOnly) {
-                Text("Ambient ${formatDecimal(design.ambientC, 1)} °C · voltage-drop target ${formatDecimal(design.voltageDropTargetPercent, 1)}% · " +
+                Text("Ambient ${rememberAppSettings().show(Measure.TEMPERATURE, design.ambientC, 1)} · voltage-drop target ${formatDecimal(design.voltageDropTargetPercent, 1)}% · " +
                     "upsize for voltage drop: ${if (design.upsizeForVoltageDrop) "on" else "off"}")
             } else {
-                NumberField(
+                UnitField(
                     label = "Default ambient temperature",
+                    measure = Measure.TEMPERATURE,
                     value = ambientText,
                     onValueChange = { ambientText = it },
-                    unit = "°C",
-                    allowNegative = true,
                     supportingText = "Runs can set their own (hot attic, rooftop).",
                 )
                 NumberField(

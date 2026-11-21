@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thedirepack.constructioncalc.core.electrical.FrictionPreset
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.PathSegment
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.PullCable
@@ -96,13 +97,13 @@ internal fun PullPlannerScreen(host: ToolHost) {
         current.copy(pull = current.pull ?: setupDefaults)
     }
     val setup = requireNotNull(run.pull)
-    val analysis = remember(project, linkedRun, run) {
-        val design = if (linkedRun != null && project != null) ProjectAnalysis.analyze(project).runs[linkedRun.id] else null
-        PullAnalysis.analyze(run, design)
+    val analysis = remember(project, linkedRun, run, settings.unitSystem) {
+        val design = if (linkedRun != null && project != null) ProjectAnalysis.analyze(project, settings.unitSystem).runs[linkedRun.id] else null
+        PullAnalysis.analyze(run, design, settings.unitSystem)
     }
     val lengthText: (Quantity) -> String = { settings.format(it) }
-    val results = remember(analysis, settings) { PullReport.results(analysis, lengthText) }
-    val summary = remember(analysis) { PullReport.summary(analysis) }
+    val results = remember(analysis, settings) { PullReport.results(analysis, settings.unitSystem, lengthText) }
+    val summary = remember(analysis, settings.unitSystem) { PullReport.summary(analysis, settings.unitSystem) }
     val canEdit = linkedRun == null || project?.archived != true
     val tools = LocalTools.current
     val bendSources = remember(linkedRun, tools) {
@@ -173,7 +174,7 @@ internal fun PullPlannerScreen(host: ToolHost) {
                 )
                 run.path.forEachIndexed { index, segment ->
                     Text("${index + 1}. ${PullReport.describe(segment, run.raceway?.conduitType, analysis.conduit?.tradeSize, lengthText)}")
-                    SegmentResults(analysis, index)
+                    SegmentResults(analysis, index, settings.unitSystem)
                     if (canEdit) {
                         FlowRow {
                             TextButton(onClick = { segmentEdit = SegmentEdit(index, SegmentKind.of(segment)) }) { Text("Edit") }
@@ -266,12 +267,12 @@ internal fun PullPlannerScreen(host: ToolHost) {
 }
 
 @Composable
-private fun SegmentResults(result: PullResult, index: Int) {
+private fun SegmentResults(result: PullResult, index: Int, units: UnitSystem) {
     listOfNotNull(result.forward, result.reverse).forEach { pass ->
         val step = PullReport.tensionAt(result, pass.direction, index) ?: return@forEach
-        val pressure = step.pressure?.let { " · ${PullReport.num(it)} lb/ft" }.orEmpty()
+        val pressure = step.pressure?.let { " · ${PullAnalysis.pressure(it, units)}" }.orEmpty()
         Text(
-            "${pass.direction.label}: ${PullReport.lb(step.tensionOut)}$pressure",
+            "${pass.direction.label}: ${PullReport.lb(step.tensionOut, units)}$pressure",
             style = MaterialTheme.typography.bodySmall,
         )
     }

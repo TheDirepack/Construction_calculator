@@ -2,7 +2,9 @@ package com.thedirepack.constructioncalc.core.model
 
 import com.thedirepack.constructioncalc.core.measure.LengthStyle
 import com.thedirepack.constructioncalc.core.measure.MeasureFormat
+import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.measure.Precision
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.design.MaterialTakeoff
 import com.thedirepack.constructioncalc.core.model.design.MaterialTakeoffs
@@ -29,9 +31,11 @@ object ProjectText {
         header: List<String> = emptyList(),
         /** How lengths read (the app passes the user's display settings). */
         length: (Quantity) -> String = ::defaultLength,
+        /** Imperial or metric: the units of the design notes, pull summaries and takeoff. */
+        units: UnitSystem = UnitSystem.IMPERIAL,
     ): String =
         buildString {
-            val design = if (project.panels.isNotEmpty() || project.runs.any { it.raceway != null }) ProjectAnalysis.analyze(project) else null
+            val design = if (project.panels.isNotEmpty() || project.runs.any { it.raceway != null }) ProjectAnalysis.analyze(project, units) else null
             if (header.isNotEmpty()) {
                 header.forEach(::appendLine)
                 appendLine()
@@ -44,7 +48,7 @@ object ProjectText {
                 if (run.note.isNotBlank()) appendLine("  ${run.note.trim()}")
                 design?.runs?.get(run.id)?.let { rd ->
                     conduitLine(rd, length)?.let { appendLine("  $it") }
-                    pullLine(rd)?.let { appendLine("  $it") }
+                    pullLine(rd, units)?.let { appendLine("  $it") }
                 }
                 if (run.items.isEmpty()) appendLine("  (empty)")
                 run.items.forEach { item -> append(renderItem(item, toolTitle, indent = "  ")) }
@@ -58,7 +62,7 @@ object ProjectText {
                 val takeoff = MaterialTakeoffs.of(project, d)
                 if (!takeoff.isEmpty) {
                     appendLine()
-                    append(takeoffText(takeoff))
+                    append(takeoffText(takeoff, units))
                 }
             }
             appendLine()
@@ -81,20 +85,20 @@ object ProjectText {
     }
 
     /** The run's pull, when it has a path: `Pull: 1,234 lb of 1,500 lb … ` plus its warnings not already on the conduit line. */
-    private fun pullLine(rd: RunDesign): String? {
+    private fun pullLine(rd: RunDesign, units: UnitSystem): String? {
         if (rd.run.path.isEmpty()) return null
-        val result = PullAnalysis.analyze(rd.run, rd)
-        val summary = PullText.summary(result) ?: return "Path: ${rd.run.path.size} segments (pull not calculated)"
+        val result = PullAnalysis.analyze(rd.run, rd, units)
+        val summary = PullText.summary(result, units) ?: return "Path: ${rd.run.path.size} segments (pull not calculated)"
         val shown = rd.notes.filter { it.isWarning }.map { it.text }.toSet()
         val warnings = PullText.warnings(result).filterNot { it in shown }.joinToString("") { "\n  ⚠ $it" }
         return "Pull: $summary$warnings"
     }
 
     /** MATERIAL TAKEOFF: wire by size and conduit by type, from every run's length. */
-    fun takeoffText(takeoff: MaterialTakeoff): String = buildString {
+    fun takeoffText(takeoff: MaterialTakeoff, units: UnitSystem = UnitSystem.IMPERIAL): String = buildString {
         appendLine("MATERIAL TAKEOFF")
-        takeoff.wire.forEach { appendLine("  Wire ${it.label}: ${Wire.number(it.feet, 0)} ft") }
-        takeoff.conduit.forEach { appendLine("  Conduit ${it.label}: ${Wire.number(it.feet, 0)} ft") }
+        takeoff.wire.forEach { appendLine("  Wire ${it.label}: ${runLength(it.feet, units)}") }
+        takeoff.conduit.forEach { appendLine("  Conduit ${it.label(units)}: ${runLength(it.feet, units)}") }
         takeoff.notes.forEach { appendLine("  ⚠ ${it.text}") }
     }
 
@@ -129,6 +133,10 @@ object ProjectText {
         appendLine("  " + pd.phaseVa.entries.joinToString(" · ") { (ph, va) -> "${ph.name} ${Wire.va(va)} (${Wire.amps(pd.phaseAmps.getValue(ph))})" } + " · total ${Wire.va(pd.totalVa)}")
         (pd.conflicts + pd.notes.filter { it.isWarning }.map { it.text }).forEach { appendLine("  ⚠ $it") }
     }
+
+    /** A run length given in feet: `120 ft`, or `37 m`. */
+    private fun runLength(feet: Double, units: UnitSystem) =
+        Wire.number(Measure.RUN_LENGTH.fromBase(feet, units), 0) + " " + Measure.RUN_LENGTH.unit(units).symbol
 
     private fun defaultLength(q: Quantity): String = MeasureFormat.primary(q, Precision.SIXTEENTH, LengthStyle.FEET_INCHES)
 

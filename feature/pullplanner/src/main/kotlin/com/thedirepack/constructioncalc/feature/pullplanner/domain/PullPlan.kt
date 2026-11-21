@@ -6,7 +6,9 @@ import com.thedirepack.constructioncalc.core.electrical.FrictionPreset
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Decimals
+import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.BendPlane
 import com.thedirepack.constructioncalc.core.model.PathSegment
 import com.thedirepack.constructioncalc.core.model.Project
@@ -76,38 +78,38 @@ object PullReport {
     const val KEY_CABLE_NEEDED = "cable_needed"
     const val KEY_BEND_DEGREES = "total_bend_degrees"
 
-    fun lb(v: Double) = PullAnalysis.lb(v)
+    fun lb(v: Double, units: UnitSystem = UnitSystem.IMPERIAL) = PullAnalysis.lb(v, units)
     fun num(v: Double, decimals: Int = 1) = Decimals.trim(v, decimals)
 
     /**
      * Published values, headline first: max tension (FORCE, lb), max sidewall pressure (NUMBER,
      * lb/ft), cable needed per conductor (LENGTH, inches), total bend degrees (ANGLE).
      */
-    fun results(r: PullResult, lengthText: (Quantity) -> String): List<ResultValue> = buildList {
+    fun results(r: PullResult, units: UnitSystem = UnitSystem.IMPERIAL, lengthText: (Quantity) -> String): List<ResultValue> = buildList {
         val pass = r.recommendedPass
         pass?.let { p ->
-            add(ResultValue.number(KEY_MAX_TENSION, "Max tension (${p.direction.label.lowercase()})", ValueKind.FORCE, p.peakTension, lb(p.peakTension)))
-            p.peakPressure?.let { add(ResultValue.number(KEY_MAX_PRESSURE, "Max sidewall pressure (lb/ft)", ValueKind.NUMBER, it, "${num(it, 0)} lb/ft")) }
+            add(ResultValue.number(KEY_MAX_TENSION, "Max tension (${p.direction.label.lowercase()})", ValueKind.FORCE, p.peakTension, lb(p.peakTension, units)))
+            p.peakPressure?.let { add(ResultValue.number(KEY_MAX_PRESSURE, "Max sidewall pressure (${Measure.SIDEWALL_PRESSURE.unit(units).symbol})", ValueKind.NUMBER, it, PullAnalysis.pressure(it, units))) }
         }
         r.cableLengthIn?.let {
             val q = Quantity.inches(Rational.of(it))
             add(ResultValue.of(KEY_CABLE_NEEDED, "Cable needed per conductor", q, lengthText(q)))
         }
         if (r.run.path.isNotEmpty()) add(ResultValue.number(KEY_BEND_DEGREES, "Total bends", ValueKind.ANGLE, r.totalDegrees, "${num(r.totalDegrees)}°"))
-        r.tensionLimit?.let { add(ResultValue.number("tension_limit", "Tension limit (${it.label})", ValueKind.FORCE, it.value, lb(it.value))) }
+        r.tensionLimit?.let { add(ResultValue.number("tension_limit", "Tension limit (${it.label})", ValueKind.FORCE, it.value, lb(it.value, units))) }
         r.jamRatio?.let { add(ResultValue.number("jam_ratio", "Jam ratio (1.05 D/d)", ValueKind.NUMBER, it, num(it, 2))) }
-        r.clearanceIn?.let { add(ResultValue.number("clearance", "Clearance", ValueKind.LENGTH, it, "${num(it, 2)} in")) }
+        r.clearanceIn?.let { add(ResultValue.number("clearance", "Clearance", ValueKind.LENGTH, it, Measure.SMALL_LENGTH.format(it, units, if (units == UnitSystem.METRIC) 1 else 2))) }
     }
 
     /** The saved item's summary: the pull line, then every limit and preset with its source. */
-    fun summary(r: PullResult): String = buildString {
-        appendLine(PullText.summary(r) ?: "Pull not calculated: ${r.notes.firstOrNull { it.isWarning }?.text ?: "add the path and cables"}")
-        r.forward?.let { f -> r.reverse?.let { b -> appendLine("Peak: toward the end ${lb(f.peakTension)}, toward the start ${lb(b.peakTension)}") } }
+    fun summary(r: PullResult, units: UnitSystem = UnitSystem.IMPERIAL): String = buildString {
+        appendLine(PullText.summary(r, units) ?: "Pull not calculated: ${r.notes.firstOrNull { it.isWarning }?.text ?: "add the path and cables"}")
+        r.forward?.let { f -> r.reverse?.let { b -> appendLine("Peak: toward the end ${lb(f.peakTension, units)}, toward the start ${lb(b.peakTension, units)}") } }
         appendLine("Cables: " + r.conductors.joinToString { it.text }.ifEmpty { "none" })
         appendLine("Friction μ ${num(r.friction, 2)}" + if (r.setup.frictionOverride != null) " (entered)" else " (${r.setup.friction.label}, guidance)")
-        r.tensionLimits.forEach { appendLine("Tension limit: ${it.label} ${lb(it.value)} — ${it.source}") }
+        r.tensionLimits.forEach { appendLine("Tension limit: ${it.label} ${lb(it.value, units)} — ${it.source}") }
         if (r.missingRatings.isNotEmpty()) appendLine("Not rated yet: ${r.missingRatings.joinToString()}")
-        r.pressureLimit?.let { appendLine("Pressure limit: ${num(it.value, 0)} lb/ft — ${it.source}") }
+        r.pressureLimit?.let { appendLine("Pressure limit: ${PullAnalysis.pressure(it.value, units)} — ${it.source}") }
         r.notes.filter { it.level == NoteLevel.WARNING }.forEach { appendLine("⚠ ${it.text}") }
     }.trimEnd()
 

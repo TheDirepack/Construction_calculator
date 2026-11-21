@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.core.model.design
 
+import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.AmbientCorrection
 import com.thedirepack.constructioncalc.core.electrical.ConductorCountAdjustment
@@ -230,7 +232,8 @@ object ProjectAnalysis {
         return result
     }
 
-    fun analyze(project: Project): ProjectDesign {
+    /** [units] only changes the text of the notes (°C or °F, lb or N…); the numbers are the same. */
+    fun analyze(project: Project, units: UnitSystem = UnitSystem.IMPERIAL): ProjectDesign {
         val runsById = project.runs.associateBy { it.id }
         val loads = loads(project)
         val allCircuits = project.panels.flatMap { p -> p.circuits.map { p to it } }
@@ -248,11 +251,11 @@ object ProjectAnalysis {
 
         // 2. Circuits.
         val circuits = allCircuits.associate { (panel, c) ->
-            c.id to designCircuit(project, panel, c, runsById, runCcc, loads[CircuitRef(panel.id, c.id)])
+            c.id to designCircuit(project, panel, c, runsById, runCcc, loads[CircuitRef(panel.id, c.id)], units)
         }
 
         // 3. Runs.
-        val runs = project.runs.associate { run -> run.id to designRun(project, run, allCircuits, circuits, runCcc.getValue(run.id)) }
+        val runs = project.runs.associate { run -> run.id to designRun(project, run, allCircuits, circuits, runCcc.getValue(run.id), units) }
 
         // 4. Panels.
         val panels = project.panels.map { designPanel(it, loads) }
@@ -279,6 +282,7 @@ object ProjectAnalysis {
         runsById: Map<String, Run>,
         runCcc: Map<String, Int>,
         load: Load?,
+        units: UnitSystem,
     ): CircuitDesign {
         val spec = c.conductor ?: project.design.conductor
         val notes = mutableListOf<DesignNote>()
@@ -298,7 +302,7 @@ object ProjectAnalysis {
         val ambient = if (runs.isEmpty()) project.design.ambientC else runs.maxOf { runAmbient(project, it, xhhw2) }
         val hottest = runs.maxByOrNull { runAmbient(project, it, xhhw2) }
         if (hottest?.raceway?.rooftop == true && !xhhw2) {
-            notes += info("${hottest.name} is on a rooftop: +${AmbientCorrection.ROOFTOP_ADDER_C.toInt()} °C adder (${CodeRule.ROOFTOP_ADDER.cite}).")
+            notes += info("${hottest.name} is on a rooftop: +${temperatureDifference(AmbientCorrection.ROOFTOP_ADDER_C, units)} adder (${CodeRule.ROOFTOP_ADDER.cite}).")
         }
         val runConduits = runs.map { it.raceway?.conduitType?.let(::table9Conduit) ?: Table9Conduit.PVC }
         val runSegments = runs.zip(runConduits).mapNotNull { (run, conduit) ->
@@ -424,6 +428,7 @@ object ProjectAnalysis {
         all: List<Pair<Panel, Circuit>>,
         designs: Map<String, CircuitDesign>,
         ccc: Int,
+        units: UnitSystem,
     ): RunDesign {
         val notes = mutableListOf<DesignNote>()
         val members = all.filter { (_, c) -> run.id in c.runIds }
@@ -493,7 +498,7 @@ object ProjectAnalysis {
         if (raceway != null && !incomplete && smallest == null && area > 0) notes += warn("Too many conductors for any ${raceway.conduitType.displayName}.")
         // Jam and clearance for pulling (IEEE 1185), from the largest conductor's Table 5 diameter.
         val largestOd = entries.mapNotNull { InsulatedConductorArea.diameter(it.insulation, it.size) }.maxOrNull()
-        if (conduit != null && !incomplete && total > 0 && largestOd != null) notes += PullAnalysis.fitNotes(conduit.internalDiameterIn, largestOd, total)
+        if (conduit != null && !incomplete && total > 0 && largestOd != null) notes += PullAnalysis.fitNotes(conduit.internalDiameterIn, largestOd, total, units)
         val insulation = project.design.conductor
         val ambient = runAmbient(project, run, insulation.insulation == InsulationType.XHHW_2)
         val ambientFactor = AmbientCorrection.factor(ambient, insulation.insulationRating)
@@ -502,7 +507,7 @@ object ProjectAnalysis {
             notes += info("$ccc current-carrying conductors: ampacity ×$adjustment (${CodeRule.CONDUCTOR_COUNT_ADJUSTMENT.cite}) for every circuit in this run.")
         }
         if (ambientFactor != null && ambientFactor != 1.0) {
-            notes += info("${fmt(ambient)} °C: ampacity ×$ambientFactor (${CodeRule.AMBIENT_CORRECTION.cite}, ${insulation.insulationRating.label} column).")
+            notes += info("${Measure.TEMPERATURE.format(ambient, units, 1)}: ampacity ×$ambientFactor (${CodeRule.AMBIENT_CORRECTION.cite}, ${insulation.insulationRating.label} column).")
         }
         val status = when {
             incomplete -> FillStatus.INCOMPLETE
@@ -551,6 +556,10 @@ object ProjectAnalysis {
         panel.mainAmps?.let { if (worst > it) notes += warn("Phase current ${fmt(worst)} A exceeds the ${it} A main.") }
         return PanelDesign(panel, phaseVa, phaseVa.values.sum(), phaseAmps, PanelLayout.conflicts(panel), notes)
     }
+
+    /** A temperature difference given in °C (no +32 offset): `33 °C`, or `59.4 °F (33 °C)`: the code states it in °C. */
+    private fun temperatureDifference(celsius: Double, units: UnitSystem): String =
+        if (units == UnitSystem.METRIC) "${fmt(celsius)} °C" else "${fmt(celsius * 9.0 / 5.0)} °F (${fmt(celsius)} °C)"
 
     private fun fmt(v: Double) = com.thedirepack.constructioncalc.core.measure.Decimals.trim(v, 1)
 }

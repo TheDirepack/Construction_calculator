@@ -112,7 +112,8 @@ private fun NoProject(host: ToolHost, archived: Project?, onViewArchived: () -> 
 @Composable
 private fun ProjectPanels(project: Project, host: ToolHost) {
     val services = LocalAppServices.current
-    val design = remember(project) { ProjectAnalysis.analyze(project) }
+    val units = rememberAppSettings().unitSystem
+    val design = remember(project, units) { ProjectAnalysis.analyze(project, units) }
     val ctx = PanelsContext(project, design, host) { change -> services.projects.edit(project.id, change) }
     val target = host.target
     var tab by rememberSaveable { mutableIntStateOf(if (target is ToolTarget.OfRun) 1 else 0) }

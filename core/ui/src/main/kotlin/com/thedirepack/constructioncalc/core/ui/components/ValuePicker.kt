@@ -61,7 +61,7 @@ fun ValuePickerSheet(
     // What the project's electrical design works out (circuit currents, run lengths…), not only saved results.
     val designRows = remember(project, kinds, settings) {
         project?.takeIf { it.panels.isNotEmpty() || it.runs.any { r -> r.raceway != null } }
-            ?.let { PublishedValues.all(ProjectAnalysis.analyze(it)) { q -> settings.format(q) } }
+            ?.let { PublishedValues.all(ProjectAnalysis.analyze(it, settings.unitSystem), settings.unitSystem) { q -> settings.format(q) } }
             .orEmpty().filter { it.kind in kinds }.map { PickRow(it, "Design") }
     }
     val projectRows = remember(project, kinds) {

@@ -33,7 +33,10 @@ import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.model.Raceway
 import com.thedirepack.constructioncalc.core.model.stored
+import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.ui.format
+import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
+import com.thedirepack.constructioncalc.core.ui.tradeSizeLabel
 import com.thedirepack.constructioncalc.core.ui.formatDecimal
 import com.thedirepack.constructioncalc.core.ui.toDecimalOrNull
 
@@ -55,6 +58,7 @@ fun RacewayEditorSheet(
     /** The run has a path: its length is the routed length, and editing it moves the last straight. */
     routed: Boolean = false,
 ) {
+    val settings = rememberAppSettings()
     var draft by remember { mutableStateOf(initial ?: Raceway()) }
     var ambientText by remember { mutableStateOf(initial?.ambientC?.let { formatDecimal(it, 1) }.orEmpty()) }
 
@@ -80,7 +84,7 @@ fun RacewayEditorSheet(
                 options = listOf<TradeSize?>(null) + ConduitTable.tradeSizes(draft.conduitType),
                 selected = draft.tradeSize,
                 onSelect = { draft = draft.copy(tradeSize = it) },
-                optionLabel = { it?.display ?: "Auto (smallest that fits)" },
+                optionLabel = { it?.let(settings::tradeSizeLabel) ?: "Auto (smallest that fits)" },
             )
             MeasureField(
                 label = "Length of run",
@@ -92,13 +96,12 @@ fun RacewayEditorSheet(
                     "Used for voltage drop. Tap for the calculator or a value from another tool."
                 },
             )
-            NumberField(
+            UnitField(
                 label = "Ambient temperature",
+                measure = Measure.TEMPERATURE,
                 value = ambientText,
                 onValueChange = { ambientText = it },
-                unit = "°C",
                 supportingText = "Leave blank to use the project default.",
-                allowNegative = true,
             )
             ToggleRow(
                 title = "Rooftop",
@@ -136,8 +139,8 @@ fun racewaySummary(raceway: Raceway, settings: AppSettings, circuits: Int? = nul
     val size = raceway.tradeSize ?: autoSize
     val conduit = when {
         size == null -> "${raceway.conduitType.displayName} (auto size)"
-        raceway.tradeSize == null -> "${size.display} ${raceway.conduitType.displayName} (auto)"
-        else -> "${size.display} ${raceway.conduitType.displayName}"
+        raceway.tradeSize == null -> "${settings.tradeSizeLabel(size)} ${raceway.conduitType.displayName} (auto)"
+        else -> "${settings.tradeSizeLabel(size)} ${raceway.conduitType.displayName}"
     }
     return listOfNotNull(
         conduit,
