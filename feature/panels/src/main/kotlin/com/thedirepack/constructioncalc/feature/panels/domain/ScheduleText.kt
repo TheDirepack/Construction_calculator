@@ -1,5 +1,9 @@
 package com.thedirepack.constructioncalc.feature.panels.domain
 
+import com.thedirepack.constructioncalc.core.model.ProjectText
+import com.thedirepack.constructioncalc.core.model.design.MaterialTakeoffs
+import com.thedirepack.constructioncalc.core.model.design.PullAnalysis
+import com.thedirepack.constructioncalc.core.model.design.PullText
 import com.thedirepack.constructioncalc.core.model.design.Wire
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.Circuit
@@ -76,8 +80,32 @@ object ScheduleText {
                 appendLine()
                 append(panelBlock(project, design, panel, pd, length))
             }
+            val extras = projectExtras(project, design)
+            if (extras.isNotEmpty()) {
+                appendLine()
+                extras.forEach(::appendLine)
+            }
             appendLine()
             append("— Construction Calc · wire sizes follow NEC 2023; verify before installing.")
+        }
+    }
+
+    /**
+     * The project-wide part of the report: each run's pull (from its path) and the material takeoff
+     * (wire by size, conduit by type and size). Empty when there's nothing to report.
+     */
+    fun projectExtras(project: Project, design: ProjectDesign): List<String> = buildList {
+        val pulls = project.runs.filter { it.path.isNotEmpty() }.mapNotNull { run ->
+            PullText.summary(PullAnalysis.analyze(run, design.runs[run.id]))?.let { "  ${run.name}: $it" }
+        }
+        if (pulls.isNotEmpty()) {
+            add("PULLS (manufacturer limits are guidance; see each pull report)")
+            addAll(pulls)
+        }
+        val takeoff = MaterialTakeoffs.of(project, design)
+        if (!takeoff.isEmpty) {
+            if (pulls.isNotEmpty()) add("")
+            addAll(ProjectText.takeoffText(takeoff).trimEnd().lines())
         }
     }
 

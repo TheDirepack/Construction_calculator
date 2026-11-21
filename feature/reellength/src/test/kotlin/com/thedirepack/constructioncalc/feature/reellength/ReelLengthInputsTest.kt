@@ -104,4 +104,19 @@ class ReelLengthInputsTest {
         assertTrue(output.results.isEmpty())
         assertEquals(NoticeLevel.ERROR, output.notices.single().level)
     }
+
+    @Test fun cableNeededSaysWhetherTheReelIsEnough() {
+        val remaining = reelLengthOutput(filled, AppSettings()).results.first { it.key == "length" }.rational!!.toDouble()
+        val enough = reelLengthOutput(filled.copy(cableNeeded = inches(remaining.toLong() - 120)), AppSettings())
+        assertEquals("Left after the pull", enough.results.single { it.key == "spare_after_pull" }.label)
+        assertTrue(enough.notices.any { it.level == NoticeLevel.INFO && it.text.startsWith("Enough for the") })
+        val short = reelLengthOutput(filled.copy(cableNeeded = inches(remaining.toLong() + 120)), AppSettings())
+        val spare = short.results.single { it.key == "spare_after_pull" }
+        assertEquals("Short for the pull", spare.label)
+        assertTrue(spare.rational!!.signum > 0)
+        assertTrue(short.notices.any { it.level == NoticeLevel.WARNING && it.text.startsWith("Short by") })
+        // No value: no comparison.
+        assertTrue(reelLengthOutput(filled, AppSettings()).results.none { it.key == "spare_after_pull" })
+        assertEquals(filled.copy(cableNeeded = inches(5)), ToolInputs.decode<ReelLengthInputs>(ToolInputs.encode(filled.copy(cableNeeded = inches(5)))))
+    }
 }

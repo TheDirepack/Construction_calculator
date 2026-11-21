@@ -152,6 +152,15 @@ fun ReelLengthScreen(host: ToolHost) {
                 )
             }
 
+            FormSection("Pull") {
+                MeasureField(
+                    "Cable needed (optional)",
+                    inputs.cableNeeded?.toQuantity(),
+                    { q -> vm.update { it.copy(cableNeeded = q?.stored()) } },
+                    supportingText = "Per conductor. Pick a run's \"cable needed\" from the Wire Pull Planner to check this reel.",
+                )
+            }
+
             ResultCard(
                 results,
                 notices = output.notices + if (results.isEmpty()) parsedMissing(inputs) else emptyList(),

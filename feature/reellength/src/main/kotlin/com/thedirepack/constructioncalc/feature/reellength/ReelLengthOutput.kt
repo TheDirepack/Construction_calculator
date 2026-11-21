@@ -41,8 +41,13 @@ internal fun reelLengthOutput(inputs: ReelLengthInputs, settings: AppSettings): 
     val lengthLabel = if (capacity) "Reel capacity" else "Cable remaining"
     val lengthQuantity = Quantity.inches(exact(result.lengthInches))
     val depthQuantity = Quantity.inches(exact(result.woundDepth))
-    val results = listOf(
+    val spare = inputs.cableNeeded?.toQuantity()?.value?.toDouble()?.takeIf { it > 0 }?.let { result.lengthInches - it }
+    val results = listOfNotNull(
         ResultValue.of("length", lengthLabel, lengthQuantity, settings.format(lengthQuantity)),
+        spare?.let {
+            val q = Quantity.inches(exact(kotlin.math.abs(it)))
+            ResultValue.of("spare_after_pull", if (it >= 0) "Left after the pull" else "Short for the pull", q, settings.format(q))
+        },
         ResultValue.text("length_feet", "$lengthLabel (feet)", formatFeet(result.lengthFeet)),
         ResultValue.of("wound_depth", "Wound depth", depthQuantity, settings.format(depthQuantity)),
         ResultValue.number("layers", "Layers", ValueKind.NUMBER, exact(result.layers), formatDecimal(result.layers, 1)),
@@ -66,6 +71,15 @@ internal fun reelLengthOutput(inputs: ReelLengthInputs, settings: AppSettings): 
         }
         if (request.packingFactor > 1.0) {
             add(Notice("A packing factor above 1 is more cable than the geometry allows.", NoticeLevel.WARNING))
+        }
+        inputs.cableNeeded?.toQuantity()?.value?.toDouble()?.takeIf { it > 0 }?.let { needed ->
+            val spare = result.lengthInches - needed
+            val neededText = settings.format(Quantity.inches(exact(needed)))
+            if (spare >= 0) {
+                add(Notice("Enough for the $neededText needed, with ${settings.format(Quantity.inches(exact(spare)))} to spare (before any allowance for waste).", NoticeLevel.INFO))
+            } else {
+                add(Notice("Short by ${settings.format(Quantity.inches(exact(-spare)))} for the $neededText needed.", NoticeLevel.WARNING))
+            }
         }
         if (capacity) {
             add(Notice("Capacity leaves ${settings.format(Quantity.inches(exact(request.topClearance)))} between the cable and the flange edge.", NoticeLevel.INFO))

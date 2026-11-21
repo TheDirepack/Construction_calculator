@@ -13,6 +13,7 @@ import com.thedirepack.constructioncalc.core.model.design.ProjectDesign
 import com.thedirepack.constructioncalc.feature.panels.domain.LoadMath
 import com.thedirepack.constructioncalc.feature.panels.domain.PanelFacts
 import com.thedirepack.constructioncalc.feature.panels.domain.ScheduleBlock
+import com.thedirepack.constructioncalc.feature.panels.domain.ScheduleText
 import com.thedirepack.constructioncalc.feature.panels.domain.ScheduleLayout
 import com.thedirepack.constructioncalc.core.model.design.Wire
 import java.io.OutputStream
@@ -48,6 +49,27 @@ internal object PanelPdf {
                 val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, 1).create())
                 page.canvas.drawText("No panels.", MARGIN, MARGIN + 20f, paint(12f))
                 doc.finishPage(page)
+            }
+            // Project-wide pages: pulls and the material takeoff, as plain lines.
+            val extras = ScheduleText.projectExtras(project, design)
+            if (extras.isNotEmpty()) {
+                var pageNumber = maxOf(panels.size, 1)
+                val body = paint(10f)
+                val bold = paint(11f, bold = true)
+                val lineHeight = 14f
+                extras.chunked(((PAGE_H - 2 * MARGIN - 40f) / lineHeight).toInt()).forEach { chunk ->
+                    pageNumber++
+                    val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, pageNumber).create())
+                    var y = MARGIN + 14f
+                    page.canvas.drawText(fit("${project.name} · $date", bold, PAGE_W - 2 * MARGIN), MARGIN, y, bold)
+                    y += 24f
+                    chunk.forEach { text ->
+                        val heading = text.isNotEmpty() && !text.startsWith(" ")
+                        page.canvas.drawText(fit(text, if (heading) bold else body, PAGE_W - 2 * MARGIN), MARGIN, y, if (heading) bold else body)
+                        y += lineHeight
+                    }
+                    doc.finishPage(page)
+                }
             }
             doc.writeTo(out)
         } finally {

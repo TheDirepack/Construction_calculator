@@ -37,10 +37,23 @@ object PublishedValues {
         }
     }
 
-    /** A conduit run's length, if set. */
+    /**
+     * A conduit run's length, if set; for a run with a path, also the cable a pull needs per
+     * conductor (routed length plus slack, for Reel Length) and the pull's max tension.
+     */
     fun run(d: RunDesign, lengthText: (Quantity) -> String): List<ResultValue> {
         val q = d.run.raceway?.length?.toQuantity() ?: return emptyList()
-        return listOf(ResultValue.of("run_${d.run.id}_length", "${d.run.name} length", q, lengthText(q)))
+        return buildList {
+            add(ResultValue.of("run_${d.run.id}_length", "${d.run.name} length", q, lengthText(q)))
+            if (d.run.path.isNotEmpty()) {
+                val pull = PullAnalysis.analyze(d.run, d)
+                pull.cableLengthIn?.let {
+                    val needed = Quantity.inches(Rational.of(it))
+                    add(ResultValue.of("run_${d.run.id}_cable_needed", "${d.run.name} cable needed per conductor", needed, lengthText(needed)))
+                }
+                pull.maxTension?.let { add(ResultValue.number("run_${d.run.id}_max_tension", "${d.run.name} max pulling tension", ValueKind.FORCE, it, PullAnalysis.lb(it))) }
+            }
+        }
     }
 
     /** Everything [design] offers: panel loads, circuit wire, length, current and load, run lengths. */

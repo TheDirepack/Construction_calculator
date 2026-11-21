@@ -195,4 +195,17 @@ class PullAnalysisTest {
         assertEquals(2621.709062 / 12, takeoff.conduit.single().feet, 1e-4)
         assertEquals(TradeSize.S_2, takeoff.conduit.single().size)
     }
+
+    @Test fun designPublishesCableNeededForReelLength() {
+        val run = fixtureRun().let { it.copy(pull = it.pull!!.copy(slackPerEnd = ft(5))) }
+        val p = Project(name = "P", createdAt = 0, runs = listOf(run)).withRunPath(run.id, fixturePath, 1)
+        val values = PublishedValues.all(ProjectAnalysis.analyze(p)) { "x" }.associateBy { it.key }
+        val needed = values.getValue("run_${run.id}_cable_needed")
+        assertEquals(com.thedirepack.constructioncalc.core.model.ValueKind.LENGTH, needed.kind)
+        assertEquals(2621.709062 + 120, needed.rational!!.toDouble(), 1e-5)
+        assertEquals(404.803332, values.getValue("run_${run.id}_max_tension").rational!!.toDouble(), 1e-5)
+        // A run without a path only publishes its length.
+        val plain = Project(name = "P", createdAt = 0, runs = listOf(Run(name = "R", raceway = Raceway(length = ft(10)))))
+        assertEquals(1, PublishedValues.all(ProjectAnalysis.analyze(plain)) { "x" }.size)
+    }
 }

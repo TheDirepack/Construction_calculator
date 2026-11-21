@@ -43,6 +43,8 @@ data class ReelLengthInputs(
     val drumMeasurement: DrumMeasurement = DrumMeasurement.DIAMETER,
     val drumCircumference: StoredQuantity? = null,
     val flangeToCore: StoredQuantity? = null,
+    /** Optional: cable a pull needs (e.g. a run's "cable needed" from the Wire Pull Planner), to check the reel. */
+    val cableNeeded: StoredQuantity? = null,
 ) {
     companion object {
         val DEFAULT_CLEARANCE: StoredQuantity = StoredQuantity.of(Quantity.inches(Rational.of(2)))
