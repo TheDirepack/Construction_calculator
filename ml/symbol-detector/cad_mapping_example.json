@@ -1,0 +1,16 @@
+{
+  "purpose": "Example only. Replace this homography with the verified transform for the paired raster.",
+  "block_map": {
+    "RCP_DUPLEX": {
+      "symbol_family": "receptacle",
+      "symbol_variant": "duplex",
+      "anchors_local": {"insert_origin": [0, 0]}
+    },
+    "RCP_GFCI": {
+      "symbol_family": "receptacle",
+      "symbol_variant": "gfci",
+      "anchors_local": {"insert_origin": [0, 0], "wall_attachment": [0, -2]}
+    }
+  },
+  "cad_to_pixel_homography": [[10, 0, 0], [0, -10, 1000], [0, 0, 1]]
+}

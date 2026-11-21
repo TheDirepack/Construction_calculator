@@ -12,3 +12,10 @@ build/
 *.apk
 *.aab
 .claude/worktrees/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Local reference data and downloaders containing shared-album links.
+/blueprints_and_libraries/
+/scripts/download_both_albums.py
+/scripts/download_google_photos.py

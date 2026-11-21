@@ -1,0 +1,10 @@
+numpy
+opencv-python-headless
+torch
+pytest
+
+# FloorPlanCAD path geometry decoding
+svgpathtools
+
+# Optional: scratch YOLO26n-P2 user-run training / blueprint-only teacher:
+# ultralytics

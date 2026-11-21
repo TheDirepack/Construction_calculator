@@ -1,0 +1,121 @@
+{
+  "format_version": 1,
+  "coordinate_system": "continuous_image_pixel_edges",
+  "image_path": "examples/demo_raster.png",
+  "image_width": 901,
+  "image_height": 517,
+  "instances": [
+    {
+      "instance_id": "R-wall",
+      "discipline": "electrical",
+      "symbol_family": "receptacle",
+      "symbol_variant": "duplex",
+      "bbox_xyxy": [
+        199,
+        129,
+        241,
+        171
+      ],
+      "snap": {
+        "point": [
+          190.0,
+          150.0
+        ],
+        "kind": "wall_centerline_intersection",
+        "quality": "estimated",
+        "center": [
+          220.0,
+          150.0
+        ],
+        "center_source": "circle_fit",
+        "wall_index": 0,
+        "wall_distance_px": 30.0,
+        "note": "Perpendicular to verified wall"
+      }
+    },
+    {
+      "instance_id": "R-free",
+      "discipline": "electrical",
+      "symbol_family": "receptacle",
+      "symbol_variant": "duplex",
+      "bbox_xyxy": [
+        469,
+        127,
+        511,
+        171
+      ],
+      "snap": {
+        "point": [
+          491.0,
+          150.0
+        ],
+        "kind": "circle_center",
+        "quality": "estimated",
+        "center": [
+          491.0,
+          150.0
+        ],
+        "center_source": "circle_fit",
+        "wall_index": null,
+        "wall_distance_px": null,
+        "note": "No eligible verified wall within local symbol range"
+      }
+    },
+    {
+      "instance_id": "HVAC-1",
+      "discipline": "hvac",
+      "symbol_family": "diffuser",
+      "symbol_variant": "ceiling",
+      "bbox_xyxy": [
+        595,
+        305,
+        652,
+        362
+      ],
+      "snap": {
+        "point": [
+          623.5,
+          333.5
+        ],
+        "kind": "bbox_center_provisional",
+        "quality": "provisional",
+        "center": [
+          623.5,
+          333.5
+        ],
+        "center_source": "detector_bbox",
+        "wall_index": null,
+        "wall_distance_px": null,
+        "note": "No wall-attachment policy for this symbol family"
+      }
+    },
+    {
+      "instance_id": "MECH-1",
+      "discipline": "mechanical",
+      "symbol_family": "valve",
+      "symbol_variant": "generic",
+      "bbox_xyxy": [
+        330,
+        315,
+        400,
+        365
+      ],
+      "snap": {
+        "point": [
+          365.0,
+          340.0
+        ],
+        "kind": "bbox_center_provisional",
+        "quality": "provisional",
+        "center": [
+          365.0,
+          340.0
+        ],
+        "center_source": "detector_bbox",
+        "wall_index": null,
+        "wall_distance_px": null,
+        "note": "No wall-attachment policy for this symbol family"
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "single_door": "door",
+  "double_door": "door",
+  "elevator": "elevator",
+  "staircase": "staircase",
+  "sink": "plumbing_fixture",
+  "toilet": "plumbing_fixture",
+  "bathtub": "plumbing_fixture",
+  "fire_hydrant": "fire_protection_device"
+}

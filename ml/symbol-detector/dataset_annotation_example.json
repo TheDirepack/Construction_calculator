@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "source_id": "personal_cad_001",
+  "source_license": "user-owned",
+  "project_family_id": "drawing_set_alpha",
+  "document_id": "drawing_001",
+  "page_index": 0,
+  "source_type": "cad_raster",
+  "image_path": "images/drawing_001_page_000.png",
+  "image_sha256": "REPLACE_WITH_REAL_HASH",
+  "image_width": 4000,
+  "image_height": 3000,
+  "coordinate_system": "original_page_pixels_top_left_y_down",
+  "instances": [
+    {
+      "instance_id": "fixture_0001",
+      "symbol_family": "receptacle",
+      "symbol_variant": "duplex",
+      "bbox_xyxy": [235.1, 350.2, 253.2, 370.3],
+      "anchors": {
+        "visual_center": {"xy": [244.15, 360.25], "visible": true, "annotated": true},
+        "wall_attachment": {"xy": [242.7, 351.3], "visible": true, "annotated": true}
+      },
+      "attributes_from_text": [],
+      "rotation_degrees": 90.0,
+      "is_truncated": false,
+      "is_occluded": false
+    }
+  ]
+}

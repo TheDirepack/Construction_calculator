@@ -48,9 +48,9 @@ anything above that disagrees.
 - **Snapping.** CAD-exported PDFs snap to their vector lines. Scanned or raster plans snap by
   contrast: find the two edges of the drawn line across the tap and snap to the **center** of the
   line between them (also along the line's direction when tracing).
-- **Data inside the PDF too.** Besides the annotated layer, write the drawing's JSON *into* the
-  exported PDF (an embedded file), so one PDF carries its own editable measurements and the app can
-  read them back. Plain `drawing.json` export stays available.
+- **Editable drawing data.** Export standalone `drawing.json` for use with the matching source
+  PDF, or use the project ZIP to keep originals and editable data together. The annotated PDF is
+  for viewing and printing. Embedding JSON is optional future work.
 - **Projects.** A project can hold several PDFs. Exporting a project that has PDFs produces a ZIP
   (project JSON plus the original PDFs); a project without PDFs stays a single JSON file.
 - **Scale.** Presets (architectural, engineering, metric ratios) and two-point calibration with a

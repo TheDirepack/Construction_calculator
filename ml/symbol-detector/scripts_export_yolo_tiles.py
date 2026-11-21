@@ -1,0 +1,248 @@
+"""Export audited raster labels into YOLO detection tiles. NO TRAINING.
+
+Generated training tiles cover ~10-128px symbols, clean and independently
+degraded variants including low-res-only. Validation/test images are clean
+deterministic full-coverage tiles; optional paired degradation sets test the
+same original drawing without moving any source group into training.
+True evaluation must also run on original whole pages after cross-tile fusion.
+
+python scripts_export_yolo_tiles.py manifest.json out/yolo --train-tiles-per-page 32 \
+    --stress-val --stress-test --allow-unverified-completeness
+"""
+from __future__ import annotations
+import argparse
+from collections import Counter
+import hashlib
+import json
+from pathlib import Path
+import cv2
+import numpy as np
+from blueprint_symbols.raster_training import read_records, RasterTileDataset
+from blueprint_symbols.dataset_manifest import validate_manifest_sources
+from blueprint_symbols.variants import make_variant, EVAL_VARIANTS, TRAIN_VARIANTS
+from blueprint_symbols.multiscale import plan_pyramid_tiles, sample_tile
+
+# Target refers to MAX(width, height) of a symbol as seen by detector.
+PIXEL_BANDS = ((10,16,.08),(16,24,.34),(24,40,.32),(40,72,.20),(72,128,.06))
+
+def _export_annotations(instances: list[dict], tile, classes: dict[str,int],
+                        represented_indices: set[int] | None = None):
+    targets=[];ignored=[]
+    for idx,inst in enumerate(instances):
+        a,b,c,d=map(float,inst['bbox_xyxy'])
+        u0,v0=(a-tile.x)/tile.source_scale,(b-tile.y)/tile.source_scale
+        u1,v1=(c-tile.x)/tile.source_scale,(d-tile.y)/tile.source_scale
+        x0,y0,x1,y1=max(0,u0),max(0,v0),min(tile.size,u1),min(tile.size,v1)
+        if x1<=x0 or y1<=y0:continue
+        area=max(1e-9,(u1-u0)*(v1-v0))
+        coverage=(x1-x0)*(y1-y0)/area
+        cls=inst.get('symbol_family')
+        if (cls not in classes or inst.get('uncertain',False) or coverage < .98):
+            ignored.append([x0,y0,x1,y1])
+        else:
+            targets.append((classes[cls],(x0,y0,x1,y1)))
+            if represented_indices is not None:
+                represented_indices.add(idx)
+    return targets,ignored
+
+
+def _save_sample(out:Path, split:str, name:str, img:np.ndarray, labels, *, counters:Counter, fmt='.png'):
+    image_dir=out/'images'/split
+    label_dir=out/'labels'/split
+    image_dir.mkdir(parents=True,exist_ok=True)
+    label_dir.mkdir(parents=True,exist_ok=True)
+    path=image_dir/f'{name}{fmt}'
+    if not cv2.imwrite(str(path),img):
+        raise OSError(f'could not write tile image: {path}')
+    h,w=img.shape[:2]
+    rows=[]
+    for cls,(x0,y0,x1,y1) in labels:
+        if not (x1>x0 and y1>y0):continue
+        x,y=(x0+x1)/(2*w),(y0+y1)/(2*h)
+        bw,bh=(x1-x0)/w,(y1-y0)/h
+        if not all(0 <= q <= 1 for q in (x,y,bw,bh)):
+            raise ValueError('invalid YOLO coordinates')
+        rows.append(f'{cls} {x:.8f} {y:.8f} {bw:.8f} {bh:.8f}')
+    (label_dir/f'{name}.txt').write_text('\n'.join(rows)+('\n' if rows else ''))
+    counters[f'{split}_images']+=1
+    counters[f'{split}_symbols']+=len(rows)
+
+
+def _img(rec):
+    img=cv2.imread(str(rec.image),cv2.IMREAD_COLOR)
+    if img is None or img.shape[:2]!=(rec.height,rec.width):
+        raise ValueError(f'bad source raster: {rec.image}')
+    return img
+
+
+def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
+        stress_val=False,stress_test=False,allow_unverified_completeness=False,
+        train_variants=3, eval_variants=None, train_negative_fraction=.20) -> dict:
+    mf=json.loads(manifest.read_text())
+    validate_manifest_sources(mf)
+    splits=mf.get('splits',{})
+    if not all(splits.get(s) for s in ('train','val','test')):
+        raise ValueError('expected non-empty train/val/test split manifest')
+    if out.exists() and any(out.iterdir()):
+        raise FileExistsError(f'refusing to overwrite nonempty output directory: {out}')
+    classes=mf['class_ids']
+    if sorted(classes.values()) != list(range(len(classes))):
+        raise ValueError('class ids must be consecutive')
+    if samples < 1 or not 1 <= train_variants <= 12 or not scales or overlap < 0 or overlap >= 512 or not 0 <= train_negative_fraction <= 1:
+        raise ValueError('bad tiling options')
+    # Do not trust missing unlabeled objects as negatives in YOLO detection loss.
+    per_split={key:read_records(value) for key,value in splits.items()}
+    paths={str(d['annotation']):d for d in mf.get('source_images',[])}
+    unchecked=[]
+    for s in per_split:
+        for path in splits[s]:
+            data=json.loads(Path(path).read_text())
+            exhaustive=set(data.get('exhaustive_families',[]))
+            if not set(classes).issubset(exhaustive):
+                unchecked.append(path)
+    if unchecked and not allow_unverified_completeness:
+        raise ValueError(f'{len(unchecked)} pages lack exhaustive_families for all classes; '
+                         'use --allow-unverified-completeness for an exploratory export '
+                         '(risk: missing symbols become false negatives)')
+    count=Counter();groups={}; meta=[]
+    evaluation_coverage={}
+    for split,recs in per_split.items():
+        for rec in recs:
+            if rec.group in groups and groups[rec.group]!=split:
+                raise ValueError(f'cross-split group leakage: {rec.group}')
+            groups[rec.group]=split
+    train=RasterTileDataset(per_split['train'], classes, size=512,
+        virtual_tiles_per_image=samples, seed=seed,
+        target_symbol_pixels=PIXEL_BANDS, degradation_profile=None)
+    for i in range(len(train)):
+        tensor,targets,info=train[i]
+        if info['ignore_boxes']:
+            count['train_skipped_ignore_regions']+=1
+            continue
+        if not targets:
+            # Fully annotated symbol-free tiles are necessary hard negatives.
+            # Never promote unknown/unmapped tiles to negative background.
+            neg_seed=int.from_bytes(hashlib.sha256(f'{seed}/negative/{i}'.encode()).digest()[:8],'big')
+            if np.random.default_rng(neg_seed).random() >= train_negative_fraction:
+                count['train_skipped_empty']+=1
+                continue
+            count['train_accepted_negative_bases']+=1
+        image=cv2.cvtColor((tensor.numpy().transpose(1,2,0)*255).round().astype(np.uint8),cv2.COLOR_RGB2BGR)
+        # Multiple *independent* variants of the SAME crop. Source group stays
+        # unchanged. Every base contributes a clean control; additional variants
+        # include low-res without JPEG/noise and then compound deterioration.
+        for variant_index in range(train_variants):
+            variant_name=TRAIN_VARIANTS[min(variant_index,len(TRAIN_VARIANTS)-1)]
+            variant_seed=int.from_bytes(hashlib.sha256(f'{seed}/train/{i}/{variant_index}'.encode()).digest()[:8],'big')
+            if variant_index >= len(TRAIN_VARIANTS):
+                variant_name='mixed_random' if variant_index % 2 else 'lowres_random'
+            variant,damage=make_variant(image,np.random.default_rng(variant_seed),variant_name)
+            name=f'train_{i:08d}_v{variant_index:02d}'
+            _save_sample(out,'train',name,variant,targets,counters=count)
+            meta.append({'sample':name,'source':info['image_path'],'group':info['group'],
+                         'source_box':list(info['tile'].source_box),
+                         'source_scale':info['tile'].source_scale,
+                         'target_symbol_pixels':info['target_symbol_pixels'],
+                         'damage':damage,'split':'train', 'variant_index':variant_index,
+                         'base_sample':f'train_{i:08d}'})
+    # Full-coverage tiles for VAL and TEST. No random sampling or augmentation.
+    for split in ('val','test'):
+        for ri,rec in enumerate(per_split[split]):
+            image=_img(rec)
+            expected={idx for idx,inst in enumerate(rec.instances)
+                      if inst.get('symbol_family') in classes and not inst.get('uncertain',False)}
+            observed=set()
+            tiles=plan_pyramid_tiles(rec.width,rec.height,tile_size=512,overlap=overlap,source_scales=scales)
+            for ti,tile in enumerate(tiles):
+                represented=set()
+                targets,ignored=_export_annotations(rec.instances,tile,classes,represented)
+                if ignored:
+                    count[f'{split}_skipped_ignore_regions']+=1
+                    continue
+                # Keep explicit source-instance coverage separate from mAP.
+                # Overlapping validation tiles can duplicate detections; they
+                # cannot substitute for fused full-page evaluation.
+                observed.update(represented & expected)
+                if not targets:
+                    count[f'{split}_empty_complete_tiles']+=1
+                patch=sample_tile(image,tile)
+                name=f'{split}_{ri:05d}_{ti:06d}'
+                _save_sample(out,split,name,patch,targets,counters=count)
+                meta.append({'sample':name,'source':str(rec.image),'group':rec.group,
+                             'source_box':list(tile.source_box),'source_scale':tile.source_scale,
+                             'damage':None,'split':split})
+                if (split=='val' and stress_val) or (split=='test' and stress_test):
+                    # Diagnostic-only stress partition; does NOT replace clean metric.
+                    for profile in (eval_variants if eval_variants is not None else EVAL_VARIANTS[1:]):
+                        profile_seed=int.from_bytes(hashlib.sha256(f'{seed}/{name}/{profile}'.encode()).digest()[:8],'big')
+                        variant,report=make_variant(patch,np.random.default_rng(profile_seed),profile)
+                        stress_split=f'{split}_stress_{profile}'
+                        _save_sample(out,stress_split,name,variant,targets,counters=count)
+                        meta.append({'sample':name,'source':str(rec.image),'group':rec.group,
+                                     'source_box':list(tile.source_box),'source_scale':tile.source_scale,
+                                     'damage':report,'split':stress_split,
+                                     'base_sample':name})
+            missing=expected-observed
+            evaluation_coverage[str(rec.image)]={'split':split,'annotated_instances':len(expected),
+                                                 'represented_in_tiles':len(observed),
+                                                 'missing':len(missing)}
+            if missing:
+                count[f'{split}_unrepresented_symbols']+=len(missing)
+    if count['val_unrepresented_symbols'] or count['test_unrepresented_symbols']:
+        raise ValueError('held-out tile set does not cover every labeled source symbol; '
+                         f'val missing={count["val_unrepresented_symbols"]}, '
+                         f'test missing={count["test_unrepresented_symbols"]}. '
+                         'Adjust overlap/scales or resolve ignored/clipped annotations; '
+                         'do not report incomplete tile metrics as complete.')
+    out.mkdir(parents=True,exist_ok=True)
+    names='\n'.join(f'  {v}: {json.dumps(k)}' for k,v in sorted(classes.items(),key=lambda x:x[1]))
+    (out/'data.yaml').write_text(f'path: {out.resolve()}\ntrain: images/train\nval: images/val\ntest: images/test\nnames:\n{names}\n')
+    # Each diagnostic set has a separate YAML. No stress images become training
+    # examples; test is NEVER used by the training launcher or early stopping.
+    eval_dir=out/'evaluation_configs'
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    for split in ('val','test'):
+        used=[split] + sorted(k for k in count if k.startswith(split+'_stress_') and k.endswith('_images'))
+        for dataset in used:
+            key=dataset[:-7] if dataset.endswith('_images') else dataset
+            lines=(f'path: {out.resolve()}\ntrain: images/train\n'
+                   f'val: images/{key}\n' + f'names:\n{names}\n')
+            (eval_dir/f'{key}.yaml').write_text(lines)
+    (out/'sample_provenance.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in meta))
+    report={'source_manifest':str(manifest.resolve()),'classes':classes,
+            'counts':dict(count),'unverified_annotation_completeness':sorted(unchecked),
+            'notes':['No training performed.','Only trusted class-labeled instances exported.',
+                     'Ignored/clipped regions cause tile rejection; evaluation coverage must be audited.',
+                     'Held-out whole-page evaluation must fuse tiled predictions and count missed instances.',
+                     'Stress tiles are diagnostics; realistic held-out real photos/scans remain necessary.',
+                     'Paired variants are correlated; report source-group-level metrics, not independent-sample confidence.'],
+            'evaluation_source_instance_coverage':evaluation_coverage,
+            'train_variants_per_base':train_variants,
+            'train_negative_fraction':train_negative_fraction,
+            'evaluation_variants':list(eval_variants) if eval_variants is not None else list(EVAL_VARIANTS[1:])}
+    (out/'export_report.json').write_text(json.dumps(report,indent=2))
+    if count['train_images']==0 or count['val_images']==0 or count['test_images']==0:
+        raise ValueError('one of train/val/test generated zero usable tiles; inspect export_report.json')
+    return report
+
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('manifest',type=Path);p.add_argument('output_dir',type=Path)
+    p.add_argument('--train-tiles-per-page',type=int,default=32)
+    p.add_argument('--train-variants',type=int,default=3,help='clean + independently downsampled/damaged variants per crop')
+    p.add_argument('--train-negative-fraction',type=float,default=.20,help='retain completely annotated symbol-free tiles')
+    p.add_argument('--eval-scales',default='1.0',help='comma-separated source pixels per model pixel')
+    p.add_argument('--overlap',type=int,default=128)
+    p.add_argument('--seed',type=int,default=2026)
+    p.add_argument('--stress-val',action='store_true')
+    p.add_argument('--stress-test',action='store_true')
+    p.add_argument('--allow-unverified-completeness',action='store_true')
+    args=p.parse_args()
+    report=run(args.manifest,args.output_dir,samples=args.train_tiles_per_page,
+               seed=args.seed,scales=tuple(float(s) for s in args.eval_scales.split(',')),
+               overlap=args.overlap,stress_val=args.stress_val,stress_test=args.stress_test,
+               allow_unverified_completeness=args.allow_unverified_completeness,
+               train_variants=args.train_variants,train_negative_fraction=args.train_negative_fraction)
+    print(json.dumps(report['counts'],indent=2))
+if __name__=='__main__':main()

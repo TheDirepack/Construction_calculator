@@ -1,0 +1,53 @@
+{
+  "image_path": "demo_raster.png",
+  "image_width": 901,
+  "image_height": 517,
+  "project_family_id": "synthetic_demo_1",
+  "source_type": "synthetic_demonstration",
+  "instances": [
+    {
+      "instance_id": "R-wall",
+      "symbol_family": "receptacle",
+      "symbol_variant": "duplex",
+      "bbox_xyxy": [
+        199,
+        129,
+        241,
+        171
+      ]
+    },
+    {
+      "instance_id": "R-free",
+      "symbol_family": "receptacle",
+      "symbol_variant": "duplex",
+      "bbox_xyxy": [
+        469,
+        127,
+        511,
+        171
+      ]
+    },
+    {
+      "instance_id": "HVAC-1",
+      "symbol_family": "diffuser",
+      "symbol_variant": "ceiling",
+      "bbox_xyxy": [
+        595,
+        305,
+        652,
+        362
+      ]
+    },
+    {
+      "instance_id": "MECH-1",
+      "symbol_family": "valve",
+      "symbol_variant": "generic",
+      "bbox_xyxy": [
+        330,
+        315,
+        400,
+        365
+      ]
+    }
+  ]
+}
