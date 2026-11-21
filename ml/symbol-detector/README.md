@@ -42,12 +42,18 @@ Optional: specialist YOLO teacher → untrusted candidate labels for REVIEW ONLY
 ## Installation
 
 ```bash
-# CPU-side data preparation and source import:
+# CPU-side data preparation and source import (no PyTorch):
 python -m pip install -r requirements.txt
-# Run all regression tests, including optional SVG / DXF / PDF adapters:
+# Run the regression tests, including optional SVG / DXF / PDF adapters:
 python -m pip install -r requirements-test.txt
 python -m pytest -q tests
+# Training machine only: PyTorch for the model and training tests.
+python -m pip install -r requirements-train.txt
 ```
+
+The normal tests never need PyTorch. Model and training tests sit in `tests/test_torch_models.py`
+(and two marked tests) and are skipped when it is not installed. Adapter tests skip when their
+optional library (ezdxf, PyMuPDF, cairosvg) is missing.
 
 Install `ultralytics` separately on your 6 GB NVIDIA training machine. Ensure its release has `yolo26n-p2.yaml`; the P2 model is official, with stride-4 small-object detection. Install a CUDA-enabled PyTorch build for that GPU. The package does **not** download generic pretrained weights. See [Ultralytics P2 model YAML](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/cfg/models/26/yolo26-p2.yaml).
 

@@ -55,7 +55,7 @@ def test_symbol_target_bands_reach_twenty_pixels(tmp_path):
         degradation_profile='clean')
     got=[]
     for i in range(len(ds)):
-        im,gt,info=ds[i]
+        im,gt,info=ds.sample(i)
         if info['target_symbol_pixels'] is not None:
             got.append(info['target_symbol_pixels'])
             assert info['damage']['profile']=='clean'

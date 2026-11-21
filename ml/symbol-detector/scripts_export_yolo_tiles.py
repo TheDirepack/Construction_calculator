@@ -115,7 +115,7 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
         virtual_tiles_per_image=samples, seed=seed,
         target_symbol_pixels=PIXEL_BANDS, degradation_profile=None)
     for i in range(len(train)):
-        tensor,targets,info=train[i]
+        rgb,targets,info=train.sample(i)
         if info['ignore_boxes']:
             count['train_skipped_ignore_regions']+=1
             continue
@@ -127,7 +127,7 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
                 count['train_skipped_empty']+=1
                 continue
             count['train_accepted_negative_bases']+=1
-        image=cv2.cvtColor((tensor.numpy().transpose(1,2,0)*255).round().astype(np.uint8),cv2.COLOR_RGB2BGR)
+        image=cv2.cvtColor(rgb,cv2.COLOR_RGB2BGR)
         # Multiple *independent* variants of the SAME crop. Source group stays
         # unchanged. Every base contributes a clean control; additional variants
         # include low-res without JPEG/noise and then compound deterioration.

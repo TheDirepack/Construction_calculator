@@ -3,13 +3,17 @@ from pathlib import Path
 import json
 import cv2
 import numpy as np
+import importlib.util
 import pytest
 from blueprint_symbols.primitive_labels import convert_primitive_json
 from blueprint_symbols.svg_labels import svg_to_image,matrix_for
 from blueprint_symbols.dataset_manifest import build_manifest
 from blueprint_symbols.cad_labels import labels_from_dxf,PixelTransform
-from blueprint_symbols.precision_training import anchor_targets
 from blueprint_symbols.crops import CropTransform
+
+
+needs_torch = pytest.mark.skipif(importlib.util.find_spec('torch') is None,
+                                 reason='training code; PyTorch is only on the training machine')
 
 
 def _img(folder,name='page.png',shape=(400,500)):
@@ -121,7 +125,7 @@ def test_manifest_disallows_unverified_group_and_unknown_classes(tmp_path):
 
 
 def test_dxf_unique_circle_produces_anchor_not_insertion_origin(tmp_path):
-    import ezdxf
+    ezdxf = pytest.importorskip("ezdxf")
     doc=ezdxf.new();block=doc.blocks.new('VALVE_SYMBOL')
     block.add_circle((2,1),1)
     doc.modelspace().add_blockref('VALVE_SYMBOL',(10,10))
@@ -161,6 +165,7 @@ def test_photo_degradation_preserves_coordinates_and_warp_moves_anchors():
     assert labels[0]['anchors']['circle_center']['xy']==[70,53]
     assert item['anchors']['circle_center']['xy']==[55,45]
 
+@needs_torch
 def test_jittered_keypoint_targets_follow_crop_not_bbox_center():
     from blueprint_symbols.precision_training import jittered_precision_example
     img=np.full((210,210,3),255,np.uint8)
@@ -182,6 +187,7 @@ def test_svg_wall_semantics_without_instance_preserved_as_context(tmp_path):
     assert record['context_primitives'][0]['points_xy']==[[10,40],[300,40]]
 
 
+@needs_torch
 def test_precision_dataset_only_uses_supported_anchor_types(tmp_path):
     from blueprint_symbols.precision_dataset import PrecisionDataset,collate_precision
     from blueprint_symbols.raster_training import read_records

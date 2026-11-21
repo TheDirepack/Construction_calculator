@@ -161,7 +161,7 @@ def test_manifest_rejects_changed_source_after_split(tmp_path):
 
 
 def test_scanned_pdf_ingestion_keeps_project_group_and_native_detail(tmp_path):
-    import fitz
+    fitz = pytest.importorskip("fitz")
     from scripts_render_pdf_sources import render_pdf_pages
     im=np.full((280,700,3),255,np.uint8)
     cv2.circle(im,(350,120),9,(0,0,0),2)

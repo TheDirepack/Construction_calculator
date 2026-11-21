@@ -13,8 +13,12 @@ import json
 import math
 import cv2
 import numpy as np
-import torch
-from torch.utils.data import Dataset
+try:  # Only the training dataset needs PyTorch; reading and splitting records does not.
+    import torch
+    from torch.utils.data import Dataset
+except ImportError:
+    torch = None
+    Dataset = object
 from .multiscale import ScaleTile, sample_tile
 from .augmentation import photometric
 from .degradation import degrade, choose_profile
@@ -100,6 +104,13 @@ class RasterTileDataset(Dataset):
         self.epoch=int(epoch)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, list[tuple[int,tuple[float,float,float,float]]], dict]:
+        if torch is None:
+            raise ImportError('training tensors need PyTorch: pip install -r requirements-train.txt')
+        rgb,targets,info=self.sample(index)
+        return torch.from_numpy(np.ascontiguousarray(rgb.transpose(2,0,1))).float().div_(255),targets,info
+
+    def sample(self, index: int) -> tuple[np.ndarray, list[tuple[int,tuple[float,float,float,float]]], dict]:
+        """One tile as uint8 RGB (height, width, 3); data export uses this without PyTorch."""
         # Export consecutive tiles from the same source. Reading an 8K raster
         # from disk for every tile is unnecessarily expensive.
         rec=self.records[index // self.samples]
@@ -174,11 +185,10 @@ class RasterTileDataset(Dataset):
             else:
                 # Never mislabel a clipped/uncertain component as background.
                 ignore.append(box)
-        t=torch.from_numpy(np.ascontiguousarray(rgb.transpose(2,0,1))).float().div_(255)
         info={'tile':tile, 'ignore_boxes':ignore, 'group':rec.group,
               'image_path':str(rec.image), 'target_symbol_pixels':target_px,
               'damage':damage_info}
-        return t,targets,info
+        return np.ascontiguousarray(rgb),targets,info
 
 
 def collate_tiles(batch):

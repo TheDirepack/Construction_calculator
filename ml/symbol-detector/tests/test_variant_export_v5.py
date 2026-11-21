@@ -26,7 +26,7 @@ def test_independent_corruptions_and_downsample_equivalence():
 
 
 def test_svg_true_low_dpi_and_anchor_scaling(tmp_path):
-    from cairosvg import svg2png
+    svg2png = pytest.importorskip("cairosvg").svg2png
     svg=tmp_path/'source.svg'
     svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100"><rect x="10" y="15" width="30" height="25" fill="black"/></svg>')
     raster=tmp_path/'source.png';raster.write_bytes(svg2png(url=str(svg)))

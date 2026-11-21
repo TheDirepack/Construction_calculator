@@ -1,25 +1,7 @@
 import cv2
 import numpy as np
-import torch
-from blueprint_symbols.models import SymbolDetector, AnchorRefiner, parameter_counts
 from blueprint_symbols.tiles import tile_page, page_px_to_pdf_points
 from blueprint_symbols.geometry import fit_isolated_stroke_centerline, closest_point_on_segment, heatmap_peak
-
-
-def test_detector_shapes_and_param_budget():
-    with torch.no_grad():
-        d = SymbolDetector(14).eval()
-        outs = d(torch.zeros(1, 3, 128, 128))
-    assert [tuple(x.shape) for x in outs] == [(1, 19, 32, 32), (1, 19, 16, 16), (1, 19, 8, 8)]
-    assert parameter_counts()['symbol_detector'] < 1_000_000
-
-
-def test_refiner_shapes_and_param_budget():
-    with torch.no_grad():
-        model = AnchorRefiner(4).eval()
-        out = model(torch.zeros(1, 3, 160, 160))
-    assert tuple(out.shape) == (1, 5, 40, 40)
-    assert parameter_counts()['anchor_refiner'] < 100_000
 
 
 def test_tiles_cover_right_bottom_without_huge_bitmap():
@@ -88,20 +70,4 @@ def test_crop_transform_and_boundary_padding():
     assert edge.shape == (160,160)
     assert transform2.origin_x < 0
 
-from blueprint_symbols.training import detector_loss
 
-
-def test_training_loss_backward_and_density_warning():
-    torch.manual_seed(1)
-    model = SymbolDetector(3)
-    outputs = model(torch.zeros((1,3,128,128)))
-    gt = [[(1,(20.,18.,36.,32.)), (0,(72.,68.,90.,84.))]]
-    loss, stats = detector_loss(outputs, gt, (128,128))
-    assert stats == {'assigned':2, 'collisions':0}
-    assert torch.isfinite(loss)
-    loss.backward()
-    assert model.head2[-1].weight.grad is not None
-    assert torch.isfinite(model.head2[-1].weight.grad).all()
-    # Same center feature-grid cell cannot represent two separate objects.
-    _, stats2 = detector_loss(outputs, [[(0,(20.,18.,36.,32.)),(1,(21.,18.,35.,32.))]], (128,128))
-    assert stats2['collisions'] == 1

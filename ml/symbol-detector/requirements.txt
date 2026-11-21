@@ -1,6 +1,5 @@
 numpy
 opencv-python-headless
-torch
 pytest
 
 # FloorPlanCAD path geometry decoding

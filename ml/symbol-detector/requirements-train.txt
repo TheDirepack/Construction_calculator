@@ -1,0 +1,3 @@
+-r requirements.txt
+# Training and model export only. Data preparation and the normal tests do not need it.
+torch
