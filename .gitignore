@@ -11,3 +11,4 @@ build/
 .kotlin/
 *.apk
 *.aab
+.claude/worktrees/

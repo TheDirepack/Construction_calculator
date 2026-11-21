@@ -183,6 +183,11 @@ fun VoltageDropScreen(host: ToolHost) {
 - **Plain numbers use `Decimals`** (`core:measure`) to parse and print, single/three phase is
   `AcPhases`, conduit is the core `ConduitType`/`TradeSize`, and switches are `ToggleRow`: one of
   each for the whole app.
+- **Units follow the Imperial/Metric setting** ([plans/unit-system.md](plans/unit-system.md)).
+  Store base units (exact inches, °C, ft, lb, lbf, lb/ft) and convert only for display and typing:
+  `UnitField` with a `Measure` for typed values, `settings.show(measure, base)` for text,
+  `settings.format(q)` / `settings.lengthFormat()` for lengths. Never write a literal unit string
+  for a convertible measure. Electrical units, AWG sizes and trade sizes don't convert.
 - **Lengths use `MeasureField`**, displayed with the app settings (`settings.format(q)`).
   Store lengths as `StoredQuantity` (exact) and publish them as `ValueKind.LENGTH` in inches.
 - **Publish results with the right `ValueKind`** and base unit (see `ValueKind`), and stable `key`s.

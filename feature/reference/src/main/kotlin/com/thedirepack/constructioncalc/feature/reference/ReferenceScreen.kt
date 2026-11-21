@@ -52,6 +52,8 @@ import com.thedirepack.constructioncalc.core.ui.tool.LocalTools
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 import com.thedirepack.constructioncalc.core.ui.tool.titleOf
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock
+import com.thedirepack.constructioncalc.feature.reference.content.RefContext
+import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.feature.reference.content.RefEntry
 import com.thedirepack.constructioncalc.feature.reference.content.RefSection
 import com.thedirepack.constructioncalc.feature.reference.content.RefSource
@@ -186,13 +188,15 @@ private fun EntryScreen(entry: RefEntry, host: ToolHost, favorite: Boolean, onTo
             }
         },
     ) { padding ->
+        val context = RefContext(rememberAppSettings().unitSystem)
+        val blocks = remember(entry, context) { entry.blocks(context) }
         LazyColumn(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(padding),
         ) {
             item { Text(entry.summary, style = MaterialTheme.typography.bodyLarge) }
-            items(entry.blocks.size) { i -> Block(entry.blocks[i], host, key = "${entry.id}:$i") }
+            items(blocks.size) { i -> Block(blocks[i], host, key = "${entry.id}:${context.system}:$i") }
         }
     }
 }

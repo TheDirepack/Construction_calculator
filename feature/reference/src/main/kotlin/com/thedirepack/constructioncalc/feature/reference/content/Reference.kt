@@ -2,6 +2,7 @@ package com.thedirepack.constructioncalc.feature.reference.content
 
 import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 
 /** The Reference's top-level subjects, in browsing order. */
 enum class RefSection(val label: String) {
@@ -64,6 +65,16 @@ sealed interface RefBlock {
     data class ToolLink(val label: String, val toolId: String, val topic: String? = null) : RefBlock
 }
 
+/** What a page is built for: the user's unit system (tables show mm, mm², Ω/km in metric). */
+data class RefContext(val system: UnitSystem = UnitSystem.IMPERIAL) {
+    val metric: Boolean get() = system == UnitSystem.METRIC
+
+    companion object {
+        val IMPERIAL = RefContext(UnitSystem.IMPERIAL)
+        val METRIC = RefContext(UnitSystem.METRIC)
+    }
+}
+
 /**
  * One page of the Reference.
  *
@@ -79,9 +90,12 @@ class RefEntry(
     val source: RefSource,
     val tools: List<String> = emptyList(),
     val keywords: List<String> = emptyList(),
-    blocks: () -> List<RefBlock>,
+    private val build: (RefContext) -> List<RefBlock>,
 ) {
-    val blocks: List<RefBlock> by lazy(blocks)
+    private val built = java.util.concurrent.ConcurrentHashMap<RefContext, List<RefBlock>>()
+
+    /** The page's content for [context], built once per unit system. */
+    fun blocks(context: RefContext = RefContext.IMPERIAL): List<RefBlock> = built.getOrPut(context) { build(context) }
 
     private val searchText: String by lazy {
         (listOf(title, summary, section.label, source.label) + keywords + tools).joinToString(" ").lowercase()

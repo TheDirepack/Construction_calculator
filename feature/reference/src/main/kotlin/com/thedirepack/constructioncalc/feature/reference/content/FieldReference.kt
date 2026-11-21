@@ -35,7 +35,7 @@ internal object FieldReference {
                 Bullets(
                     listOf(
                         "Distance between bends = offset depth × multiplier (the cosecant of the angle).",
-                        "Shrink = depth × shrink per inch (the tangent of half the angle). Add it to the measurement to the obstruction.",
+                        "Shrink = depth × shrink per inch (the tangent of half the angle; the same per millimeter in metric). Add it to the measurement to the obstruction.",
                         "The field values are the rounded numbers printed on many benders; the exact values are what the Conduit Bending tool uses.",
                     ),
                 ),
@@ -80,7 +80,7 @@ internal object FieldReference {
                     listOf(
                         "1/2" to "7/8", "3/4" to "1-1/8", "1" to "1-3/8", "1-1/4" to "1-3/4", "1-1/2" to "2",
                         "2" to "2-1/2", "2-1/2" to "3", "3" to "3-5/8", "3-1/2" to "4-1/8", "4" to "4-5/8",
-                    ).map { (t, h) -> listOf("$t\"", "$h\"") },
+                    ).map { (t, h) -> listOf("$t\"", "$h\" (${Decimals.trim(inchesOf(h) * 25.4, 1)} mm)") },
                     "Nominal hole for the fitting's thread. Check the fitting or punch maker's chart for exact sizes.",
                 ),
             )
@@ -208,6 +208,13 @@ internal object FieldReference {
             )
         },
     )
+
+    /** "1-3/8" → 1.375 */
+    private fun inchesOf(text: String): Double {
+        val whole = text.substringBefore('-', "").takeIf { '-' in text }?.toDouble() ?: 0.0
+        val frac = text.substringAfter('-')
+        return whole + if ('/' in frac) frac.substringBefore('/').toDouble() / frac.substringAfter('/').toDouble() else frac.toDouble()
+    }
 
     private fun fraction(k: Int, d: Int): String {
         tailrec fun gcd(a: Int, b: Int): Int = if (b == 0) a else gcd(b, a % b)

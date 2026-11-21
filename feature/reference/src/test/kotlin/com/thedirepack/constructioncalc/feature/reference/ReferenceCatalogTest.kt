@@ -4,6 +4,7 @@ import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaCatalog
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock
+import com.thedirepack.constructioncalc.feature.reference.content.RefContext
 import com.thedirepack.constructioncalc.feature.reference.content.RefEntry
 import com.thedirepack.constructioncalc.feature.reference.content.RefSource
 import com.thedirepack.constructioncalc.feature.reference.content.ReferenceCatalog
@@ -18,14 +19,16 @@ class ReferenceCatalogTest {
         if (b is RefBlock.Choice) listOf(b) + b.options.indices.flatMap { expand(b.content(it)) } else listOf(b)
     }
 
-    private fun tables(e: RefEntry) = expand(e.blocks).filterIsInstance<RefBlock.Table>()
+    private fun tables(e: RefEntry, ctx: RefContext = RefContext.IMPERIAL) = expand(e.blocks(ctx)).filterIsInstance<RefBlock.Table>()
 
     @Test
     fun everyEntryBuildsAndHasContent() {
-        ReferenceCatalog.all.forEach { e ->
-            val blocks = expand(e.blocks)
-            assertTrue("${e.id} is empty", blocks.isNotEmpty())
-            tables(e).forEach { t -> assertTrue("${e.id} has an empty table", t.rows.isNotEmpty()) }
+        for (ctx in listOf(RefContext.IMPERIAL, RefContext.METRIC)) {
+            ReferenceCatalog.all.forEach { e ->
+                val blocks = expand(e.blocks(ctx))
+                assertTrue("${e.id} is empty", blocks.isNotEmpty())
+                tables(e, ctx).forEach { t -> assertTrue("${e.id} has an empty table", t.rows.isNotEmpty()) }
+            }
         }
     }
 
@@ -34,7 +37,7 @@ class ReferenceCatalogTest {
         FormulaCatalog.all.forEach { f ->
             val entry = ReferenceCatalog.find("formula:${f.id}")
             assertTrue(f.id, entry != null)
-            assertTrue(expand(entry!!.blocks).any { it is RefBlock.ToolLink && it.toolId == ToolIds.FORMULAS && it.topic == f.id })
+            assertTrue(expand(entry!!.blocks()).any { it is RefBlock.ToolLink && it.toolId == ToolIds.FORMULAS && it.topic == f.id })
         }
     }
 
@@ -65,7 +68,7 @@ class ReferenceCatalogTest {
     fun wiresInConduitMatchAnnexC() {
         // Annex C Table C.1: 3/4" EMT holds 16 × 12 AWG THHN; 1/2" EMT holds 9.
         val annex = ReferenceCatalog.find("nec-conductors-in-conduit")!!
-        val emt = annex.blocks.filterIsInstance<RefBlock.Choice>().first().content(0) // EMT first
+        val emt = annex.blocks().filterIsInstance<RefBlock.Choice>().first().content(0) // EMT first
         val thhn = (emt.first() as RefBlock.Choice).content(0).filterIsInstance<RefBlock.Table>().first()
         val row = thhn.rows.first { it[0] == "12 AWG" }
         assertEquals("9", row[thhn.columns.indexOf("1/2\"")])
@@ -88,6 +91,19 @@ class ReferenceCatalogTest {
         assertTrue(ReferenceCatalog.forTool(ToolIds.CONDUIT_FILL).any { it.id == "nec-conduit-dimensions" })
         assertTrue(ReferenceCatalog.hasEntriesFor(ToolIds.FORMULAS))
         assertTrue(!ReferenceCatalog.hasEntriesFor(ToolIds.PROJECTS))
+    }
+
+    @Test
+    fun metricTablesConvert() {
+        // 3/4" EMT: ID 0.824 in = 20.9 mm; 100% area 0.533 in² = 343.9 mm².
+        val table4 = ReferenceCatalog.find("nec-conduit-dimensions")!!
+        val emt = (table4.blocks(RefContext.METRIC).first() as RefBlock.Choice).content(0).filterIsInstance<RefBlock.Table>().first()
+        assertEquals("ID mm", emt.columns[2])
+        val row = emt.rows.first { it[0] == "3/4\"" }
+        assertEquals("20.9", row[2])
+        // 12 AWG Cu stranded: 1.98 Ω/kft = 6.4961 Ω/km.
+        val t8 = tables(ReferenceCatalog.find("nec-conductor-properties")!!, RefContext.METRIC).first()
+        assertEquals("6.4961", t8.rows.first { it[0] == "12 AWG" }[4])
     }
 
     @Test

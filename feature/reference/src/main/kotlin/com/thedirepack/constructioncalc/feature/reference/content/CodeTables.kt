@@ -48,6 +48,17 @@ internal object CodeTables {
     private fun n(v: Double?, decimals: Int = 4) = v?.let { Decimals.trim(it, decimals) } ?: BLANK
     private fun i(v: Int?) = v?.toString() ?: BLANK
 
+    // Unit-aware cells: inches ↔ mm, in² ↔ mm², Ω per 1000 ft ↔ Ω per km (exact factors).
+    private fun len(inches: Double?, ctx: RefContext, decimals: Int = 3) =
+        inches?.let { if (ctx.metric) Decimals.trim(it * 25.4, 1) else Decimals.trim(it, decimals) } ?: BLANK
+    private fun area(sqIn: Double?, ctx: RefContext) =
+        sqIn?.let { if (ctx.metric) Decimals.trim(it * 645.16, 1) else Decimals.trim(it, 4) } ?: BLANK
+    private fun ohms(perKft: Double?, ctx: RefContext) =
+        perKft?.let { if (ctx.metric) Decimals.trim(it / 0.3048, 4) else Decimals.trim(it, 4) } ?: BLANK
+    private fun lenUnit(ctx: RefContext) = if (ctx.metric) "mm" else "in"
+    private fun areaUnit(ctx: RefContext) = if (ctx.metric) "mm²" else "in²"
+    private fun ohmUnit(ctx: RefContext) = if (ctx.metric) "Ω/km" else "Ω/kft"
+
     private val ampacityMaterials = listOf(ConductorMaterial.COPPER, ConductorMaterial.ALUMINUM)
 
     val entries: List<RefEntry> get() = listOf(
@@ -142,7 +153,7 @@ internal object CodeTables {
             RefSource.CodeRef(CodeRule.CONDUCTOR_PROPERTIES),
             tools = listOf(ToolIds.VOLTAGE_DROP, ToolIds.CONDUIT_FILL),
             keywords = listOf("circular mils", "cmil", "resistance", "ohms", "diameter", "bare", "mm2", "kcmil", "table 8"),
-        ) {
+        ) { ctx ->
             listOf(
                 Choice("Stranding", listOf("Stranded", "Solid (18–8 AWG)")) { pick ->
                     val stranding = if (pick == 0) Stranding.STRANDED else Stranding.SOLID
@@ -153,13 +164,13 @@ internal object CodeTables {
                             size.label,
                             size.circularMils.toString(),
                             n(size.squareMillimeters, 2),
-                            n(bare?.diameterIn, 3),
-                            n(ConductorResistance.ohmsPerKft(size, ConductorMaterial.COPPER, stranding)),
-                            n(ConductorResistance.ohmsPerKft(size, ConductorMaterial.COATED_COPPER, stranding)),
-                            n(ConductorResistance.ohmsPerKft(size, ConductorMaterial.ALUMINUM, stranding)),
+                            len(bare?.diameterIn, ctx),
+                            ohms(ConductorResistance.ohmsPerKft(size, ConductorMaterial.COPPER, stranding), ctx),
+                            ohms(ConductorResistance.ohmsPerKft(size, ConductorMaterial.COATED_COPPER, stranding), ctx),
+                            ohms(ConductorResistance.ohmsPerKft(size, ConductorMaterial.ALUMINUM, stranding), ctx),
                         )
                     }
-                    listOf(Table(listOf("Size", "cmil", "mm²", "Dia. in", "Cu Ω/kft", "Cu coated", "Al Ω/kft"), rows, "DC resistance at 75 °C. mm² is calculated from circular mils."))
+                    listOf(Table(listOf("Size", "cmil", "mm²", "Dia. ${lenUnit(ctx)}", "Cu ${ohmUnit(ctx)}", "Cu coated", "Al ${ohmUnit(ctx)}"), rows, "DC resistance at 75 °C. mm² is calculated from circular mils."))
                 },
                 Paragraph("At another temperature: R2 = R1 × (1 + α × (T2 − 75)), α = 0.00323 copper, 0.00330 aluminum."),
                 ToolLink("Correct for temperature in Electrical Formulas", ToolIds.FORMULAS, "resistance-temperature"),
@@ -171,18 +182,19 @@ internal object CodeTables {
             RefSource.CodeRef(CodeRule.AC_IMPEDANCE),
             tools = listOf(ToolIds.VOLTAGE_DROP),
             keywords = listOf("impedance", "reactance", "xl", "ac resistance", "table 9", "voltage drop"),
-        ) {
+        ) { ctx ->
             listOf(
                 Choice("Material", listOf("Copper", "Aluminum")) { pick ->
                     val material = ampacityMaterials[pick]
                     val rows = ConductorImpedance.sizes(material).map { size ->
                         val r = ConductorImpedance.row(size, material)!!
                         listOf(
-                            size.label, n(r.xNonMagnetic, 3), n(r.xSteel, 3), n(r.rPvc), n(r.rAluminum), n(r.rSteel),
-                            n(r.effectiveZ(Table9Conduit.PVC, 0.85)), n(r.effectiveZ(Table9Conduit.STEEL, 0.85)),
+                            size.label, ohms(r.xNonMagnetic, ctx), ohms(r.xSteel, ctx), ohms(r.rPvc, ctx), ohms(r.rAluminum, ctx), ohms(r.rSteel, ctx),
+                            ohms(r.effectiveZ(Table9Conduit.PVC, 0.85), ctx), ohms(r.effectiveZ(Table9Conduit.STEEL, 0.85), ctx),
                         )
                     }
-                    listOf(Table(listOf("Size", "XL PVC/Al", "XL steel", "R PVC", "R Al", "R steel", "Z PVC @0.85", "Z steel @0.85"), rows, "Ω per 1000 ft, to neutral. Effective Z at 0.85 power factor = R × PF + XL × sin(acos PF)."))
+                    val per = if (ctx.metric) "Ω per km" else "Ω per 1000 ft"
+                    listOf(Table(listOf("Size", "XL PVC/Al", "XL steel", "R PVC", "R Al", "R steel", "Z PVC @0.85", "Z steel @0.85"), rows, "$per, to neutral. Effective Z at 0.85 power factor = R × PF + XL × sin(acos PF)."))
                 },
                 ToolLink("Calculate voltage drop", ToolIds.VOLTAGE_DROP),
             )
@@ -193,16 +205,16 @@ internal object CodeTables {
             RefSource.CodeRef(CodeRule.CONDUCTOR_DIMENSIONS),
             tools = listOf(ToolIds.CONDUIT_FILL, ToolIds.PULL_PLANNER, ToolIds.REEL_LENGTH),
             keywords = listOf("thhn", "xhhw", "area", "diameter", "od", "table 5", "insulation"),
-        ) {
+        ) { ctx ->
             val types = InsulationType.entries
             listOf(
                 Choice("Insulation", types.map { it.label }) { pick ->
                     val type = types[pick]
                     val rows = InsulatedConductorArea.sizes(type).map { size ->
                         val d = InsulatedConductorArea.dimensions(type, size)!!
-                        listOf(size.label, n(d.areaSqIn), n(d.diameterIn, 3))
+                        listOf(size.label, area(d.areaSqIn, ctx), len(d.diameterIn, ctx))
                     }
-                    listOf(Table(listOf("Size", "Area in²", "Diameter in"), rows, "Types: ${type.types}."))
+                    listOf(Table(listOf("Size", "Area ${areaUnit(ctx)}", "Diameter ${lenUnit(ctx)}"), rows, "Types: ${type.types}."))
                 },
             )
         },
@@ -290,15 +302,18 @@ internal object CodeTables {
             RefSource.CodeRef(CodeRule.CONDUIT_DIMENSIONS),
             tools = listOf(ToolIds.CONDUIT_FILL, ToolIds.PULL_PLANNER),
             keywords = listOf("emt", "rmc", "imc", "pvc", "inside diameter", "id", "area", "table 4", "trade size"),
-        ) {
+        ) { ctx ->
             val types = ConduitType.entries
             listOf(
                 Choice("Conduit", types.map { it.displayName }) { pick ->
                     val type = types[pick]
                     val rows = ConduitTable.sizes(type).map { c ->
-                        listOf(c.tradeSize.display, c.tradeSize.metricDesignator.toString(), n(c.internalDiameterIn, 3), n(c.area100SqIn, 3), n(c.allowedAreaSqIn(40), 3), n(c.allowedAreaSqIn(53), 3), n(c.allowedAreaSqIn(31), 3), n(c.allowedAreaSqIn(60), 3))
+                        listOf(c.tradeSize.display, c.tradeSize.metricDesignator.toString(), len(c.internalDiameterIn, ctx)) +
+                            listOf(c.area100SqIn, c.allowedAreaSqIn(40), c.allowedAreaSqIn(53), c.allowedAreaSqIn(31), c.allowedAreaSqIn(60)).map { a ->
+                                if (ctx.metric) area(a, ctx) else n(a, 3)
+                            }
                     }
-                    listOf(Table(listOf("Trade size", "Metric", "ID in", "100% in²", "40%", "53%", "31%", "60%"), rows, "${type.fullName}, ${type.article}."))
+                    listOf(Table(listOf("Trade size", "Metric", "ID ${lenUnit(ctx)}", "100% ${areaUnit(ctx)}", "40%", "53%", "31%", "60%"), rows, "${type.fullName}, ${type.article}."))
                 },
             )
         },
@@ -334,12 +349,12 @@ internal object CodeTables {
             RefSource.CodeRef(CodeRule.BEND_RADIUS),
             tools = listOf(ToolIds.CONDUIT_BENDING, ToolIds.PULL_PLANNER),
             keywords = listOf("radius", "bend", "360", "pull point", "pull box", "table 2"),
-        ) {
+        ) { ctx ->
             val sizes = TradeSize.entries.filter { RacewayBends.minimumRadiusInches(it, BendRadiusColumn.ONE_SHOT) != null }
             listOf(
                 Table(
-                    listOf("Trade size", "One shot and full shoe (in)", "Other bends (in)"),
-                    sizes.map { s -> listOf(s.display, n(RacewayBends.minimumRadiusInches(s, BendRadiusColumn.ONE_SHOT), 2), n(RacewayBends.minimumRadiusInches(s, BendRadiusColumn.OTHER), 2)) },
+                    listOf("Trade size", "One shot and full shoe (${lenUnit(ctx)})", "Other bends (${lenUnit(ctx)})"),
+                    sizes.map { s -> listOf(if (ctx.metric) "${s.display} (${s.metricDesignator})" else s.display, len(RacewayBends.minimumRadiusInches(s, BendRadiusColumn.ONE_SHOT), ctx, 2), len(RacewayBends.minimumRadiusInches(s, BendRadiusColumn.OTHER), ctx, 2)) },
                     "Radius to the centerline of the conduit.",
                 ),
                 Paragraph("No more than ${RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS.toInt()}° of bends between pull points, offsets and kicks included:"),
