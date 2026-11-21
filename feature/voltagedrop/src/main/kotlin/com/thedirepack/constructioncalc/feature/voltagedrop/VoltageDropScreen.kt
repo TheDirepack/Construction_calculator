@@ -1,5 +1,8 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop
 
+import com.thedirepack.constructioncalc.core.model.ToolTarget
+import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
+
 import com.thedirepack.constructioncalc.core.electrical.Table9Conduit
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorResistance
@@ -37,6 +40,12 @@ private const val CUSTOM_VOLTAGE = 0
 @Composable
 fun VoltageDropScreen(host: ToolHost) {
     val vm: VoltageDropViewModel = toolViewModel(VoltageDropTool.ID, host)
+    val projectsRepo = LocalAppServices.current.projects
+    LaunchedEffect(host.target) {
+        (host.target as? ToolTarget.OfCircuit)?.let { t ->
+            vm.prefill(t) { projectsRepo.get(t.projectId)?.let { voltageDropInputsForCircuit(it, t.circuitId) } }
+        }
+    }
     val inputs = vm.inputs
     val settings = rememberAppSettings()
     val output = remember(inputs, settings) { voltageDropOutput(inputs, settings) }

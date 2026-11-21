@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.model.ValueKind
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -60,6 +61,7 @@ fun MeasureInputSheet(
     val recents by LocalAppServices.current.recents.recents.collectAsStateWithLifecycle()
     var state by remember { mutableStateOf(CalcState(tokens = listOfNotNull(initial?.let { Token.Value(it) }))) }
     var problem by remember { mutableStateOf<String?>(null) }
+    var picking by remember { mutableStateOf(false) }
     val defaultsToInches = allowed.size == 1 && Dimension.LENGTH in allowed
 
     fun fieldValue(value: Quantity, tokens: List<Token>): Quantity =
@@ -94,6 +96,9 @@ fun MeasureInputSheet(
         Column(Modifier.padding(horizontal = 16.dp).navigationBarsPadding()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                IconButton(onClick = { picking = true }) {
+                    Icon(painterResource(R.drawable.ic_pick), contentDescription = "Use a value from another tool or the project")
+                }
                 IconButton(onClick = { press(Key.Backspace) }) {
                     Icon(painterResource(R.drawable.ic_backspace), contentDescription = "Backspace")
                 }
@@ -138,5 +143,16 @@ fun MeasureInputSheet(
             MeasureKeypad(onKey = press, equalsLabel = "Use", modifier = Modifier.fillMaxWidth().height(320.dp))
             Spacer(Modifier.height(12.dp))
         }
+    }
+    if (picking) {
+        ValuePickerSheet(
+            title = title,
+            kinds = allowed.map { ValueKind.of(it) }.toSet(),
+            onPick = { value ->
+                value.toQuantity()?.let { press(Key.Recall(it)) }
+                picking = false
+            },
+            onDismiss = { picking = false },
+        )
     }
 }

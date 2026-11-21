@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.model.ToolTarget
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,7 +54,8 @@ fun PanelsScreen(host: ToolHost) {
     val services = LocalAppServices.current
     val settings = rememberAppSettings()
     val projects by services.projects.projects.collectAsStateWithLifecycle()
-    val project = projects.firstOrNull { it.id == settings.activeProjectId }
+    // Opened for a circuit or run of a project (from Projects or another tool): that project; else the active one.
+    val project = projects.firstOrNull { it.id == (host.target?.projectId ?: settings.activeProjectId) }
     var viewArchived by rememberSaveable(project?.id) { mutableStateOf(false) }
 
     if (project == null || (project.archived && !viewArchived)) {
@@ -112,8 +114,11 @@ private fun ProjectPanels(project: Project, host: ToolHost) {
     val services = LocalAppServices.current
     val design = remember(project) { ProjectAnalysis.analyze(project) }
     val ctx = PanelsContext(project, design, host) { change -> services.projects.edit(project.id, change) }
-    var tab by rememberSaveable { mutableIntStateOf(0) }
-    var openPanelId by rememberSaveable { mutableStateOf<String?>(null) }
+    val target = host.target
+    var tab by rememberSaveable { mutableIntStateOf(if (target is ToolTarget.OfRun) 1 else 0) }
+    var openPanelId by rememberSaveable {
+        mutableStateOf((target as? ToolTarget.OfCircuit)?.let { t -> project.panels.firstOrNull { p -> p.circuits.any { it.id == t.circuitId } }?.id })
+    }
     var menu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     val openPanel = openPanelId?.let(project::panel)

@@ -121,7 +121,7 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
     val stack = rememberSaveable(saver = StackSaver) { mutableStateListOf<Destination>(Destination.Tool(ToolRegistry.default.id)) }
     // Tools publish on every input change; only the value that settles is offered to other tools.
     val publishJobs = remember { mutableMapOf<String, Job>() }
-    var pendingSave by remember { mutableStateOf<Pair<ItemDraft, ProjectItem?>?>(null) }
+    var pendingSave by remember { mutableStateOf<Triple<ItemDraft, ProjectItem?, ToolTarget?>?>(null) }
     var pendingImport by remember { mutableStateOf<AppFile?>(null) }
 
     val current = stack.last()
@@ -174,7 +174,7 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
                                     if (tool.id == ProjectsTool.ID) stack[stack.lastIndex] = projects else push(projects)
                                 },
                                 onBack = ::pop,
-                                onSave = { pendingSave = it to current.item },
+                                onSave = { pendingSave = Triple(it, current.item, current.target) },
                                 onPublish = { results, ctx, immediate ->
                                     publishJobs.remove(tool.id)?.cancel()
                                     val publish = {
@@ -232,10 +232,11 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
         )
     }
 
-    pendingSave?.let { (draft, editing) ->
+    pendingSave?.let { (draft, editing, target) ->
         SaveToProjectSheet(
             draft = draft,
             editing = editing,
+            target = target,
             onSaved = { text ->
                 pendingSave = null
                 message(text)

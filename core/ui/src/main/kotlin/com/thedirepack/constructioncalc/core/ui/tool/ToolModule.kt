@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.core.ui.tool
 
+import com.thedirepack.constructioncalc.core.model.Raceway
+
 import android.content.Context
 import androidx.annotation.DrawableRes
 import androidx.compose.runtime.Composable
@@ -115,6 +117,8 @@ data class ItemDraft(
     val inputs: JsonObject,
     val results: List<ResultValue>,
     val summary: String,
+    /** The conduit this calculation was for (e.g. a bend); saving to a run offers it as the run's conduit. */
+    val conduit: Raceway? = null,
 )
 
 /** App-wide repositories, available to every tool's composables. */

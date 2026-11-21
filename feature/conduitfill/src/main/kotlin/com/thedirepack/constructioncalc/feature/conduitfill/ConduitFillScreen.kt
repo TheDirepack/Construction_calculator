@@ -1,5 +1,8 @@
 package com.thedirepack.constructioncalc.feature.conduitfill
 
+import com.thedirepack.constructioncalc.core.model.ToolTarget
+import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
+
 import com.thedirepack.constructioncalc.core.ui.components.ToggleRow
 
 import com.thedirepack.constructioncalc.feature.conduitfill.domain.toResults
@@ -59,6 +62,12 @@ import java.util.Locale
 @Composable
 fun ConduitFillScreen(host: ToolHost) {
     val vm: ConduitFillViewModel = toolViewModel(ConduitFillTool.ID, host)
+    val projectsRepo = LocalAppServices.current.projects
+    LaunchedEffect(host.target) {
+        (host.target as? ToolTarget.OfRun)?.let { t ->
+            vm.prefill(t) { projectsRepo.get(t.projectId)?.let { conduitFillInputsForRun(it, t.runId) } }
+        }
+    }
 
     val inputs = vm.inputs
     val parsed = remember(inputs) { inputs.toRequest() }

@@ -130,7 +130,7 @@ class ScheduleTextTest {
         )
         assertEquals("6,200 VA", panel.first { it.kind == ValueKind.APPARENT_POWER }.text)
         val circuit = PublishedValues.circuit(design.circuits.getValue(project.panels[1].circuits[0].id)) { "50'" }
-        assertEquals(listOf(ValueKind.TEXT, ValueKind.LENGTH, ValueKind.CURRENT), circuit.map { it.kind })
+        assertEquals(listOf(ValueKind.TEXT, ValueKind.LENGTH, ValueKind.CURRENT, ValueKind.APPARENT_POWER), circuit.map { it.kind })
         assertEquals("2#12, 1#12G", circuit[0].text)
         assertEquals("600", circuit[1].exact) // 50 ft in inches
         assertNotNull(circuit[2].rational)

@@ -1,5 +1,10 @@
 package com.thedirepack.constructioncalc.feature.reellength
 
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
@@ -27,6 +32,7 @@ import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 @Composable
 fun ReelLengthScreen(host: ToolHost) {
     val vm: ReelLengthViewModel = toolViewModel(ReelLengthTool.ID, host)
+    var pickingWire by remember { mutableStateOf(false) }
     val inputs = vm.inputs
     val settings = rememberAppSettings()
     val output = remember(inputs, settings) { reelLengthOutput(inputs, settings) }
@@ -106,6 +112,16 @@ fun ReelLengthScreen(host: ToolHost) {
                     inputs.cableDiameter?.toQuantity(),
                     { q -> vm.update { it.copy(cableDiameter = q?.stored()) } },
                 )
+                TextButton(onClick = { pickingWire = true }) { Text("From a wire size (NEC Table 5)…") }
+                if (pickingWire) {
+                    WireDiameterDialog(
+                        onPick = { q ->
+                            vm.update { it.copy(cableDiameter = q.stored()) }
+                            pickingWire = false
+                        },
+                        onDismiss = { pickingWire = false },
+                    )
+                }
                 if (capacity) {
                     MeasureField(
                         "Clearance below flange edge",

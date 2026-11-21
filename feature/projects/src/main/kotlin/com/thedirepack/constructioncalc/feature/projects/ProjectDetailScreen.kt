@@ -1,5 +1,8 @@
 package com.thedirepack.constructioncalc.feature.projects
 
+import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
+import com.thedirepack.constructioncalc.core.model.design.PanelLayout
+import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.ui.format
 
 import android.content.ActivityNotFoundException
@@ -99,7 +102,7 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
     val readOnly = project.archived
     // Conduit runs show their circuit count and (when the size is Auto) the size the design picked.
     val runDesigns = remember(project) {
-        if (project.runs.any { it.raceway != null }) ProjectAnalysis.analyze(project).runs else emptyMap()
+        if (project.runs.any { it.raceway != null } || project.panels.isNotEmpty()) ProjectAnalysis.analyze(project).runs else emptyMap()
     }
 
     val toText = { ProjectText.render(project, tools::titleOf, header = settings.company.headerLines(), length = { settings.format(it) }) }
@@ -231,6 +234,8 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
                             val text = run.items.joinToString("") { ProjectText.renderItem(it, tools::titleOf) }
                             host.shareText("${project.name} › ${run.name}", "${project.name} › ${run.name}\n\n$text")
                         },
+                        circuits = runDesigns[run.id]?.circuits.orEmpty().map { (panel, c) -> "${panel.name} ${PanelLayout.label(c)}" },
+                        onOpenTool = { toolId -> host.openTool(toolId, target = ToolTarget.OfRun(project.id, run.id)) },
                     )
                 }
                 if (run.items.isEmpty()) {
@@ -332,6 +337,8 @@ private fun RunHeader(
     onDelete: () -> Unit,
     onMakeTarget: () -> Unit,
     onShare: () -> Unit,
+    circuits: List<String>,
+    onOpenTool: (String) -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(
@@ -342,6 +349,13 @@ private fun RunHeader(
             Text(run.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             if (conduitSummary != null) {
                 Text(fractionText(conduitSummary), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (circuits.isNotEmpty()) {
+                Text(
+                    "Circuits: " + circuits.joinToString(", "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (isTarget) {
                 Text("New saves go here", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -354,6 +368,11 @@ private fun RunHeader(
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 if (!isTarget && !readOnly) DropdownMenuItem(text = { Text("Save new results here") }, onClick = { menu = false; onMakeTarget() })
                 DropdownMenuItem(text = { Text("Share run as text") }, onClick = { menu = false; onShare() })
+                DropdownMenuItem(text = { Text("Open in Panels & Circuits") }, onClick = { menu = false; onOpenTool(ToolIds.PANELS) })
+                if (conduitSummary != null) {
+                    DropdownMenuItem(text = { Text("Check fill in Conduit Fill") }, onClick = { menu = false; onOpenTool(ToolIds.CONDUIT_FILL) })
+                    DropdownMenuItem(text = { Text("Bend this conduit") }, onClick = { menu = false; onOpenTool(ToolIds.CONDUIT_BENDING) })
+                }
                 if (!readOnly) {
                     DropdownMenuItem(
                         text = { Text(if (conduitSummary == null) "Add conduit…" else "Edit conduit…") },

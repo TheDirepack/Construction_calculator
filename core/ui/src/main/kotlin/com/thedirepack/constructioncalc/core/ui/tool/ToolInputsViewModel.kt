@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.thedirepack.constructioncalc.core.model.ProjectItem
 import com.thedirepack.constructioncalc.core.model.ToolInputs
+import com.thedirepack.constructioncalc.core.model.ToolTarget
 import kotlinx.serialization.KSerializer
 
 /**
@@ -26,6 +27,7 @@ open class ToolInputsViewModel<T : Any>(initial: T, private val serializer: KSer
         private set
 
     private var restoredItemId: String? = null
+    private var prefilledFor: String? = null
 
     fun update(change: (T) -> T) {
         inputs = normalize(change(inputs))
@@ -43,17 +45,28 @@ open class ToolInputsViewModel<T : Any>(initial: T, private val serializer: KSer
         runCatching { ToolInputs.json.decodeFromJsonElement(serializer, item.inputs) }.getOrNull()?.let(::load)
     }
 
+    /**
+     * Starts from a project circuit or run the screen was opened for, once per target (the screen may
+     * recompose many times; later edits are kept). [build] returns null when the target is gone.
+     */
+    fun prefill(target: ToolTarget?, build: (ToolTarget) -> T?) {
+        val key = target?.encode() ?: return
+        if (prefilledFor == key) return
+        prefilledFor = key
+        build(target)?.let(::load)
+    }
+
     protected open fun normalize(next: T): T = next
 }
 
 /**
- * The tool's [ToolInputsViewModel] for this screen: keyed by the saved item it shows (so each item
- * keeps its own state), restored from that item once.
+ * The tool's [ToolInputsViewModel] for this screen: keyed by the saved item it shows and the circuit
+ * or run it was opened for (so each keeps its own state), restored from that item once.
  */
 @Composable
 inline fun <reified VM : ToolInputsViewModel<*>> toolViewModel(toolId: String, host: ToolHost): VM {
     val opened = host.openedItem?.takeIf { it.toolId == toolId }
-    val vm: VM = viewModel(key = "$toolId:${opened?.id}")
+    val vm: VM = viewModel(key = "$toolId:${opened?.id}:${host.target?.encode()}")
     LaunchedEffect(opened) { opened?.let(vm::restore) }
     return vm
 }

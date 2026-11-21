@@ -1,5 +1,8 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.ui.format
+import com.thedirepack.constructioncalc.core.model.design.PublishedValues
+import com.thedirepack.constructioncalc.core.model.design.ProjectAnalysis
 import com.thedirepack.constructioncalc.core.data.activeTarget
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -52,6 +55,12 @@ fun ValuePickerSheet(
             PickRow(it.value, listOf(it.toolTitle, it.context).filter(String::isNotBlank).joinToString(" · "))
         }
     }
+    // What the project's electrical design works out (circuit currents, run lengths…), not only saved results.
+    val designRows = remember(project, kinds, settings) {
+        project?.takeIf { it.panels.isNotEmpty() || it.runs.any { r -> r.raceway != null } }
+            ?.let { PublishedValues.all(ProjectAnalysis.analyze(it)) { q -> settings.format(q) } }
+            .orEmpty().filter { it.kind in kinds }.map { PickRow(it, "Design") }
+    }
     val projectRows = remember(project, kinds) {
         project?.allResults().orEmpty().filter { it.value.kind in kinds }.map {
             PickRow(it.value, "${it.run.name} › ${it.item.title} · ${tools.titleOf(it.item.toolId)}")
@@ -65,7 +74,7 @@ fun ValuePickerSheet(
             modifier = Modifier.padding(horizontal = 24.dp),
         )
         LazyColumn(Modifier.navigationBarsPadding().padding(bottom = 16.dp)) {
-            if (recentRows.isEmpty() && projectRows.isEmpty()) {
+            if (recentRows.isEmpty() && projectRows.isEmpty() && designRows.isEmpty()) {
                 item {
                     Text(
                         "No matching values yet. Results from other tools appear here after you calculate them.",
@@ -81,6 +90,10 @@ fun ValuePickerSheet(
             if (projectRows.isNotEmpty()) {
                 item { SectionLabel("In ${project?.name}") }
                 items(projectRows) { PickItem(it) { onPick(it.value) } }
+            }
+            if (designRows.isNotEmpty()) {
+                item { SectionLabel("From the design in ${project?.name}") }
+                items(designRows) { PickItem(it) { onPick(it.value) } }
             }
         }
     }

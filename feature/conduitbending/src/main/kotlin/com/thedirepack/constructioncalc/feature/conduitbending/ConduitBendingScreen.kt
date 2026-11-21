@@ -1,5 +1,8 @@
 package com.thedirepack.constructioncalc.feature.conduitbending
 
+import com.thedirepack.constructioncalc.core.model.ToolTarget
+import com.thedirepack.constructioncalc.core.model.Raceway
+
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.fmt
 import com.thedirepack.constructioncalc.core.model.design.ProjectAnalysis
 import androidx.compose.foundation.layout.Arrangement
@@ -62,6 +65,12 @@ import com.thedirepack.constructioncalc.feature.conduitbending.domain.Severity
 @Composable
 fun ConduitBendingScreen(host: ToolHost) {
     val vm: ConduitBendingViewModel = toolViewModel(ConduitBendingTool.ID, host)
+    val projectsRepo = LocalAppServices.current.projects
+    LaunchedEffect(host.target) {
+        (host.target as? ToolTarget.OfRun)?.let { t ->
+            vm.prefill(t) { projectsRepo.get(t.projectId)?.let { bendingInputsForRun(it, t.runId, vm.inputs) } }
+        }
+    }
 
     val settings = rememberAppSettings()
     val store = LocalAppServices.current.settings.module(ConduitBendingTool.ID)
@@ -82,7 +91,10 @@ fun ConduitBendingScreen(host: ToolHost) {
         host = host,
         onSave = if (!plan.hasResults) null else ({
             host.saveToProject(
-                ItemDraft(ConduitBendingTool.ID, plan.type.label, ToolInputs.encode(inputs), results, summary),
+                ItemDraft(
+                    ConduitBendingTool.ID, plan.type.label, ToolInputs.encode(inputs), results, summary,
+                    conduit = Raceway(conduitType = inputs.conduit, tradeSize = inputs.tradeSize),
+                ),
             )
         }),
         actions = {

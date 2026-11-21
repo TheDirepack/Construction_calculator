@@ -5,7 +5,7 @@ import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ValueKind
 
-/** Values the Panels tool offers to other tools' input fields (`ToolHost.publish`). */
+/** Values a project's electrical design offers other tools' input fields (Panels publishes them; the value picker lists them). */
 object PublishedValues {
 
     /** A panel's phase currents and connected load. Keys are stable per panel. */
@@ -33,6 +33,19 @@ object PublishedValues {
                 add(ResultValue.of("circuit_${id}_length", "$label length", q, lengthText(q)))
             }
             d.amps?.let { add(ResultValue.number("circuit_${id}_amps", "$label load current", ValueKind.CURRENT, it, Wire.amps(it))) }
+            d.loadVa?.let { add(ResultValue.number("circuit_${id}_va", "$label load", ValueKind.APPARENT_POWER, it, Wire.va(it))) }
         }
     }
+
+    /** A conduit run's length, if set. */
+    fun run(d: RunDesign, lengthText: (Quantity) -> String): List<ResultValue> {
+        val q = d.run.raceway?.length?.toQuantity() ?: return emptyList()
+        return listOf(ResultValue.of("run_${d.run.id}_length", "${d.run.name} length", q, lengthText(q)))
+    }
+
+    /** Everything [design] offers: panel loads, circuit wire, length, current and load, run lengths. */
+    fun all(design: ProjectDesign, lengthText: (Quantity) -> String): List<ResultValue> =
+        design.panels.flatMap(::panel) +
+            design.circuits.values.flatMap { circuit(it, lengthText) } +
+            design.runs.values.flatMap { run(it, lengthText) }
 }

@@ -1,5 +1,12 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.model.ToolTarget
+import com.thedirepack.constructioncalc.core.model.Project
+import com.thedirepack.constructioncalc.core.model.design.PanelLayout
+import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.getValue
+
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
@@ -36,8 +43,11 @@ fun ToolScaffold(
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val editing = host.openedItem
-    val back = onBack ?: if (editing != null) host::back else null
-    val subtitleText = subtitle ?: editing?.let { "Editing saved item: ${it.title}" }
+    // Opened for a circuit or run (from Panels or a project): say which, and offer the way back.
+    val linked = host.target?.takeIf { it !is ToolTarget.OfProject }
+    val projects by LocalAppServices.current.projects.projects.collectAsStateWithLifecycle()
+    val back = onBack ?: if (editing != null || linked != null) host::back else null
+    val subtitleText = subtitle ?: editing?.let { "Editing saved item: ${it.title}" } ?: linked?.let { targetLabel(it, projects) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -82,4 +92,18 @@ fun ToolScaffold(
         floatingActionButton = floatingActionButton,
         content = content,
     )
+}
+
+/** "For LP-1 #5 Kitchen" or "For run Home run", from the project's current state. */
+fun targetLabel(target: ToolTarget, projects: List<Project>): String? {
+    val project = projects.firstOrNull { it.id == target.projectId } ?: return null
+    return when (target) {
+        is ToolTarget.OfCircuit -> project.panels.firstNotNullOfOrNull { p ->
+            p.circuits.firstOrNull { it.id == target.circuitId }?.let { c ->
+                "For ${p.name} ${PanelLayout.label(c)}" + c.description.takeIf { it.isNotBlank() }?.let { " · ${it.trim()}" }.orEmpty()
+            }
+        }
+        is ToolTarget.OfRun -> project.run(target.runId)?.let { "For run ${it.name} · ${project.name}" }
+        is ToolTarget.OfProject -> project.name
+    }
 }

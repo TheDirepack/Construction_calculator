@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import com.thedirepack.constructioncalc.core.model.Raceway
+import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.data.activeTarget
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -52,6 +54,8 @@ fun SaveToProjectSheet(
     editing: ProjectItem?,
     onSaved: (String) -> Unit,
     onDismiss: () -> Unit,
+    /** The project, circuit or run the tool was opened for: saving defaults to it. */
+    target: ToolTarget? = null,
 ) {
     val services = LocalAppServices.current
     val settings = rememberAppSettings()
@@ -67,6 +71,7 @@ fun SaveToProjectSheet(
     var projectId by remember {
         mutableStateOf(
             editingProject?.id
+                ?: target?.projectId?.takeIf { id -> projects.any { it.id == id } }
                 ?: settings.activeProjectId?.takeIf { id -> projects.any { it.id == id } }
                 ?: projects.firstOrNull()?.id
                 ?: NEW,
@@ -76,12 +81,16 @@ fun SaveToProjectSheet(
     val project = projects.firstOrNull { it.id == projectId }
     var runId by remember(projectId) {
         mutableStateOf(
-            settings.activeTarget(projects)?.takeIf { it.project.id == project?.id }?.run?.id
+            (target as? ToolTarget.OfRun)?.runId?.takeIf { id -> project?.run(id) != null }
+                ?: settings.activeTarget(projects)?.takeIf { it.project.id == project?.id }?.run?.id
                 ?: project?.runs?.lastOrNull()?.id
                 ?: NEW,
         )
     }
     var newRunName by remember { mutableStateOf("") }
+    // A calculation done for a conduit (a bend) can set the run's conduit, by default when it has none.
+    val conduit = draft.conduit
+    var useConduit by remember(projectId, runId) { mutableStateOf(conduit != null && project?.run(runId)?.raceway == null) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
@@ -156,6 +165,18 @@ fun SaveToProjectSheet(
                 }
             }
 
+            if (conduit != null && !updateExisting) {
+                val label = listOfNotNull(conduit.tradeSize?.display, conduit.conduitType.displayName).joinToString(" ")
+                ToggleRow(
+                    title = "Use $label as this run's conduit",
+                    checked = useConduit,
+                    onCheckedChange = { useConduit = it },
+                    detail = project?.run(runId)?.raceway?.let { r ->
+                        "It now has ${listOfNotNull(r.tradeSize?.display, r.conduitType.displayName).joinToString(" ")}. Length, temperature and other settings are kept."
+                    } ?: "Then assign circuits to the run in Panels to size their wire.",
+                )
+            }
+
             OutlinedTextField(
                 value = note,
                 onValueChange = { note = it },
@@ -198,6 +219,13 @@ fun SaveToProjectSheet(
                             summary = draft.summary,
                         )
                         services.projects.addItem(targetProject.id, targetRun.id, item)
+                        if (useConduit && conduit != null) {
+                            services.projects.edit(targetProject.id) { p, t ->
+                                p.updateRun(targetRun.id, t) { r ->
+                                    r.copy(raceway = (r.raceway ?: Raceway()).copy(conduitType = conduit.conduitType, tradeSize = conduit.tradeSize))
+                                }
+                            }
+                        }
                         services.settings.setActiveTarget(targetProject.id, targetRun.id)
                         onSaved("Saved to ${targetProject.name} › ${targetRun.name}")
                     },

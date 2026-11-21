@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.model.ToolTarget
+import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -165,12 +167,23 @@ private fun RunCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                if (!ctx.readOnly) {
-                    Box {
-                        IconButton(onClick = { menu = true }, modifier = Modifier.semantics { contentDescription = "Options for ${run.name}" }) {
-                            Icon(painterResource(R.drawable.ic_more_vert), contentDescription = null)
+                Box {
+                    IconButton(onClick = { menu = true }, modifier = Modifier.semantics { contentDescription = "Options for ${run.name}" }) {
+                        Icon(painterResource(R.drawable.ic_more_vert), contentDescription = null)
+                    }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        if (run.raceway != null) {
+                            val target = ToolTarget.OfRun(ctx.project.id, run.id)
+                            DropdownMenuItem(text = { Text("Check fill in Conduit Fill") }, onClick = {
+                                menu = false
+                                ctx.host.openTool(ToolIds.CONDUIT_FILL, target = target)
+                            })
+                            DropdownMenuItem(text = { Text("Bend this conduit") }, onClick = {
+                                menu = false
+                                ctx.host.openTool(ToolIds.CONDUIT_BENDING, target = target)
+                            })
                         }
-                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        if (!ctx.readOnly) {
                             DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename() })
                             DropdownMenuItem(text = { Text("Delete run") }, onClick = { menu = false; onDelete() })
                         }
@@ -206,6 +219,7 @@ private fun RunCard(
                         )
                     }
                     rd.smallestFitting?.let { Text("Smallest that fits: ${it.displayName}", style = MaterialTheme.typography.bodySmall) }
+                    rd.bendDegrees?.let { Text("Saved bends: ${Wire.number(it, 1)}° of 360° between pull points", style = MaterialTheme.typography.bodySmall) }
                     rd.notes.forEach { note ->
                         if (note.isWarning) {
                             WarningText(note.text)

@@ -1,5 +1,8 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import com.thedirepack.constructioncalc.core.model.ToolTarget
+import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
+import androidx.compose.material3.OutlinedButton
 import com.thedirepack.constructioncalc.core.ui.components.ToggleRow
 
 import androidx.compose.foundation.layout.Arrangement
@@ -339,6 +342,12 @@ internal fun CircuitSheet(
                 FormSection("Design result") { DesignResult(design) }
             }
 
+            if (!isNew && draft.kind == CircuitKind.LOAD) {
+                OutlinedButton(onClick = {
+                    onDismiss()
+                    ctx.host.openTool(ToolIds.VOLTAGE_DROP, target = ToolTarget.OfCircuit(ctx.project.id, draft.id))
+                }) { Text("Voltage drop for this circuit…") }
+            }
             Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!isNew && !ctx.readOnly) {
                     TextButton(onClick = { confirmDelete = true }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
