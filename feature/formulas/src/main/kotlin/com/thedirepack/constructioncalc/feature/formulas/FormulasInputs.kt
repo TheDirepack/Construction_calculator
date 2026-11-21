@@ -53,7 +53,14 @@ data class FormulaInputs(
         text.isNotEmpty() && Decimals.parse(text) == null
     }.map { it.name }
 
-    fun withValue(id: String, text: String) = copy(values = values + (id to text))
+    /**
+     * Sets a typed value and pins the unit it was typed in, so switching Imperial/Metric later
+     * never changes what a saved value means (an unpinned value follows the system's default unit).
+     */
+    fun withValue(id: String, text: String, system: UnitSystem = UnitSystem.IMPERIAL): FormulaInputs {
+        val pinned = if (id in units || text.isBlank()) units else units + (id to unitIndex(id, system))
+        return copy(values = values + (id to text), units = pinned)
+    }
 
     /** Changes a variable's unit, converting what was typed so the quantity stays the same. */
     fun withUnit(id: String, index: Int, system: UnitSystem = UnitSystem.IMPERIAL): FormulaInputs {

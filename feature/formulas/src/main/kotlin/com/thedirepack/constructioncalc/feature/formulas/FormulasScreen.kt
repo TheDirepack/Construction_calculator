@@ -96,7 +96,7 @@ fun FormulasScreen(host: ToolHost) {
                         text = inputs.values[v.id].orEmpty(),
                         unitIndex = inputs.unitIndex(v.id, settings.unitSystem),
                         computed = output.computedText[v.id]?.takeIf { inputs.values[v.id].isNullOrBlank() },
-                        onText = { t -> vm.update { it.withValue(v.id, t) } },
+                        onText = { t -> vm.update { it.withValue(v.id, t, settings.unitSystem) } },
                         onUnit = { u -> vm.update { it.withUnit(v.id, u, settings.unitSystem) } },
                     )
                 }

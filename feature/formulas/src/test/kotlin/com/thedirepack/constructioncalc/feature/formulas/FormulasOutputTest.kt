@@ -83,11 +83,21 @@ class FormulasOutputTest {
         assertEquals("m", si.results.first { it.key.endsWith(".L") }.text.substringAfterLast(' '))
         // published exact value (inches) is identical
         assertEquals(imperial.results.first { it.key.endsWith(".L") }.exact, si.results.first { it.key.endsWith(".L") }.exact)
-        // typed meters become feet: 30.48 m = 100 ft
-        val typed = inputs("voltage-drop-single-phase", "L" to "30.48")
+        // Meters typed in metric become feet (30.48 m = 100 ft), and stay meters after switching.
+        val typed = FormulaInputs.start(FormulaCatalog.find("voltage-drop-single-phase")!!).withValue("L", "30.48", UnitSystem.METRIC)
         assertEquals(100.0, typed.given(UnitSystem.METRIC)["L"]!!, 1e-9)
-        assertEquals(30.48, typed.given(UnitSystem.IMPERIAL)["L"]!!, 1e-9)
-        assertEquals(1, typed.unitIndex("L", UnitSystem.METRIC))
-        assertEquals(0, typed.unitIndex("L", UnitSystem.IMPERIAL))
+        assertEquals(100.0, typed.given(UnitSystem.IMPERIAL)["L"]!!, 1e-9)
+        assertEquals(1, typed.unitIndex("L", UnitSystem.IMPERIAL))
+    }
+
+    @Test
+    fun typedValueKeepsItsUnitWhenTheSystemChanges() {
+        // 30 typed as meters in metric must still mean 30 m after switching to imperial.
+        val start = FormulaInputs.start(FormulaCatalog.find("voltage-drop-single-phase")!!)
+        val typed = start.withValue("L", "30", com.thedirepack.constructioncalc.core.measure.UnitSystem.METRIC)
+        val metricFt = typed.given(com.thedirepack.constructioncalc.core.measure.UnitSystem.METRIC)["L"]!!
+        val imperialFt = typed.given(com.thedirepack.constructioncalc.core.measure.UnitSystem.IMPERIAL)["L"]!!
+        assertEquals(30 / 0.3048, metricFt, 1e-9)
+        assertEquals(metricFt, imperialFt, 1e-9)
     }
 }
