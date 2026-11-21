@@ -167,6 +167,7 @@ The main thing this app adds over single-purpose calculators:
 - Values flow between tools: a length worked out in Foot-Inch can feed Voltage Drop and Pull Planner without retyping it.
 - Each tool's screen gets an "Add to run" action, and a run shows every step and its result.
 - Sharing: export a run or project as a readable summary (text or PDF) and as a file that someone else's copy of the app can import. Later: a share link.
+- Drawings can open project PDFs, calibrate scale zones, save measured lines, and add ink, vector marks, text, and imported SVG symbols. Export an annotated PDF or editable drawing JSON, or ship the originals with the project ZIP. [PDF plan measuring proposal](plans/pdf-plan-measuring.md)
 - Storage: one plain JSON file per project (`core:data` `FileProjectStore`, unreadable files set aside in `projects/damaged/`), the same format that is shared.
 
 ## Architecture notes

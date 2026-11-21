@@ -53,8 +53,11 @@ fun ValuePickerSheet(
     val projects by services.projects.projects.collectAsStateWithLifecycle()
     val project = settings.activeTarget(projects)?.project
 
-    val recentRows = remember(recents, kinds) {
-        recents.filter { it.value.kind in kinds }.map {
+    val drawingIds = remember(project?.drawings) {
+        project?.drawings.orEmpty().flatMap { drawing -> drawing.measurements.map { it.id } }.toHashSet()
+    }
+    val recentRows = remember(recents, kinds, drawingIds) {
+        recents.filter { it.value.kind in kinds && it.value.key !in drawingIds }.map {
             PickRow(it.value, listOf(it.toolTitle, it.context).filter(String::isNotBlank).joinToString(" · "))
         }
     }
@@ -69,6 +72,19 @@ fun ValuePickerSheet(
             PickRow(it.value, "${it.run.name} › ${it.item.title} · ${tools.titleOf(it.item.toolId)}")
         }
     }
+    val drawingRows = remember(project?.drawings, kinds, settings) {
+        if (ValueKind.LENGTH !in kinds) emptyList()
+        else project?.drawings.orEmpty().flatMap { drawing ->
+            drawing.measurements.mapNotNull { measurement ->
+                drawing.length(measurement)?.let { length ->
+                    PickRow(
+                        ResultValue.of(measurement.id, "Plan distance", length, "≈ " + settings.format(length)),
+                        "${drawing.name} · Page ${measurement.page + 1}",
+                    )
+                }
+            }
+        }
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Text(
@@ -77,7 +93,7 @@ fun ValuePickerSheet(
             modifier = Modifier.padding(horizontal = 24.dp),
         )
         LazyColumn(Modifier.navigationBarsPadding().padding(bottom = 16.dp)) {
-            if (recentRows.isEmpty() && projectRows.isEmpty() && designRows.isEmpty()) {
+            if (recentRows.isEmpty() && projectRows.isEmpty() && designRows.isEmpty() && drawingRows.isEmpty()) {
                 item {
                     Text(
                         "No matching values yet. Results from other tools appear here after you calculate them.",
@@ -93,6 +109,10 @@ fun ValuePickerSheet(
             if (projectRows.isNotEmpty()) {
                 item { SectionLabel("In ${project?.name}") }
                 items(projectRows) { PickItem(it) { onPick(it.value) } }
+            }
+            if (drawingRows.isNotEmpty()) {
+                item { SectionLabel("From drawings in ${project?.name}") }
+                items(drawingRows) { PickItem(it) { onPick(it.value) } }
             }
             if (designRows.isNotEmpty()) {
                 item { SectionLabel("From the design in ${project?.name}") }

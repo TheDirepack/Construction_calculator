@@ -5,7 +5,7 @@ import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import java.io.File
 
-/** Where projects are kept. Each project is one JSON file in the same format that is shared. */
+/** Stores project metadata. Original drawing PDFs are kept separately by [PlanFiles]. */
 interface ProjectStore {
     fun loadAll(): List<Project>
     fun save(project: Project)

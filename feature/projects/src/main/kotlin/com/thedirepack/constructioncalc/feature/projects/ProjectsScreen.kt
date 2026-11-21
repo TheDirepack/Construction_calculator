@@ -1,13 +1,9 @@
 package com.thedirepack.constructioncalc.feature.projects
 
 import com.thedirepack.constructioncalc.core.model.ToolTarget
-import android.content.ActivityNotFoundException
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.ui.platform.LocalContext
 import com.thedirepack.constructioncalc.core.data.AppServices
-import com.thedirepack.constructioncalc.core.data.ProjectSharing
-import com.thedirepack.constructioncalc.core.ui.tool.LocalTools
-import com.thedirepack.constructioncalc.core.ui.tool.titleOf
+import com.thedirepack.constructioncalc.core.ui.components.rememberProjectSharer
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -78,16 +74,8 @@ private fun ProjectListScreen(projects: List<Project>, host: ToolHost, onOpen: (
     var menu by remember { mutableStateOf(false) }
     val openFile = host::openFile
     val exporter = rememberBackupExporter(host::showMessage)
-    val context = LocalContext.current
-    val tools = LocalTools.current
     var showArchive by rememberSaveable { mutableStateOf(false) }
-    val share: (Project) -> Unit = { project ->
-        try {
-            context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value))
-        } catch (_: ActivityNotFoundException) {
-            host.showMessage("No app available to share with")
-        }
-    }
+    val share = rememberProjectSharer(host::showMessage)
     val setArchived: (Project, Boolean) -> Unit = { project, archive ->
         archiveProject(services, project, archive)
         host.showMessage(if (archive) "Archived ${project.name}. It's read-only until you unarchive it." else "Unarchived ${project.name}")

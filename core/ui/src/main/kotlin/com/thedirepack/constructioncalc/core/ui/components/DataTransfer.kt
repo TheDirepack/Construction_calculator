@@ -60,6 +60,26 @@ fun rememberAppFileOpener(onResult: (Result<AppFile>) -> Unit): () -> Unit {
     return { launcher.launch(ProjectSharing.OPEN_MIME_TYPES) }
 }
 
+@Composable
+fun rememberProjectSharer(onMessage: (String) -> Unit): (Project) -> Unit {
+    val context = LocalContext.current
+    val services = LocalAppServices.current
+    val tools = LocalTools.current
+    val scope = rememberCoroutineScope()
+    return { project ->
+        scope.launch {
+            runCatching {
+                val intent = withContext(Dispatchers.IO) {
+                    ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value)
+                }
+                context.startActivity(intent)
+            }.onFailure {
+                onMessage(if (it is ActivityNotFoundException) "No app available to share with" else it.message ?: "Couldn't share the project.")
+            }
+        }
+    }
+}
+
 /** Exports backups: share by email/messages/Drive, or save to a file the user picks. */
 class BackupExporter internal constructor(
     val share: (sections: BackupSections, label: String) -> Unit,

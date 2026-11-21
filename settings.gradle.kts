@@ -33,6 +33,7 @@ include(":core:ui")      // Android: theme, tool API, shared inputs (MeasureFiel
 
 // Tools: one module each
 include(":feature:projects")
+include(":feature:drawings")
 include(":feature:footinch")
 include(":feature:panels")
 include(":feature:conduitbending")

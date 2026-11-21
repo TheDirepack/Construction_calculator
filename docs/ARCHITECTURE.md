@@ -68,8 +68,10 @@ project, and open each other by id (`ToolIds`) with a `ToolTarget`, never by imp
   create them. A `ProjectItem` stores the tool's own `inputs` (JSON, shaped however the tool
   likes), `results` (`ResultValue`s anyone can read) and a human `summary`. Opening an item from
   Projects calls `tool.Content(host)` with `host.openedItem` set, and the tool restores its inputs.
-- **One file.** A project is one pretty-printed JSON file (`Name.project.json`), the same format on disk and
-  when shared. Share = attachment + readable text body. Import = file picker or "open with".
+- **Project files.** Project metadata is stored as pretty-printed JSON. Original drawing PDFs live in
+  app storage under their content hashes. Projects with drawings share a ZIP containing the project
+  JSON and the original PDFs. Project JSON is also available separately. Import uses the file
+  picker or "open with".
 - **One active project, everywhere.** `ToolScaffold` puts the `ProjectSwitcher` under every tool's
   title: "No project" (the default) or the active project and run, with a dropdown to switch,
   pick the run saves go to, export any project, create one, or manage projects. The active

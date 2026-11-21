@@ -23,8 +23,7 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Open project and backup files (plain .json) from email, messages, Files, Drive…
-                 The app checks the file's "format" field and rejects other JSON politely. -->
+            <!-- Open project or backup JSON and complete project ZIP files. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -32,12 +31,14 @@
                 <data android:scheme="content" />
                 <data android:scheme="file" />
                 <data android:mimeType="application/json" />
+                <data android:mimeType="application/zip" />
             </intent-filter>
             <!-- "Share to Construction Calc" from another app. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/json" />
+                <data android:mimeType="application/zip" />
             </intent-filter>
         </activity>
     </application>

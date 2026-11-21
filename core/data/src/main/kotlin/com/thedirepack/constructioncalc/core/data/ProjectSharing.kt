@@ -5,6 +5,7 @@ import com.thedirepack.constructioncalc.core.measure.MeasureFormat
 import com.thedirepack.constructioncalc.core.measure.LengthFormat
 
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -18,6 +19,8 @@ import com.thedirepack.constructioncalc.core.model.ProjectFormatException
 import com.thedirepack.constructioncalc.core.model.ProjectText
 import java.io.File
 import java.io.IOException
+import java.io.PushbackInputStream
+import java.util.UUID
 
 /**
  * Moving projects in and out of the app with no permissions:
@@ -27,7 +30,15 @@ import java.io.IOException
 object ProjectSharing {
 
     /** MIME types accepted when opening a file; the content is validated by [ProjectCodec]. */
-    val OPEN_MIME_TYPES = arrayOf(ProjectCodec.MIME_TYPE, "application/octet-stream", "text/plain", "*/*")
+    val OPEN_MIME_TYPES = arrayOf(ProjectCodec.MIME_TYPE, ZIP_MIME_TYPE, "application/octet-stream", "text/plain", "*/*")
+
+    const val ZIP_MIME_TYPE = "application/zip"
+
+    fun mimeType(project: Project): String = if (project.drawings.isEmpty()) ProjectCodec.MIME_TYPE else ZIP_MIME_TYPE
+
+    fun fileName(project: Project): String =
+        if (project.drawings.isEmpty()) ProjectCodec.fileName(project)
+        else ProjectCodec.fileName(project).removeSuffix(".json") + ".zip"
 
     /** [header]: company lines for the text body (`AppSettings.company.headerLines()`). */
     fun shareIntent(
@@ -39,16 +50,16 @@ object ProjectSharing {
     ): Intent {
         // The message text follows the user's units; the attached file always holds base units.
         val format = LengthFormat(settings.unitSystem, settings.precision, settings.lengthDisplay.resolve(null), settings.metricDisplay, settings.metricResolution, settings.feetInchStyle)
-        return fileShareIntent(
+        return shareFileIntent(
             context,
-            fileName = ProjectCodec.fileName(project),
-            content = ProjectCodec.encode(project, exportedAt = now),
+            fileName = fileName(project),
+            mimeType = mimeType(project),
             subject = project.name,
             body = ProjectText.render(
                 project, toolTitle, header = settings.company.headerLines(),
                 length = { MeasureFormat.primary(it, format) }, units = settings.unitSystem,
             ),
-        )
+        ) { writeProject(context, it, project, now) }
     }
 
     /** Shares a backup file (everything, or a subset such as all projects). */
@@ -77,12 +88,17 @@ object ProjectSharing {
         body: String,
         write: (java.io.OutputStream) -> Unit,
     ): Intent {
-        val dir = File(context.cacheDir, "shared").apply {
-            mkdirs()
-            listFiles()?.forEach { it.delete() } // only keep the file being shared
-        }
+        val shared = File(context.cacheDir, "shared")
+        val expired = System.currentTimeMillis() - 24 * 60 * 60 * 1000
+        shared.listFiles()?.filter { it.lastModified() < expired }?.forEach { it.deleteRecursively() }
+        val dir = File(shared, UUID.randomUUID().toString()).apply { mkdirs() }
         val file = File(dir, fileName)
-        file.outputStream().use(write)
+        try {
+            file.outputStream().use(write)
+        } catch (error: Exception) {
+            dir.deleteRecursively()
+            throw error
+        }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
         val send = Intent(Intent.ACTION_SEND).apply {
             type = mimeType
@@ -92,7 +108,14 @@ object ProjectSharing {
             clipData = ClipData.newRawUri(subject, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        return Intent.createChooser(send, "Share $subject")
+        return Intent.createChooser(send, "Share $subject").apply {
+            val ownTargets = context.packageManager.queryIntentActivities(send, 0)
+                .mapNotNull { it.activityInfo }
+                .filter { it.packageName == context.packageName }
+                .map { ComponentName(it.packageName, it.name) }
+                .toTypedArray()
+            putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, ownTargets)
+        }
     }
 
     /** Writes any text (a project or backup file) to a document picked with ACTION_CREATE_DOCUMENT. */
@@ -115,37 +138,41 @@ object ProjectSharing {
     @Throws(IOException::class)
     fun write(context: Context, uri: Uri, project: Project, now: Long) {
         val out = context.contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Can't write to that file")
-        out.use { it.write(ProjectCodec.encode(project, exportedAt = now).toByteArray()) }
+        out.use { writeProject(context, it, project, now) }
+    }
+
+    private fun writeProject(context: Context, out: java.io.OutputStream, project: Project, now: Long) {
+        if (project.drawings.isEmpty()) out.write(ProjectCodec.encode(project, exportedAt = now).encodeToByteArray())
+        else ProjectArchive.write(out, project, now, PlanFiles(context)::file)
     }
 
     /** Reads a project or backup file from a picked or received file. */
     @Throws(IOException::class, ProjectFormatException::class)
-    fun readAppFile(context: Context, uri: Uri): AppFile = AppFileCodec.decode(readText(context, uri))
+    fun readAppFile(context: Context, uri: Uri): AppFile {
+        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Can't open that file")
+        return PushbackInputStream(input, 4).use { stream ->
+            val signature = ByteArray(4)
+            var count = 0
+            while (count < signature.size) {
+                val chunk = stream.read(signature, count, signature.size - count)
+                if (chunk < 0) break
+                count += chunk
+            }
+            stream.unread(signature, 0, count)
+            if (signature.contentEquals(byteArrayOf(0x50, 0x4b, 3, 4))) {
+                val files = PlanFiles(context)
+                AppFile.SingleProject(ProjectArchive.read(stream) { pdf, hash ->
+                    files.store(pdf, expectedHash = hash, validatePdf = true)
+                })
+            } else {
+                AppFileCodec.decode(stream.readBounded(PlanFiles.MAX_JSON_BYTES).decodeToString())
+            }
+        }
+    }
 
     /** Reads a project from a picked or received file. */
     @Throws(IOException::class, ProjectFormatException::class)
-    fun read(context: Context, uri: Uri): Project = ProjectCodec.decode(readText(context, uri))
-
-    private fun readText(context: Context, uri: Uri): String {
-        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Can't open that file")
-        val text = input.use { stream ->
-            val bytes = stream.readNBytesCompat(MAX_FILE_BYTES + 1)
-            if (bytes.size > MAX_FILE_BYTES) throw ProjectFormatException("That file is too large to be a project.")
-            bytes.decodeToString()
-        }
-        return text
-    }
-
-    private const val MAX_FILE_BYTES = 20 * 1024 * 1024
-
-    private fun java.io.InputStream.readNBytesCompat(limit: Int): ByteArray {
-        val buffer = java.io.ByteArrayOutputStream()
-        val chunk = ByteArray(64 * 1024)
-        while (buffer.size() < limit) {
-            val n = read(chunk, 0, minOf(chunk.size, limit - buffer.size()))
-            if (n < 0) break
-            buffer.write(chunk, 0, n)
-        }
-        return buffer.toByteArray()
-    }
+    fun read(context: Context, uri: Uri): Project =
+        (readAppFile(context, uri) as? AppFile.SingleProject)?.project
+            ?: throw ProjectFormatException("This isn't a Construction Calc project file.")
 }

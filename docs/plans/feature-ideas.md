@@ -137,10 +137,12 @@ Google Play services only when it's on.
 
 **Goal:** One drawing/document pipeline that supports import, calibrated takeoff, route tracing, annotation, visual diagrams and export. **Keep it separate from the electrical calculation engines.**
 
+The [PDF plan measuring proposal](pdf-plan-measuring.md) describes the first field workflow, how it connects to existing tools, and the order to build it.
+
 - [ ] **B1 · P1 / M — Robust PDF viewer and file handling.** Multipage PDFs, thumbnails, zoom/pan, page rotation, page selection, page labels, large file handling, Android file picker/open-with, offline access; render embedded imagery without corrupting originals. Prefer Jetpack PDF where runtime/device compatibility is verified, with an offline fallback for unsupported devices.
-- [ ] **B2 · P1 / L — Page and region scale calibration.** Preset plan scales and two-point known-distance calibration; support differently scaled pages, manual override, and explicit *unscaled/not verified* state. Check for skew, nonuniform scans, and inconsistent dimensions before treating measurements as design data.
+- [ ] **B2 · P1 / L — Scale zones.** Draw one or more zones on a sheet. Give each zone a preset scale or calibrate it with known distances entered on the shared measurement keypad. Use multiple references to check the fit and correct stretch or skew when the geometry supports it. [Zone calibration implementation plan](pdf-zone-calibration.md)
 - [ ] **B3 · P1 / L — Drawing measurement and quantity tools.** Length, continuous polyline, perimeter, angle, area, counts, elevations entered separately, and named takeoff categories. Measurements use `:core:measure` display/precision and carry drawing/page/revision provenance.
-- [ ] **B4 · P1 / L — Tap-to-route conduit takeoff.** Trace route on a plan; add vertical drops/rises, pull points, bends and equipment connections; create/update an actual `RunPath` rather than a disconnected drawing-only line. Show measured vs entered lengths and unresolved elevations.
+- [ ] **B4 · P1 / L — Tap-to-route conduit takeoff.** Trace a route on a plan, add vertical drops or rises, pull points, bends and equipment connections, and create or update a `RunPath`. Show measured and entered lengths and unresolved elevations. Generate a schematic or plan overlay from a run and preview a duplicate placement before creating a new run. [Route workflows](../research/pdf-editor-workflows.md)
 - [ ] **B5 · P1 / M — Markups and linked annotations.** Text, arrows, clouds, dimensions, highlights, basic shapes, equipment markers, layer visibility, undo/redo, object links; support project comments without modifying original PDF bytes.
 - [ ] **B6 · P1 / M — Reusable PDF report generator.** Single report engine for calculation worksheets, panels, run summaries, pulling plans, BOMs, fabrication/cut sheets, inspection/test forms and signed closeout records; common template styles and company profile. Reuse the existing project PDF export where possible; do not add a second PDF generator without a demonstrated gap.
 - [ ] **B7 · P2 / L — Auto-generated single-line diagram.** Layout vector SLD from modeled service/panel/feeder/equipment relations; represent actual hierarchy, wire/feeder sizes, breaker/main ratings, transformers, labels and source links; support manual positioning/notes. Flag missing topology rather than inventing connections.
@@ -154,6 +156,20 @@ Google Play services only when it's on.
 - [ ] **B15 · P1 / M — Searchable PDF scans.** Convert straightened camera/scanner pages into a multipage PDF, optionally embed an invisible Unicode text layer aligned to corrected page coordinates, and retain OCR confidence/provenance outside the PDF. Verify search/copy/highlight and text alignment across viewers and rotated pages.
 - [ ] **B16 · P1 / M — PDF processing safety and compatibility.** Capability-gated rendering/editing by SDK extension/API/runtime; isolated parsing when supported; bound file size/page count/image resolution and memory use; safe timeouts/cancellation; representative tests for malformed, encrypted, very large and image-only PDFs. No assumption that all Android devices have the same Mainline PDF extensions.
 
+### Plan and project exports
+
+A project can contain multiple PDFs. Each drawing revision has a stable ID, and its measurements and markups reference pages within that revision. Keep the original PDF bytes in project storage. Save calibrations, measurements, markups and project links as editable data.
+
+| Export | Contents and import behavior |
+|---|---|
+| **Annotated PDF** | Export one drawing with visible measurements and markups for viewing or printing. Preserve the source PDF in the project. |
+| **Standalone JSON** | Export editable drawing data in `drawing.json`, including the drawing revision, page references, calibration, measurement geometry, markups and linked object IDs. Standalone project JSON is also available and includes references to the drawings. The app can relink separately supplied PDFs after checking that they match the referenced revisions. |
+| **Complete project** | Export a project containing one or more PDFs as a ZIP with `project.json` and every original PDF under `drawings/`. The JSON contains editable drawing data and maps revision IDs to archive paths. Generate paths from IDs so same-named PDFs can coexist. Import restores the project, its drawings and links together. Projects without PDFs can continue to use the existing JSON export. |
+
+Version the JSON formats and keep measurements in page coordinates with their calibration and original precision. Check source identity before applying standalone drawing data to a PDF. On ZIP import, validate schema, paths, attachment integrity and size limits before saving the project. Keep older project JSON importable.
+
+Verify that a project with two same-named PDFs and different page calibrations survives export and import with its run links intact. Verify that the annotated PDF shows measurements in a regular PDF viewer. Confirm that standalone drawing JSON restores editable measurements when paired with its source PDF.
+
 **Recommended PDF implementation stack (selection, not a commitment to ship every library):**
 
 | Concern | Recommended default | Conditional alternative / limitation |
@@ -165,7 +181,7 @@ Google Play services only when it's on.
 | PDF generation/stamping | Reuse existing exporter, Android `PdfDocument`, vector/graphics exporter or PdfBox first | `OpenPDF` is an *alternative to evaluate*, not the default: its current Java requirements and Android compatibility must be tested. `QPDF` JNI is deferred unless concrete repair/structural needs justify it. |
 | OCR on scanned PDF pages | Shared System M on-device OCR adapter after bitmap rendering | `pdf-ocr-play-services` is a possible GMS-dependent integration, **not** a core requirement; do not assume Jetpack provides offline OCR on every device. |
 
-**Build sequence:** Viewer/file safety → text extraction → camera/import OCR handoff → calibration/measurements → geometry and annotations → project route handoff → reports/searchable scans → structural assembly → SLD and revision handling. Use platform PDF libraries and tested tools rather than inventing a PDF parser. Calibrated plan measurements are estimates subject to drawing accuracy, perspective, lens distortion, resizing and verified scale.
+**Build sequence.** Start with safe PDF import, viewing, and calibrated measurements. Add takeoff tools, markups, and portable exports, then connect reviewed traces to project runs. Text extraction, searchable scans, structural assembly, and visual revision comparison can follow. Calibrated plan measurements are estimates subject to drawing accuracy, perspective, lens distortion, resizing and verified scale.
 
 ## C. Measurement & Layout — extend the existing calculator
 

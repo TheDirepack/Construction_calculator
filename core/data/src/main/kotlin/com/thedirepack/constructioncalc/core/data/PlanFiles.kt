@@ -1,0 +1,131 @@
+package com.thedirepack.constructioncalc.core.data
+
+import android.content.Context
+import android.graphics.pdf.PdfRenderer
+import android.net.Uri
+import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
+import com.thedirepack.constructioncalc.core.model.PlanDrawing
+import com.thedirepack.constructioncalc.core.model.ProjectCodec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import java.io.File
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.security.MessageDigest
+
+class PlanFiles(private val context: Context) {
+    private val directory = File(context.filesDir, "plan-pdfs")
+
+    fun file(sha256: String): File {
+        require(sha256.length == 64 && sha256.all { it in '0'..'9' || it in 'a'..'f' })
+        return File(directory, "$sha256.pdf")
+    }
+
+    suspend fun import(uri: Uri): PlanDrawing = withContext(Dispatchers.IO) {
+        val name = displayName(context, uri, "Drawing.pdf")
+        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Couldn't open the PDF.")
+        val sha256 = input.use { store(it, validatePdf = true) }
+        PlanDrawing(name = name, sha256 = sha256)
+    }
+
+    suspend fun importDrawingJson(uri: Uri): PlanDrawing = withContext(Dispatchers.IO) {
+        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Couldn't open drawing JSON.")
+        val drawing = input.use { DrawingJson.decode(it.readBounded(MAX_JSON_BYTES).decodeToString()) }
+        if (!file(drawing.sha256).isFile) {
+            throw IOException("Import the matching original PDF before opening this drawing JSON.")
+        }
+        drawing
+    }
+
+    internal fun store(input: InputStream, expectedHash: String? = null, validatePdf: Boolean = false): String {
+        if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
+            throw IOException("Couldn't create drawing storage.")
+        }
+        val temp = File.createTempFile("drawing-", ".tmp", directory)
+        try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            temp.outputStream().use { output ->
+                input.copyBounded(output, MAX_PDF_BYTES, digest)
+            }
+            val sha = digest.digest().joinToString("") { "%02x".format(it) }
+            if (expectedHash != null && sha != expectedHash) throw IOException("A PDF does not match its project checksum.")
+            if (validatePdf) validate(temp)
+            val destination = file(sha)
+            if (!destination.isFile && !temp.renameTo(destination) && !destination.isFile) {
+                throw IOException("Couldn't save the drawing.")
+            }
+            return sha
+        } finally {
+            temp.delete()
+        }
+    }
+
+    private fun validate(file: File) {
+        val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        val renderer = try {
+            PdfRenderer(descriptor)
+        } catch (error: Exception) {
+            descriptor.close()
+            throw IOException("Couldn't read this PDF. Check whether it is damaged or password protected.", error)
+        }
+        renderer.use {
+            if (it.pageCount !in 1..MAX_PAGES) throw IOException("This PDF must have between 1 and $MAX_PAGES pages.")
+        }
+    }
+
+    companion object {
+        internal const val MAX_JSON_BYTES = 20 * 1024 * 1024
+        internal const val MAX_PDF_BYTES = 150L * 1024 * 1024
+        internal const val MAX_PAGES = 1_000
+    }
+}
+
+internal object DrawingJson {
+    private const val FORMAT = "construction-calc/drawing"
+
+    fun encode(drawing: PlanDrawing): String =
+        ProjectCodec.json.encodeToString(buildJsonObject {
+            put("format", JsonPrimitive(FORMAT))
+            put("version", JsonPrimitive(1))
+            put("drawing", ProjectCodec.json.encodeToJsonElement(PlanDrawing.serializer(), drawing))
+        })
+
+    fun decode(content: String): PlanDrawing {
+        val parts = Json.parseToJsonElement(content).jsonObject
+        if (parts["format"] != JsonPrimitive(FORMAT) || parts["version"] != JsonPrimitive(1)) {
+            throw IOException("This is not a supported drawing JSON file.")
+        }
+        val drawing = parts["drawing"] ?: throw IOException("Drawing data is missing.")
+        return ProjectCodec.json.decodeFromJsonElement(PlanDrawing.serializer(), drawing)
+    }
+}
+
+internal fun displayName(context: Context, uri: Uri, fallback: String): String {
+    val supplied = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { if (it.moveToFirst()) it.getString(0) else null }
+    return supplied?.trim()?.take(240)?.ifBlank { null } ?: fallback
+}
+
+internal fun InputStream.readBounded(limit: Int): ByteArray = java.io.ByteArrayOutputStream().use {
+    copyBounded(it, limit.toLong())
+    it.toByteArray()
+}
+
+internal fun InputStream.copyBounded(output: OutputStream, limit: Long, digest: MessageDigest? = null): Long {
+    val buffer = ByteArray(64 * 1024)
+    var total = 0L
+    while (true) {
+        val count = read(buffer)
+        if (count < 0) return total
+        total += count
+        if (total > limit) throw IOException("This file exceeds the supported size limit.")
+        digest?.update(buffer, 0, count)
+        output.write(buffer, 0, count)
+    }
+}

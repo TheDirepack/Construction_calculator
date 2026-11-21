@@ -8,7 +8,7 @@ fun newId(): String = UUID.randomUUID().toString()
 
 /**
  * A job. Holds [runs] (a circuit run, a wall, a room…), which hold [ProjectItem]s: saved results
- * from any tool. A project is saved and shared as one JSON file (see [ProjectCodec]).
+ * from any tool. [ProjectCodec] stores the metadata and references to any original drawing PDFs.
  */
 @Serializable
 data class Project(
@@ -28,6 +28,7 @@ data class Project(
     val panels: List<Panel> = emptyList(),
     val groups: List<CircuitGroup> = emptyList(),
     val design: DesignDefaults = DesignDefaults(),
+    val drawings: List<PlanDrawing> = emptyList(),
 ) {
     fun panel(panelId: String): Panel? = panels.firstOrNull { it.id == panelId }
 

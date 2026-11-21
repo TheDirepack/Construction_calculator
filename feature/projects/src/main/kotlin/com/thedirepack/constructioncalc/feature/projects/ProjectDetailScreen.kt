@@ -8,7 +8,6 @@ import com.thedirepack.constructioncalc.core.model.design.PanelLayout
 import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.ui.format
 
-import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -68,6 +67,7 @@ import com.thedirepack.constructioncalc.core.ui.components.RacewayEditorSheet
 import com.thedirepack.constructioncalc.core.ui.components.ResultCard
 import com.thedirepack.constructioncalc.core.ui.components.TextInputDialog
 import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
+import com.thedirepack.constructioncalc.core.ui.components.rememberProjectSharer
 import com.thedirepack.constructioncalc.core.ui.components.racewaySummary
 import com.thedirepack.constructioncalc.core.ui.fractionText
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
@@ -98,6 +98,7 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
     val settings = rememberAppSettings()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val share = rememberProjectSharer(host::showMessage)
     var prompt by remember { mutableStateOf<Prompt?>(null) }
     var menu by remember { mutableStateOf(false) }
     var openItem by remember { mutableStateOf<String?>(null) }
@@ -109,12 +110,23 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
     }
 
     val toText = { ProjectText.render(project, tools::titleOf, header = settings.company.headerLines(), length = { settings.format(it) }, units = settings.unitSystem) }
-    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ProjectCodec.MIME_TYPE)) { uri ->
+    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ProjectSharing.mimeType(project))) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { ProjectSharing.write(context, uri, project, services.clock()) } }
-                .onSuccess { host.showMessage("Saved ${ProjectCodec.fileName(project)}") }
+                .onSuccess { host.showMessage("Saved ${ProjectSharing.fileName(project)}") }
                 .onFailure { host.showMessage(it.message ?: "Couldn't save the file") }
+        }
+    }
+    val jsonExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ProjectCodec.MIME_TYPE)) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    ProjectSharing.writeText(context, uri, ProjectCodec.encode(project, exportedAt = services.clock()))
+                }
+            }.onSuccess { host.showMessage("Saved ${ProjectCodec.fileName(project)}") }
+                .onFailure { host.showMessage(it.message ?: "Couldn't save the project JSON") }
         }
     }
 
@@ -129,13 +141,7 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
                 else -> ""
             },
         actions = {
-            IconButton(onClick = {
-                try {
-                    context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value))
-                } catch (_: ActivityNotFoundException) {
-                    host.showMessage("No app available to share with")
-                }
-            }) {
+            IconButton(onClick = { share(project) }) {
                 Icon(painterResource(R.drawable.ic_share), contentDescription = "Share project")
             }
             Box {
@@ -154,7 +160,10 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
                                 services.settings.setActiveTarget(project.id, project.runs.lastOrNull()?.id)
                             })
                         }
-                        add("Save to file…" to { exporter.launch(ProjectCodec.fileName(project)) })
+                        add("Save to file…" to { exporter.launch(ProjectSharing.fileName(project)) })
+                        if (project.drawings.isNotEmpty()) {
+                            add("Save project JSON…" to { jsonExporter.launch(ProjectCodec.fileName(project)) })
+                        }
                         add("Share as text" to { host.shareText(project.name, toText()) })
                         add("Copy as text" to {
                             context.getSystemService(ClipboardManager::class.java)
@@ -188,6 +197,12 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
         },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 32.dp)) {
+            item(key = "drawings") {
+                OutlinedButton(
+                    onClick = { host.openTool(ToolIds.DRAWINGS, target = ToolTarget.OfProject(project.id)) },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                ) { Text("Drawings · ${project.drawings.size}") }
+            }
             if (readOnly) {
                 item(key = "archived-banner") {
                     Card(

@@ -1,6 +1,5 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
-import android.content.ActivityNotFoundException
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
@@ -21,7 +20,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -29,13 +27,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.thedirepack.constructioncalc.core.data.ProjectSharing
 import com.thedirepack.constructioncalc.core.data.activeTarget
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
-import com.thedirepack.constructioncalc.core.ui.tool.LocalTools
-import com.thedirepack.constructioncalc.core.ui.tool.titleOf
 
 /**
  * The app-wide project picker shown at the top of every tool: the active project (or "No
@@ -48,8 +43,7 @@ import com.thedirepack.constructioncalc.core.ui.tool.titleOf
 @Composable
 fun ProjectSwitcher(onOpenProject: (String?) -> Unit, onMessage: (String) -> Unit, modifier: Modifier = Modifier) {
     val services = LocalAppServices.current
-    val tools = LocalTools.current
-    val context = LocalContext.current
+    val share = rememberProjectSharer(onMessage)
     val settings = rememberAppSettings()
     val all by services.projects.projects.collectAsStateWithLifecycle()
     val projects = all.filterNot { it.archived } // archived projects are read-only: never a save target
@@ -107,11 +101,7 @@ fun ProjectSwitcher(onOpenProject: (String?) -> Unit, onMessage: (String) -> Uni
                     trailingIcon = {
                         IconButton(onClick = {
                             open = false
-                            try {
-                                context.startActivity(ProjectSharing.shareIntent(context, project, services.clock(), tools::titleOf, services.settings.settings.value))
-                            } catch (_: ActivityNotFoundException) {
-                                onMessage("No app available to share with")
-                            }
+                            share(project)
                         }) {
                             Icon(painterResource(R.drawable.ic_share), contentDescription = "Export ${project.name}")
                         }
