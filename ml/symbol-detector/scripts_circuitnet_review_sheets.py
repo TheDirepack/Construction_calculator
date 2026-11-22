@@ -42,6 +42,7 @@ import numpy as np
 import pymupdf
 
 from blueprint_symbols.review_gate import review_decision
+from blueprint_symbols.electrical_device_attributes import ATTRIBUTE_SCHEMA, NUMERIC_ATTRIBUTES
 
 
 COORD_MAX = 1000.0
@@ -112,6 +113,12 @@ REFINEMENT_INSTRUCTIONS = (
     "Nothing is approved merely because it appears in the batch. Set review_status to "
     "accepted/rejected/uncertain, and keep=true ONLY after explicit visual review. "
     "Unreviewed or uncertain detections are excluded from output. "
+    "Independent electrical attributes may coexist: e.g. three_way + dimmer, "
+    "or duplex + GFCI + emergency. Do not invent every combination as a new subtype. "
+    "Assign voltage_v, phase_count, amperage_a, pole_count, NEMA, etc. ONLY when "
+    "the project's legend, nearby callout or schedule explicitly supplies them; "
+    "do not infer them from a stock NECA example or geometry alone. Add `evidence` "
+    "with provenance for each such electrical property. "
     "When SAM includes NECA category/subcategory, preserve that hierarchy; "
     "use the expanded taxonomy for fine-grained device_type/subtype choices. "
     "Each numbered cell (#01..#NN) shows a zoomed crop around one provisional detection "
@@ -615,6 +622,8 @@ def cmd_render(args: argparse.Namespace) -> None:
                     'taxonomy_version': '7.0+neca' if payload.get('prompt_taxonomy') else '7.0',
                     'taxonomy': merge_review_taxonomy(payload),
                     'category_taxonomy': payload.get('prompt_category_taxonomy', {}),
+                    'device_attribute_schema': ATTRIBUTE_SCHEMA,
+                    'numeric_attribute_fields': sorted(NUMERIC_ATTRIBUTES),
                     'source_file': payload.get('source_file'),
                     'source_pdf_relative': payload.get('source_pdf_relative'),
                     'source_pdf_absolute': payload.get('source_pdf_absolute'),
