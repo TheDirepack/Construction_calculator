@@ -429,9 +429,9 @@ def main() -> None:
     ap.add_argument('--prompt-allowlist', type=Path, default=None,
                     help='Optional JSON list of reviewed standalone NECA symbol IDs to use as prompts')
     ap.add_argument('--prompts-per-subcategory', type=int, default=2)
-    ap.add_argument('--prompts-per-category', type=int, default=16)
-    ap.add_argument('--max-prompts', type=int, default=192,
-                    help='Balanced maximum number of exemplar queries per image tile; 0 disables cap')
+    ap.add_argument('--prompts-per-category', type=int, default=12)
+    ap.add_argument('--max-prompts', type=int, default=96,
+                    help='Maximum exemplar queries per image tile (fast=96, balanced=192, exhaustive=0 with both per-category and per-subcategory set to 0)')
     ap.add_argument('--native-only', action='store_true',
                     help='Exclude raster-traced NECA symbols; default retains traced Annex A alternatives')
     ap.add_argument('--catalog-only', action='store_true',
