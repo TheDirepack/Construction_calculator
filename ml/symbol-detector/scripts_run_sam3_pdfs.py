@@ -40,6 +40,9 @@ from blueprint_symbols.neca_prompt_catalog import (SamNecaPrompt, list_neca_prom
     choose_neca_prompts, load_neca_sam_prompts)
 from blueprint_symbols.proposal_fusion import merge_sam_proposals
 from blueprint_symbols.sam_precision import filter_sam_detections
+from blueprint_symbols.sam_precision_profile import (
+    load_family_thresholds, threshold_for_family,
+)
 from blueprint_symbols.preencoded_prompt_cache import (
     prompt_feature_cache_path, load_prompt_features, save_prompt_features,
 )
@@ -307,6 +310,7 @@ def detect_page_sam3(
     max_ink_fraction: float = 0.85,
     coarse_family_limit: int = 50,
     fine_family_limit: int = 80,
+    family_thresholds: dict[str, dict[str, float]] | None = None,
     query_stats: Counter | None = None,
     max_box_px: float = 220.0,
     min_box_px: float = 10.0,
@@ -388,7 +392,18 @@ def detect_page_sam3(
                         if pres.ndim == 1:
                             pres = pres.unsqueeze(-1)
                         scores = logits.sigmoid() * pres.sigmoid()
-                        hits = torch.nonzero(scores >= threshold, as_tuple=False)
+                        if family_thresholds:
+                            # Apply independent family cutoffs before CPU copy.
+                            thrs = torch.tensor([
+                                threshold_for_family(
+                                    glyphs[i].device_type, stage, threshold,
+                                    family_thresholds,
+                                )
+                                for i in subset
+                            ], dtype=scores.dtype, device=scores.device).unsqueeze(-1)
+                            hits = torch.nonzero(scores >= thrs, as_tuple=False)
+                        else:
+                            hits = torch.nonzero(scores >= threshold, as_tuple=False)
                         if hits.numel() == 0:
                             continue
 
@@ -533,6 +548,8 @@ def main() -> None:
     ap.add_argument('--fine-match-iou', type=float, default=0.10)
     ap.add_argument('--score-thr', type=float, default=0.72,
                     help='Final fine-instance threshold, higher by default to limit VLM false positives')
+    ap.add_argument('--family-thresholds', type=Path, default=None,
+                    help='Optional local JSON {device_family: {coarse: 0..1, fine: 0..1}} overrides')
     ap.add_argument('--emit-generic', action='store_true',
                     help='Export coarse-only candidates too (high-recall, many false positives)')
     ap.add_argument('--max-box-aspect', type=float, default=6.0)
@@ -653,6 +670,13 @@ def main() -> None:
               f'{prompt_plan["coarse_count"]} coarse queries per tile; '
               f'{prompt_plan["fine_catalog_count"]} subtype prompts available for gated pass', flush=True)
 
+    try:
+        family_thresholds = load_family_thresholds(
+            args.family_thresholds, {g.device_type for g in glyphs},
+        )
+    except (ValueError, OSError, json.JSONDecodeError) as exc:
+        ap.error(f'family threshold file invalid: {exc}')
+
     # Prompt/model changes must invalidate resume cache; otherwise revised
     # detectors silently read old labels and appear to run impossibly fast.
     run_config = {
@@ -663,6 +687,7 @@ def main() -> None:
         'tile_size': args.tile_size,
         'tile_overlap': args.overlap,
         'score_threshold': args.score_thr,
+        'family_thresholds': family_thresholds,
         'prompt_dedup_similarity': args.svg_dedup_sim,
         'min_page_pts': args.min_page_pts,
         'prompt_budgets': catalog_summary['prompt_budgets'],
@@ -753,6 +778,7 @@ def main() -> None:
                     max_ink_fraction=args.max_ink_fraction,
                     coarse_family_limit=args.coarse_family_limit,
                     fine_family_limit=args.fine_family_limit,
+                    family_thresholds=family_thresholds,
                     query_stats=pdf_query_stats,
                     device='cuda', dtype=dtype,
                 )
