@@ -27,10 +27,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,9 +65,7 @@ import com.thedirepack.constructioncalc.core.plans.LineMap
 import com.thedirepack.constructioncalc.core.plans.SnapKind
 import com.thedirepack.constructioncalc.core.plans.SnapTarget
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.ceil
 import kotlin.math.max
@@ -110,11 +110,11 @@ private fun loadPage(file: File, pageIndex: Int): PageBitmap =
         }
     }
 
-private class PageViewport {
+private class PageViewport(quarterTurns: Int) {
     var size by mutableStateOf(IntSize.Zero)
     var scroll by mutableStateOf(Offset.Zero)
     var zoom by mutableStateOf(1f)
-    var quarterTurns by mutableStateOf(0)
+    var quarterTurns by mutableStateOf(quarterTurns)
         private set
 
     private fun pageSize(page: PageBitmap) =
@@ -235,18 +235,22 @@ internal fun PlanCanvas(
     handles: List<EndpointHandle> = emptyList(),
     onMoveEndpoint: (EndpointHandle, PlanPoint) -> Unit = { _, _ -> },
 ) {
-    val state by produceState<PageState>(PageState.Loading, file, pageIndex) {
-        value = PageState.Loading
-        value = try {
-            PageState.Loaded(withContext(Dispatchers.IO) { loadPage(file, pageIndex) })
-        } catch (error: java.io.IOException) {
-            PageState.Error("This PDF page could not be opened.")
-        } catch (error: IllegalArgumentException) {
-            PageState.Error("This PDF page is unavailable.")
-        } catch (error: SecurityException) {
-            PageState.Error("This PDF requires a password.")
-        } catch (_: OutOfMemoryError) {
-            PageState.Error("This page is too large to display on this device.")
+    var quarterTurns by rememberSaveable(file) { mutableStateOf(0) }
+    val state by key(file, pageIndex) {
+        produceState<PageState>(PageState.Loading) {
+            value = try {
+                // A short pause so paging quickly through a set doesn't render every page passed.
+                delay(PAGE_DEBOUNCE_MS)
+                PageState.Loaded(PdfWork.render { loadPage(file, pageIndex) })
+            } catch (error: java.io.IOException) {
+                PageState.Error("This PDF page could not be opened.")
+            } catch (error: IllegalArgumentException) {
+                PageState.Error("This PDF page is unavailable.")
+            } catch (error: SecurityException) {
+                PageState.Error("This PDF requires a password.")
+            } catch (_: OutOfMemoryError) {
+                PageState.Error("This page is too large to display on this device.")
+            }
         }
     }
     val place by rememberUpdatedState(onPlace)
@@ -300,7 +304,7 @@ internal fun PlanCanvas(
                 }
 
                 val pageRect = remember(page) { RectF(0f, 0f, page.width, page.height) }
-                val viewport = remember(page) { PageViewport() }
+                val viewport = remember(page) { PageViewport(quarterTurns) }
                 var preview by remember(page, mode) { mutableStateOf(emptyList<InkPoint>()) }
                 var activeSnap by remember(page, mode) { mutableStateOf<SnappedPoint?>(null) }
                 var loupe by remember(page, mode) { mutableStateOf<LoupeState?>(null) }
@@ -341,7 +345,7 @@ internal fun PlanCanvas(
                     val maxSide = max(visible.width(), visible.height()).coerceAtLeast(1f)
                     val targetScale = min(t.scale, MAX_TILE_PIXELS / maxSide).coerceAtLeast(1f)
                     val rendered = try {
-                        withContext(Dispatchers.IO) { renderRegion(file, pageIndex, visible, targetScale) }
+                        PdfWork.render { renderRegion(file, pageIndex, visible, targetScale) }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Throwable) {
@@ -602,7 +606,10 @@ internal fun PlanCanvas(
                         IconButton(onClick = { viewport.zoomFromCenter(page, 1.5f) }, enabled = viewport.zoom < 16f) {
                             Icon(painterResource(R.drawable.ic_plan_zoom_in), contentDescription = "Zoom in")
                         }
-                        IconButton(onClick = { viewport.rotate() }) {
+                        IconButton(onClick = {
+                            viewport.rotate()
+                            quarterTurns = viewport.quarterTurns
+                        }) {
                             Icon(painterResource(R.drawable.ic_plan_rotate), contentDescription = "Rotate view")
                         }
                     }
@@ -764,4 +771,5 @@ private fun DrawScope.drawPlanText(text: String, point: Offset, textSize: Float,
 private const val TILE_ZOOM_THRESHOLD = 2.0f
 private const val TILE_CLEAR_THRESHOLD = 1.7f
 private const val TILE_DEBOUNCE_MS = 120L
+private const val PAGE_DEBOUNCE_MS = 150L
 private const val MAX_TILE_PIXELS = 2048f

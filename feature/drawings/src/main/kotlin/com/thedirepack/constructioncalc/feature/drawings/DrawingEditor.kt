@@ -20,6 +20,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -54,6 +55,7 @@ import com.thedirepack.constructioncalc.feature.drawings.domain.PlanRoute
 import com.thedirepack.constructioncalc.feature.drawings.domain.RouteSummary
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -114,22 +116,24 @@ internal fun DrawingEditor(
     val page = session.page
     val mode = if (editable) session.mode else DrawingMode.Navigate
 
-    // Pre-computed line map for the active page (built once in the background and cached).
-    val lineMap by produceState<LineMap?>(null, drawing.sha256, file, page) {
-        value = null
-        value = try {
-            lineStore.getOrBuild(drawing.sha256, file, page)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     val snapEnabled = when {
         !mode.snaps -> false
         mode == DrawingMode.Reference -> prefs.snapCalibration
         else -> prefs.snapMeasurements
+    }
+    // Wait for page navigation to settle before starting the native line extraction.
+    val lineMap by key(drawing.sha256, file, page, snapEnabled) {
+        produceState<LineMap?>(null) {
+            if (!snapEnabled) return@produceState
+            delay(LINE_MAP_DELAY_MS)
+            value = try {
+                lineStore.getOrBuild(drawing.sha256, file, page)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+        }
     }
     val snapTarget = when (mode) {
         DrawingMode.Reference -> prefs.calibrationTarget
@@ -532,3 +536,5 @@ private fun EditorDialogs(
         )
     }
 }
+
+private const val LINE_MAP_DELAY_MS = 400L
