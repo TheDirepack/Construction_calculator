@@ -168,6 +168,54 @@ def list_neca_prompt_specs(library_root: Path, *, allow_raster_traces: bool = Tr
     }
 
 
+
+# Prefer common plan devices in the cheap first pass. Every subtype remains in
+# the catalog; increasing the budget or using an allowlist restores rare shapes.
+COMMON_FIRST = {
+    'power_outlet': ('duplex', 'double duplex', 'single', 'floor box', 'special receptacle',
+                     'multioutlet', 'multi-outlet', 'junction box'),
+    'lighting_control': ('single pole switch', 'three way switch', 'dimmer switch',
+                         'occupancy sensor', 'four way switch', 'double pole switch',
+                         'low voltage switch', 'timer switch'),
+    'lighting_fixture': ('luminaire:', 'strip', 'exit luminaire', 'spotlight',
+                         'emergency battery', 'wallpack', 'pole mounted'),
+    'fire_alarm_detection': ('smoke detector.', 'manual pull station', 'duct smoke',
+                             'automatic heat', 'beam smoke', 'carbon monoxide',
+                             'tamper switch', 'water flow'),
+    'fire_alarm_notification': ('horn and strobe', 'strobe unit', 'horn unit',
+                                'speaker and strobe', 'bell and strobe', 'door holder'),
+    'fire_alarm_control': ('fire alarm control panel', 'annunciator panel',
+                           'individual addressable module', 'voice evacuation',
+                           'transponder', 'fire alarm master box'),
+    'telecom_outlet': ('data outlet.', 'telephone/data outlet', 'telephone outlet'),
+    'security': ('camera', 'card reader', 'motion detector', 'security door contacts',
+                'security control panel', 'electric door strike'),
+    'power_distribution': ('lighting or power panel', 'distribution panel',
+                           'transformer', 'generator', 'transfer switch'),
+    'motor_and_hvac_control': ('disconnect switch', 'magnetic motor starter',
+                               'adjustable speed drive', 'thermostat', 'photocell',
+                               'flow switch', 'pressure switch'),
+    'motor_and_hvac_equipment': ('motor ', 'ceiling fan', 'wall fan',
+                                 'motorized damper', 'heater'),
+    'junction_and_service_box': ('junction box', 'pull box', 'power pole', 'telecom pole'),
+    'audio_visual': ('speaker', 'intercom', 'cable antenna', 'microphone', 'volume control'),
+    'communications_equipment': ('equipment rack', 'equipment cabinet', 'terminal cabinet'),
+    'nurse_call': ('nurse call', 'emergency pull cord', 'dome light',
+                   'duty station', 'staff station'),
+    'fire_safety_alternative': ('photoelectric smoke detector', 'pull station',
+                                'heat detector', 'speaker/horn', 'illuminated exit',
+                                'fire alarm control panel'),
+}
+
+
+def _common_rank(category: str, name: str) -> int:
+    name = name.lower()
+    for i, phrase in enumerate(COMMON_FIRST.get(category, ())):
+        if phrase in name:
+            return i
+    return 1000
+
+
 def choose_neca_prompts(specs: list[SamNecaPrompt], *, per_subcategory: int = 2,
                         per_category: int = 16, total: int = 192,
                         allowlist: set[str] | None = None) -> list[SamNecaPrompt]:
@@ -196,7 +244,9 @@ def choose_neca_prompts(specs: list[SamNecaPrompt], *, per_subcategory: int = 2,
         queue = []
         for round_id in range(max(len(v) for v in subs.values())):
             if per_subcategory and round_id >= per_subcategory: break
-            for sub in sorted(subs):
+            priority_subs = sorted(subs,
+                                   key=lambda sub: (_common_rank(cat, subs[sub][0].name), sub))
+            for sub in priority_subs:
                 if round_id < len(subs[sub]): queue.append(subs[sub][round_id])
         queues[cat] = queue[:per_category] if per_category else queue
     chosen = []
