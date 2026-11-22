@@ -140,7 +140,12 @@ internal object CodeTables {
             val basis = Code.book.values.ambientBasisC
             listOf(
                 Table(listOf("°C", "°F", "60 °C", "75 °C", "90 °C"), rows, "Factors for a ${Measure.TEMPERATURE.format(basis, UnitSystem.METRIC, 0)} (${Measure.TEMPERATURE.format(basis, UnitSystem.IMPERIAL, 0)}) table basis. A dash: too hot for that insulation."),
-                Paragraph("Raceways or cables in sunlight on a rooftop, less than 3/4 in. (19 mm) above it: add ${AmbientCorrection.rooftopAdderText(UnitSystem.METRIC).drop(1)} (${AmbientCorrection.rooftopAdderText(UnitSystem.IMPERIAL).drop(1)}) to the outdoor temperature (${CodeRule.ROOFTOP_ADDER.cite}). Type XHHW-2 is exempt."),
+                Paragraph(
+                    "Raceways or cables in sunlight on a rooftop, less than ${codeLength(Code.book.values.rooftopMaxHeightIn, Code.book.values.rooftopMaxHeightMm, UnitSystem.IMPERIAL)} " +
+                        "(${codeLength(Code.book.values.rooftopMaxHeightIn, Code.book.values.rooftopMaxHeightMm, UnitSystem.METRIC)}) above it: add ${AmbientCorrection.rooftopAdderText(UnitSystem.METRIC).drop(1)} " +
+                        "(${AmbientCorrection.rooftopAdderText(UnitSystem.IMPERIAL).drop(1)}) to the outdoor temperature (${CodeRule.ROOFTOP_ADDER.cite}). " +
+                        Code.book.values.rooftopExemptInsulation.joinToString(", ") { "Type ${it.code}" } + " is exempt.",
+                ),
             )
         },
         RefEntry(

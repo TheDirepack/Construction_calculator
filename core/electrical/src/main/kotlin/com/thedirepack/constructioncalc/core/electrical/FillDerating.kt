@@ -72,11 +72,11 @@ object FillDerating {
             adjustment < 1.0 -> "$ccc current-carrying conductors: ×$adjustment (${CodeRule.CONDUCTOR_COUNT_ADJUSTMENT.cite})."
             else -> "$ccc current-carrying conductors: no count adjustment (${ConductorCountAdjustment.bands.first().from - 1} or fewer)."
         }
-        if (rooftop) notes += "Rooftop in sunlight under 3/4 in.: ${AmbientCorrection.rooftopAdderText(units)} (${CodeRule.ROOFTOP_ADDER.cite}); XHHW-2 is exempt."
+        if (rooftop) notes += "Rooftop in sunlight. ${AmbientCorrection.rooftopConditionText(units)}."
 
         val rows = groups.filter { it.insulation != null && it.currentCarrying }.map { g ->
             val rating = insulationRating(g.insulation!!)
-            val ambient = AmbientCorrection.effectiveAmbient(ambientC, rooftop, g.insulation == InsulationType.XHHW_2)
+            val ambient = AmbientCorrection.effectiveAmbient(ambientC, rooftop, AmbientCorrection.isRooftopExempt(g.insulation))
             val factor = rating?.let { AmbientCorrection.factor(ambient, it) }
             val table = rating?.let { Ampacity.of(g.size, material, it) }
             val adjusted = if (table != null && factor != null) table * factor * adjustment else null
