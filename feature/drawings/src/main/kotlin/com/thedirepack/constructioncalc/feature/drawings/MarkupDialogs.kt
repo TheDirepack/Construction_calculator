@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -32,6 +34,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,6 +53,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -58,6 +62,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.thedirepack.constructioncalc.core.data.PlanFiles
 import com.thedirepack.constructioncalc.core.data.PlanPhotos
 import com.thedirepack.constructioncalc.core.model.PlanArrowStyle
@@ -94,7 +100,7 @@ internal fun MarkupStyleDialog(
     onDismiss: () -> Unit,
     onConfirm: (MarkupToolStyle) -> Unit,
 ) {
-    var style by remember { mutableStateOf(initial) }
+    var style by remember(initial) { mutableStateOf(initial) }
     val widthPresets = when {
         kind.isTextSized() -> listOf(9.0, 11.0, 13.0, 16.0, 20.0, 26.0)
         kind == PlanMarkKind.HIGHLIGHT -> listOf(6.0, 10.0, 12.0, 18.0, 24.0)
@@ -285,7 +291,7 @@ internal fun DetailLinkDialog(
 ) {
     val context = LocalContext.current
     val files = remember(context) { PlanFiles(context.applicationContext) }
-    var targetDrawingId by rememberSaveable { mutableStateOf(initialTargetDrawingId ?: currentDrawingId) }
+    var targetDrawingId by rememberSaveable(initialTargetDrawingId) { mutableStateOf(initialTargetDrawingId ?: currentDrawingId) }
     val targetDrawing = project.drawings.firstOrNull { it.id == targetDrawingId } ?: project.drawings.firstOrNull { it.id == currentDrawingId }
     val resolvedDrawingId = targetDrawing?.id ?: currentDrawingId
     val resolvedPageCount by produceState(initialValue = if (resolvedDrawingId == currentDrawingId) currentPageCount else 1, resolvedDrawingId) {
@@ -299,13 +305,13 @@ internal fun DetailLinkDialog(
             }
         }
     }
-    var targetPage by rememberSaveable { mutableStateOf((initialTargetPage ?: currentPage).coerceIn(0, (resolvedPageCount - 1).coerceAtLeast(0))) }
+    var targetPage by rememberSaveable(initialTargetPage) { mutableStateOf((initialTargetPage ?: currentPage).coerceIn(0, (resolvedPageCount - 1).coerceAtLeast(0))) }
     if (targetPage >= resolvedPageCount) targetPage = (resolvedPageCount - 1).coerceAtLeast(0)
     var pageInput by rememberSaveable(resolvedDrawingId, targetPage) { mutableStateOf((targetPage + 1).toString()) }
     val targetRevLabel = targetDrawing?.sheetRevisions?.get(targetPage)?.sheetId
         ?: if (resolvedDrawingId == currentDrawingId) currentLabels[targetPage]?.number else null
     val defaultCaption = targetRevLabel?.takeIf { it.isNotBlank() } ?: "Page ${targetPage + 1}"
-    var label by rememberSaveable { mutableStateOf(initialLabel.ifBlank { "" }) }
+    var label by rememberSaveable(initialLabel) { mutableStateOf(initialLabel.ifBlank { "" }) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -458,6 +464,52 @@ internal fun PhotoPinDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun EraserSizeDialog(
+    initialDp: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit,
+) {
+    var sizeDp by rememberSaveable(initialDp) { mutableStateOf(initialDp.coerceIn(6, 48)) }
+    val presets = listOf(8 to "Small", 16 to "Medium", 28 to "Large", 40 to "XL")
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Eraser size") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 104.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Canvas(Modifier.size(96.dp)) {
+                        val radiusPx = sizeDp.dp.toPx().coerceAtMost(size.minDimension / 2f)
+                        drawCircle(Color(0x33D32F2F), radius = radiusPx)
+                        drawCircle(Color(0xCCD32F2F), radius = radiusPx, style = Stroke(2.dp.toPx()))
+                    }
+                }
+                Text("Radius: $sizeDp dp", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for ((value, label) in presets) {
+                        FilterChip(
+                            selected = sizeDp == value,
+                            onClick = { sizeDp = value },
+                            label = { Text("$label · $value") },
+                        )
+                    }
+                }
+                Slider(
+                    value = sizeDp.toFloat(),
+                    onValueChange = { sizeDp = it.roundToInt().coerceIn(6, 48) },
+                    valueRange = 6f..48f,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onConfirm(sizeDp) }) { Text("Apply") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
 @Composable
 internal fun PhotoViewerDialog(
     photoSha256: String?,
@@ -465,6 +517,7 @@ internal fun PhotoViewerDialog(
     editable: Boolean,
     onReplacePhoto: (String) -> Unit,
     onUpdateCaption: (String) -> Unit,
+    onDeletePhoto: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -473,6 +526,8 @@ internal fun PhotoViewerDialog(
     var caption by rememberSaveable(photoSha256, initialCaption) { mutableStateOf(initialCaption) }
     var importing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var photoZoom by remember(photoSha256) { mutableStateOf(1f) }
+    var photoOffset by remember(photoSha256) { mutableStateOf(Offset.Zero) }
 
     val bitmap by produceState<Bitmap?>(null, photoSha256) {
         value = if (photoSha256 == null) null else try {
@@ -512,106 +567,118 @@ internal fun PhotoViewerDialog(
         }
     }
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text("Pinned photo") },
-        text = {
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize().padding(10.dp),
+            shape = MaterialTheme.shapes.large,
+            tonalElevation = 4.dp,
+        ) {
             Column(
-                Modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                Modifier.fillMaxSize().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                val loaded = bitmap
-                if (loaded != null && !loaded.isRecycled) {
-                    var photoZoom by remember(photoSha256) { mutableStateOf(1f) }
-                    var photoOffset by remember(photoSha256) { mutableStateOf(Offset.Zero) }
-                    val doubleTapDist = with(LocalDensity.current) { 48.dp.toPx() }
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 260.dp)
-                            .clipToBounds()
-                            .pointerInput(photoSha256) {
-                                var lastTapMs = 0L
-                                var lastTapPos = Offset.Zero
-                                awaitEachGesture {
-                                    val down = awaitFirstDown(requireUnconsumed = false)
-                                    var lastPos = down.position
-                                    var moved = false
-                                    var multi = false
-                                    do {
-                                        val event = awaitPointerEvent()
-                                        if (event.changes.count { it.pressed } > 1) {
-                                            multi = true
-                                            val nextZoom = (photoZoom * event.calculateZoom()).coerceIn(1f, 5f)
-                                            photoZoom = nextZoom
-                                            photoOffset = if (nextZoom <= 1.02f) Offset.Zero else photoOffset + event.calculatePan()
-                                            event.changes.forEach { it.consume() }
-                                        } else if (!multi && photoZoom > 1.02f) {
-                                            val change = event.changes.firstOrNull { it.id == down.id }
-                                            if (change != null) {
-                                                val delta = change.position - lastPos
-                                                moved = moved || (change.position - down.position).getDistance() > viewConfiguration.touchSlop
-                                                lastPos = change.position
-                                                if (moved) {
-                                                    photoOffset += delta
-                                                    change.consume()
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Pinned photo", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    if (photoZoom > 1.05f) {
+                        TextButton(onClick = {
+                            photoZoom = 1f
+                            photoOffset = Offset.Zero
+                        }) {
+                            Text("Reset (${(photoZoom * 100).roundToInt()}%)")
+                        }
+                    }
+                    TextButton(onClick = onDismiss) { Text("Close") }
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainerLowest, MaterialTheme.shapes.medium)
+                        .clipToBounds(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val loaded = bitmap
+                    if (loaded != null && !loaded.isRecycled) {
+                        val doubleTapDist = with(LocalDensity.current) { 48.dp.toPx() }
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .pointerInput(photoSha256) {
+                                    var lastTapMs = 0L
+                                    var lastTapPos = Offset.Zero
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false)
+                                        var lastPos = down.position
+                                        var moved = false
+                                        var multi = false
+                                        do {
+                                            val event = awaitPointerEvent()
+                                            if (event.changes.count { it.pressed } > 1) {
+                                                multi = true
+                                                val nextZoom = (photoZoom * event.calculateZoom()).coerceIn(1f, 6f)
+                                                photoZoom = nextZoom
+                                                photoOffset = if (nextZoom <= 1.02f) Offset.Zero else photoOffset + event.calculatePan()
+                                                event.changes.forEach { it.consume() }
+                                            } else if (!multi && photoZoom > 1.02f) {
+                                                val change = event.changes.firstOrNull { it.id == down.id }
+                                                if (change != null) {
+                                                    val delta = change.position - lastPos
+                                                    moved = moved || (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+                                                    lastPos = change.position
+                                                    if (moved) {
+                                                        photoOffset += delta
+                                                        change.consume()
+                                                    }
+                                                }
+                                            } else if (!multi) {
+                                                val change = event.changes.firstOrNull { it.id == down.id }
+                                                if (change != null) {
+                                                    moved = moved || (change.position - down.position).getDistance() > viewConfiguration.touchSlop
                                                 }
                                             }
-                                        } else if (!multi) {
-                                            val change = event.changes.firstOrNull { it.id == down.id }
-                                            if (change != null) {
-                                                moved = moved || (change.position - down.position).getDistance() > viewConfiguration.touchSlop
-                                            }
-                                        }
-                                    } while (event.changes.any { it.pressed })
-                                    if (!multi && !moved) {
-                                        if (isDoubleTap(lastTapMs, lastTapPos, down.uptimeMillis, down.position, doubleTapDist)) {
-                                            lastTapMs = 0L
-                                            if (photoZoom > 1.25f) {
-                                                photoZoom = 1f
-                                                photoOffset = Offset.Zero
+                                        } while (event.changes.any { it.pressed })
+                                        if (!multi && !moved) {
+                                            if (isDoubleTap(lastTapMs, lastTapPos, down.uptimeMillis, down.position, doubleTapDist)) {
+                                                lastTapMs = 0L
+                                                if (photoZoom > 1.25f) {
+                                                    photoZoom = 1f
+                                                    photoOffset = Offset.Zero
+                                                } else {
+                                                    photoZoom = 2.5f
+                                                }
                                             } else {
-                                                photoZoom = 2.5f
+                                                lastTapMs = down.uptimeMillis
+                                                lastTapPos = down.position
                                             }
-                                        } else {
-                                            lastTapMs = down.uptimeMillis
-                                            lastTapPos = down.position
                                         }
                                     }
-                                }
-                            },
-                    ) {
-                        Image(
-                            bitmap = loaded.asImageBitmap(),
-                            contentDescription = caption.ifBlank { "Field photo" },
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 260.dp)
-                                .graphicsLayer {
-                                    scaleX = photoZoom
-                                    scaleY = photoZoom
-                                    translationX = photoOffset.x
-                                    translationY = photoOffset.y
                                 },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Image(
+                                bitmap = loaded.asImageBitmap(),
+                                contentDescription = caption.ifBlank { "Field photo" },
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        scaleX = photoZoom
+                                        scaleY = photoZoom
+                                        translationX = photoOffset.x
+                                        translationY = photoOffset.y
+                                    },
+                            )
+                        }
+                    } else {
+                        Text(
+                            if (photoSha256 == null) "No photo attached."
+                            else "This photo file isn't on this device yet.",
+                            style = MaterialTheme.typography.bodyMedium,
                         )
                     }
-                    if (photoZoom > 1.05f) {
-                        FilterChip(
-                            selected = true,
-                            onClick = {
-                                photoZoom = 1f
-                                photoOffset = Offset.Zero
-                            },
-                            label = { Text("Reset zoom (${(photoZoom * 100).roundToInt()}%)") },
-                        )
-                    }
-                } else {
-                    Text(
-                        if (photoSha256 == null) "No photo attached."
-                        else "This photo file isn't on this device yet.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
                 }
                 if (editable) {
                     OutlinedTextField(
@@ -621,27 +688,26 @@ internal fun PhotoViewerDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    TextButton(onClick = { picker.launch(arrayOf("image/*")) }, enabled = !importing) {
-                        Text(if (importing) "Replacing photo…" else "Replace photo")
-                    }
                     error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { picker.launch(arrayOf("image/*")) }, enabled = !importing) {
+                            Text(if (importing) "Replacing…" else "Replace photo")
+                        }
+                        if (onDeletePhoto != null) {
+                            TextButton(onClick = onDeletePhoto) {
+                                Text("Delete", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                        Box(Modifier.weight(1f))
+                        TextButton(onClick = {
+                            if (caption.trim() != initialCaption) onUpdateCaption(caption.trim())
+                            onDismiss()
+                        }) { Text("Save") }
+                    }
                 } else if (caption.isNotBlank()) {
-                    Text(caption)
+                    Text(caption, style = MaterialTheme.typography.bodyMedium)
                 }
             }
-        },
-        confirmButton = {
-            if (editable) {
-                TextButton(onClick = {
-                    if (caption.trim() != initialCaption) onUpdateCaption(caption.trim())
-                    onDismiss()
-                }) { Text("Save") }
-            } else {
-                TextButton(onClick = onDismiss) { Text("Close") }
-            }
-        },
-        dismissButton = {
-            if (editable) TextButton(onClick = onDismiss) { Text("Close") }
-        },
-    )
+        }
+    }
 }

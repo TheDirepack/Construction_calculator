@@ -13,7 +13,7 @@ internal const val DOUBLE_TAP_ZOOM = 2.5f
 internal const val MAX_CANVAS_ZOOM = 24f
 internal const val PALM_COOLDOWN_MS = 250L
 internal const val PALM_INTERRUPT_WINDOW_MS = 120L
-internal const val DOUBLE_TAP_TIMEOUT_MS = 300L
+internal const val DOUBLE_TAP_TIMEOUT_MS = 380L
 internal const val MULTI_TAP_TIMEOUT_MS = 260L
 
 internal data class InkPoint(val point: PlanPoint, val pressure: Float)
@@ -234,7 +234,7 @@ internal class InkStrokeFilter(
     private var smoothedPressure = 1f
     private var hasSamples = false
 
-    val points: List<InkPoint> get() = items
+    val points: List<InkPoint> get() = items.toList()
     val size: Int get() = items.size
 
     fun append(point: PlanPoint, rawPressure: Float, isStylus: Boolean, minSpacingPt: Double): InkPoint? {

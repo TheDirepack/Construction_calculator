@@ -8,15 +8,20 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -34,6 +39,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
@@ -42,7 +49,10 @@ import androidx.compose.ui.res.painterResource
 import com.thedirepack.constructioncalc.core.data.PlanSymbol
 import com.thedirepack.constructioncalc.core.data.PlanSymbols
 import com.thedirepack.constructioncalc.core.data.SymbolLibraryMeta
+import com.thedirepack.constructioncalc.core.model.PlanDrawing
+import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanPath
+import com.thedirepack.constructioncalc.core.model.PlanReference
 import kotlinx.coroutines.delay
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
@@ -240,14 +250,19 @@ internal fun ZoneDialog(
 internal fun ReferenceDialog(
     targetName: String,
     hasFit: Boolean,
+    initialLength: Quantity? = null,
+    initialCheck: Boolean = false,
+    title: String = "Known dimension",
+    confirmLabel: String = "Save dimension",
+    onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     onConfirm: (StoredQuantity, Boolean) -> Unit,
 ) {
-    var length by remember { mutableStateOf<Quantity?>(null) }
-    var check by rememberSaveable { mutableStateOf(false) }
+    var length by remember(initialLength) { mutableStateOf(initialLength) }
+    var check by rememberSaveable(initialCheck) { mutableStateOf(initialCheck) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Known dimension") },
+        title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(targetName)
@@ -268,18 +283,24 @@ internal fun ReferenceDialog(
                         )
                     }
                 }
+                if (onDelete != null) {
+                    TextButton(onClick = onDelete) {
+                        Text("Remove dimension", color = MaterialTheme.colorScheme.error)
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(
                 onClick = { length?.let { onConfirm(it.stored(), check) } },
                 enabled = length?.value?.signum?.let { it > 0 } == true,
-            ) { Text("Save dimension") }
+            ) { Text(confirmLabel) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun CalibrationDialog(
     calibration: PlanCalibrationLayer,
@@ -290,6 +311,8 @@ internal fun CalibrationDialog(
     onCalibrationChange: (PlanCalibrationLayer) -> Unit,
     onZoneChange: (PlanZone) -> Unit,
     onZoneDelete: (String) -> Unit,
+    onCalibrateFromLine: () -> Unit = {},
+    onDrawScaleZone: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val settings = rememberAppSettings()
@@ -298,6 +321,8 @@ internal fun CalibrationDialog(
     val hasPageOverride = calibration.pageModes.containsKey(page)
     var renamingZone by remember { mutableStateOf<PlanZone?>(null) }
     var deletingZone by remember { mutableStateOf<PlanZone?>(null) }
+    var editingDocIndex by remember { mutableStateOf<Int?>(null) }
+    var editingZoneRef by remember { mutableStateOf<Pair<PlanZone, Int>?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -324,6 +349,25 @@ internal fun CalibrationDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = if (summary.status == CalibrationStatus.NEEDS_REVIEW) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (editable) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilledTonalButton(onClick = onCalibrateFromLine) {
+                            Icon(painterResource(R.drawable.ic_plan_tool_calibrate), contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Measure known dimensions")
+                        }
+                        OutlinedButton(onClick = onDrawScaleZone) {
+                            Icon(painterResource(R.drawable.ic_plan_tool_zone), contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Add scale zone")
+                        }
+                    }
+                    Text(
+                        "Pick a preset scale below, or draw known dimensions on the sheet, fine-tune their endpoints, and submit.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text("Document preset", style = MaterialTheme.typography.labelLarge)
                 PresetPicker(
                     selected = calibration.preset?.toQuantity()?.value,
@@ -372,7 +416,12 @@ internal fun CalibrationDialog(
                     }
                 }
                 HorizontalDivider()
-                Text("Document dimensions (${calibration.references.size})", style = MaterialTheme.typography.titleMedium)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Document dimensions (${calibration.references.size})", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    if (editable) {
+                        TextButton(onClick = onCalibrateFromLine) { Text("+ Measure") }
+                    }
+                }
                 if (calibration.references.isEmpty()) {
                     Text("No known dimensions recorded yet.", style = MaterialTheme.typography.bodySmall)
                 }
@@ -388,6 +437,8 @@ internal fun CalibrationDialog(
                         title = "P${ref.page + 1} · ${if (ref.check) "Check" else "Fit"} · ${settings.format(ref.length.toQuantity())}",
                         detail = detail,
                         detailIsError = entry.exceedsTolerance,
+                        actionLabel = if (editable) "Edit" else null,
+                        onAction = if (editable) ({ editingDocIndex = entry.index }) else null,
                         onDelete = if (editable) ({
                             onCalibrationChange(calibration.copy(references = calibration.references.filterIndexed { i, _ -> i != entry.index }))
                         }) else null,
@@ -440,6 +491,8 @@ internal fun CalibrationDialog(
                                 title = "${if (ref.check) "Check" else "Fit"} · ${settings.format(ref.length.toQuantity())}",
                                 detail = detail,
                                 detailIsError = entry.exceedsTolerance,
+                                actionLabel = if (editable) "Edit" else null,
+                                onAction = if (editable) ({ editingZoneRef = zone to entry.index }) else null,
                                 onDelete = if (editable) ({
                                     onZoneChange(zone.copy(references = zone.references.filterIndexed { i, _ -> i != entry.index }))
                                 }) else null,
@@ -451,6 +504,54 @@ internal fun CalibrationDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
     )
+
+    editingDocIndex?.let { index ->
+        val current = calibration.references.getOrNull(index)
+        if (current != null) {
+            ReferenceDialog(
+                targetName = "Document calibration (page ${current.page + 1})",
+                hasFit = calibration.references.indices.any { it != index && !calibration.references[it].check } || calibration.preset != null,
+                initialLength = current.length.toQuantity(),
+                initialCheck = current.check,
+                title = "Edit known dimension",
+                confirmLabel = "Update",
+                onDelete = {
+                    onCalibrationChange(calibration.copy(references = calibration.references.filterIndexed { i, _ -> i != index }))
+                    editingDocIndex = null
+                },
+                onDismiss = { editingDocIndex = null },
+                onConfirm = { length, check ->
+                    val updated = current.copy(length = length, check = check)
+                    onCalibrationChange(calibration.copy(references = calibration.references.mapIndexed { i, r -> if (i == index) updated else r }))
+                    editingDocIndex = null
+                },
+            )
+        }
+    }
+
+    editingZoneRef?.let { (zone, index) ->
+        val current = zone.references.getOrNull(index)
+        if (current != null) {
+            ReferenceDialog(
+                targetName = zone.name,
+                hasFit = zone.references.indices.any { it != index && !zone.references[it].check } || zone.preset != null,
+                initialLength = current.length.toQuantity(),
+                initialCheck = current.check,
+                title = "Edit zone dimension",
+                confirmLabel = "Update",
+                onDelete = {
+                    onZoneChange(zone.copy(references = zone.references.filterIndexed { i, _ -> i != index }))
+                    editingZoneRef = null
+                },
+                onDismiss = { editingZoneRef = null },
+                onConfirm = { length, check ->
+                    val updated = current.copy(length = length, check = check)
+                    onZoneChange(zone.copy(references = zone.references.mapIndexed { i, r -> if (i == index) updated else r }))
+                    editingZoneRef = null
+                },
+            )
+        }
+    }
 
     renamingZone?.let { target ->
         RenameDialog(
@@ -479,6 +580,87 @@ internal fun CalibrationDialog(
 }
 
 @Composable
+internal fun StagedCalibrationListDialog(
+    previewDrawing: PlanDrawing,
+    draft: List<StagedCalibrationRef>,
+    page: Int,
+    editable: Boolean,
+    onEdit: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val settings = rememberAppSettings()
+    val docSummary = remember(previewDrawing.calibration, page) {
+        CalibrationDiagnostics.evaluate(previewDrawing.calibration, page)
+    }
+    val docItems = remember(draft) { draft.filter { it.zoneId == null } }
+    val zoneSummaries = remember(previewDrawing.zones) {
+        previewDrawing.zones.associateWith { CalibrationDiagnostics.evaluateZone(it) }.mapKeys { it.key.id }
+    }
+    val zoneItemsByZone = remember(draft) {
+        draft.filter { it.zoneId != null }.groupBy { it.zoneId }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Staged calibration (${draft.size})") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Preview status", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    Text(docSummary.status.label, style = MaterialTheme.typography.labelLarge, color = statusColor(docSummary.status))
+                }
+                Text(
+                    "Adjust exact endpoint handles directly on the plan, or edit entered distances below before submitting.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (draft.isEmpty()) {
+                    Text("No calibration dimensions staged yet.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    draft.forEachIndexed { idx, item ->
+                        val ref = item.ref
+                        val zone = item.zoneId?.let { id -> previewDrawing.zones.firstOrNull { it.id == id } }
+                        val residual = if (item.zoneId == null) {
+                            val docIdx = docItems.indexOfFirst { it.id == item.id }
+                            docSummary.residuals.getOrNull(docIdx)
+                        } else {
+                            val zList = zoneItemsByZone[item.zoneId].orEmpty()
+                            val zIdx = zList.indexOfFirst { it.id == item.id }
+                            zoneSummaries[item.zoneId]?.residuals?.getOrNull(zIdx)
+                        }
+                        val diffDetail = residual?.deltaInches?.let { delta ->
+                            val diff = settings.format(Quantity.inches(Rational.of(abs(delta))))
+                            val pct = residual.percentError ?: 0.0
+                            "Diff ${if (delta < 0) "−" else "+"}$diff (${String.format(Locale.getDefault(), "%+.2f", pct)}%)"
+                        }
+                        val scope = zone?.name ?: "Doc P${ref.page + 1}"
+                        ItemRow(
+                            title = "#${idx + 1} · $scope · ${if (ref.check) "Check" else "Fit"} · ${settings.format(ref.length.toQuantity())}",
+                            detail = diffDetail,
+                            detailIsError = residual?.exceedsTolerance == true,
+                            actionLabel = if (editable) "Edit" else null,
+                            onAction = if (editable) ({ onEdit(item.id) }) else null,
+                            onDelete = if (editable) ({ onDelete(item.id) }) else null,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onSubmit, enabled = editable) { Text("Submit") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Back") }
+        },
+    )
+}
+
+@Composable
 internal fun CircuitTagDialog(initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var tag by rememberSaveable(initial) { mutableStateOf(initial) }
     AlertDialog(
@@ -498,24 +680,38 @@ internal fun TextMarkupDialog(
     initial: String = "",
     title: String = if (initial.isBlank()) "Place text" else "Edit text",
     label: String = "Text",
+    helperText: String? = null,
     allowEmpty: Boolean = false,
     onConfirm: (String) -> Unit,
 ) {
-    var value by rememberSaveable(initial) { mutableStateOf(initial) }
+    var value by rememberSaveable(initial, stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(text = initial, selection = TextRange(initial.length)))
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            OutlinedTextField(
-                value = value,
-                onValueChange = { value = it.take(2_000) },
-                label = { Text(label) },
-                maxLines = 6,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (helperText != null) {
+                    Text(
+                        helperText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { updated ->
+                        value = if (updated.text.length <= 2_000) updated else updated.copy(text = updated.text.take(2_000))
+                    },
+                    label = { Text(label) },
+                    maxLines = 6,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(value.trim()) }, enabled = allowEmpty || value.isNotBlank()) { Text("Save") }
+            TextButton(onClick = { onConfirm(value.text.trim()) }, enabled = allowEmpty || value.text.isNotBlank()) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
@@ -534,6 +730,7 @@ internal fun PageItemsDialog(
     onMeasureEdit: (String) -> Unit,
     onMeasureDelete: (String) -> Unit,
     onPathDelete: (String) -> Unit = {},
+    onMarkOpen: ((PlanMark) -> Unit)? = null,
     onMarkDelete: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -628,9 +825,16 @@ internal fun PageItemsDialog(
                 if (marks.isEmpty()) Text("No markups on this page.")
                 marks.forEach { mark ->
                     val name = mark.kind.name.lowercase().replace('_', ' ').replaceFirstChar { it.titlecase() }
+                    val openLabel = when (mark.kind) {
+                        PlanMarkKind.PHOTO -> "View"
+                        PlanMarkKind.DETAIL_LINK -> "Open"
+                        else -> null
+                    }
                     ItemRow(
                         title = name,
-                        detail = mark.text.takeIf { it.isNotBlank() },
+                        detail = mark.text.takeIf { it.isNotBlank() } ?: mark.photoSha256?.let { "Photo (${it.take(8)}…)" },
+                        actionLabel = openLabel,
+                        onAction = if (openLabel != null && onMarkOpen != null) ({ onMarkOpen(mark) }) else null,
                         onDelete = if (editable) ({ onMarkDelete(mark.id) }) else null,
                     )
                 }
@@ -800,6 +1004,8 @@ internal fun ItemRow(
     title: String,
     detail: String?,
     detailIsError: Boolean = false,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
     onDelete: (() -> Unit)?,
 ) {
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -813,6 +1019,7 @@ internal fun ItemRow(
                 )
             }
         }
+        if (actionLabel != null && onAction != null) TextButton(onClick = onAction) { Text(actionLabel) }
         if (onDelete != null) TextButton(onClick = onDelete) { Text("Delete") }
     }
 }

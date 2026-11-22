@@ -20,24 +20,23 @@ internal fun markAt(marks: List<PlanMark>, point: PlanPoint, radius: Double): Pl
             PlanMarkKind.TEXT, PlanMarkKind.CALLOUT -> {
                 val box = if (mark.kind == PlanMarkKind.CALLOUT) last else first
                 val lines = mark.text.lines()
-                val right = box.x + mark.width * (lines.maxOf { it.length }.coerceAtLeast(1))
-                contains(point, box, box.offset(right - box.x, mark.width * (lines.size + if (mark.kind == PlanMarkKind.CALLOUT) 1.25 else 0.0)), radius) ||
+                val inset = if (mark.kind == PlanMarkKind.CALLOUT) mark.width * 0.35 else 0.0
+                val right = box.x + mark.width * 0.65 * (lines.maxOf { it.length }.coerceAtLeast(1)) + inset * 2
+                contains(point, box, box.offset(right - box.x, mark.width * 1.18 * lines.size + inset * 2), radius) ||
                     (mark.kind == PlanMarkKind.CALLOUT && EditorActions.segmentDistance(point, first, last) <= radius)
             }
             PlanMarkKind.CLOUD_CALLOUT -> {
                 val p1 = mark.points.getOrElse(1) { first }
-                val box = mark.points.getOrElse(2) { PlanPoint(maxOf(first.x, p1.x) + 18.0, minOf(first.y, p1.y)) }
-                val fontSize = maxOf(mark.width, 8.0)
-                val lines = mark.text.ifBlank { "Revision" }.lines()
-                val right = box.x + fontSize * (lines.maxOf { it.length }.coerceAtLeast(1))
-                val anchor = PlanPoint(box.x.coerceIn(minOf(first.x, p1.x), maxOf(first.x, p1.x)), box.y.coerceIn(minOf(first.y, p1.y), maxOf(first.y, p1.y)))
-                contains(point, first, p1, radius) ||
-                    contains(point, box, box.offset(right - box.x, fontSize * (lines.size + 1.25)), radius) ||
-                    EditorActions.segmentDistance(point, anchor, box) <= radius
+                contains(point, first, p1, radius)
             }
             PlanMarkKind.PHOTO, PlanMarkKind.DETAIL_LINK -> {
-                val half = maxOf(10.0, min(mark.width, 48.0) * 0.6)
-                contains(point, first.offset(-half, -half), first.offset(half, half), radius)
+                val half = maxOf(14.0, min(mark.width, 48.0) * 0.65)
+                val extraRight = if (mark.text.isNotBlank()) {
+                    maxOf(10.0, mark.width * 0.45) * mark.text.length * 0.65 + 8.0
+                } else {
+                    0.0
+                }
+                contains(point, first.offset(-half, -half), first.offset(half + extraRight, half), radius)
             }
             PlanMarkKind.DIMENSION -> {
                 EditorActions.segmentDistance(point, first, last) <= radius + maxOf(4.0, mark.width)
@@ -62,12 +61,8 @@ internal fun PlanMark.editHandles(): List<PlanPoint> {
     val p1 = points[1]
     val end = points.last()
     return when (kind) {
-        PlanMarkKind.RECTANGLE, PlanMarkKind.CLOUD -> listOf(first, end, PlanPoint(first.x, end.y), PlanPoint(end.x, first.y))
-        PlanMarkKind.CLOUD_CALLOUT -> if (points.size >= 3) {
-            listOf(first, p1, PlanPoint(first.x, p1.y), PlanPoint(p1.x, first.y), end)
-        } else {
-            listOf(first, end, PlanPoint(first.x, end.y), PlanPoint(end.x, first.y))
-        }
+        PlanMarkKind.RECTANGLE, PlanMarkKind.CLOUD, PlanMarkKind.CLOUD_CALLOUT ->
+            listOf(first, p1, PlanPoint(first.x, p1.y), PlanPoint(p1.x, first.y))
         PlanMarkKind.LINE, PlanMarkKind.ARROW, PlanMarkKind.CALLOUT, PlanMarkKind.DIMENSION -> listOf(first, end)
         else -> emptyList()
     }
@@ -77,14 +72,13 @@ internal fun PlanMark.resize(handle: Int, point: PlanPoint): PlanMark {
     val first = points.first()
     val p1 = points.getOrElse(1) { first }
     val end = points.last()
-    if (kind == PlanMarkKind.CLOUD_CALLOUT && points.size >= 3) {
+    if (kind == PlanMarkKind.CLOUD_CALLOUT) {
         return copy(
             points = when (handle) {
-                0 -> listOf(point, p1, end)
-                1 -> listOf(first, point, end)
-                2 -> listOf(PlanPoint(point.x, first.y), PlanPoint(p1.x, point.y), end)
-                3 -> listOf(PlanPoint(first.x, point.y), PlanPoint(point.x, p1.y), end)
-                else -> listOf(first, p1, point)
+                0 -> listOf(point, p1)
+                1 -> listOf(first, point)
+                2 -> listOf(PlanPoint(point.x, first.y), PlanPoint(p1.x, point.y))
+                else -> listOf(PlanPoint(first.x, point.y), PlanPoint(point.x, p1.y))
             },
         )
     }

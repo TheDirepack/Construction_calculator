@@ -9,29 +9,30 @@ import com.thedirepack.constructioncalc.core.model.PlanMeasurement
 import com.thedirepack.constructioncalc.core.model.PlanPoint
 import com.thedirepack.constructioncalc.core.model.PlanReference
 import com.thedirepack.constructioncalc.core.model.PlanZone
+import com.thedirepack.constructioncalc.core.model.newId
 import kotlin.math.hypot
 
 internal enum class ToolGroup(val label: String) { TAKEOFF("Takeoff"), MARKUP("Markup") }
 
 internal enum class DrawingMode(val title: String, val hint: String, val group: ToolGroup) {
     Navigate("Pan", "Drag to pan. Pinch to zoom.", ToolGroup.TAKEOFF),
-    Measure("Measure", "Tap or drag between the ends of a line to measure.", ToolGroup.TAKEOFF),
-    Route("Route", "Tap connected points along a conduit route to measure legs and bends.", ToolGroup.TAKEOFF),
+    Measure("Measure", "Place Point A then Point B (or drag if configured in settings).", ToolGroup.TAKEOFF),
+    Route("Route", "Aim and release points along a conduit route to measure legs and bends.", ToolGroup.TAKEOFF),
     Adjust("Select", "Tap a markup or measurement to select it. Drag the sheet to pan.", ToolGroup.TAKEOFF),
-    Reference("Calibrate", "Tap or drag between the ends of a known dimension.", ToolGroup.TAKEOFF),
+    Reference("Calibrate", "Place known dimensions, adjust endpoints, then Submit calibration.", ToolGroup.TAKEOFF),
     Zone("Zone", "Draw an override zone for a detail with a different scale.", ToolGroup.TAKEOFF),
     Pen("Pen", "Draw with a finger or stylus. Pinch with two fingers to zoom.", ToolGroup.MARKUP),
     Highlight("Highlight", "Drag a finger or stylus over the area to highlight.", ToolGroup.MARKUP),
     Arrow("Arrow", "Tap or drag from the tail to the tip.", ToolGroup.MARKUP),
     Line("Line", "Tap or drag between the line endpoints.", ToolGroup.MARKUP),
     Rectangle("Rectangle", "Tap or drag between two opposite corners.", ToolGroup.MARKUP),
-    Text("Text", "Tap where the text should begin.", ToolGroup.MARKUP),
+    Text("Text", "Tap where the text should begin, or tap existing text to edit.", ToolGroup.MARKUP),
     Symbol("Count", "Tap each device to place the chosen symbol.", ToolGroup.MARKUP),
-    Callout("Callout", "Place the leader tip, then the note.", ToolGroup.MARKUP),
-    Dimension("Dimension", "Tap or drag between two points to stamp a calibrated dimension.", ToolGroup.MARKUP),
+    Callout("Arrow callout", "Place the arrow tip, then the text box.", ToolGroup.MARKUP),
+    Dimension("Dimension", "Place Point A then Point B to stamp a calibrated dimension.", ToolGroup.MARKUP),
     Cloud("Cloud", "Tap or drag opposite corners to draw a revision cloud.", ToolGroup.MARKUP),
-    CloudCallout("Cloud + Note", "Draw a revision cloud, then attach a note.", ToolGroup.MARKUP),
-    Photo("Photo", "Tap where you want to pin a field photo.", ToolGroup.MARKUP),
+    CloudCallout("Cloud + Note", "Draw a revision cloud; text is placed inside.", ToolGroup.MARKUP),
+    Photo("Photo", "Tap where to pin a photo, or tap a pin to view.", ToolGroup.MARKUP),
     DetailLink("Detail link", "Tap to link a callout directly to another sheet or detail.", ToolGroup.MARKUP),
     Eraser("Eraser", "Drag to trim strokes or switch to Whole stroke in the bar.", ToolGroup.MARKUP),
     ;
@@ -75,10 +76,18 @@ internal sealed interface EditOp {
     data class Tracing(val points: List<PlanPoint>) : EditOp
 }
 
+internal data class StagedCalibrationRef(
+    val id: String = newId(),
+    val zoneId: String?,
+    val ref: PlanReference,
+)
+
 /** The dialog open over the editor, if any. Only one exists at a time. */
 internal sealed interface EditorDialog {
     data class NewZone(val first: PlanPoint, val second: PlanPoint) : EditorDialog
     data class Reference(val zoneId: String?, val first: PlanPoint, val second: PlanPoint) : EditorDialog
+    data class EditStagedReference(val stagedId: String) : EditorDialog
+    data object StagedCalibrationList : EditorDialog
     data class PlaceText(val point: PlanPoint) : EditorDialog
     data object PickSymbol : EditorDialog
     data class PlaceCallout(val first: PlanPoint, val second: PlanPoint) : EditorDialog
@@ -131,6 +140,7 @@ internal sealed interface EndpointTarget {
     data class Path(val id: String) : EndpointTarget
     data class DocumentReference(val index: Int) : EndpointTarget
     data class ZoneReference(val zoneId: String, val index: Int) : EndpointTarget
+    data class StagedReference(val id: String) : EndpointTarget
 }
 
 /** A draggable end of a measurement or known dimension; [end] is 0 for the first point, 1 for the second. */
@@ -367,6 +377,7 @@ internal object EditorActions {
                     d.copy(zones = d.zones.map { if (it.id == zone.id) it.copy(references = it.references.replaced(target.index, moved)) else it })
                 })
             }
+            is EndpointTarget.StagedReference -> EditorOutcome(session)
         }
     }
 

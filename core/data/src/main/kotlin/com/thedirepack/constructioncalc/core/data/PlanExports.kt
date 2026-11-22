@@ -32,10 +32,12 @@ import com.tom_roush.pdfbox.util.Matrix
 import java.io.File
 import java.io.IOException
 import java.io.OutputStream
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -241,13 +243,24 @@ object PlanExports {
             val y1 = measure.first.y.toFloat()
             val x2 = measure.second.x.toFloat()
             val y2 = measure.second.y.toFloat()
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff08765d.toInt(); strokeWidth = 1.5f }
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff08765d.toInt(); strokeWidth = 2f }
             canvas.drawLine(x1, y1, x2, y2, paint)
-            canvas.drawCircle(x1, y1, 2f, paint)
-            canvas.drawCircle(x2, y2, 2f, paint)
-            paint.textSize = 11f
+            canvas.drawCircle(x1, y1, 3f, paint)
+            canvas.drawCircle(x2, y2, 3f, paint)
+            paint.textSize = 13f
             paint.typeface = Typeface.DEFAULT_BOLD
-            canvas.drawText(label, (x1 + x2) / 2 + 3f, (y1 + y2) / 2 - 4f, paint)
+            val len = hypot(x2 - x1, y2 - y1).coerceAtLeast(1f)
+            var nx = -(y2 - y1) / len
+            var ny = (x2 - x1) / len
+            if (ny > 0f) {
+                nx = -nx
+                ny = -ny
+            }
+            val cx = (x1 + x2) / 2f + nx * 8f
+            val cy = (y1 + y2) / 2f + ny * 8f
+            paint.textAlign = Paint.Align.CENTER
+            drawHaloText(canvas, paint, label, cx, cy, 0xff08765d.toInt(), 255)
+            paint.textAlign = Paint.Align.LEFT
         }
     }
 
@@ -438,14 +451,16 @@ fun drawPlanMark(
             paint.pathEffect = null
             paint.textSize = width
             val lines = mark.text.lines()
+            val fm = paint.fontMetrics
+            val lineHeight = (fm.descent - fm.ascent).coerceAtLeast(width)
             if (applyFillPaint()) {
                 val inset = width * 0.25f
                 val maxW = lines.maxOfOrNull { paint.measureText(it) } ?: 0f
                 canvas.drawRoundRect(
                     x - inset,
-                    y - inset * 0.4f,
+                    y - inset * 0.5f,
                     x + maxW + inset,
-                    y + lines.size * width + inset * 1.1f,
+                    y + lines.size * lineHeight + inset * 0.5f,
                     inset,
                     inset,
                     paint,
@@ -455,10 +470,11 @@ fun drawPlanMark(
                 paint.textSize = width
             }
             paint.style = Paint.Style.FILL
-            drawMultilineText(canvas, mark.text, x, y, width, paint)
+            drawMultilineText(canvas, mark.text, x, y - fm.ascent, lineHeight, paint)
         }
         PlanMarkKind.CALLOUT -> {
             paint.pathEffect = null
+            val hasFill = mark.fillColor != null && mark.fillOpacity > 0f
             drawCalloutNote(
                 canvas = canvas,
                 paint = paint,
@@ -472,12 +488,8 @@ fun drawPlanMark(
                 fontSize = width,
                 strokeColor = baseColor,
                 strokeAlpha = effectiveAlpha,
-                fillColor = mark.fillColor?.toInt() ?: Color.WHITE,
-                fillAlpha = if (mark.fillColor != null && mark.fillOpacity > 0f) {
-                    (255f * mark.fillOpacity * mark.opacity).roundToInt().coerceIn(0, 255)
-                } else {
-                    effectiveAlpha
-                },
+                fillColor = mark.fillColor?.toInt() ?: Color.TRANSPARENT,
+                fillAlpha = if (hasFill) (255f * mark.fillOpacity * mark.opacity).roundToInt().coerceIn(0, 255) else 0,
             )
         }
         PlanMarkKind.DIMENSION -> {
@@ -497,32 +509,41 @@ fun drawPlanMark(
             paint.pathEffect = null
             val arrowStyle = mark.arrowStyle ?: PlanArrowStyle.BOTH
             drawStyledArrowHeads(canvas, paint, path, arrowStyle, x, y, endX, endY)
-            // Readable centered label over white backing
+            // Bold legible label offset off the dimension line, transparent by default (optional fill via style).
             val labelText = dimensionLabel?.invoke(mark) ?: mark.text.ifBlank { "Dimension" }
-            val labelSize = maxOf(10f, width * 4.5f).coerceAtMost(18f)
-            paint.style = Paint.Style.FILL
+            val labelSize = maxOf(14f, width * 6.0f).coerceAtMost(32f)
             paint.typeface = Typeface.DEFAULT_BOLD
             paint.textSize = labelSize
             val textW = paint.measureText(labelText)
-            val padX = labelSize * 0.35f
-            val padY = labelSize * 0.25f
-            val cx = (x + endX) / 2f
-            val cy = (y + endY) / 2f
-            paint.color = Color.WHITE
-            paint.alpha = (235f * mark.opacity).roundToInt().coerceIn(0, 255)
-            canvas.drawRoundRect(
-                cx - textW / 2f - padX,
-                cy - labelSize * 0.65f - padY,
-                cx + textW / 2f + padX,
-                cy + labelSize * 0.35f + padY,
-                3f,
-                3f,
-                paint,
-            )
-            paint.color = baseColor
-            paint.alpha = effectiveAlpha
+            // Orient normal toward screen top so label sits cleanly above horizontal lines.
+            val upNx = if (ny > 0f) -nx else nx
+            val upNy = if (ny > 0f) -ny else ny
+            val cx = (x + endX) / 2f + upNx * (labelSize * 0.72f)
+            val cy = (y + endY) / 2f + upNy * (labelSize * 0.72f)
+            val fm = paint.fontMetrics
+            val baselineY = cy - (fm.ascent + fm.descent) / 2f
+            if (applyFillPaint()) {
+                val padX = labelSize * 0.35f
+                val padY = labelSize * 0.25f
+                canvas.drawRoundRect(
+                    cx - textW / 2f - padX,
+                    baselineY + fm.ascent - padY,
+                    cx + textW / 2f + padX,
+                    baselineY + fm.descent + padY,
+                    3f,
+                    3f,
+                    paint,
+                )
+            }
             paint.textAlign = Paint.Align.CENTER
-            canvas.drawText(labelText, cx, cy + labelSize * 0.25f, paint)
+            if (mark.fillColor != null && mark.fillOpacity > 0f) {
+                paint.style = Paint.Style.FILL
+                paint.color = baseColor
+                paint.alpha = effectiveAlpha
+                canvas.drawText(labelText, cx, baselineY, paint)
+            } else {
+                drawHaloText(canvas, paint, labelText, cx, baselineY, baseColor, effectiveAlpha)
+            }
             paint.textAlign = Paint.Align.LEFT
         }
         PlanMarkKind.CLOUD -> {
@@ -537,6 +558,20 @@ fun drawPlanMark(
             }
             paint.style = Paint.Style.STROKE
             canvas.drawPath(path, paint)
+            if (mark.text.isNotBlank()) {
+                drawTextInsideRect(
+                    canvas = canvas,
+                    paint = paint,
+                    text = mark.text,
+                    left = left,
+                    top = top,
+                    right = right,
+                    bottom = bottom,
+                    preferredSize = maxOf(11f, width * 4.5f),
+                    color = baseColor,
+                    alpha = effectiveAlpha,
+                )
+            }
         }
         PlanMarkKind.CLOUD_CALLOUT -> {
             val p1 = points.getOrElse(1) { first }
@@ -544,8 +579,8 @@ fun drawPlanMark(
             val top = minOf(y, p1.y.toFloat())
             val right = maxOf(x, p1.x.toFloat())
             val bottom = maxOf(y, p1.y.toFloat())
-            val fontSize = maxOf(width, 8f)
-            val strokeW = maxOf(1.5f, fontSize / 7.5f)
+            val fontSize = maxOf(width, 9f)
+            val strokeW = maxOf(1.6f, fontSize / 7.0f)
             paint.strokeWidth = strokeW
             buildCloudPath(path, left, top, right, bottom, maxOf(10f, strokeW * 6f))
             if (applyFillPaint()) {
@@ -555,32 +590,18 @@ fun drawPlanMark(
             }
             paint.style = Paint.Style.STROKE
             canvas.drawPath(path, paint)
-
-            val boxCorner = points.getOrNull(2)
-            val boxLeft = boxCorner?.x?.toFloat() ?: (right + 18f)
-            val boxTop = boxCorner?.y?.toFloat() ?: top
-            val anchorX = boxLeft.coerceIn(left, right)
-            val anchorY = boxTop.coerceIn(top, bottom)
             paint.pathEffect = null
-            drawCalloutNote(
+            drawTextInsideRect(
                 canvas = canvas,
                 paint = paint,
-                anchorX = anchorX,
-                anchorY = anchorY,
-                boxLeft = boxLeft,
-                boxTop = boxTop,
-                edgeStartX = anchorX,
-                edgeStartY = anchorY,
                 text = mark.text.ifBlank { "Revision" },
-                fontSize = fontSize,
-                strokeColor = baseColor,
-                strokeAlpha = effectiveAlpha,
-                fillColor = mark.fillColor?.toInt() ?: Color.WHITE,
-                fillAlpha = if (mark.fillColor != null && mark.fillOpacity > 0f) {
-                    (255f * mark.fillOpacity * mark.opacity).roundToInt().coerceIn(0, 255)
-                } else {
-                    effectiveAlpha
-                },
+                left = left,
+                top = top,
+                right = right,
+                bottom = bottom,
+                preferredSize = fontSize,
+                color = baseColor,
+                alpha = effectiveAlpha,
             )
         }
         PlanMarkKind.PHOTO -> {
@@ -626,15 +647,106 @@ fun drawPlanMark(
     }
 }
 
-private fun drawMultilineText(canvas: Canvas, text: String, left: Float, top: Float, lineHeight: Float, paint: Paint) {
+private fun drawMultilineText(canvas: Canvas, text: String, left: Float, firstBaseline: Float, lineHeight: Float, paint: Paint) {
     var line = 0
     var start = 0
     while (start <= text.length) {
         val end = text.indexOf('\n', start).let { if (it < 0) text.length else it }
-        canvas.drawText(text, start, end, left, top + lineHeight * (line + 1), paint)
+        canvas.drawText(text, start, end, left, firstBaseline + lineHeight * line, paint)
         line++
         start = end + 1
     }
+}
+
+private fun drawHaloText(
+    canvas: Canvas,
+    paint: Paint,
+    text: String,
+    x: Float,
+    baselineY: Float,
+    color: Int,
+    alpha: Int,
+) {
+    val prevStrokeJoin = paint.strokeJoin
+    val prevStrokeWidth = paint.strokeWidth
+    paint.style = Paint.Style.STROKE
+    paint.strokeJoin = Paint.Join.ROUND
+    paint.strokeWidth = maxOf(1.2f, paint.textSize * 0.18f)
+    paint.color = Color.WHITE
+    paint.alpha = (alpha * 0.86f).roundToInt().coerceIn(0, 255)
+    canvas.drawText(text, x, baselineY, paint)
+    paint.strokeWidth = prevStrokeWidth
+    paint.strokeJoin = prevStrokeJoin
+    paint.style = Paint.Style.FILL
+    paint.color = color
+    paint.alpha = alpha
+    canvas.drawText(text, x, baselineY, paint)
+}
+
+private fun wrapLines(text: String, paint: Paint, maxWidth: Float): List<String> {
+    val result = mutableListOf<String>()
+    for (paragraph in text.lines()) {
+        if (paragraph.isBlank()) {
+            result += ""
+            continue
+        }
+        val words = paragraph.trim().split(Regex("""\s+"""))
+        var current = ""
+        for (word in words) {
+            val candidate = if (current.isEmpty()) word else "$current $word"
+            if (current.isNotEmpty() && paint.measureText(candidate) > maxWidth) {
+                result += current
+                current = word
+            } else {
+                current = candidate
+            }
+        }
+        if (current.isNotEmpty()) result += current
+    }
+    return if (result.isEmpty()) listOf("") else result
+}
+
+private fun drawTextInsideRect(
+    canvas: Canvas,
+    paint: Paint,
+    text: String,
+    left: Float,
+    top: Float,
+    right: Float,
+    bottom: Float,
+    preferredSize: Float,
+    color: Int,
+    alpha: Int,
+) {
+    val boxW = abs(right - left).coerceAtLeast(12f)
+    val boxH = abs(bottom - top).coerceAtLeast(12f)
+    val innerW = boxW * 0.78f
+    val innerH = boxH * 0.78f
+    paint.typeface = Typeface.DEFAULT_BOLD
+    var size = preferredSize.coerceIn(7f, maxOf(7f, innerH * 0.6f))
+    var lines = emptyList<String>()
+    var lineH = size
+    for (attempt in 0 until 8) {
+        paint.textSize = size
+        lines = wrapLines(text, paint, innerW)
+        val fm = paint.fontMetrics
+        lineH = (fm.descent - fm.ascent).coerceAtLeast(size)
+        val widest = lines.maxOfOrNull { paint.measureText(it) } ?: 0f
+        if (lines.size * lineH <= innerH && widest <= innerW) break
+        if (size <= 7f) break
+        size = max(7f, size * 0.82f)
+    }
+    paint.textSize = size
+    val fm = paint.fontMetrics
+    lineH = (fm.descent - fm.ascent).coerceAtLeast(size)
+    val totalH = lines.size * lineH
+    val startY = (top + bottom) / 2f - totalH / 2f - fm.ascent
+    val cx = (left + right) / 2f
+    paint.textAlign = Paint.Align.CENTER
+    lines.forEachIndexed { index, line ->
+        drawHaloText(canvas, paint, line, cx, startY + index * lineH, color, alpha)
+    }
+    paint.textAlign = Paint.Align.LEFT
 }
 
 private fun drawCalloutNote(
@@ -654,11 +766,13 @@ private fun drawCalloutNote(
     fillAlpha: Int,
 ) {
     paint.textSize = fontSize
-    val inset = fontSize * .25f
+    val inset = fontSize * .35f
     val lines = text.lines()
+    val fm = paint.fontMetrics
+    val lineHeight = (fm.descent - fm.ascent).coerceAtLeast(fontSize)
     val right = boxLeft + (lines.maxOfOrNull { paint.measureText(it) } ?: 0f) + inset * 2
-    val bottom = boxTop + (lines.size + 1) * fontSize + inset
-    paint.strokeWidth = maxOf(1f, fontSize / 8)
+    val bottom = boxTop + lines.size * lineHeight + inset * 2
+    paint.strokeWidth = maxOf(1.2f, fontSize / 8f)
     paint.color = strokeColor
     paint.alpha = strokeAlpha
     val edgeX = edgeStartX.coerceIn(boxLeft, right)
@@ -667,16 +781,18 @@ private fun drawCalloutNote(
         canvas.drawLine(anchorX, anchorY, edgeX, edgeY, paint)
         drawArrowHead(canvas, paint, edgeX, edgeY, anchorX, anchorY)
     }
-    paint.style = Paint.Style.FILL
-    paint.color = fillColor
-    paint.alpha = fillAlpha
-    canvas.drawRect(boxLeft, boxTop, right, bottom, paint)
+    if (fillAlpha > 0) {
+        paint.style = Paint.Style.FILL
+        paint.color = fillColor
+        paint.alpha = fillAlpha
+        canvas.drawRect(boxLeft, boxTop, right, bottom, paint)
+    }
     paint.color = strokeColor
     paint.alpha = strokeAlpha
     paint.style = Paint.Style.STROKE
     canvas.drawRect(boxLeft, boxTop, right, bottom, paint)
     paint.style = Paint.Style.FILL
-    drawMultilineText(canvas, text, boxLeft + inset, boxTop + inset, fontSize, paint)
+    drawMultilineText(canvas, text, boxLeft + inset, boxTop + inset - fm.ascent, lineHeight, paint)
 }
 
 private fun drawBadgeCaption(
@@ -689,17 +805,11 @@ private fun drawBadgeCaption(
     color: Int,
     alpha: Int,
 ) {
-    paint.style = Paint.Style.FILL
     paint.typeface = Typeface.DEFAULT_BOLD
     paint.textSize = textSize
-    val pad = textSize * 0.25f
-    val w = paint.measureText(text)
-    paint.color = Color.WHITE
-    paint.alpha = (alpha * 0.92f).roundToInt().coerceIn(0, 255)
-    canvas.drawRoundRect(x - pad, centerY - textSize * 0.7f - pad, x + w + pad, centerY + textSize * 0.3f + pad, 3f, 3f, paint)
-    paint.color = color
-    paint.alpha = alpha
-    canvas.drawText(text, x, centerY + textSize * 0.2f, paint)
+    val fm = paint.fontMetrics
+    val baselineY = centerY - (fm.ascent + fm.descent) / 2f
+    drawHaloText(canvas, paint, text, x, baselineY, color, alpha)
 }
 
 private fun buildCloudPath(path: Path, left: Float, top: Float, right: Float, bottom: Float, stepTarget: Float) {
