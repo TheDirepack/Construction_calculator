@@ -43,6 +43,7 @@ import com.thedirepack.constructioncalc.core.model.PathSegment
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
 import com.thedirepack.constructioncalc.core.model.PlanMeasurement
 import com.thedirepack.constructioncalc.core.model.PlanRunRoute
+import com.thedirepack.constructioncalc.core.model.PlanSheetSource
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.Run
@@ -209,10 +210,11 @@ private fun DrawingsScreen(host: ToolHost) {
         }
     }
 
-    fun publish(measurement: PlanMeasurement, quantity: Quantity, name: String) {
+    fun publish(measurement: PlanMeasurement, quantity: Quantity, source: PlanSheetSource) {
         host.publish(
-            listOf(ResultValue.of(measurement.id, "Plan distance", quantity, "≈ " + appSettings.format(quantity))),
-            context = name,
+            listOf(ResultValue.of(measurement.id, "Plan distance", quantity, "≈ " + appSettings.format(quantity))
+                .copy(planSource = source)),
+            context = "${drawing?.name} · ${source.label}",
             immediate = true,
         )
     }
@@ -229,7 +231,7 @@ private fun DrawingsScreen(host: ToolHost) {
             focusRouteId = focusRouteId,
             onChange = ::updateDrawing,
             onSendRouteToRun = ::sendRouteToRun,
-            publish = { measurement, value -> publish(measurement, value, drawing.name) },
+            onPublish = ::publish,
             host = host,
             modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing),
         )

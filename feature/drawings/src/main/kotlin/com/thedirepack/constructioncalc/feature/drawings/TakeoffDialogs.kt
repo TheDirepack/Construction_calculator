@@ -27,6 +27,7 @@ import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
 import com.thedirepack.constructioncalc.core.model.PlanMeasurement
 import com.thedirepack.constructioncalc.core.model.PlanRunRoute
+import com.thedirepack.constructioncalc.core.model.sheetSource
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
@@ -50,11 +51,18 @@ internal fun TakeoffDialog(
                 Modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                if (takeoff.sources.isNotEmpty()) {
+                    Text(drawing.name, style = MaterialTheme.typography.titleSmall)
+                    Text(takeoff.sources.joinToString { it.label }, style = MaterialTheme.typography.bodySmall)
+                }
                 if (takeoff.isEmpty) Text("Nothing measured, counted or routed on this drawing yet.")
                 if (takeoff.measuredCount > 0) {
                     Section("Measured lengths")
                     TotalRow("All pages · ${takeoff.measuredCount}", "≈ ${settings.format(takeoff.measuredTotal)}")
-                    takeoff.byPage.forEach { (_, group) -> TotalRow("${group.name} · ${group.count}", "≈ ${settings.format(group.total)}") }
+                    takeoff.byPage.forEach { (page, group) ->
+                        val source = drawing.sheetSource(page)
+                        TotalRow("${source.label} · ${group.count}", "≈ ${settings.format(group.total)}")
+                    }
                 }
                 if (takeoff.uncalibratedCount > 0) {
                     Text(
@@ -80,9 +88,10 @@ internal fun TakeoffDialog(
                     Section("Routes sent to runs")
                     takeoff.routes.forEach { entry ->
                         val runName = project.runs.firstOrNull { it.id == entry.route.runId }?.name ?: "Run (deleted)"
+                        val source = drawing.sheetSource(entry.route.page)
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(listOf(runName, entry.route.circuitTag, "page ${entry.route.page + 1}").filter(String::isNotBlank).joinToString(" · "))
+                                Text(listOf(runName, entry.route.circuitTag, source.label).filter(String::isNotBlank).joinToString(" · "))
                                 Text(
                                     when {
                                         entry.current == null -> "Can't be measured now: the scale was removed."

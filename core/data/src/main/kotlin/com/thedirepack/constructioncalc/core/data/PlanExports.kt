@@ -1,7 +1,10 @@
 package com.thedirepack.constructioncalc.core.data
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.RectF
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Typeface
@@ -12,6 +15,7 @@ import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
+import com.thedirepack.constructioncalc.core.model.PlanSheetSource
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.multipdf.LayerUtility
@@ -23,10 +27,22 @@ import java.io.File
 import java.io.IOException
 import java.io.OutputStream
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sin
+
+/** Bounds in displayed source-page points, with the origin at the top left. */
+data class PlanExportCrop(val left: Float, val top: Float, val right: Float, val bottom: Float) {
+    init {
+        require(listOf(left, top, right, bottom).all(Float::isFinite))
+        require(left >= 0 && top >= 0 && right > left && bottom > top)
+    }
+
+    val width: Float get() = right - left
+    val height: Float get() = bottom - top
+}
 
 object PlanExports {
     fun writeJson(drawing: PlanDrawing, out: OutputStream) {
@@ -104,42 +120,7 @@ object PlanExports {
                 val (width, height) = sizes[index]
                 val page = document.startPage(PdfDocument.PageInfo.Builder(width, height, index + 1).create())
                 try {
-                    drawing.marks.filter { it.page == pageNumber }.forEach { drawPlanMark(page.canvas, it) }
-                    drawing.routes.filter { it.page == pageNumber }.forEach { route ->
-                        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                            color = 0xcc7b1fa2.toInt()
-                            strokeWidth = 2f
-                            style = Paint.Style.STROKE
-                            strokeJoin = Paint.Join.ROUND
-                        }
-                        val path = Path().apply {
-                            moveTo(route.points.first().x.toFloat(), route.points.first().y.toFloat())
-                            route.points.drop(1).forEach { lineTo(it.x.toFloat(), it.y.toFloat()) }
-                        }
-                        page.canvas.drawPath(path, paint)
-                        paint.style = Paint.Style.FILL
-                        paint.textSize = 10f
-                        paint.typeface = Typeface.DEFAULT_BOLD
-                        val start = route.points.first()
-                        val name = routeLabel(route.runId)
-                        val label = if (route.circuitTag.isBlank()) name else "$name · ${route.circuitTag}"
-                        page.canvas.drawText(label, start.x.toFloat() + 3f, start.y.toFloat() - 4f, paint)
-                    }
-                    drawing.measurements.filter { it.page == pageNumber }.forEach { measure ->
-                        val value = drawing.length(measure)?.let { "≈ ${format(it)}" } ?: "Uncalibrated"
-                        val label = if (measure.label.isBlank()) value else "${measure.label}: $value"
-                        val x1 = measure.first.x.toFloat()
-                        val y1 = measure.first.y.toFloat()
-                        val x2 = measure.second.x.toFloat()
-                        val y2 = measure.second.y.toFloat()
-                        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff08765d.toInt(); strokeWidth = 1.5f }
-                        page.canvas.drawLine(x1, y1, x2, y2, paint)
-                        page.canvas.drawCircle(x1, y1, 2f, paint)
-                        page.canvas.drawCircle(x2, y2, 2f, paint)
-                        paint.textSize = 11f
-                        paint.typeface = Typeface.DEFAULT_BOLD
-                        page.canvas.drawText(label, (x1 + x2) / 2 + 3f, (y1 + y2) / 2 - 4f, paint)
-                    }
+                    drawAnnotations(page.canvas, drawing, pageNumber, format, routeLabel)
                 } finally {
                     document.finishPage(page)
                 }
@@ -149,6 +130,120 @@ object PlanExports {
             document.close()
         }
         return sizes
+    }
+
+    private fun drawAnnotations(
+        canvas: Canvas,
+        drawing: PlanDrawing,
+        pageNumber: Int,
+        format: (Quantity) -> String,
+        routeLabel: (String) -> String,
+    ) {
+        drawing.marks.filter { it.page == pageNumber }.forEach { drawPlanMark(canvas, it) }
+        drawing.routes.filter { it.page == pageNumber }.forEach { route ->
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xcc7b1fa2.toInt()
+                strokeWidth = 2f
+                style = Paint.Style.STROKE
+                strokeJoin = Paint.Join.ROUND
+            }
+            val path = Path().apply {
+                moveTo(route.points.first().x.toFloat(), route.points.first().y.toFloat())
+                route.points.drop(1).forEach { lineTo(it.x.toFloat(), it.y.toFloat()) }
+            }
+            canvas.drawPath(path, paint)
+            paint.style = Paint.Style.FILL
+            paint.textSize = 10f
+            paint.typeface = Typeface.DEFAULT_BOLD
+            val start = route.points.first()
+            val name = routeLabel(route.runId)
+            val label = if (route.circuitTag.isBlank()) name else "$name · ${route.circuitTag}"
+            canvas.drawText(label, start.x.toFloat() + 3f, start.y.toFloat() - 4f, paint)
+        }
+        drawing.measurements.filter { it.page == pageNumber }.forEach { measure ->
+            val value = drawing.length(measure)?.let { "≈ ${format(it)}" } ?: "Uncalibrated"
+            val label = if (measure.label.isBlank()) value else "${measure.label}: $value"
+            val x1 = measure.first.x.toFloat()
+            val y1 = measure.first.y.toFloat()
+            val x2 = measure.second.x.toFloat()
+            val y2 = measure.second.y.toFloat()
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff08765d.toInt(); strokeWidth = 1.5f }
+            canvas.drawLine(x1, y1, x2, y2, paint)
+            canvas.drawCircle(x1, y1, 2f, paint)
+            canvas.drawCircle(x2, y2, 2f, paint)
+            paint.textSize = 11f
+            paint.typeface = Typeface.DEFAULT_BOLD
+            canvas.drawText(label, (x1 + x2) / 2 + 3f, (y1 + y2) / 2 - 4f, paint)
+        }
+    }
+
+    /** A flattened sheet or viewport crop. Only visible pixels enter the exported PDF. */
+    fun writeSheetPdf(
+        context: Context,
+        drawing: PlanDrawing,
+        source: PlanSheetSource,
+        crop: PlanExportCrop?,
+        out: OutputStream,
+        format: (Quantity) -> String,
+        routeLabel: (String) -> String,
+    ) {
+        require(source.drawingId == drawing.id && source.sha256 == drawing.sha256)
+        val file = PlanFiles(context).file(source.sha256)
+        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+            PdfRenderer(descriptor).use { renderer ->
+                renderer.openPage(source.page).use { page ->
+                    val region = crop ?: PlanExportCrop(0f, 0f, page.width.toFloat(), page.height.toFloat())
+                    require(region.right <= page.width && region.bottom <= page.height)
+                    val detail = min(3f, 4096f / maxOf(region.width, region.height))
+                    val bitmap = Bitmap.createBitmap(
+                        ceil(region.width * detail).toInt().coerceAtLeast(1),
+                        ceil(region.height * detail).toInt().coerceAtLeast(1),
+                        Bitmap.Config.ARGB_8888,
+                    )
+                    try {
+                        bitmap.eraseColor(Color.WHITE)
+                        val map = android.graphics.Matrix().apply {
+                            setTranslate(-region.left, -region.top)
+                            postScale(bitmap.width / region.width, bitmap.height / region.height)
+                        }
+                        page.render(bitmap, null, map, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+                        val pixels = Canvas(bitmap)
+                        pixels.concat(map)
+                        drawAnnotations(pixels, drawing, source.page, format, routeLabel)
+                        writeStampedSheet(bitmap, region, source, out)
+                    } finally {
+                        bitmap.recycle()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun writeStampedSheet(bitmap: Bitmap, region: PlanExportCrop, source: PlanSheetSource, out: OutputStream) {
+        val header = 36
+        val width = maxOf(180, ceil(region.width).toInt())
+        val left = (width - region.width) / 2
+        val document = PdfDocument()
+        try {
+            val page = document.startPage(PdfDocument.PageInfo.Builder(width, ceil(region.height).toInt() + header, 1).create())
+            try {
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+                val lines = listOf("Sheet ${source.sheetId}", source.revision?.let { "Revision $it" } ?: "Revision unassigned")
+                paint.typeface = Typeface.DEFAULT_BOLD
+                paint.textSize = 11f
+                lines.forEachIndexed { index, line ->
+                    paint.textScaleX = 1f
+                    paint.textScaleX = min(1f, (width - 16f) / paint.measureText(line).coerceAtLeast(1f))
+                    page.canvas.drawText(line, 8f, 13f + index * 14f, paint)
+                }
+                page.canvas.drawBitmap(bitmap, null, RectF(left, header.toFloat(), left + region.width, header + region.height), paint)
+            } finally {
+                document.finishPage(page)
+            }
+            document.writeTo(out)
+        } finally {
+            document.close()
+        }
     }
 
     /** The form uses bottom-left coordinates in the displayed page orientation. */

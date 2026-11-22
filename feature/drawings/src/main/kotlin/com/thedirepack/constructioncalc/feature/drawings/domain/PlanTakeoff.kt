@@ -6,6 +6,8 @@ import com.thedirepack.constructioncalc.core.model.PlanDrawing
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanRunRoute
+import com.thedirepack.constructioncalc.core.model.PlanSheetSource
+import com.thedirepack.constructioncalc.core.model.sheetSource
 
 /** Length measurements of one group (a page, a zone, a label) and their total. */
 data class LengthGroup(val name: String, val count: Int, val total: Quantity)
@@ -37,6 +39,7 @@ data class TakeoffSummary(
     val textNotes: Int,
     val symbolsByCircuit: List<SymbolCount> = emptyList(),
     val routes: List<RouteTakeoff>,
+    val sources: List<PlanSheetSource>,
 ) {
     val isEmpty: Boolean
         get() = measuredCount == 0 && uncalibratedCount == 0 && symbols.isEmpty() && textNotes == 0 && routes.isEmpty()
@@ -88,6 +91,10 @@ object PlanTakeoff {
             symbolsByCircuit = byCircuit,
             textNotes = drawing.marks.count { it.kind == PlanMarkKind.TEXT || it.kind == PlanMarkKind.CALLOUT },
             routes = routes,
+            sources = (drawing.measurements.map { it.page } + symbolMarks.map { it.page } +
+                drawing.routes.map { it.page } + drawing.marks.filter {
+                    it.kind == PlanMarkKind.TEXT || it.kind == PlanMarkKind.CALLOUT
+                }.map { it.page }).distinct().sorted().map { drawing.sheetSource(it) },
         )
     }
 }

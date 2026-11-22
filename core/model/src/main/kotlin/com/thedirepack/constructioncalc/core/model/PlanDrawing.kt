@@ -562,9 +562,11 @@ data class PlanDrawing(
     /** Routes sent to project runs, one per run (the latest send replaces the earlier one). */
     val routes: List<PlanRunRoute> = emptyList(),
     val paths: List<PlanPath> = emptyList(),
+    val sheetRevisions: Map<Int, SheetRevision> = emptyMap(),
 ) {
     init {
         require(name.isNotBlank() && name.length <= 240)
+        require(sheetRevisions.keys.all { it >= 0 })
         require(sha256.length == 64 && sha256.all { it in '0'..'9' || it in 'a'..'f' })
     }
 

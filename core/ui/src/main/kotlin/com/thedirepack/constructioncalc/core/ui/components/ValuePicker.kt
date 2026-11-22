@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ValueKind
+import com.thedirepack.constructioncalc.core.model.sheetRevisionStatus
+import com.thedirepack.constructioncalc.core.model.sheetSource
 import com.thedirepack.constructioncalc.core.ui.fractionText
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
@@ -69,17 +71,22 @@ fun ValuePickerSheet(
     }
     val projectRows = remember(project, kinds) {
         project?.allResults().orEmpty().filter { it.value.kind in kinds }.map {
-            PickRow(it.value, "${it.run.name} › ${it.item.title} · ${tools.titleOf(it.item.toolId)}")
+            val item = "${it.run.name} › ${it.item.title} · ${tools.titleOf(it.item.toolId)}"
+            PickRow(it.value, listOfNotNull(item, it.value.planSource?.label).joinToString(" · "))
         }
     }
-    val drawingRows = remember(project?.drawings, kinds, settings) {
-        if (ValueKind.LENGTH !in kinds) emptyList()
-        else project?.drawings.orEmpty().flatMap { drawing ->
+    val drawingRows = remember(project, kinds, settings) {
+        if (project == null || ValueKind.LENGTH !in kinds) emptyList()
+        else project.drawings.flatMap { drawing ->
+            val revisionStatuses = drawing.sheetRevisions.mapValues { (page, _) -> project.sheetRevisionStatus(drawing, page) }
             drawing.measurements.mapNotNull { measurement ->
                 drawing.length(measurement)?.let { length ->
+                    val source = drawing.sheetSource(measurement.page)
+                    val status = revisionStatuses[measurement.page]
                     PickRow(
-                        ResultValue.of(measurement.id, "Plan distance", length, "≈ " + settings.format(length)),
-                        "${drawing.name} · Page ${measurement.page + 1}",
+                        ResultValue.of(measurement.id, "Plan distance", length, "≈ " + settings.format(length))
+                            .copy(planSource = source),
+                        listOfNotNull(drawing.name, source.label, status?.label).joinToString(" · "),
                     )
                 }
             }

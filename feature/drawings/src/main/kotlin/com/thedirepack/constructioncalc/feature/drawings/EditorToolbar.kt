@@ -120,6 +120,7 @@ internal fun EditorOptions(
     onToggleHighlights: () -> Unit,
     onTakeoff: () -> Unit,
     onPageItems: () -> Unit,
+    onExportSheet: () -> Unit,
     onExportPdf: () -> Unit,
     onExportJson: () -> Unit,
 ) {
@@ -145,6 +146,7 @@ internal fun EditorOptions(
             MenuItem("Takeoff totals", close, onTakeoff)
             MenuItem("Page measurements and markups", close, onPageItems)
             HorizontalDivider()
+            MenuItem("Export or share this sheet", close, onExportSheet)
             MenuItem("Export annotated PDF", close, onExportPdf)
             MenuItem("Export drawing JSON", close, onExportJson)
         }
