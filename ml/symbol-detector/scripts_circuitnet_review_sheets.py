@@ -475,6 +475,21 @@ def cmd_render(args: argparse.Namespace) -> None:
 
         pdf_stem = jpath.name.removesuffix('_CIRCUITNET.json').removesuffix('_SAM3.json')
         pdf_out_dir = out_root / pdf_stem
+        if args.zip and (out_root / f'{pdf_stem}.zip').is_file() and (pdf_out_dir / 'manifest.json').is_file():
+            m = json.loads((pdf_out_dir / 'manifest.json').read_text())
+            pdf_index.append({
+                'folder': pdf_stem,
+                'zip_file': f'{pdf_stem}.zip',
+                'source_file': m.get('source_file'),
+                'pdf_included': m.get('pdf_included', False),
+                'total_devices': m.get('total_devices', 0),
+                'total_batches': m.get('total_batches', 0),
+            })
+            total_pdfs += 1
+            total_sheets += int(m.get('total_batches', 0))
+            total_crops += int(m.get('total_devices', 0))
+            print(f'[{total_pdfs}] RESUME-SKIP {pdf_stem}.zip (already complete)', flush=True)
+            continue
         pdf_out_dir.mkdir(parents=True, exist_ok=True)
 
         doc = pymupdf.open(pdf_path)
@@ -621,10 +636,12 @@ def cmd_render(args: argparse.Namespace) -> None:
         zip_file_name = None
         if args.zip:
             zip_path = out_root / f'{pdf_stem}.zip'
-            with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            tmp_zip = out_root / f'.{pdf_stem}.zip.tmp'
+            with zipfile.ZipFile(tmp_zip, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
                 for f in sorted(pdf_out_dir.iterdir()):
                     if f.is_file():
                         zf.write(f, arcname=f'{pdf_stem}/{f.name}')
+            tmp_zip.replace(zip_path)
             zip_file_name = zip_path.name
 
         pdf_index.append({
