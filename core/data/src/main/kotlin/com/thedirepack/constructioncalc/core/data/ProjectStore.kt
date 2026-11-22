@@ -33,7 +33,10 @@ class FileProjectStore(private val dir: File) : ProjectStore {
             runCatching { ProjectCodec.decode(file.readText()) }.getOrElse {
                 damagedDir.mkdirs()
                 val aside = File(damagedDir, file.name)
-                if (!file.renameTo(aside)) file.copyTo(aside, overwrite = true)
+                if (!file.renameTo(aside)) {
+                    file.copyTo(aside, overwrite = true)
+                    file.delete()
+                }
                 bad += file.name
                 null
             }
@@ -49,6 +52,7 @@ class FileProjectStore(private val dir: File) : ProjectStore {
         // Write then rename, so a crash mid-write never corrupts the saved project.
         val target = fileFor(project.id)
         val temp = File(dir, "${project.id}.tmp")
+        require(temp.canonicalFile.parentFile == dir.canonicalFile) { "Invalid project id." }
         temp.writeText(ProjectCodec.encode(project))
         if (!temp.renameTo(target)) {
             target.delete()
@@ -60,5 +64,12 @@ class FileProjectStore(private val dir: File) : ProjectStore {
         fileFor(projectId).delete()
     }
 
-    private fun fileFor(id: String) = File(dir, "$id.json")
+    private fun fileFor(id: String): File {
+        require(id.length in 1..64 && id.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' }) {
+            "Invalid project id."
+        }
+        val file = File(dir, "$id.json")
+        require(file.canonicalFile.parentFile == dir.canonicalFile) { "Invalid project path." }
+        return file
+    }
 }

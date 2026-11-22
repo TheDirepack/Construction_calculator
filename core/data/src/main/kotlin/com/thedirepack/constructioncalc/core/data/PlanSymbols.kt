@@ -114,8 +114,13 @@ private fun parseSvg(source: String): SvgDrawing {
     val shapes = mutableListOf<SvgShape>()
     while (parser.eventType != XmlPullParser.END_DOCUMENT) {
         when (parser.eventType) {
-            XmlPullParser.DOCDECL, XmlPullParser.ENTITY_REF ->
-                throw IllegalArgumentException("SVG document types and entities are unsupported.")
+            XmlPullParser.DOCDECL ->
+                throw IllegalArgumentException("SVG document types are unsupported.")
+            XmlPullParser.ENTITY_REF -> {
+                if (parser.name !in PREDEFINED_XML_ENTITIES) {
+                    throw IllegalArgumentException("SVG custom entities are unsupported.")
+                }
+            }
             XmlPullParser.START_TAG -> {
                 require(parser.depth <= 24 && shapes.size < 2_000) { "This SVG is too complex." }
                 val attributes = readAttributes(parser)
@@ -217,35 +222,39 @@ private fun addPaint(
 }
 
 private fun Map<String, String>.path(name: String): Path {
+    val attrs = this
     if (name == "path") {
-        val data = getValue("d")
+        val data = requireNotNull(attrs["d"]) { "SVG <path> is missing its d attribute." }
         require(data.length <= 64_000 && numbersInPath(data)) { "This SVG path is invalid or too complex." }
-        return PathParser.createPathFromPathData(data) ?: throw IllegalArgumentException("Invalid SVG path.")
+        return PathParser.createPathFromPathData(data)
     }
     return Path().apply {
         when (name) {
             "rect" -> {
-                val x = number("x")
-                val y = number("y")
-                val width = number("width")
-                val height = number("height")
-                val rx = number("rx", number("ry")).coerceIn(0f, width.coerceAtLeast(0f) / 2)
-                val ry = number("ry", rx).coerceIn(0f, height.coerceAtLeast(0f) / 2)
+                val x = attrs.number("x")
+                val y = attrs.number("y")
+                val width = attrs.number("width")
+                val height = attrs.number("height")
+                require(width >= 0f && height >= 0f) { "SVG <rect> dimensions must be non-negative." }
+                val rx = attrs.number("rx", attrs.number("ry")).coerceIn(0f, width / 2)
+                val ry = attrs.number("ry", rx).coerceIn(0f, height / 2)
                 addRoundRect(x, y, x + width, y + height, rx, ry, Path.Direction.CW)
             }
             "line" -> {
-                moveTo(number("x1"), number("y1"))
-                lineTo(number("x2"), number("y2"))
+                moveTo(attrs.number("x1"), attrs.number("y1"))
+                lineTo(attrs.number("x2"), attrs.number("y2"))
             }
             "circle", "ellipse" -> {
-                val x = number("cx")
-                val y = number("cy")
-                val rx = number(if (name == "circle") "r" else "rx")
-                val ry = if (name == "circle") rx else number("ry")
+                val x = attrs.number("cx")
+                val y = attrs.number("cy")
+                val rx = attrs.number(if (name == "circle") "r" else "rx")
+                val ry = if (name == "circle") rx else attrs.number("ry")
+                require(rx >= 0f && ry >= 0f) { "SVG <$name> radius must be non-negative." }
                 addOval(x - rx, y - ry, x + rx, y + ry, Path.Direction.CW)
             }
             "polyline", "polygon" -> {
-                val points = numbers(getValue("points"))
+                val raw = requireNotNull(attrs["points"]) { "SVG <$name> is missing its points attribute." }
+                val points = numbers(raw)
                 require(points.size >= 4 && points.size % 2 == 0) { "Invalid SVG points." }
                 moveTo(points[0], points[1])
                 for (index in 2 until points.size step 2) lineTo(points[index], points[index + 1])
@@ -254,6 +263,8 @@ private fun Map<String, String>.path(name: String): Path {
         }
     }
 }
+
+private val PREDEFINED_XML_ENTITIES = setOf("amp", "lt", "gt", "quot", "apos")
 
 private val numberPattern = Regex("""[+-]?(?:\d*\.\d+|\d+\.?)(?:[eE][+-]?\d+)?""")
 private val transformPattern = Regex("""([a-zA-Z]+)\s*\(([^()]*)\)""")

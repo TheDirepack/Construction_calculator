@@ -106,17 +106,38 @@ fun rememberBackupExporter(onMessage: (String) -> Unit): BackupExporter {
     return remember(services, tools) {
         BackupExporter(
             share = { sections, label ->
-                val backup = services.backup.create(sections)
-                val name = AppFileCodec.backupFileName(services.clock(), label)
-                try {
-                    context.startActivity(ProjectSharing.shareBackupIntent(context, backup, name, tools::titleOf))
-                } catch (_: ActivityNotFoundException) {
-                    onMessage("No app available to share with")
+                scope.launch {
+                    val intent = runCatching {
+                        withContext(Dispatchers.IO) {
+                            val backup = services.backup.create(sections)
+                            val name = AppFileCodec.backupFileName(services.clock(), label)
+                            ProjectSharing.shareBackupIntent(context, backup, name, tools::titleOf)
+                        }
+                    }.getOrElse {
+                        onMessage(it.message ?: "Couldn't create the backup")
+                        return@launch
+                    }
+                    try {
+                        context.startActivity(intent)
+                    } catch (_: ActivityNotFoundException) {
+                        onMessage("No app available to share with")
+                    }
                 }
             },
             saveToFile = { sections, label ->
-                pending = AppFileCodec.encodeBackup(services.backup.create(sections))
-                saver.launch(AppFileCodec.backupFileName(services.clock(), label))
+                scope.launch {
+                    val prepared = runCatching {
+                        withContext(Dispatchers.IO) {
+                            val name = AppFileCodec.backupFileName(services.clock(), label)
+                            name to AppFileCodec.encodeBackup(services.backup.create(sections))
+                        }
+                    }.getOrElse {
+                        onMessage(it.message ?: "Couldn't create the backup")
+                        return@launch
+                    }
+                    pending = prepared.second
+                    saver.launch(prepared.first)
+                }
             },
         )
     }

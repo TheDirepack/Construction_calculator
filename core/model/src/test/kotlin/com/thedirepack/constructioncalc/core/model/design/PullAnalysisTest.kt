@@ -154,7 +154,7 @@ class PullAnalysisTest {
     }
 
     @Test fun reverseDiffersWhenBendsAreAtOneEnd() {
-        val run = fixtureRun().copy(pull = fixtureSetup.copy(incomingTension = emptyList()))
+        val run = fixtureRun().copy(pull = fixtureSetup.copy(incomingTension = listOf(0.0)))
         val path = listOf(PathSegment.Straight(ft(200)), PathSegment.Bend(90.0, inches(24.0)), PathSegment.Bend(90.0, inches(24.0)))
         val p = Project(name = "P", createdAt = 0, runs = listOf(run)).withRunPath(run.id, path, 1)
         val r = PullAnalysis.analyze(p, run.id)!!

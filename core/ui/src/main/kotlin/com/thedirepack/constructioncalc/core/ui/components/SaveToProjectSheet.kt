@@ -259,22 +259,22 @@ fun SaveToProjectSheet(
                             results = draft.results,
                             summary = draft.summary,
                         )
-                        services.projects.addItem(targetProject.id, targetRun.id, item)
-                        if (addBends && bends.isNotEmpty()) {
-                            services.projects.edit(targetProject.id) { p, t -> p.addBendsToRunPath(targetRun.id, item.id, bends, t) }
-                        }
-                        if (useRoute && route != null) {
-                            services.projects.edit(targetProject.id) { p, t ->
-                                p.updateRun(targetRun.id, t) { r -> r.copy(pull = route.pull ?: r.pull, raceway = route.raceway ?: r.raceway) }
-                                    .withRunPath(targetRun.id, route.path, t)
+                        services.projects.edit(targetProject.id) { p, t ->
+                            var updated = p.addItem(targetRun.id, item, t)
+                            if (addBends && bends.isNotEmpty()) {
+                                updated = updated.addBendsToRunPath(targetRun.id, item.id, bends, t)
                             }
-                        }
-                        if (useConduit && conduit != null) {
-                            services.projects.edit(targetProject.id) { p, t ->
-                                p.updateRun(targetRun.id, t) { r ->
+                            if (useRoute && route != null) {
+                                updated = updated.updateRun(targetRun.id, t) { r ->
+                                    r.copy(pull = route.pull ?: r.pull, raceway = route.raceway ?: r.raceway)
+                                }.withRunPath(targetRun.id, route.path, t)
+                            }
+                            if (useConduit && conduit != null) {
+                                updated = updated.updateRun(targetRun.id, t) { r ->
                                     r.copy(raceway = (r.raceway ?: Raceway()).copy(conduitType = conduit.conduitType, tradeSize = conduit.tradeSize))
                                 }.syncRunLength(targetRun.id, t) // bend radii follow the new size
                             }
+                            updated
                         }
                         services.settings.setActiveTarget(targetProject.id, targetRun.id)
                         onSaved("Saved to ${targetProject.name} › ${targetRun.name}")

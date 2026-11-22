@@ -161,8 +161,7 @@ fun Project.feedCandidates(panelId: String): List<CircuitAt> {
 fun Project.circuitsInRun(runId: String): List<CircuitAt> = allCircuits().filter { runId in it.circuit.runIds }
 
 /** Deletes a run and takes it out of every circuit. */
-fun Project.deleteRunAndUnassign(runId: String, now: Long): Project =
-    assignRun(runId, emptySet(), now).removeRun(runId, now)
+fun Project.deleteRunAndUnassign(runId: String, now: Long): Project = removeRun(runId, now)
 
 /** A new conduit run (a project run with a [Raceway]). */
 fun Project.addConduitRun(name: String, now: Long, raceway: Raceway = Raceway()): Pair<Project, Run> {

@@ -52,8 +52,9 @@ open class ToolInputsViewModel<T : Any>(initial: T, private val serializer: KSer
     fun prefill(target: ToolTarget?, build: (ToolTarget) -> T?) {
         val key = target?.encode() ?: return
         if (prefilledFor == key) return
+        val built = build(target) ?: return
         prefilledFor = key
-        build(target)?.let(::load)
+        load(built)
     }
 
     protected open fun normalize(next: T): T = next

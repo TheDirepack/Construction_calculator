@@ -100,9 +100,9 @@ object VfdSizing {
     /** Table 430.52(C)(1) maximum for a time-delay (dual-element) fuse, percent of full-load current. */
     val DUAL_ELEMENT_FUSE_PERCENT: Int get() = MotorProtection.percent(MotorType.POLYPHASE_AC, MotorProtectiveDevice.DUAL_ELEMENT_FUSE)
     /** Table 430.52(C)(1), inverse-time circuit breaker, three-phase induction motor. */
-    val BREAKER_FACTOR = MotorProtection.factor(MotorType.POLYPHASE_AC, MotorProtectiveDevice.INVERSE_TIME_BREAKER)
+    val BREAKER_FACTOR: Double get() = MotorProtection.factor(MotorType.POLYPHASE_AC, MotorProtectiveDevice.INVERSE_TIME_BREAKER)
     /** Table 430.52(C)(1), time-delay (dual-element) fuse, three-phase induction motor. */
-    val DUAL_ELEMENT_FUSE_FACTOR = MotorProtection.factor(MotorType.POLYPHASE_AC, MotorProtectiveDevice.DUAL_ELEMENT_FUSE)
+    val DUAL_ELEMENT_FUSE_FACTOR: Double get() = MotorProtection.factor(MotorType.POLYPHASE_AC, MotorProtectiveDevice.DUAL_ELEMENT_FUSE)
     /** [CodeRule.MOTOR_OVERLOAD]: overload device maximum for motors with a high service factor or a low temperature rise. */
     val OVERLOAD_FACTOR: Double get() = Code.book.values.motorOverloadFactor
     /** Rule of thumb only, not a code requirement. */
@@ -139,8 +139,8 @@ object VfdSizing {
         else if (MotorFullLoadCurrent.threePhase(request.hp, request.volts) == null) {
             add("${CodeRule.MOTOR_FLC_THREE_PHASE.cite} has no ${MotorFullLoadCurrent.label(request.hp)} HP value at ${request.volts} V.")
         }
-        request.nameplateFla?.let { if (!(it > 0)) add("Nameplate FLA must be more than zero.") }
-        request.driveInputAmps?.let { if (!(it > 0)) add("Drive input current must be more than zero.") }
+        request.nameplateFla?.let { if (!(it.isFinite() && it > 0)) add("Nameplate FLA must be more than zero.") }
+        request.driveInputAmps?.let { if (!(it.isFinite() && it > 0)) add("Drive input current must be more than zero.") }
     }
 
     fun calculate(request: VfdRequest): VfdResult? {

@@ -179,7 +179,9 @@ object Bends {
     fun backToBack(height: Rational, spec: BenderSpec, between: Rational, secondStub: Rational? = null): BackToBackResult? {
         if (between.signum <= 0) return null
         val first = stubUp(height, spec) ?: return null
-        val cut = secondStub?.takeIf { it.signum > 0 }?.let { height + between + it - spec.gain - spec.gain }
+        if (secondStub != null && secondStub < spec.takeUp) return null
+        val cut = secondStub?.let { height + between + it - spec.gain - spec.gain }
+        if (cut != null && cut.signum <= 0) return null
         return BackToBackResult(first, between, between, secondStub, cut)
     }
 
@@ -207,6 +209,7 @@ object Bends {
         val multiplier = BendMath.tidy(BendMath.csc(angleDeg))
         val travel = height * multiplier
         val run = height * BendMath.tidy(BendMath.cot(angleDeg))
+        if (distance != null && distance < run) return null
         return KickResult(height, angleDeg, multiplier, travel, run, travel - run, distance?.let { it - run })
     }
 }

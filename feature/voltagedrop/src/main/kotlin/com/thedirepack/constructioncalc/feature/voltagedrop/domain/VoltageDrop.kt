@@ -101,12 +101,12 @@ object VoltageDrop {
 
     /** Human-readable problems that stop a calculation. Empty when [request] can be calculated. */
     fun problems(request: VoltageDropRequest): List<String> = buildList {
-        if (!(request.volts > 0)) add("Voltage must be greater than 0.")
-        if (!(request.amps > 0)) add("Load current must be greater than 0.")
-        if (!(request.lengthFeet > 0)) add("Length must be greater than 0.")
+        if (!(request.volts.isFinite() && request.volts > 0)) add("Voltage must be greater than 0.")
+        if (!(request.amps.isFinite() && request.amps > 0)) add("Load current must be greater than 0.")
+        if (!(request.lengthFeet.isFinite() && request.lengthFeet > 0)) add("Length must be greater than 0.")
         if (request.parallelSets !in 1..MAX_SETS) add("Parallel sets must be 1 to $MAX_SETS.")
-        if (!(request.targetPercent > 0 && request.targetPercent < 100)) add("Target drop must be between 0 and 100%.")
-        if (request.method == Method.AC_TABLE_9 && !(request.powerFactor > 0 && request.powerFactor <= 1)) {
+        if (!(request.targetPercent.isFinite() && request.targetPercent > 0 && request.targetPercent < 100)) add("Target drop must be between 0 and 100%.")
+        if (request.method == Method.AC_TABLE_9 && !(request.powerFactor.isFinite() && request.powerFactor > 0 && request.powerFactor <= 1)) {
             add("Power factor must be above 0 and at most 1.")
         }
         if (impedancePerKft(request.size, request.material, request.method, request.conduit, request.powerFactor.coerceIn(0.01, 1.0), request.stranding) == null) {

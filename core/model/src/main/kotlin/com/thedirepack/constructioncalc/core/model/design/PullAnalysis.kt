@@ -255,7 +255,7 @@ object PullAnalysis {
         if (path.any { it is PathSegment.Bend && it.plane != BendPlane.HORIZONTAL }) {
             notes += info("Vertical bends assume the tension holds the cable against the inside of the bend.")
         }
-        if (forward != null && setup.incomingTension.all { it == 0.0 }) notes += info("Incoming tension is 0 ${Measure.FORCE.unit(units).symbol}. Add the feed-in (reel back) tension if you know it.")
+        if (forward != null && sectionDegrees.indices.all { setup.incoming(it) == 0.0 }) notes += info("Incoming tension is 0 ${Measure.FORCE.unit(units).symbol}. Add the feed-in (reel back) tension if you know it.")
 
         val routed = if (path.isNotEmpty()) RunPath.lengthInches(path, raceway?.conduitType, size) else raceway?.length?.toQuantity()?.value?.toDouble()
         val slack = setup.slackPerEnd?.toQuantity()?.value?.toDouble() ?: 0.0

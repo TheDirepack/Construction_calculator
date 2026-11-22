@@ -215,6 +215,26 @@ series ratings, and selective coordination notes.
 - [ ] Editable local conventions (phase colors) and user notes on entries
 - [ ] Deep links from individual notices (tap a citation to open its entry)
 
+## Next improvements (to-do)
+
+- **Printable panel schedule export**: export directly from the panel schedule creator as a print-ready PDF or image (PNG) formatted to print and post inside a panel door or job binder.
+- **Drawings UX & takeoff**:
+  - [ ] Crisp high-zoom region tiling in `PlanCanvas` (reusing `PlanRendering.renderRegion`), avoiding per-frame allocations and recycling page bitmaps
+  - [ ] Loupe / magnifier overlay while snapping endpoints on plans
+  - [ ] Multi-segment / polyline measurement on plans (summing chained legs + bend count straight into a Project Run / Wire Pull Planner)
+  - [ ] Undo/redo stack for drawing markups and measurements
+  - [ ] Rename and delete imported drawings in the drawing list, plus garbage-collecting unreferenced PDFs
+  - [ ] Include drawing measurement summaries in `ProjectText` exports
+- **Projects & exports**:
+  - [ ] Add a `Panels · N` entry point directly on `ProjectDetailScreen`
+  - [ ] CSV / spreadsheet export for material takeoffs and panel schedules
+  - [ ] Search and filter on `ProjectsScreen` (by name, note, panel, or circuit)
+  - [ ] Full `.backup.zip` export/restore that carries drawing PDFs alongside project JSON
+- **Platform polish**:
+  - [ ] Store lightweight `(projectId, itemId)` in `DestinationCodec` instead of full `ProjectItem` JSON in `rememberSaveable`
+  - [ ] Standardize `FileProjectStore` writes on `AtomicFile` / atomic moves
+  - [ ] Show clipboard copy feedback snackbar on Android API < 33
+
 ## Idea backlog
 
 [plans/feature-ideas.md](plans/feature-ideas.md) holds a long list of possible additions, triaged

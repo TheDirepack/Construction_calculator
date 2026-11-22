@@ -6,6 +6,9 @@ import java.util.UUID
 
 fun newId(): String = UUID.randomUUID().toString()
 
+internal fun isValidId(id: String): Boolean =
+    id.length in 1..64 && id.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' }
+
 /**
  * A job. Holds [runs] (a circuit run, a wall, a room…), which hold [ProjectItem]s: saved results
  * from any tool. [ProjectCodec] stores the metadata and references to any original drawing PDFs.
@@ -30,6 +33,10 @@ data class Project(
     val design: DesignDefaults = DesignDefaults(),
     val drawings: List<PlanDrawing> = emptyList(),
 ) {
+    init {
+        require(isValidId(id)) { "Invalid project id." }
+    }
+
     fun panel(panelId: String): Panel? = panels.firstOrNull { it.id == panelId }
 
     fun updatePanel(panelId: String, now: Long, change: (Panel) -> Panel) =

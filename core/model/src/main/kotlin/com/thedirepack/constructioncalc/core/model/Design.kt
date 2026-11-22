@@ -7,6 +7,7 @@ import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import com.thedirepack.constructioncalc.core.electrical.SupplySystem
 import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
+import com.thedirepack.constructioncalc.core.measure.Dimension
 import kotlinx.serialization.Serializable
 
 /*
@@ -74,6 +75,11 @@ data class Circuit(
         // A circuit may extend past its current panel after a resize.
         require(slot in 1..Panel.MAX_SPACES) { "Invalid circuit position: $slot" }
         require(poles in 1..3) { "Invalid circuit pole count: $poles" }
+        require(breakerAmps == null || breakerAmps > 0) { "Invalid breaker rating: $breakerAmps" }
+        require(loadVa == null || (loadVa.isFinite() && loadVa >= 0.0)) { "Invalid circuit load: $loadVa" }
+        require(length == null || (length.dimension == Dimension.LENGTH && length.toQuantity().value.signum >= 0)) {
+            "Invalid circuit length."
+        }
     }
 
     /** Positions this breaker occupies. */
@@ -109,6 +115,8 @@ data class Panel(
 ) {
     init {
         require(spaces in 1..MAX_SPACES) { "Invalid panel space count: $spaces" }
+        require(busAmps == null || busAmps > 0) { "Invalid panel bus rating: $busAmps" }
+        require(mainAmps == null || mainAmps > 0) { "Invalid panel main rating: $mainAmps" }
     }
 
     companion object {
@@ -139,7 +147,16 @@ data class Raceway(
     val rooftop: Boolean = false,
     /** Run is 24" or shorter (a nipple): no count adjustment (310.15(C)(1)(b)), 60% fill. */
     val nipple: Boolean = false,
-)
+) {
+    init {
+        require(length == null || (length.dimension == Dimension.LENGTH && length.toQuantity().value.signum >= 0)) {
+            "Invalid raceway length."
+        }
+        require(ambientC == null || (ambientC.isFinite() && ambientC in -100.0..200.0)) {
+            "Invalid raceway ambient temperature: $ambientC"
+        }
+    }
+}
 
 /** Project-wide design assumptions every circuit starts from. */
 @Serializable
@@ -149,4 +166,11 @@ data class DesignDefaults(
     val voltageDropTargetPercent: Double = Code.book.values.voltageDropBranchPercent,
     /** Upsize conductors to meet [voltageDropTargetPercent] (and the EGC with them, 250.122(B)). */
     val upsizeForVoltageDrop: Boolean = true,
-)
+) {
+    init {
+        require(ambientC.isFinite() && ambientC in -100.0..200.0) { "Invalid ambient temperature: $ambientC" }
+        require(voltageDropTargetPercent.isFinite() && voltageDropTargetPercent > 0.0 && voltageDropTargetPercent < 100.0) {
+            "Invalid voltage drop target: $voltageDropTargetPercent"
+        }
+    }
+}

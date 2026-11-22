@@ -43,7 +43,9 @@ class PlanFiles(private val context: Context) {
         drawing
     }
 
-    internal fun store(input: InputStream, expectedHash: String? = null, validatePdf: Boolean = false): String {
+    internal class StagedPdf(val sha256: String, internal val temp: File)
+
+    internal fun stage(input: InputStream, expectedHash: String? = null, validatePdf: Boolean = false): StagedPdf {
         if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
             throw IOException("Couldn't create drawing storage.")
         }
@@ -56,14 +58,28 @@ class PlanFiles(private val context: Context) {
             val sha = digest.digest().joinToString("") { "%02x".format(it) }
             if (expectedHash != null && sha != expectedHash) throw IOException("A PDF does not match its project checksum.")
             if (validatePdf) validate(temp)
-            val destination = file(sha)
-            if (!destination.isFile && !temp.renameTo(destination) && !destination.isFile) {
+            return StagedPdf(sha, temp)
+        } catch (error: Throwable) {
+            temp.delete()
+            throw error
+        }
+    }
+
+    internal fun commit(staged: StagedPdf) {
+        val destination = file(staged.sha256)
+        try {
+            if (!destination.isFile && !staged.temp.renameTo(destination) && !destination.isFile) {
                 throw IOException("Couldn't save the drawing.")
             }
-            return sha
         } finally {
-            temp.delete()
+            staged.temp.delete()
         }
+    }
+
+    internal fun store(input: InputStream, expectedHash: String? = null, validatePdf: Boolean = false): String {
+        val staged = stage(input, expectedHash, validatePdf)
+        commit(staged)
+        return staged.sha256
     }
 
     private fun validate(file: File) {

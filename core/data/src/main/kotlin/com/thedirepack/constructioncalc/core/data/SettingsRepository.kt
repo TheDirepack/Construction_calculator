@@ -89,6 +89,7 @@ class SettingsRepository(private val context: Context) {
 
     /** A tool's own settings store, e.g. `module("foot-inch")`. */
     fun module(toolId: String): ModuleSettings = synchronized(modules) {
+        require(isValidToolId(toolId)) { "Invalid tool id." }
         modules.getOrPut(toolId) {
             val known = prefs.getStringSet(KEY_MODULES, emptySet()).orEmpty()
             if (toolId !in known) prefs.edit { putStringSet(KEY_MODULES, known + toolId) }
@@ -155,7 +156,15 @@ class SettingsRepository(private val context: Context) {
             .filterValues { it.isNotEmpty() }
 
     fun importToolSettings(values: Map<String, JsonObject>, replace: Boolean) {
-        values.forEach { (toolId, json) -> module(toolId).importJson(json, replace) }
+        if (replace) {
+            val known = prefs.getStringSet(KEY_MODULES, emptySet()).orEmpty().filter(::isValidToolId)
+            known.filterNot { it in values }.forEach { toolId ->
+                module(toolId).importJson(JsonObject(emptyMap()), replace = true)
+            }
+        }
+        values.forEach { (toolId, json) ->
+            if (isValidToolId(toolId)) module(toolId).importJson(json, replace)
+        }
     }
 
     fun setPrecision(precision: Precision) = save { it.copy(precision = precision) }
@@ -231,6 +240,7 @@ class SettingsRepository(private val context: Context) {
             val badKey = appKeys.firstOrNull { settings?.get(it)?.let { value -> value !is JsonPrimitive } == true }
             if (badKey != null) throw ProjectFormatException("The backup has a damaged app setting: $badKey.")
             toolSettings.forEach { (tool, values) ->
+                if (!isValidToolId(tool)) throw ProjectFormatException("The backup has an invalid tool id: $tool.")
                 values.forEach { (key, entry) ->
                     val fields = entry as? JsonObject
                     if (fields?.get("type") !is JsonPrimitive || fields["value"] !is JsonPrimitive) {
@@ -239,6 +249,9 @@ class SettingsRepository(private val context: Context) {
                 }
             }
         }
+
+        internal fun isValidToolId(id: String): Boolean =
+            id.length in 1..40 && id.all { it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_' }
 
         const val KEY_THEME = "theme"
         const val KEY_ANIMATIONS = "animations"

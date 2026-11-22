@@ -161,9 +161,17 @@ object ProjectSharing {
             stream.unread(signature, 0, count)
             if (signature.contentEquals(byteArrayOf(0x50, 0x4b, 3, 4))) {
                 val files = PlanFiles(context)
-                AppFile.SingleProject(ProjectArchive.read(stream) { pdf, hash ->
-                    files.store(pdf, expectedHash = hash, validatePdf = true)
-                })
+                val staged = mutableListOf<PlanFiles.StagedPdf>()
+                try {
+                    val project = ProjectArchive.read(stream) { pdf, hash ->
+                        staged += files.stage(pdf, expectedHash = hash, validatePdf = true)
+                    }
+                    staged.forEach(files::commit)
+                    AppFile.SingleProject(project)
+                } catch (error: Throwable) {
+                    staged.forEach { it.temp.delete() }
+                    throw error
+                }
             } else {
                 AppFileCodec.decode(stream.readBounded(PlanFiles.MAX_JSON_BYTES).decodeToString())
             }
