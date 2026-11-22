@@ -18,6 +18,32 @@ def _iou(a: list[float], b: list[float]) -> float:
     return x / (aa + bb - x) if aa + bb > x else 0.
 
 
+
+
+
+def _same_physical_symbol(a: list[float], b: list[float], iou_threshold: float) -> bool:
+    """Recognize variable-size boxes enclosing the same device.
+
+    A small circle-box and a larger circle+letter box can have IoU below
+    conventional NMS even with identical centers. Requiring BOTH strong
+    containment and near-identical centers avoids merging adjacent devices.
+    """
+    overlap = _iou(a, b)
+    if overlap >= iou_threshold:
+        return True
+    area_a = (a[2] - a[0]) * (a[3] - a[1])
+    area_b = (b[2] - b[0]) * (b[3] - b[1])
+    inter = overlap * (area_a + area_b) / (1.0 + overlap) if overlap else 0.
+    containment = inter / max(1e-6, min(area_a, area_b))
+    if containment < .80:
+        return False
+    cx_a, cy_a = (a[0] + a[2]) * .5, (a[1] + a[3]) * .5
+    cx_b, cy_b = (b[0] + b[2]) * .5, (b[1] + b[3]) * .5
+    width = min(a[2] - a[0], b[2] - b[0])
+    height = min(a[3] - a[1], b[3] - b[1])
+    return abs(cx_a - cx_b) <= .25 * width and abs(cy_a - cy_b) <= .25 * height
+
+
 def merge_sam_proposals(detections: list[dict], *, iou_threshold: float = .50,
                         max_alternatives: int = 6) -> list[dict]:
     """Merge duplicate overlapping proposals, preserving competing labels.
@@ -45,8 +71,11 @@ def merge_sam_proposals(detections: list[dict], *, iou_threshold: float = .50,
         best_iou = iou_threshold
         for cluster in selected:
             ov = _iou(box, cluster['box_px'])
-            if ov >= best_iou:
-                best, best_iou = cluster, ov
+            if _same_physical_symbol(box, cluster['box_px'], iou_threshold):
+                # Prefer the closest overlapping geometry; also merge a
+                # contained prediction if standard IoU alone is too low.
+                if best is None or ov >= best_iou:
+                    best, best_iou = cluster, ov
         if best is None:
             primary = dict(d)
             primary['same_region_prompt_hits'] = 1
