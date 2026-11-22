@@ -165,6 +165,7 @@ private fun buildCalibration(field: ScaleField, references: List<PlanReference>)
 internal interface ScaleField {
     val valid: Boolean
     fun distance(first: PlanPoint, second: PlanPoint): Double
+    fun areaScale(x: Double, y: Double): Double
 }
 
 /** A fitted constant metric in real square inches per square page point. */
@@ -184,6 +185,9 @@ internal data class DistanceMetric(val xx: Double, val xy: Double, val yy: Doubl
 
 private class ConstantField(private val metric: DistanceMetric) : ScaleField {
     override val valid: Boolean get() = metric.valid
+    private val areaScale = sqrt(metric.xx) * sqrt(metric.yy - (metric.xy / sqrt(metric.xx)).let { it * it })
+
+    override fun areaScale(x: Double, y: Double): Double = areaScale
     override fun distance(first: PlanPoint, second: PlanPoint): Double = metric.distance(first, second)
 }
 
@@ -208,18 +212,24 @@ private class DistortedField(
     override fun distance(first: PlanPoint, second: PlanPoint): Double =
         segmentLength(first, second, cx, cy, invRadius, l00, l01, l11, params)
 
+    override fun areaScale(x: Double, y: Double): Double {
+        val u = ((x - cx) * invRadius).coerceIn(-2.0, 2.0)
+        val v = ((y - cy) * invRadius).coerceIn(-2.0, 2.0)
+        return l00 * l11 * exp(logAxisScale(u, v, params, 0) + logAxisScale(u, v, params, 6))
+    }
+
     companion object {
         const val PARAM_COUNT = 15
 
         // 5-point Gauss-Legendre quadrature on [0, 1].
-        private val GL_NODES = doubleArrayOf(
+        val GL_NODES = doubleArrayOf(
             0.04691007703066802,
             0.23076534494715845,
             0.5,
             0.7692346550528415,
             0.9530899229693319,
         )
-        private val GL_WEIGHTS = doubleArrayOf(
+        val GL_WEIGHTS = doubleArrayOf(
             0.11846344252809454,
             0.23931433524968324,
             0.28444444444444444,
@@ -227,15 +237,16 @@ private class DistortedField(
             0.11846344252809454,
         )
 
+        private fun logAxisScale(u: Double, v: Double, p: DoubleArray, offset: Int): Double =
+            (p[offset] + p[offset + 1] * u + p[offset + 2] * v + p[offset + 3] * (u * u) +
+                p[offset + 4] * (u * v) + p[offset + 5] * (v * v)).coerceIn(-1.5, 1.5)
+
         fun speedAt(uRaw: Double, vRaw: Double, bx: Double, by: Double, p: DoubleArray): Double {
             // Clamp far extrapolations gently so distant measurements stay well-behaved.
             val u = uRaw.coerceIn(-2.0, 2.0)
             val v = vRaw.coerceIn(-2.0, 2.0)
-            val u2 = u * u
-            val uv = u * v
-            val v2 = v * v
-            val logSx = (p[0] + p[1] * u + p[2] * v + p[3] * u2 + p[4] * uv + p[5] * v2).coerceIn(-1.5, 1.5)
-            val logSy = (p[6] + p[7] * u + p[8] * v + p[9] * u2 + p[10] * uv + p[11] * v2).coerceIn(-1.5, 1.5)
+            val logSx = logAxisScale(u, v, p, 0)
+            val logSy = logAxisScale(u, v, p, 6)
             val shear = (p[12] + p[13] * u + p[14] * v).coerceIn(-1.0, 1.0)
             val vx = exp(logSx) * bx + shear * by
             val vy = exp(logSy) * by
@@ -275,7 +286,41 @@ class PlanCalibration internal constructor(
     val residuals: List<Double>,
 ) {
     fun distance(first: PlanPoint, second: PlanPoint): Quantity =
-        Quantity.inches(Rational.of(field.distance(first, second)))
+        Quantity.inches(Rational.of(distanceInches(first, second)))
+
+    internal fun distanceInches(first: PlanPoint, second: PlanPoint): Double = field.distance(first, second)
+
+    /** Integrates the local area scale over a simple polygon using signed fan triangles. */
+    internal fun area(points: List<PlanPoint>): Quantity? {
+        val a = points.first()
+        val nodes = DistortedField.GL_NODES
+        val weights = DistortedField.GL_WEIGHTS
+        var total = 0.0
+        for (i in 1 until points.lastIndex) {
+            val b = points[i]
+            val c = points[i + 1]
+            val signedDoubleArea = cross(a, b, c)
+            if (signedDoubleArea == 0.0) continue
+            if (field is ConstantField) {
+                total += signedDoubleArea * 0.5 * field.areaScale(a.x, a.y)
+            } else {
+                // Map the unit square to the triangle, with Jacobian (1 - u).
+                var integral = 0.0
+                for (j in nodes.indices) {
+                    val u = nodes[j]
+                    for (k in nodes.indices) {
+                        val v = (1.0 - u) * nodes[k]
+                        val x = a.x + u * (b.x - a.x) + v * (c.x - a.x)
+                        val y = a.y + u * (b.y - a.y) + v * (c.y - a.y)
+                        integral += weights[j] * weights[k] * (1.0 - u) * field.areaScale(x, y)
+                    }
+                }
+                total += signedDoubleArea * integral
+            }
+        }
+        val squareInches = abs(total)
+        return if (squareInches.isFinite() && squareInches > 0.0) Quantity(Rational.of(squareInches), Dimension.AREA) else null
+    }
 }
 
 /** Picks the richest constant metric that the fitting references cleanly determine. */
@@ -516,6 +561,7 @@ data class PlanDrawing(
     val marks: List<PlanMark> = emptyList(),
     /** Routes sent to project runs, one per run (the latest send replaces the earlier one). */
     val routes: List<PlanRunRoute> = emptyList(),
+    val paths: List<PlanPath> = emptyList(),
 ) {
     init {
         require(name.isNotBlank() && name.length <= 240)
