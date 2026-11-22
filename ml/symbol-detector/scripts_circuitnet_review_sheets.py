@@ -102,6 +102,9 @@ def merge_review_taxonomy(provisional: dict) -> dict[str, list[str]]:
             raise ValueError('invalid extended taxonomy type')
         if not isinstance(subtypes, list):
             raise ValueError('invalid extended taxonomy subtypes')
+        # Coarse-family detections must remain publishable as unspecified.
+        # Forcing a specific variant when invisible would invent training labels.
+        base.setdefault(dtype, set()).add('unspecified')
         for sub in subtypes:
             if not isinstance(sub, str) or not re.fullmatch(r'[a-z0-9_]+', sub):
                 raise ValueError('invalid extended taxonomy subtype')
