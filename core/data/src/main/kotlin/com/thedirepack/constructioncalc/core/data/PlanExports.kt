@@ -36,16 +36,23 @@ object PlanExports {
     }
 
     /** Adds a vector form to each marked source page. The PDF in project storage is never written. */
-    fun writePdf(context: Context, drawing: PlanDrawing, out: OutputStream, format: (Quantity) -> String) {
+    fun writePdf(
+        context: Context,
+        drawing: PlanDrawing,
+        out: OutputStream,
+        format: (Quantity) -> String,
+        routeLabel: (runId: String) -> String = { "Run" },
+    ) {
         val source = PlanFiles(context).file(drawing.sha256)
-        val markedPages = (drawing.marks.map { it.page } + drawing.measurements.map { it.page }).distinct().sorted()
+        val markedPages = (drawing.marks.map { it.page } + drawing.measurements.map { it.page } + drawing.routes.map { it.page })
+            .distinct().sorted()
         if (markedPages.isEmpty()) {
             source.inputStream().use { it.copyTo(out) }
             return
         }
         val overlay = File.createTempFile("plan-overlay-", ".pdf", context.cacheDir)
         try {
-            val sizes = writeOverlay(source, overlay, drawing, markedPages, format)
+            val sizes = writeOverlay(source, overlay, drawing, markedPages, format, routeLabel)
             PDFBoxResourceLoader.init(context.applicationContext)
             val memory = { MemoryUsageSetting.setupMixed(24L * 1024 * 1024).setTempDir(context.cacheDir) }
             PDDocument.load(source, memory()).use { original ->
@@ -76,6 +83,7 @@ object PlanExports {
         drawing: PlanDrawing,
         markedPages: List<Int>,
         format: (Quantity) -> String,
+        routeLabel: (String) -> String,
     ): List<Pair<Int, Int>> {
         val descriptor = ParcelFileDescriptor.open(source, ParcelFileDescriptor.MODE_READ_ONLY)
         val renderer = try {
@@ -97,8 +105,27 @@ object PlanExports {
                 val page = document.startPage(PdfDocument.PageInfo.Builder(width, height, index + 1).create())
                 try {
                     drawing.marks.filter { it.page == pageNumber }.forEach { drawPlanMark(page.canvas, it) }
+                    drawing.routes.filter { it.page == pageNumber }.forEach { route ->
+                        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                            color = 0xcc7b1fa2.toInt()
+                            strokeWidth = 2f
+                            style = Paint.Style.STROKE
+                            strokeJoin = Paint.Join.ROUND
+                        }
+                        val path = Path().apply {
+                            moveTo(route.points.first().x.toFloat(), route.points.first().y.toFloat())
+                            route.points.drop(1).forEach { lineTo(it.x.toFloat(), it.y.toFloat()) }
+                        }
+                        page.canvas.drawPath(path, paint)
+                        paint.style = Paint.Style.FILL
+                        paint.textSize = 10f
+                        paint.typeface = Typeface.DEFAULT_BOLD
+                        val start = route.points.first()
+                        page.canvas.drawText(routeLabel(route.runId), start.x.toFloat() + 3f, start.y.toFloat() - 4f, paint)
+                    }
                     drawing.measurements.filter { it.page == pageNumber }.forEach { measure ->
-                        val label = drawing.length(measure)?.let { "≈ ${format(it)}" } ?: "Uncalibrated"
+                        val value = drawing.length(measure)?.let { "≈ ${format(it)}" } ?: "Uncalibrated"
+                        val label = if (measure.label.isBlank()) value else "${measure.label}: $value"
                         val x1 = measure.first.x.toFloat()
                         val y1 = measure.first.y.toFloat()
                         val x2 = measure.second.x.toFloat()

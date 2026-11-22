@@ -33,9 +33,21 @@ class PlanFiles(private val context: Context) {
      */
     fun garbageCollect(referencedHashes: Set<String>): Int = garbageCollect(directory, referencedHashes)
 
+    /**
+     * Copies a picked PDF into app storage (so no persistable URI permission is needed and the plan
+     * works offline), checks that it's a readable PDF, and returns a drawing for it. Fails with a
+     * message for the user on files that aren't PDFs, are empty, too large, damaged or password
+     * protected, or that the provider won't hand over (a cloud file that isn't downloaded).
+     */
     suspend fun import(uri: Uri): PlanDrawing = withContext(Dispatchers.IO) {
-        val name = displayName(context, uri, "Drawing.pdf")
-        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Couldn't open the PDF.")
+        val name = runCatching { displayName(context, uri, "Drawing.pdf") }.getOrDefault("Drawing.pdf")
+        val input = try {
+            context.contentResolver.openInputStream(uri)
+        } catch (error: java.io.FileNotFoundException) {
+            throw IOException("Couldn't open the PDF. If it's in cloud storage, make it available offline and try again.", error)
+        } catch (error: SecurityException) {
+            throw IOException("Construction Calc isn't allowed to read that file. Pick it again from the file picker.", error)
+        } ?: throw IOException("Couldn't open the PDF.")
         val sha256 = input.use { store(it, validatePdf = true) }
         PlanDrawing(name = name, sha256 = sha256)
     }
@@ -89,15 +101,26 @@ class PlanFiles(private val context: Context) {
     }
 
     private fun validate(file: File) {
+        val head = file.inputStream().use { it.readNBytesCompat(PDF_HEADER_WINDOW) }
+        pdfHeaderProblem(head)?.let { throw IOException(it) }
         val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         val renderer = try {
             PdfRenderer(descriptor)
+        } catch (error: SecurityException) {
+            descriptor.close()
+            throw IOException("This PDF is password protected. Save a copy without the password and import that.", error)
         } catch (error: Exception) {
             descriptor.close()
-            throw IOException("Couldn't read this PDF. Check whether it is damaged or password protected.", error)
+            throw IOException("Couldn't read this PDF. It may be damaged or incomplete.", error)
         }
         renderer.use {
             if (it.pageCount !in 1..MAX_PAGES) throw IOException("This PDF must have between 1 and $MAX_PAGES pages.")
+            // Some damaged files open but fail on their first page; catch that now, not in the editor.
+            try {
+                it.openPage(0).close()
+            } catch (error: Exception) {
+                throw IOException("Couldn't read the first page of this PDF. It may be damaged.", error)
+            }
         }
     }
 
@@ -105,6 +128,20 @@ class PlanFiles(private val context: Context) {
         internal const val MAX_JSON_BYTES = 20 * 1024 * 1024
         internal const val MAX_PDF_BYTES = 150L * 1024 * 1024
         internal const val MAX_PAGES = 1_000
+
+        /** PDF readers accept the `%PDF-` marker anywhere in the first 1024 bytes. */
+        internal const val PDF_HEADER_WINDOW = 1024
+
+        /** Why [head] (a file's first bytes) can't be a PDF, or null when it looks like one. */
+        internal fun pdfHeaderProblem(head: ByteArray): String? {
+            if (head.isEmpty()) return "This file is empty."
+            val marker = "%PDF-".encodeToByteArray()
+            val limit = minOf(head.size, PDF_HEADER_WINDOW) - marker.size
+            for (start in 0..limit) {
+                if ((marker.indices).all { head[start + it] == marker[it] }) return null
+            }
+            return "This file isn't a PDF."
+        }
 
         internal fun isValidHash(value: String): Boolean =
             value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }
@@ -147,6 +184,18 @@ internal fun displayName(context: Context, uri: Uri, fallback: String): String {
     val supplied = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
         ?.use { if (it.moveToFirst()) it.getString(0) else null }
     return supplied?.trim()?.take(240)?.ifBlank { null } ?: fallback
+}
+
+/** Up to [count] bytes from the start of the stream (API 26 has no `readNBytes`). */
+internal fun InputStream.readNBytesCompat(count: Int): ByteArray {
+    val buffer = ByteArray(count)
+    var filled = 0
+    while (filled < count) {
+        val read = read(buffer, filled, count - filled)
+        if (read < 0) break
+        filled += read
+    }
+    return buffer.copyOf(filled)
 }
 
 internal fun InputStream.readBounded(limit: Int): ByteArray = java.io.ByteArrayOutputStream().use {
