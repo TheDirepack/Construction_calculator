@@ -197,3 +197,29 @@ def test_neca_taxonomy_rejects_arbitrary_class_names():
     for value in ({'Unknown name': ['foo']}, {'known': ['not valid!']}, {'bad': 'string'}):
         with pytest.raises(ValueError):
             merge_review_taxonomy({'prompt_taxonomy': value})
+
+
+def test_neca_review_category_hierarchy_cannot_be_hallucinated():
+    from blueprint_symbols.review_gate import review_decision
+    item = {
+        'review_status': 'accepted', 'keep': True, 'device_index': 1,
+        'pdf_page': 2, 'refined_device_type': 'receptacle',
+        'refined_subtype': 'duplex', 'refined_bbox_cell': [400, 400, 600, 600],
+        'crop_pdf_rect_bl': [100, 100, 200, 200], 'on_wall': False,
+        'provisional_category': 'power_outlet', 'provisional_subcategory': 'duplex_receptacle',
+        'attributes': {},
+    }
+    category_taxonomy = {'power_outlet': ['duplex_receptacle', 'quad_receptacle']}
+    assert review_decision(
+        item, {'receptacle': ['duplex']}, category_taxonomy=category_taxonomy
+    ) == 'accepted'
+    with pytest.raises(ValueError, match='Unknown accepted category'):
+        review_decision(
+            {**item, 'refined_category': 'imaginary'}, {'receptacle': ['duplex']},
+            category_taxonomy=category_taxonomy,
+        )
+    with pytest.raises(ValueError, match='Unknown subcategory'):
+        review_decision(
+            {**item, 'refined_subcategory': 'imaginary'}, {'receptacle': ['duplex']},
+            category_taxonomy=category_taxonomy,
+        )
