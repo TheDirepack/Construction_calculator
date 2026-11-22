@@ -22,6 +22,7 @@ core/electrical/.../code/
     Nec2023Raceways.kt    Ch. 9 Tables 2 and 4; each raceway's article, bend-radius column and xxx.24(B) section
     Nec2023Motors.kt      Tables 430.248, 430.250, 430.52(C)(1)
     Nec2023General.kt     Table 110.26(A)(1)
+    Nec2023LoadCalculations.kt  Article 220: Tables 220.45, 220.47, 220.54, 220.55; 220.52, 220.53, 220.82
 ```
 
 Each table carries the printed page it was checked against in its KDoc. Each single value in
@@ -73,6 +74,7 @@ give the 2023 edition the same shape.
 | Tables 430.248, 430.250 | `Nec2023Motors.kt` | `MotorFullLoadCurrent` | `MotorFullLoadCurrentTest` |
 | Table 430.52(C)(1) | `Nec2023Motors.kt` | `MotorProtection` | `MotorProtectionTest` |
 | Table 110.26(A)(1), (A)(2), (A)(3) | `Nec2023General.kt`, values | `WorkingSpace` | `MotorProtectionTest` |
+| Article 220 demand factors (220.45, 220.47, 220.52–220.55, 220.82) | `Nec2023LoadCalculations.kt` | `Article220` | `Article220Test` |
 | 210.19(A)(1) 125 %, 310.3(A) minimum size | values | `ConductorSizing` | `ConductorSizingTest` |
 
 The Reference's NEC pages (`feature/reference/.../content/CodeTables.kt`) are generated from these

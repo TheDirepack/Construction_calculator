@@ -50,6 +50,9 @@ enum class CircuitKind(val label: String) {
  * @property continuous whether the load runs 3 hours or more (sized at 125%).
  * @property runIds the project runs (conduits) this circuit passes through, in order.
  * @property length one-way length override; otherwise the sum of its runs' lengths.
+ * @property conduitTag optional lightweight conduit tag/number when no full [Run] is assigned.
+ * @property conduitType optional inline conduit type (used for Table 9 impedance when [runIds] is empty).
+ * @property conduitSize optional inline conduit trade size when [runIds] is empty.
  * @property conductor overrides for this circuit (otherwise [DesignDefaults]).
  */
 @Serializable
@@ -68,6 +71,9 @@ data class Circuit(
     val groupIds: List<String> = emptyList(),
     val runIds: List<String> = emptyList(),
     val length: StoredQuantity? = null,
+    val conduitTag: String = "",
+    val conduitType: ConduitType? = null,
+    val conduitSize: TradeSize? = null,
     val conductor: ConductorSpec? = null,
     val note: String = "",
 ) {

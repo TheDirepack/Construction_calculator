@@ -4,6 +4,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,14 +51,36 @@ private sealed interface PanelPrompt {
     data class Delete(val panel: Panel) : PanelPrompt
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PanelsTab(ctx: PanelsContext, export: ExportActions, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
     var prompt by remember { mutableStateOf<PanelPrompt?>(null) }
+    val allWarnings = remember(ctx.design) {
+        buildList {
+            ctx.design.panels.forEach { pd ->
+                pd.conflicts.forEach { add("${pd.panel.name}: $it") }
+                pd.notes.filter { it.isWarning }.forEach { add("${pd.panel.name}: ${it.text}") }
+            }
+            ctx.design.circuits.values.forEach { cd ->
+                cd.notes.filter { it.isWarning }.forEach { note ->
+                    add("${cd.panel.name} #${cd.circuit.slots.joinToString(",")}: ${note.text}")
+                }
+            }
+        }
+    }
     LazyColumn(
         modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (allWarnings.isNotEmpty()) {
+            item(key = "warnings") {
+                OutOfSpecBanner(
+                    title = "${plural(allWarnings.size, "out-of-spec warning")} across panels",
+                    warnings = allWarnings,
+                )
+            }
+        }
         if (!ctx.readOnly) {
             item(key = "add") { Button(onClick = { prompt = PanelPrompt.Add }) { Text("Add panel") } }
         }
@@ -70,7 +94,14 @@ internal fun PanelsTab(ctx: PanelsContext, export: ExportActions, onOpen: (Strin
             }
         }
         items(ctx.project.panels, key = { it.id }) { panel ->
-            PanelCard(ctx, panel, onOpen = { onOpen(panel.id) }, onRename = { prompt = PanelPrompt.Rename(panel) }, onDelete = { prompt = PanelPrompt.Delete(panel) })
+            PanelCard(
+                ctx,
+                panel,
+                onOpen = { onOpen(panel.id) },
+                onSharePng = { export.png(panel.id) },
+                onRename = { prompt = PanelPrompt.Rename(panel) },
+                onDelete = { prompt = PanelPrompt.Delete(panel) },
+            )
         }
         if (ctx.project.panels.isNotEmpty()) {
             item(key = "export") {
@@ -78,13 +109,19 @@ internal fun PanelsTab(ctx: PanelsContext, export: ExportActions, onOpen: (Strin
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Export", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                         Text(
-                            "A PDF with one panel per page (company header, schedule, wire sizes, totals), or plain text.",
+                            "Print-ready PDF or PNG for panel doors and binders, RFC-4180 CSV for spreadsheets, or plain text.",
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { export.pdf(null) }) { Text("Share panel schedule (PDF)") }
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Button(onClick = { export.pdf(null) }) { Text("Share PDF") }
+                            OutlinedButton(onClick = { export.png(null) }) { Text("Share printable PNG") }
+                            OutlinedButton(onClick = { export.scheduleCsv(null) }) { Text("Export schedule (CSV)") }
+                            OutlinedButton(onClick = { export.takeoffCsv() }) { Text("Export takeoff (CSV)") }
+                            OutlinedButton(onClick = { export.text(null) }) { Text("Share as text") }
                         }
-                        OutlinedButton(onClick = { export.text(null) }) { Text("Share as text") }
                     }
                 }
             }
@@ -117,24 +154,40 @@ internal fun PanelsTab(ctx: PanelsContext, export: ExportActions, onOpen: (Strin
 }
 
 @Composable
-private fun PanelCard(ctx: PanelsContext, panel: Panel, onOpen: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
+private fun PanelCard(
+    ctx: PanelsContext,
+    panel: Panel,
+    onOpen: () -> Unit,
+    onSharePng: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
     var menu by remember { mutableStateOf(false) }
     val pd = ctx.design.panels.firstOrNull { it.panel.id == panel.id }
-    val warnings = (pd?.conflicts.orEmpty() + pd?.notes.orEmpty().map { it.text })
+    val circuitWarnings = panel.circuits.flatMap { c ->
+        ctx.design.circuits[c.id]?.notes.orEmpty()
+            .filter { it.isWarning }
+            .map { "#${c.slots.joinToString(",")}: ${it.text}" }
+    }
+    val warnings = (pd?.conflicts.orEmpty() + pd?.notes.orEmpty().filter { it.isWarning }.map { it.text } + circuitWarnings)
     val used = panel.circuits.sumOf { if (it.kind == CircuitKind.SPACE) 0 else it.poles }
     Card(
         Modifier.fillMaxWidth().clickable(onClickLabel = "Open ${panel.name}", onClick = onOpen),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Column(Modifier.padding(start = 16.dp, top = 8.dp, bottom = 12.dp, end = 4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(panel.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                if (warnings.isNotEmpty()) {
+                    WarningBadge(plural(warnings.size, "warning"))
+                }
                 Box {
                     IconButton(onClick = { menu = true }, modifier = Modifier.semantics { contentDescription = "Options for ${panel.name}" }) {
                         Icon(painterResource(R.drawable.ic_more_vert), contentDescription = null)
                     }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(text = { Text("Open") }, onClick = { menu = false; onOpen() })
+                        DropdownMenuItem(text = { Text("Share printable PNG") }, onClick = { menu = false; onSharePng() })
                         if (!ctx.readOnly) {
                             DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename() })
                             DropdownMenuItem(text = { Text("Duplicate") }, onClick = {

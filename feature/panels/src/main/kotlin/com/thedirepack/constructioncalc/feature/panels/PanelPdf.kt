@@ -26,8 +26,8 @@ import java.io.OutputStream
  * (descriptions at the outer edges, circuit numbers beside the phase column), totals and the date.
  */
 internal object PanelPdf {
-    private const val PAGE_W = 612
-    private const val PAGE_H = 792
+    internal const val PAGE_W = 612
+    internal const val PAGE_H = 792
     private const val MARGIN = 36f
 
     fun write(
@@ -41,36 +41,44 @@ internal object PanelPdf {
         units: UnitSystem = UnitSystem.IMPERIAL,
     ) {
         val panels = panelIds?.mapNotNull(project::panel) ?: project.panels
+        val extras = ScheduleText.projectExtras(project, design, units)
+        val lineHeight = 14f
+        val linesPerExtraPage = ((PAGE_H - 2 * MARGIN - 56f) / lineHeight).toInt().coerceAtLeast(1)
+        val extraChunks = if (extras.isEmpty()) emptyList() else extras.chunked(linesPerExtraPage)
+        val panelPages = maxOf(panels.size, 1)
+        val totalPages = panelPages + extraChunks.size
+        val width = PAGE_W - 2 * MARGIN
+
         val doc = PdfDocument()
         try {
             panels.forEachIndexed { index, panel ->
                 val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, index + 1).create())
-                drawPanel(page.canvas, project, design, panel, header, date, index + 1, panels.size)
+                drawPanel(page.canvas, project, design, panel, header, date, index + 1, totalPages)
                 doc.finishPage(page)
             }
             if (panels.isEmpty()) {
                 val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, 1).create())
                 page.canvas.drawText("No panels.", MARGIN, MARGIN + 20f, paint(12f))
+                drawPageFooter(page.canvas, date, 1, totalPages, width)
                 doc.finishPage(page)
             }
             // Project-wide pages: pulls and the material takeoff, as plain lines.
-            val extras = ScheduleText.projectExtras(project, design, units)
-            if (extras.isNotEmpty()) {
-                var pageNumber = maxOf(panels.size, 1)
+            if (extraChunks.isNotEmpty()) {
+                var pageNumber = panelPages
                 val body = paint(10f)
                 val bold = paint(11f, bold = true)
-                val lineHeight = 14f
-                extras.chunked(((PAGE_H - 2 * MARGIN - 40f) / lineHeight).toInt()).forEach { chunk ->
+                extraChunks.forEach { chunk ->
                     pageNumber++
                     val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, pageNumber).create())
                     var y = MARGIN + 14f
-                    page.canvas.drawText(fit("${project.name} · $date", bold, PAGE_W - 2 * MARGIN), MARGIN, y, bold)
+                    page.canvas.drawText(fit("${project.name} · $date", bold, width), MARGIN, y, bold)
                     y += 24f
                     chunk.forEach { text ->
                         val heading = text.isNotEmpty() && !text.startsWith(" ")
-                        page.canvas.drawText(fit(text, if (heading) bold else body, PAGE_W - 2 * MARGIN), MARGIN, y, if (heading) bold else body)
+                        page.canvas.drawText(fit(text, if (heading) bold else body, width), MARGIN, y, if (heading) bold else body)
                         y += lineHeight
                     }
+                    drawPageFooter(page.canvas, date, pageNumber, totalPages, width)
                     doc.finishPage(page)
                 }
             }
@@ -78,6 +86,12 @@ internal object PanelPdf {
         } finally {
             doc.close()
         }
+    }
+
+    private fun drawPageFooter(canvas: Canvas, date: String, pageNumber: Int, pageCount: Int, width: Float) {
+        val foot = paint(7f, gray = true)
+        val pageText = "Construction Calc · $date · page $pageNumber of $pageCount"
+        canvas.drawText(pageText, MARGIN + width - foot.measureText(pageText), PAGE_H - MARGIN + 16f, foot)
     }
 
     private fun paint(size: Float, bold: Boolean = false, gray: Boolean = false) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -97,7 +111,7 @@ internal object PanelPdf {
         return text.substring(0, end).trimEnd() + "…"
     }
 
-    private fun drawPanel(
+    internal fun drawPanel(
         canvas: Canvas,
         project: Project,
         design: ProjectDesign,

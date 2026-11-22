@@ -87,3 +87,55 @@ internal fun WarningText(text: String, modifier: Modifier = Modifier) {
         modifier = modifier,
     )
 }
+
+/** Compact pill badge for out-of-spec items; carries text + ⚠ so it never relies on colour alone. */
+@Composable
+internal fun WarningBadge(text: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    ) {
+        Text(
+            "⚠ $text",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** Prominent summary banner surfacing live out-of-spec warnings from ProjectAnalysis. */
+@Composable
+internal fun OutOfSpecBanner(title: String, warnings: List<String>, modifier: Modifier = Modifier) {
+    if (warnings.isEmpty()) return
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(12.dp))
+            .padding(12.dp),
+    ) {
+        Text(
+            "⚠ $title",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+        )
+        warnings.take(3).forEach { w ->
+            Text(
+                "• $w",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+        }
+        if (warnings.size > 3) {
+            Text(
+                "+${warnings.size - 3} more warning${if (warnings.size - 3 == 1) "" else "s"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+        }
+    }
+}

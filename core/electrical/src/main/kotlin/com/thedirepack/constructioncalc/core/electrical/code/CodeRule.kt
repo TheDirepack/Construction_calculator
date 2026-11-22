@@ -43,6 +43,19 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
     SMALL_CONDUCTOR_14_CCA("14 AWG copper-clad aluminum conditions"),
     STANDARD_OCPD("Standard ampere ratings of fuses and inverse-time breakers"),
 
+    // Feeder and service load calculations (Article 220)
+    LIGHTING_DEMAND("Lighting load demand factors", isTable = true),
+    RECEPTACLE_DEMAND("Demand factors for non-dwelling receptacle loads", isTable = true),
+    SMALL_APPLIANCE_LAUNDRY("Small-appliance and laundry loads, dwelling unit"),
+    DWELLING_APPLIANCE_DEMAND("Fastened-in-place appliance load, dwelling units"),
+    DRYER_DEMAND("Demand factors for household electric clothes dryers", isTable = true),
+    RANGE_DEMAND("Demand loads for household electric ranges and cooking appliances", isTable = true),
+    FEEDER_MOTOR_LOAD("Motors on a feeder: 125% of the largest motor"),
+    NONCOINCIDENT_LOADS("Noncoincident loads"),
+    OPTIONAL_DWELLING("Optional feeder and service calculation, dwelling unit"),
+    OPTIONAL_DWELLING_GENERAL("Optional dwelling calculation: general loads"),
+    OPTIONAL_DWELLING_HVAC("Optional dwelling calculation: heating and air-conditioning load"),
+
     // Grounding
     EGC_SIZE("Minimum size of equipment grounding conductors", isTable = true),
     EGC_INCREASED("Equipment grounding conductor increased with the ungrounded conductors"),

@@ -105,6 +105,11 @@ interface ElectricalCode {
 
     /** [CodeRule.WORKING_SPACE] rows, lowest voltage first. */
     val workingSpace: List<WorkingSpaceRow>
+
+    // ---- Feeder and service load calculations ----
+
+    /** Article 220 demand factors and unit loads. */
+    val loadCalculation: LoadCalculationCode
 }
 
 /** One row of the ampacity table, amperes; null where the table cell is blank. */

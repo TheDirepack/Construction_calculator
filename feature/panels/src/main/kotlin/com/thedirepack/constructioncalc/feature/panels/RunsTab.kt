@@ -84,7 +84,22 @@ private sealed interface RunPrompt {
 internal fun RunsTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
     var prompt by remember { mutableStateOf<RunPrompt?>(null) }
     val runs = remember(ctx.project) { ctx.project.designRuns() }
+    val runWarnings = remember(ctx.design, runs) {
+        runs.flatMap { run ->
+            ctx.design.runs[run.id]?.notes.orEmpty()
+                .filter { it.isWarning }
+                .map { "${run.name}: ${it.text}" }
+        }
+    }
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (runWarnings.isNotEmpty()) {
+            item(key = "warnings") {
+                OutOfSpecBanner(
+                    title = "${plural(runWarnings.size, "out-of-spec run warning")}",
+                    warnings = runWarnings,
+                )
+            }
+        }
         if (!ctx.readOnly) {
             item(key = "new") { Button(onClick = { prompt = RunPrompt.New }) { Text("New conduit run") } }
         }
@@ -166,7 +181,7 @@ private fun RunCard(
     val members = rd?.circuits.orEmpty()
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
         Column(Modifier.padding(start = 16.dp, top = 8.dp, bottom = 12.dp, end = 4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f)) {
                     Text(run.name, style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -174,6 +189,15 @@ private fun RunCard(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                val badgeText = when {
+                    rd?.fillStatus == FillStatus.OVER || rd?.fillStatus == FillStatus.TOO_MANY_FOR_ANY_SIZE -> "Over fill"
+                    rd?.sectionDegrees?.any { it > RacewayBends.MAX_DEGREES_BETWEEN_PULL_POINTS + 1e-9 } == true -> ">360° bends"
+                    rd?.notes?.any { it.isWarning } == true -> "Warning"
+                    else -> null
+                }
+                if (badgeText != null) {
+                    WarningBadge(badgeText)
                 }
                 Box {
                     IconButton(onClick = { menu = true }, modifier = Modifier.semantics { contentDescription = "Options for ${run.name}" }) {
@@ -239,7 +263,7 @@ private fun RunCard(
                     }
                 }
             }
-            if (run.raceway != null) PullSummary(run, rd, settings.unitSystem)
+            if (run.raceway != null) PullSummary(run, rd, settings.unitSystem, ctx.project.updatedAt)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (!ctx.readOnly) {
                     TextButton(onClick = onConduit) { Text(if (run.raceway == null) "Set conduit…" else "Edit conduit…") }
@@ -336,8 +360,11 @@ private fun AssignCircuitsSheet(ctx: PanelsContext, run: Run, onDismiss: () -> U
 
 /** The run's path and pull: max tension against its limit, worst sidewall pressure, degrees per section and warnings. */
 @Composable
-private fun PullSummary(run: Run, rd: RunDesign?, units: UnitSystem) {
+private fun PullSummary(run: Run, rd: RunDesign?, units: UnitSystem, projectUpdatedAt: Long) {
     val result = remember(run, rd, units) { PullAnalysis.analyze(run, rd, units) }
+    val latestPullItem = remember(run.items) {
+        run.items.filter { it.toolId == ToolIds.PULL_PLANNER }.maxByOrNull { it.updatedAt }
+    }
     Column(Modifier.padding(end = 12.dp, top = 6.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
         if (run.path.isEmpty()) {
             Text("No path yet. Plan the pull to add straights, bends and pull points.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -354,6 +381,9 @@ private fun PullSummary(run: Run, rd: RunDesign?, units: UnitSystem) {
             Text(summary, style = MaterialTheme.typography.bodyMedium, color = if (result.overTension || result.overPressure) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
         } else {
             Text("Pull not calculated yet: open Plan pull for what's missing.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (latestPullItem != null && latestPullItem.updatedAt < projectUpdatedAt) {
+            WarningText("Saved pull report may be stale after recent run/circuit edits — open Plan pull to re-verify.")
         }
         val shown = rd?.notes.orEmpty().filter { it.isWarning }.map { it.text }.toSet()
         PullText.warnings(result).filterNot { it in shown }.forEach { WarningText(it) }

@@ -1,38 +1,79 @@
 package com.thedirepack.constructioncalc.feature.panels
 
-import com.thedirepack.constructioncalc.core.electrical.code.codePercentValue
-import com.thedirepack.constructioncalc.core.ui.components.UnitField
-import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
-import com.thedirepack.constructioncalc.core.ui.show
-import com.thedirepack.constructioncalc.core.measure.Measure
-import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
-import com.thedirepack.constructioncalc.core.electrical.code.Code
-import kotlinx.coroutines.delay
-import androidx.compose.runtime.LaunchedEffect
-import com.thedirepack.constructioncalc.core.ui.components.ToggleRow
-
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.thedirepack.constructioncalc.core.electrical.AcPhases
+import com.thedirepack.constructioncalc.core.electrical.Article220
+import com.thedirepack.constructioncalc.core.electrical.ComparisonRequest
+import com.thedirepack.constructioncalc.core.electrical.ConductorComparison
+import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
+import com.thedirepack.constructioncalc.core.electrical.ConduitType
+import com.thedirepack.constructioncalc.core.electrical.LightingOccupancy
+import com.thedirepack.constructioncalc.core.electrical.code.codeNumber
+import com.thedirepack.constructioncalc.core.electrical.code.codePercent
+import com.thedirepack.constructioncalc.core.electrical.OptionalDwellingInput
+import com.thedirepack.constructioncalc.core.electrical.StandardLoadInput
+import com.thedirepack.constructioncalc.core.electrical.StandardOcpd
+import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+import com.thedirepack.constructioncalc.core.electrical.code.codePercentValue
+import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.model.ResultValue
+import com.thedirepack.constructioncalc.core.model.design.Wire
+import com.thedirepack.constructioncalc.core.ui.components.ChoiceField
 import com.thedirepack.constructioncalc.core.ui.components.FormSection
+import com.thedirepack.constructioncalc.core.ui.components.MeasureField
+import com.thedirepack.constructioncalc.core.ui.components.Notice
+import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import com.thedirepack.constructioncalc.core.ui.components.NumberField
+import com.thedirepack.constructioncalc.core.ui.components.ResultCard
+import com.thedirepack.constructioncalc.core.ui.components.SegmentedChoice
+import com.thedirepack.constructioncalc.core.ui.components.ToggleRow
+import com.thedirepack.constructioncalc.core.ui.components.UnitField
 import com.thedirepack.constructioncalc.core.ui.formatDecimal
+import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
+import com.thedirepack.constructioncalc.core.ui.show
 import com.thedirepack.constructioncalc.core.ui.toDecimalOrNull
+import kotlinx.coroutines.delay
 
 /** The project's design assumptions (they live in the project file, not in app settings). */
 private const val TYPING_SETTLE_MS = 600L
+
+private enum class Article220Mode {
+    STANDARD,
+    OPTIONAL_DWELLING,
+    ;
+
+    val label: String get() = when (this) {
+        STANDARD -> "Standard (Part III)"
+        OPTIONAL_DWELLING -> "Optional dwelling (${CodeRule.OPTIONAL_DWELLING.cite})"
+    }
+}
 
 @Composable
 internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
@@ -53,10 +94,35 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
             ?.let { v -> update { it.copy(voltageDropTargetPercent = v) } }
     }
 
+    val allWarnings = remember(ctx.design) {
+        buildList {
+            ctx.design.panels.forEach { pd ->
+                pd.conflicts.forEach { add("${pd.panel.name}: $it") }
+                pd.notes.filter { it.isWarning }.forEach { add("${pd.panel.name}: ${it.text}") }
+            }
+            ctx.design.circuits.values.forEach { cd ->
+                cd.notes.filter { it.isWarning }.forEach { note ->
+                    add("${cd.panel.name} #${cd.circuit.slots.joinToString(",")}: ${note.text}")
+                }
+            }
+            ctx.design.runs.values.forEach { rd ->
+                rd.notes.filter { it.isWarning }.forEach { note ->
+                    add("${rd.run.name}: ${note.text}")
+                }
+            }
+        }
+    }
+
     Column(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        if (allWarnings.isNotEmpty()) {
+            OutOfSpecBanner(
+                title = "${plural(allWarnings.size, "out-of-spec design warning")}",
+                warnings = allWarnings,
+            )
+        }
         Text(
             "Every circuit starts from these assumptions unless it has its own conductor override. They are saved with the project.",
             style = MaterialTheme.typography.bodyMedium,
@@ -74,8 +140,10 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
         }
         FormSection("Conditions") {
             if (ctx.readOnly) {
-                Text("Ambient ${rememberAppSettings().show(Measure.TEMPERATURE, design.ambientC, 1)} · voltage-drop target ${formatDecimal(design.voltageDropTargetPercent, 1)}% · " +
-                    "upsize for voltage drop: ${if (design.upsizeForVoltageDrop) "on" else "off"}")
+                Text(
+                    "Ambient ${rememberAppSettings().show(Measure.TEMPERATURE, design.ambientC, 1)} · voltage-drop target ${formatDecimal(design.voltageDropTargetPercent, 1)}% · " +
+                        "upsize for voltage drop: ${if (design.upsizeForVoltageDrop) "on" else "off"}",
+                )
             } else {
                 UnitField(
                     label = "Default ambient temperature",
@@ -99,11 +167,319 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
                 )
             }
         }
+
+        Article220Card(ctx)
+        ConductorComparisonCard(ctx)
+
         Text(
             "Sizing follows ${Code.label}: ${CodeRule.AMPACITY_TABLE.cite} ampacity, ${CodeRule.AMPACITY.cite} ambient and conductor-count adjustment, ${CodeRule.TERMINATION_TEMPERATURE.cite} terminals, " +
                 "${CodeRule.CONDUCTOR_PROTECTION.cite} protection, ${CodeRule.FILL_PERCENT.cite}, ${CodeRule.CONDUIT_DIMENSIONS.cite}, ${CodeRule.CONDUCTOR_DIMENSIONS.cite} and ${CodeRule.AC_IMPEDANCE.cite}. It guides fieldwork and doesn't replace a code check.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun Article220Card(ctx: PanelsContext) {
+    var expanded by remember { mutableStateOf(false) }
+    var mode by remember { mutableStateOf(Article220Mode.STANDARD) }
+    var occupancy by remember { mutableStateOf(LightingOccupancy.DWELLING) }
+    var lightingVa by remember { mutableStateOf("6000") }
+    var floorSqFt by remember { mutableStateOf("2000") }
+    var smallAppCount by remember { mutableStateOf("2") }
+    var laundryCount by remember { mutableStateOf("1") }
+    var receptacleVa by remember { mutableStateOf("0") }
+    var fixedApplianceVa by remember { mutableStateOf("0") }
+    var fixedApplianceCount by remember { mutableStateOf("0") }
+    var dryerCount by remember { mutableStateOf("1") }
+    var rangeCount by remember { mutableStateOf("1") }
+    var rangeKw by remember { mutableStateOf("12") }
+    var heatingVa by remember { mutableStateOf("0") }
+    var coolingVa by remember { mutableStateOf("4800") }
+    var largestMotorVa by remember { mutableStateOf("0") }
+    var otherVa by remember { mutableStateOf("0") }
+    var voltage by remember { mutableStateOf("240") }
+    var phases by remember { mutableStateOf(AcPhases.SINGLE) }
+
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Feeder & Service Demand (Article 220)", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "${Code.label} demand factors: lighting, receptacles, ranges, dryers, HVAC, optional dwelling.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide" else "Open") }
+            }
+
+            if (expanded) {
+                val panelTotalVa = ctx.design.panels.sumOf { it.totalVa }
+                if (panelTotalVa > 0.0) {
+                    val firstPanel = ctx.project.panels.firstOrNull()
+                    OutlinedButton(onClick = {
+                        // Panel totals are already-itemized loads: count them at 100%, not as lighting.
+                        mode = Article220Mode.STANDARD
+                        otherVa = formatDecimal(panelTotalVa, 0)
+                        if (firstPanel != null) {
+                            voltage = firstPanel.system.lineToLine.toString()
+                            phases = if (firstPanel.system.phases == 3) AcPhases.THREE else AcPhases.SINGLE
+                        }
+                    }) {
+                        Text("Add ${Wire.va(panelTotalVa)} of panel loads at 100%")
+                    }
+                }
+
+                SegmentedChoice(
+                    options = Article220Mode.entries,
+                    selected = mode,
+                    onSelect = { mode = it },
+                    label = "Calculation method",
+                    optionLabel = { it.label },
+                )
+
+                val vInt = voltage.toIntOrNull()?.takeIf { it > 0 } ?: 240
+                if (mode == Article220Mode.STANDARD) {
+                    ChoiceField(
+                        label = "Occupancy (${CodeRule.LIGHTING_DEMAND.cite})",
+                        options = LightingOccupancy.entries,
+                        selected = occupancy,
+                        onSelect = { occupancy = it },
+                        optionLabel = { it.label },
+                    )
+                    SegmentedChoice(
+                        options = AcPhases.entries,
+                        selected = phases,
+                        onSelect = { phases = it },
+                        label = "System phase",
+                        optionLabel = { it.label },
+                    )
+                    NumberField("Line voltage", voltage, { voltage = it }, unit = "V")
+                    NumberField("General lighting", lightingVa, { lightingVa = it }, unit = "VA")
+                    if (occupancy == LightingOccupancy.DWELLING) {
+                        val c = Code.book.loadCalculation
+                        NumberField("Small-appliance circuits (${codeNumber(c.smallApplianceCircuitVa)} VA ea)", smallAppCount, { smallAppCount = it })
+                        NumberField("Laundry circuits (${codeNumber(c.laundryCircuitVa)} VA ea)", laundryCount, { laundryCount = it })
+                        NumberField("Fixed appliances total", fixedApplianceVa, { fixedApplianceVa = it }, unit = "VA")
+                        NumberField("Fixed appliance count", fixedApplianceCount, { fixedApplianceCount = it })
+                        NumberField("Electric dryers (${CodeRule.DRYER_DEMAND.cite})", dryerCount, { dryerCount = it })
+                        NumberField("Electric ranges (${CodeRule.RANGE_DEMAND.cite})", rangeCount, { rangeCount = it })
+                        NumberField("Range rating (each)", rangeKw, { rangeKw = it }, unit = "kW")
+                    } else {
+                        NumberField("Receptacles (${CodeRule.RECEPTACLE_DEMAND.cite})", receptacleVa, { receptacleVa = it }, unit = "VA")
+                    }
+                    NumberField("Heating load (${CodeRule.NONCOINCIDENT_LOADS.cite})", heatingVa, { heatingVa = it }, unit = "VA")
+                    NumberField("Cooling load (${CodeRule.NONCOINCIDENT_LOADS.cite})", coolingVa, { coolingVa = it }, unit = "VA")
+                    NumberField(
+                        "Largest motor (${codePercent(Code.book.loadCalculation.largestMotorAdder, false)} adder)",
+                        largestMotorVa,
+                        { largestMotorVa = it },
+                        unit = "VA",
+                    )
+                    NumberField("Other loads (100%)", otherVa, { otherVa = it }, unit = "VA")
+                } else {
+                    NumberField("Line voltage", voltage, { voltage = it }, unit = "V")
+                    val c = Code.book.loadCalculation
+                    NumberField("Floor area (${codeNumber(c.optionalVaPerSqFt)} VA/sq ft)", floorSqFt, { floorSqFt = it }, unit = "sq ft")
+                    NumberField("Small-appliance circuits", smallAppCount, { smallAppCount = it })
+                    NumberField("Laundry circuits", laundryCount, { laundryCount = it })
+                    NumberField("Appliances, ranges & dryers total", fixedApplianceVa, { fixedApplianceVa = it }, unit = "VA")
+                    NumberField("Cooling load (${codePercent(c.optionalCoolingFactor, false)})", coolingVa, { coolingVa = it }, unit = "VA")
+                    NumberField("Central electric heat (${codePercent(c.optionalCentralHeatFactor, false)})", heatingVa, { heatingVa = it }, unit = "VA")
+                }
+
+                val calc = remember(
+                    mode, occupancy, lightingVa, floorSqFt, smallAppCount, laundryCount,
+                    receptacleVa, fixedApplianceVa, fixedApplianceCount, dryerCount, rangeCount,
+                    rangeKw, heatingVa, coolingVa, largestMotorVa, otherVa, vInt, phases,
+                ) {
+                    if (mode == Article220Mode.STANDARD) {
+                        Article220.standardCalculation(
+                            StandardLoadInput(
+                                occupancy = occupancy,
+                                generalLightingVa = lightingVa.toDecimalOrNull() ?: 0.0,
+                                smallApplianceCircuits = smallAppCount.toIntOrNull() ?: 0,
+                                laundryCircuits = laundryCount.toIntOrNull() ?: 0,
+                                receptacleVa = receptacleVa.toDecimalOrNull() ?: 0.0,
+                                fixedApplianceVa = fixedApplianceVa.toDecimalOrNull() ?: 0.0,
+                                fixedApplianceCount = fixedApplianceCount.toIntOrNull() ?: 0,
+                                dryerCount = dryerCount.toIntOrNull() ?: 0,
+                                rangeCount = rangeCount.toIntOrNull() ?: 0,
+                                rangeEachKw = rangeKw.toDecimalOrNull() ?: 12.0,
+                                heatingVa = heatingVa.toDecimalOrNull() ?: 0.0,
+                                coolingVa = coolingVa.toDecimalOrNull() ?: 0.0,
+                                largestMotorVa = largestMotorVa.toDecimalOrNull() ?: 0.0,
+                                otherNonContinuousVa = otherVa.toDecimalOrNull() ?: 0.0,
+                                lineVoltage = vInt,
+                                phases = phases,
+                            ),
+                        )
+                    } else {
+                        Article220.optionalDwellingCalculation(
+                            OptionalDwellingInput(
+                                floorAreaSqFt = floorSqFt.toDecimalOrNull() ?: 0.0,
+                                smallApplianceCircuits = smallAppCount.toIntOrNull() ?: 0,
+                                laundryCircuits = laundryCount.toIntOrNull() ?: 0,
+                                appliancesVa = fixedApplianceVa.toDecimalOrNull() ?: 0.0,
+                                coolingVa = coolingVa.toDecimalOrNull() ?: 0.0,
+                                centralHeatingVa = heatingVa.toDecimalOrNull() ?: 0.0,
+                                lineVoltage = vInt,
+                            ),
+                        )
+                    }
+                }
+
+                val rows = buildList {
+                    add(ResultValue.text("connected", "Connected load", Wire.va(calc.connectedVa)))
+                    add(ResultValue.text("demand", "Demand load", Wire.va(calc.demandVa)))
+                    add(ResultValue.text("amps", "Demand current", Wire.amps(calc.demandAmps)))
+                    calc.recommendedOcpdAmps?.let { add(ResultValue.text("ocpd", "Next standard OCPD", "$it A")) }
+                    calc.breakdown.forEachIndexed { idx, item ->
+                        val label = if (item.rule.isEmpty()) item.label else "${item.label} (${item.rule})"
+                        add(ResultValue.text("b$idx", label, Wire.va(item.demandVa)))
+                    }
+                }
+                ResultCard(
+                    results = rows,
+                    notices = calc.notes.map { Notice(it, NoticeLevel.INFO) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConductorComparisonCard(ctx: PanelsContext) {
+    var expanded by remember { mutableStateOf(false) }
+    var ocpd by remember { mutableStateOf(400) }
+    var loadText by remember { mutableStateOf("350") }
+    var voltageText by remember { mutableStateOf("480") }
+    var phases by remember { mutableStateOf(AcPhases.THREE) }
+    var length by remember { mutableStateOf<Quantity?>(Quantity.feet(Rational.of(200))) }
+    var conduitType by remember { mutableStateOf(ConduitType.EMT) }
+    var continuous by remember { mutableStateOf(false) }
+    var includeNeutral by remember { mutableStateOf(false) }
+
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Cu / Al & Parallel Comparison", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Compare Copper vs. Aluminum across 1–4 parallel sets (ampacity, VD %, EGC, min conduit & fill).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide" else "Open") }
+            }
+
+            if (expanded) {
+                ChoiceField(
+                    label = "OCPD rating",
+                    options = StandardOcpd.ratings.filter { it in 60..4000 },
+                    selected = ocpd,
+                    onSelect = { ocpd = it },
+                    optionLabel = { "$it A" },
+                )
+                NumberField("Load current", loadText, { loadText = it }, unit = "A")
+                NumberField("Line voltage", voltageText, { voltageText = it }, unit = "V")
+                SegmentedChoice(
+                    options = AcPhases.entries,
+                    selected = phases,
+                    onSelect = { phases = it },
+                    label = "Phases",
+                    optionLabel = { it.label },
+                )
+                MeasureField(
+                    label = "One-way length",
+                    value = length,
+                    onValueChange = { length = it },
+                )
+                ChoiceField(
+                    label = "Conduit type",
+                    options = ConduitType.entries,
+                    selected = conduitType,
+                    onSelect = { conduitType = it },
+                    optionLabel = { it.displayName },
+                )
+                ToggleRow("Continuous load (${codePercent(Code.book.values.continuousLoadFactor, false)})", continuous, { continuous = it })
+                ToggleRow("Include neutral in each raceway", includeNeutral, { includeNeutral = it })
+
+                val loadAmps = loadText.toDecimalOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                val voltage = voltageText.toIntOrNull()?.takeIf { it > 0 } ?: 480
+                val lengthFt = (length?.value?.toDouble() ?: 0.0) / 12.0
+                val comparison = remember(
+                    ocpd, loadAmps, voltage, phases, lengthFt, conduitType, continuous,
+                    includeNeutral, ctx.project.design,
+                ) {
+                    ConductorComparison.compare(
+                        ComparisonRequest(
+                            ocpdAmps = ocpd,
+                            loadAmps = loadAmps,
+                            voltage = voltage,
+                            phases = phases,
+                            lengthFeet = lengthFt,
+                            continuous = continuous,
+                            includeNeutral = includeNeutral,
+                            conduitType = conduitType,
+                            insulation = ctx.project.design.conductor.insulation,
+                            insulationRating = ctx.project.design.conductor.insulationRating,
+                            terminationRating = ctx.project.design.conductor.terminationRating,
+                            ambientC = ctx.project.design.ambientC,
+                            voltageDropTargetPercent = ctx.project.design.voltageDropTargetPercent,
+                        ),
+                    )
+                }
+
+                listOf(ConductorMaterial.COPPER, ConductorMaterial.ALUMINUM).forEach { mat ->
+                    Text(
+                        mat.label,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    comparison.options.filter { it.material == mat }.forEach { opt ->
+                        HorizontalDivider()
+                        Column(Modifier.padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "${opt.sets}× ${opt.size?.label ?: "No size fits"}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (opt.size != null && !opt.meetsVoltageDropTarget) {
+                                    WarningBadge("VD ${opt.voltageDropPercent?.let { Wire.percent(it) } ?: "—"}")
+                                }
+                            }
+                            if (opt.size != null) {
+                                val summary = buildList {
+                                    opt.totalAmpacity?.let { add("Ampacity ${Wire.amps(it)}") }
+                                    opt.voltageDropPercent?.let { add("VD ${Wire.percent(it)}") }
+                                    opt.egcSize?.let { add("EGC ${it.label}") }
+                                    opt.minConduit?.let { c ->
+                                        val fill = opt.conduitFillPercent?.let { " (${Wire.percent(it)})" }.orEmpty()
+                                        add("Min ${c.displayName}$fill")
+                                    }
+                                }.joinToString(" · ")
+                                Text(summary, style = MaterialTheme.typography.bodySmall)
+                            } else {
+                                opt.note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
