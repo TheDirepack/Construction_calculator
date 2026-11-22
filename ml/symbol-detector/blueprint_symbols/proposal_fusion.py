@@ -55,6 +55,7 @@ def merge_sam_proposals(detections: list[dict], *, iou_threshold: float = .50,
             best['_label_scores'][key] = float(d['score'])
             best['alternative_labels'].append({
                 'device_type': d['device_type'], 'subtype': d.get('subtype'),
+                'category': d.get('category'), 'subcategory': d.get('subcategory'),
                 'score': float(d['score']), 'neca_symbol_id': d.get('symbol_id'),
                 'neca_name': d.get('neca_name'),
             })
