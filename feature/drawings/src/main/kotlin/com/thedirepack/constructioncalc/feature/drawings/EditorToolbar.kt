@@ -132,7 +132,8 @@ internal fun ToolTooltipIconButton(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun EditorHeader(
-    sheet: String,
+    sheetTitle: String,
+    pageCounter: String,
     onSheets: () -> Unit,
     canUndo: Boolean,
     canRedo: Boolean,
@@ -143,7 +144,13 @@ internal fun EditorHeader(
 ) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = onSheets, modifier = Modifier.weight(1f)) {
-            Text(sheet, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                sheetTitle,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Text(" · $pageCounter", maxLines = 1)
             Icon(painterResource(R.drawable.ic_plan_expand), "Browse sheets", Modifier.size(18.dp))
         }
         TooltipBox(
@@ -202,7 +209,7 @@ internal fun EditorStatusBar(
     var snapMenu by remember { mutableStateOf(false) }
     var stylusMenu by remember { mutableStateOf(false) }
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 2.dp),
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp, vertical = 0.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

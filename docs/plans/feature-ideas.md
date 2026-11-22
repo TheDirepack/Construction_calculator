@@ -32,7 +32,8 @@ This file summarizes future work beyond what is actively tracked in [docs/ROADMA
 - **Focused panel-schedule label OCR:** on-device OCR (no Play Services) to pre-fill circuit labels from a photo of an existing panel schedule, with user review. Standardized phase rotation (`A/B/C` for 3φ, `L1/L2` for 1φ) fills automatically from slot order, leaving only breaker amperage to confirm.
 
 ### Drawings & Field Measurement
-- **PDF plan takeoff:** line snapping (pre-computed vector/raster line maps), crisp high-zoom region tiling, loupe/magnifier, polyline measurement, "Send route to Run", undo/redo, rename/delete drawings and scale zones, and unreferenced PDF garbage collection.
+- **PDF plan takeoff (v1 done):** line snapping (pre-computed vector/raster line maps, Center/Edge/Off), high-zoom region tiling + LRU page cache, loupe/magnifier, polyline & closed-polygon area measurement, "Send route to Run", undo/redo, symbol-first toolbar, markup styles & symbol sets, partial eraser, clouds, photo pins, detail links, revision tracking & full-screen overlay compare, stylus/Pencil mode & convenience gestures, rename/delete drawings and scale zones, and unreferenced PDF/photo garbage collection.
+- **Next for Drawings:** portable manual sheet labels on `PlanDrawing`, saved overlay alignments & diff export, bulk addendum revision tagging, offline scan OCR, `TEXT`/`SYMBOL`/`INK` resize handles, cutout polygons, sheet-size-aware style scaling, shape snap, layer filters, shareable symbol packs, physical stylus tuning, keyboard shortcuts, and instrumented UI/snap benchmark tests (tracked in `docs/ROADMAP.md`).
 - **Bluetooth laser distance meters:** feed any `MeasureField` length input and provide exact two-point real-world measurements for PDF plan calibration ("tap two points + fire laser").
 - **Blueprint symbol detector (`ml/symbol-detector/`):** kept in its own isolated folder outside the Android build for future work once a trained model is ready.
 

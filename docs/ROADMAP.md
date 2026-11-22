@@ -42,6 +42,7 @@ inventory of features, never as a source of code, art or text.
 | Electrical Formulas | **done** (v1: 18 formulas, solve for any blank; [tool notes](tools/formulas.md)) | Ugly's-style formula pages, Southwire Power Conversion |
 | Reference | **done** (v1: NEC tables generated from the engine data, formula sheet, field references; [tool notes](tools/reference.md)) | Original; edition-aware via `CodeRule` ([CODE_UPDATES.md](CODE_UPDATES.md)) |
 | Projects & Runs | **done** (circuits and runs open Voltage Drop, Conduit Fill, Bending and Panels; shared text includes the design) | Original to this app: links all of the above |
+| Drawings | **done** (v1: offline PDF takeoff, snap/loupe, routes, markups, stylus, revisions, exports; [plan](plans/pdf-plan-measuring.md)) | Bluebeam, Fieldwire, Autodesk Build |
 
 ## 1. Foot-Inch Calculator (done: v0.1)
 
@@ -247,13 +248,32 @@ Ordered by priority and reasonableness of implementation — start at Tier 1 and
 - [x] GEC & bonding jumpers (Table 250.66), across-the-line motor circuits (Art. 430), burial depth (Table 300.5), support spacing, and PVC thermal expansion
 - [x] Article 220 feeder and service load calculations with demand factors, plus Cu/Al and parallel-feeder what-if comparisons
 
-### Tier 4 — Drawings Takeoff Polish *(medium–large effort, builds on `PlanCanvas` & `:core:plans`)*
-- [x] Crisp high-zoom region tiling in `PlanCanvas` (reusing `PlanRendering.renderRegion`), avoiding per-frame allocations and recycling page bitmaps
+### Tier 4 — Drawings Takeoff Polish *(done)*
+- [x] Crisp high-zoom region tiling in `PlanCanvas` (reusing `PlanRendering.renderRegion`), avoiding per-frame allocations and byte-bounded LRU page-bitmap cache
 - [x] Undo/redo stack for drawing markups and measurements
-- [x] Loupe / magnifier overlay while snapping endpoints on plans
-- [x] Multi-segment / polyline measurement on plans (summing chained legs + bend count straight into a Project Run)
-- [x] "View on plan" link back from a run to the route it came from (the drawing keeps each sent route; Takeoff totals flag routes whose plan length moved after recalibration)
-- [x] Phone-width drawing toolbar (fixed page/undo/redo row, tool picker, overflow menu), typed editor state, Adjust tool (drag measurement and dimension ends, label measurements), full architectural/engineering/metric presets, line-end snapping, takeoff totals by page/label with symbol counts, sturdier PDF import
+- [x] Loupe / magnifier overlay while snapping endpoints on plans (Center / Edge / Off + visual snap target labels)
+- [x] Multi-segment / polyline measurement on plans (summing chained legs + bend count straight into a Project Run) and saved editable open polylines / closed polygons with calibrated length, perimeter & area
+- [x] "View on plan" link back from a run to the route it came from (the drawing keeps each sent route; Takeoff totals flag routes whose plan length moved after recalibration and roll up devices, circuits, areas & paths)
+- [x] Symbol-first collapsible drawing toolbar, fixed status bar (`Revision`, `Scale`, `Snap`, `Pencil`), typed editor state, Adjust tool (move/resize handles, partial stroke & whole-stroke eraser), full architectural/engineering/metric presets, and PDF export covering marks, paths, routes, measurements & revisions
+- [x] Sheet navigation (title-block extraction, disk-cached indexing & full-text search, repeated-label recovery, favorites, recents, discipline filters, manual labels)
+- [x] Markup styles & electrical annotations (color palette, width/text size, opacity, dash patterns, arrowheads, fills, per-tool defaults, starter + custom symbol sets/favorites/recents, dimensions, revision clouds/callouts, offline photo pins, cross-sheet detail links)
+- [x] Revision identity & comparison (sheet revision tracking with Latest/Superseded provenance into Value Picker/Takeoff, full-screen pinch/pan revision overlay compare, single-sheet/crop/whole-set exports)
+- [x] Smooth zoom/convenience gestures (0.85×–24× pinch-to-zoom, fling inertia, double-tap zoom & link jump, fit-to-page & `< page/total >` pills, scroll-wheel zoom, 2/3-finger tap undo/redo) and Android stylus support (Pencil mode finger-pan, palm rejection, pressure smoothing, barrel button actions, tail eraser, hover preview)
+
+### Future Additions & Polish (Drawings & Platform)
+- [ ] Persist manual sheet labels (`SheetLabel`) on `PlanDrawing` for cross-device `.drawing.json` / `.project.zip` portability
+- [ ] Persist revision overlay alignment per sheet pair & export flattened revision-diff PDF/PNG
+- [ ] Batch / bulk revision assignment across imported addendum sets
+- [ ] On-device offline OCR for scanned PDFs (title-block auto-naming & searchable scan text, no Play Services)
+- [ ] Resize handles / bounding-box transform on `TEXT`, `SYMBOL`, `INK`, and `HIGHLIGHT` markups
+- [ ] Multipolygon / polygon-with-cutout (hole) area takeoff support
+- [ ] Sheet-size-aware default markup text/callout/stroke scaling (ARCH D/E vs Letter)
+- [ ] Shape snap / hold-to-straighten on freehand pen strokes
+- [ ] Markup layer/type/circuit/area visibility filters
+- [ ] Standalone shareable custom symbol pack import/export
+- [ ] Physical-tablet stylus QA & tuning (S Pen / USI 2.0 / Wacom EMR pressure curves, tilt, stylus quick-draw option)
+- [ ] Keyboard shortcuts for tablet/Chromebook workflows (`Ctrl+Z`/`Ctrl+Shift+Z`, zoom/fit, page step, tool hotkeys)
+- [ ] Instrumented Compose UI test suite (`androidTest`) for `DrawingEditor` live interactions + snap reference benchmark fixtures for `:core:plans` (`LineSnapReferenceTest`, `PlanLinesReferenceTest`)
 
 ### Tier 5 — Optional Hardware, Vision & Context Integrations *(larger effort / optional permissions, off by default)*
 - [ ] Optional on-app-open nearby-project suggestion using Android's native `LocationManager` and coarse location only (`ACCESS_COARSE_LOCATION`, no precise GPS, no background geofencing, no Play Services)

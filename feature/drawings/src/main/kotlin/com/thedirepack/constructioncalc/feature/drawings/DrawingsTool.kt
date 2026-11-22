@@ -270,9 +270,9 @@ private fun DrawingsScreen(host: ToolHost) {
                 pendingJumpPage = targetPage
                 jumpSerial++
             },
-            onChange = ::updateDrawing,
-            onSendRouteToRun = ::sendRouteToRun,
-            onPublish = ::publish,
+            onChange = { updateDrawing(it) },
+            onSendRouteToRun = { id, name, segs, route -> sendRouteToRun(id, name, segs, route) },
+            onPublish = { m, q, s -> publish(m, q, s) },
             host = host,
             modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing),
         )
@@ -301,8 +301,8 @@ private fun DrawingsScreen(host: ToolHost) {
                 onImport = { importPdf.launch(arrayOf("application/pdf")) },
                 onImportJson = { importJson.launch(arrayOf("application/json", "application/octet-stream")) },
                 onDrawing = { activeDrawingId = it },
-                onRename = ::renameDrawing,
-                onDelete = ::deleteDrawing,
+                onRename = { d, name -> renameDrawing(d, name) },
+                onDelete = { deleteDrawing(it) },
                 modifier = Modifier.padding(padding),
             )
 

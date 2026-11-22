@@ -40,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.thedirepack.constructioncalc.core.ui.R as CoreR
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -47,6 +48,7 @@ import kotlinx.coroutines.delay
 @Composable
 internal fun SheetBrowser(
     file: File,
+    drawingSha256: String,
     drawingName: String,
     projectName: String,
     page: Int,
@@ -69,11 +71,11 @@ internal fun SheetBrowser(
     val query = normalizeSheetText(search)
     val context = LocalContext.current
     var textMatches by remember(file, query, includePdfText) { mutableStateOf<PdfTextMatches?>(null) }
-    LaunchedEffect(file, query, includePdfText) {
+    LaunchedEffect(file, drawingSha256, query, includePdfText) {
         if (!includePdfText || query.isEmpty()) return@LaunchedEffect
         delay(300)
         textMatches = try {
-            searchPdfText(context.applicationContext, file, query)
+            searchPdfText(context.applicationContext, drawingSha256, file, query)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -106,6 +108,16 @@ internal fun SheetBrowser(
                         listState.requestScrollToItem(0)
                     },
                     label = { Text(if (includePdfText) "Sheets and PDF text" else "Sheet number or title") },
+                    trailingIcon = if (search.isNotEmpty()) {
+                        {
+                            IconButton(onClick = {
+                                search = ""
+                                listState.requestScrollToItem(0)
+                            }) {
+                                Icon(painterResource(CoreR.drawable.ic_close), contentDescription = "Clear search")
+                            }
+                        }
+                    } else null,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )

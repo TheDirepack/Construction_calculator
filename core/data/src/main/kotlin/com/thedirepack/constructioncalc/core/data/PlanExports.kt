@@ -71,7 +71,8 @@ object PlanExports {
             drawing.marks.map { it.page } +
                 drawing.measurements.map { it.page } +
                 drawing.routes.map { it.page } +
-                drawing.paths.map { it.page }
+                drawing.paths.map { it.page } +
+                drawing.sheetRevisions.keys.filter { it >= 0 }
             )
             .distinct().sorted()
         if (markedPages.isEmpty()) {
@@ -132,7 +133,7 @@ object PlanExports {
                 val (width, height) = sizes[index]
                 val page = document.startPage(PdfDocument.PageInfo.Builder(width, height, index + 1).create())
                 try {
-                    drawAnnotations(page.canvas, drawing, pageNumber, format, routeLabel)
+                    drawAnnotations(page.canvas, drawing, pageNumber, format, routeLabel, includeRevisionStamp = true)
                 } finally {
                     document.finishPage(page)
                 }
@@ -150,7 +151,29 @@ object PlanExports {
         pageNumber: Int,
         format: (Quantity) -> String,
         routeLabel: (String) -> String,
+        includeRevisionStamp: Boolean = false,
     ) {
+        if (includeRevisionStamp) {
+            drawing.sheetRevisions[pageNumber]?.let { rev ->
+                val stamp = "Sheet ${rev.sheetId} · Rev ${rev.revision}"
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    textSize = 11f
+                    typeface = Typeface.DEFAULT_BOLD
+                }
+                val padX = 7f
+                val w = paint.measureText(stamp) + padX * 2f
+                val rect = RectF(10f, 10f, 10f + w, 30f)
+                paint.color = 0xEEFFFFFF.toInt()
+                paint.style = Paint.Style.FILL
+                canvas.drawRoundRect(rect, 4f, 4f, paint)
+                paint.color = 0xFF155CBD.toInt()
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = 1.2f
+                canvas.drawRoundRect(rect, 4f, 4f, paint)
+                paint.style = Paint.Style.FILL
+                canvas.drawText(stamp, 10f + padX, 24f, paint)
+            }
+        }
         val dimensionFormatter: (PlanMark) -> String = { mark ->
             val measured = drawing.dimensionLength(mark)?.let { "≈ ${format(it)}" } ?: "Uncalibrated"
             if (mark.text.isBlank()) measured else "${mark.text}: $measured"
@@ -640,10 +663,7 @@ private fun drawCalloutNote(
     paint.alpha = strokeAlpha
     val edgeX = edgeStartX.coerceIn(boxLeft, right)
     val edgeY = edgeStartY.coerceIn(boxTop, bottom)
-    if (edgeX != anchorX || edgeY != anchorY || boxLeft !in anchorX..anchorX) {
-        canvas.drawLine(anchorX, anchorY, edgeX, edgeY, paint)
-        drawArrowHead(canvas, paint, edgeX, edgeY, anchorX, anchorY)
-    } else {
+    if (edgeX != anchorX || edgeY != anchorY) {
         canvas.drawLine(anchorX, anchorY, edgeX, edgeY, paint)
         drawArrowHead(canvas, paint, edgeX, edgeY, anchorX, anchorY)
     }

@@ -6,22 +6,28 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -33,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
@@ -43,8 +50,11 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.thedirepack.constructioncalc.core.data.PlanFiles
 import com.thedirepack.constructioncalc.core.model.IssuedSheet
 import com.thedirepack.constructioncalc.core.model.SheetRevision
@@ -157,22 +167,60 @@ internal fun RevisionOverlayDialog(
     var pan by remember { mutableStateOf(Offset.Zero) }
     var panning by remember { mutableStateOf(false) }
     val previewResult = preview
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text("Revision overlay") },
-        text = {
-            Column(Modifier.heightIn(max = 510.dp).verticalScroll(rememberScrollState())) {
-                Text("$currentLabel (black)")
-                Text("${comparison.source.label} (blue)")
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize().padding(10.dp),
+            shape = MaterialTheme.shapes.large,
+            tonalElevation = 4.dp,
+        ) {
+            Column(
+                Modifier.fillMaxSize().padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Revision overlay",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (previewResult?.isSuccess == true) {
+                        TextButton(onClick = {
+                            position = Offset.Zero
+                            scale = 1f
+                            angle = 0f
+                            opacity = .75f
+                            zoom = 1f
+                            pan = Offset.Zero
+                            panning = false
+                        }) { Text("Reset") }
+                    }
+                    TextButton(onClick = onDismiss) { Text("Done") }
+                }
+                Text(
+                    "$currentLabel (black)  •  ${comparison.source.label} (blue)",
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 when {
-                    previewResult == null -> CircularProgressIndicator()
-                    previewResult.isFailure -> Text("A PDF page could not be loaded for comparison.")
+                    previewResult == null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                    previewResult.isFailure -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text("A PDF page could not be loaded for comparison.")
+                    }
                     else -> {
                         val (base, layer) = previewResult.getOrThrow()
                         val baseImage = remember(base) { base.image.asImageBitmap() }
                         val layerImage = remember(layer) { layer.image.asImageBitmap() }
                         Canvas(
-                            Modifier.fillMaxWidth().height(230.dp).background(Color.White)
+                            Modifier.weight(1f).fillMaxWidth().clipToBounds().background(Color.White)
                                 .pointerInput(base, panning) {
                                     awaitEachGesture {
                                         val down = awaitFirstDown(requireUnconsumed = false)
@@ -208,8 +256,10 @@ internal fun RevisionOverlayDialog(
                             val fit = zoom * minOf(size.width / base.width, size.height / base.height)
                             val origin = center + pan
                             fun imageSize(sheet: PageBitmap) =
-                                IntSize((sheet.width * fit).roundToInt().coerceAtLeast(1),
-                                    (sheet.height * fit).roundToInt().coerceAtLeast(1))
+                                IntSize(
+                                    (sheet.width * fit).roundToInt().coerceAtLeast(1),
+                                    (sheet.height * fit).roundToInt().coerceAtLeast(1),
+                                )
                             val baseSize = imageSize(base)
                             val layerSize = imageSize(layer)
                             clipRect {
@@ -222,40 +272,39 @@ internal fun RevisionOverlayDialog(
                                     scale(scale, scale, Offset.Zero)
                                     translate(-layerSize.width / 2f, -layerSize.height / 2f)
                                 }) {
-                                    drawImage(layerImage, dstSize = layerSize, alpha = opacity,
-                                        colorFilter = comparisonTint, blendMode = BlendMode.Darken)
+                                    drawImage(
+                                        layerImage,
+                                        dstSize = layerSize,
+                                        alpha = opacity,
+                                        colorFilter = comparisonTint,
+                                        blendMode = BlendMode.Darken,
+                                    )
                                 }
                             }
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(panning, onCheckedChange = { panning = it })
-                            Text(if (panning) "Drag to pan the preview" else "Drag to align the blue sheet")
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            FilterChip(selected = !panning, onClick = { panning = false }, label = { Text("Align blue") })
+                            FilterChip(selected = panning, onClick = { panning = true }, label = { Text("Pan preview") })
+                            Spacer(Modifier.weight(1f))
+                            Text("Zoom ${(zoom * 100).roundToInt()}%", style = MaterialTheme.typography.labelMedium)
                         }
-                        Text("Preview zoom ${(zoom * 100).roundToInt()}%")
-                        Slider(zoom, { zoom = it; if (it == 1f) pan = Offset.Zero }, valueRange = 1f..5f)
-                        Text("Scale ${(scale * 100).roundToInt()}%")
-                        Slider(scale, { scale = it }, valueRange = .5f..2f)
-                        Text("Rotation ${angle.roundToInt()}°")
-                        Slider(angle, { angle = it }, valueRange = -180f..180f)
-                        Text("Opacity ${(opacity * 100).roundToInt()}%")
-                        Slider(opacity, { opacity = it })
+                        Column(
+                            Modifier.fillMaxWidth().heightIn(max = 175.dp).verticalScroll(rememberScrollState()),
+                        ) {
+                            Text("Opacity ${(opacity * 100).roundToInt()}%", style = MaterialTheme.typography.labelSmall)
+                            Slider(opacity, { opacity = it })
+                            Text("Scale ${(scale * 100).roundToInt()}%", style = MaterialTheme.typography.labelSmall)
+                            Slider(scale, { scale = it }, valueRange = .5f..2f)
+                            Text("Rotation ${angle.roundToInt()}°", style = MaterialTheme.typography.labelSmall)
+                            Slider(angle, { angle = it }, valueRange = -180f..180f)
+                        }
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
-        dismissButton = {
-            if (previewResult?.isSuccess == true) {
-                TextButton(onClick = {
-                    position = Offset.Zero
-                    scale = 1f
-                    angle = 0f
-                    opacity = .75f
-                    zoom = 1f
-                    pan = Offset.Zero
-                    panning = false
-                }) { Text("Reset") }
-            }
-        },
-    )
+        }
+    }
 }

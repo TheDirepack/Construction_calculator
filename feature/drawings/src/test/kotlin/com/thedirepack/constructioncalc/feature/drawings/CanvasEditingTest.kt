@@ -55,9 +55,39 @@ class CanvasEditingTest {
         assertEquals(true, ep101?.matches("POWER PLAN"))
         assertNull(resolveSheetLabel(staleLabel, repeatedLabels, null))
         assertEquals(
-            SheetLabel("A-102 - DIMENSION PLANS", "DIMENSION PLANS"),
+            SheetLabel("A-102 - DIMENSION PLANS", ""),
             resolveSheetLabel("A-102 - DIMENSION PLANS", repeatedLabels, SheetLabel("A-102", "DIMENSION PLANS")),
         )
+        assertEquals(
+            SheetLabel("A-102", "DIMENSION PLANS"),
+            resolveSheetLabel("A-102", repeatedLabels, SheetLabel("A-102", "DIMENSION PLANS")),
+        )
+    }
+
+    @Test fun sheetLabelsAndPdfTextDiskCachesRoundTripAndRejectCorruptInput() {
+        val labels = mapOf(
+            0 to SheetLabel("G-001", "COVER\tSHEET\\A"),
+            15 to SheetLabel("A-102", "DIMENSION\nPLANS"),
+        )
+        val encodedLabels = encodeSheetLabelsCache(labels)
+        assertEquals(labels, decodeSheetLabelsCache(encodedLabels))
+        assertNull(decodeSheetLabelsCache("WRONG-HEADER\n0\tA\tB"))
+        assertNull(decodeSheetLabelsCache("CC-SHEET-LABELS-V1\nbad"))
+
+        val textData = CachedPdfText(
+            hasText = true,
+            pages = mapOf(
+                0 to "GENERAL\tNOTES\\REV1\nLINE2",
+                30 to "EP101 POWER PLAN GARAGE DOOR OPENER",
+            ),
+        )
+        val encodedText = encodePdfTextCache(textData)
+        assertEquals(textData, decodePdfTextCache(encodedText))
+
+        val noText = CachedPdfText(hasText = false, pages = emptyMap())
+        assertEquals(noText, decodePdfTextCache(encodePdfTextCache(noText)))
+        assertNull(decodePdfTextCache("CC-PDF-TEXT-V1\t2\n"))
+        assertNull(decodePdfTextCache("CC-PDF-TEXT-V1\t1\n-1\tbad"))
     }
 
     @Test fun partialEraserSplitsAndTrimsInkPreservingStyleAndPressures() {

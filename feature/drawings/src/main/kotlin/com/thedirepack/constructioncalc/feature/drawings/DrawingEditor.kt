@@ -180,9 +180,9 @@ internal fun DrawingEditor(
     var customLabels by remember(sheetStore) { mutableStateOf(sheetStore.labels()) }
     val labels = remember(file) { mutableStateMapOf<Int, SheetLabel>() }
     var indexing by remember(file) { mutableStateOf(true) }
-    LaunchedEffect(file) {
+    LaunchedEffect(file, drawing.sha256) {
         try {
-            indexSheets(context.applicationContext, file) { index, label -> labels[index] = label }
+            indexSheets(context.applicationContext, drawing.sha256, file) { index, label -> labels[index] = label }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -572,7 +572,8 @@ internal fun DrawingEditor(
         val identity = drawing.sheetRevisions[page]
         val revisionStatus = remember(project.drawings, drawing, page) { project.sheetRevisionStatus(drawing, page) }
         EditorHeader(
-            sheet = "${source.sheetId} · ${page + 1}/$count",
+            sheetTitle = source.sheetId,
+            pageCounter = "${page + 1}/$count",
             onSheets = { sheetsOpen = true },
             canUndo = editable && history.canUndo,
             canRedo = editable && history.canRedo,
@@ -585,7 +586,7 @@ internal fun DrawingEditor(
                 busy = busy,
                 showCalibration = prefs.showCalibrationLayer,
                 scale = docSummary.status,
-                onMode = ::switchMode,
+                onMode = { switchMode(it) },
                 onScale = { session = session.open(EditorDialog.Calibration) },
                 onRotate = { rotation = (rotation + 1) % 4 },
                 onToggleCalibration = { DrawingsSettings.setShowCalibrationLayer(prefsStore, !prefs.showCalibrationLayer) },
@@ -683,6 +684,7 @@ internal fun DrawingEditor(
             sheetBrowserState.SaveableStateProvider("${drawing.id}/${drawing.sha256}") {
                 SheetBrowser(
                     file = file,
+                    drawingSha256 = drawing.sha256,
                     drawingName = drawing.name,
                     projectName = project.name,
                     page = page,
@@ -700,7 +702,7 @@ internal fun DrawingEditor(
                         sheetStore.saveLabel(target, label)
                     },
                     onDismiss = { sheetsOpen = false },
-                    onPage = ::goToPage,
+                    onPage = { goToPage(it) },
                 )
             }
         }
@@ -715,7 +717,7 @@ internal fun DrawingEditor(
             }
             val strip: @Composable () -> Unit = {
                 if (editable) {
-                    EditorTools(mode, landscape, toolColors, ::switchMode)
+                    EditorTools(mode, landscape, toolColors) { switchMode(it) }
                 }
             }
             val canvas: @Composable (Modifier) -> Unit = { canvasModifier ->
@@ -736,7 +738,7 @@ internal fun DrawingEditor(
                         snapTarget = snapTarget,
                         onPageSize = { pageSize = it },
                         onCropProvider = { cropProvider = it },
-                        onPlace = ::place,
+                        onPlace = { p, r -> place(p, r) },
                         onLine = { first, second -> apply(EditorActions.span(session, drawing, first, second, activeToolStyle)) },
                         onInk = { points ->
                             val raw = PlanMark(
@@ -757,7 +759,7 @@ internal fun DrawingEditor(
                         selectedPathEdge = selectedEdge,
                         handles = handles,
                         selectedMark = selectedMark,
-                        onMoveMark = ::replaceMark,
+                        onMoveMark = { replaceMark(it) },
                         onMoveEndpoint = { handle, point ->
                             if (handle.target is EndpointTarget.Path) {
                                 selectedVertex = handle.end
@@ -783,7 +785,7 @@ internal fun DrawingEditor(
                         },
                         dimensionLabel = formatDimension,
                         pageCount = count,
-                        onPageStep = ::goToPage,
+                        onPageStep = { goToPage(it) },
                         onOpenSheets = { sheetsOpen = true },
                         editable = editable,
                         stylusOnlyDraw = prefs.stylusOnlyDraw,
@@ -987,7 +989,7 @@ internal fun DrawingEditor(
                                             routeFinished = false
                                             host.showMessage("Saved ${legs.size} leg(s) as measurements.")
                                         },
-                                        onSavePath = ::saveTrace,
+                                        onSavePath = { saveTrace(it) },
                                         vertexCount = routePoints.size,
                                         onSendRoute = { session = session.open(EditorDialog.SendRoute) },
                                     )
@@ -1164,15 +1166,15 @@ internal fun DrawingEditor(
             if (it.op == EditOp.Idle) routeFinished = false
             session = it
         },
-        editDrawing = ::editDrawing,
-        addMark = ::addMark,
-        replaceMark = ::replaceMark,
+        editDrawing = { editDrawing(it) },
+        addMark = { addMark(it) },
+        replaceMark = { replaceMark(it) },
         onPickSymbol = {
             symbol = it
             views.edit().putString("${drawing.id}/symbol", it.id).apply()
         },
         onOpenSettings = { settingsOpen = true },
-        publish = ::publish,
+        publish = { m, q -> publish(m, q) },
         onSendRouteToRun = onSendRouteToRun,
     )
 }
@@ -1416,8 +1418,8 @@ private fun EditorDialogs(
             pageZones = pageZones,
             editable = editable,
             onCalibrationChange = { updated -> editDrawing { it.copy(calibration = updated) } },
-            onZoneChange = ::updateZone,
-            onZoneDelete = ::deleteZone,
+            onZoneChange = { updateZone(it) },
+            onZoneDelete = { deleteZone(it) },
             onDismiss = close,
         )
         EditorDialog.PageItems -> PageItemsDialog(
@@ -1427,8 +1429,8 @@ private fun EditorDialogs(
             marks = marks,
             editable = editable,
             publish = publish,
-            onZoneChange = ::updateZone,
-            onZoneDelete = ::deleteZone,
+            onZoneChange = { updateZone(it) },
+            onZoneDelete = { deleteZone(it) },
             onMeasureEdit = { id -> onSession(session.open(EditorDialog.EditMeasurement(id))) },
             onMeasureDelete = { id -> editDrawing { it.copy(measurements = it.measurements.filterNot { m -> m.id == id }) } },
             onPathDelete = { id -> editDrawing { it.copy(paths = it.paths.filterNot { p -> p.id == id }) } },

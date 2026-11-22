@@ -234,7 +234,7 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
                                     // Already in Projects: show that page (or the list) in place.
                                     if (tool.id == ProjectsTool.ID) stack[stack.lastIndex] = projectsDest else push(projectsDest)
                                 },
-                                onBack = ::pop,
+                                onBack = { pop() },
                                 onSave = { pendingSave = Triple(it, resolvedItem, current.target) },
                                 onPublish = { results, ctx, immediate ->
                                     publishJobs.remove(tool.id)?.cancel()
@@ -259,7 +259,7 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
                                         message("No app available to share with")
                                     }
                                 },
-                                onMessage = ::message,
+                                onMessage = { message(it) },
                                 onOpenFile = openFile,
                             )
                         }
@@ -268,11 +268,11 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
                     is Destination.Settings -> SettingsScreen(
                         toolId = current.toolId,
                         canGoBack = stack.size > 1,
-                        onBack = ::pop,
+                        onBack = { pop() },
                         onOpenDrawer = { scope.launch { drawer.open() } },
                         onOpenToolPage = { push(Destination.Settings(it)) },
                         onOpenFile = openFile,
-                        onMessage = ::message,
+                        onMessage = { message(it) },
                     )
                 }
             }

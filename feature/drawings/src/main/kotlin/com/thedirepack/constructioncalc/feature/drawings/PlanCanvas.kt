@@ -6,6 +6,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.util.LruCache
 import android.view.MotionEvent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animate
@@ -32,10 +33,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -94,6 +97,18 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 internal data class PageBitmap(val image: Bitmap, val width: Float, val height: Float)
+
+private const val PAGE_CACHE_KB = 32 * 1024
+
+private val pageBitmapCache = object : LruCache<String, PageBitmap>(PAGE_CACHE_KB) {
+    override fun sizeOf(key: String, value: PageBitmap): Int =
+        if (value.image.isRecycled) 1 else (value.image.allocationByteCount / 1024).coerceAtLeast(1)
+}
+
+/** Keeps the latest function/callback even across capturing local `::fn` references whose `equals()` ignores captures. */
+@Composable
+private fun <T> rememberLatest(value: T): State<T> =
+    remember { mutableStateOf(value, referentialEqualityPolicy()) }.apply { this.value = value }
 
 private data class RegionTile(val bitmap: Bitmap, val region: RectF, val scale: Float)
 
@@ -378,16 +393,27 @@ internal fun PlanCanvas(
     val haptic = LocalHapticFeedback.current
     val views = remember(context) { context.getSharedPreferences("drawing-views", 0) }
     val viewKey = "$drawingId/$pageIndex"
-    val setCropProvider by rememberUpdatedState(onCropProvider)
+    val reportPageSize by rememberLatest(onPageSize)
+    val setCropProvider by rememberLatest(onCropProvider)
     val selected by rememberUpdatedState(selectedMark)
     val currentMarks by rememberUpdatedState(marks)
-    val moveMark by rememberUpdatedState(onMoveMark)
-    val state by key(file, pageIndex) {
-        produceState<PageState>(PageState.Loading) {
+    val moveMark by rememberLatest(onMoveMark)
+    val cacheKey = "${file.absolutePath}#$pageIndex"
+    val cachedPage = remember(cacheKey) {
+        pageBitmapCache.get(cacheKey)?.takeUnless { it.image.isRecycled }
+    }
+    val state by key(cacheKey) {
+        produceState<PageState>(if (cachedPage != null) PageState.Loaded(cachedPage) else PageState.Loading) {
+            if (cachedPage != null) {
+                value = PageState.Loaded(cachedPage)
+                return@produceState
+            }
             value = try {
                 // A short pause so paging quickly through a set doesn't render every page passed.
                 delay(PAGE_DEBOUNCE_MS)
-                PageState.Loaded(PdfWork.render { loadPage(file, pageIndex) })
+                val loaded = PdfWork.render { loadPage(file, pageIndex) }
+                pageBitmapCache.put(cacheKey, loaded)
+                PageState.Loaded(loaded)
             } catch (error: java.io.IOException) {
                 PageState.Error("This PDF page could not be opened.")
             } catch (error: IllegalArgumentException) {
@@ -399,20 +425,20 @@ internal fun PlanCanvas(
             }
         }
     }
-    val place by rememberUpdatedState(onPlace)
-    val line by rememberUpdatedState(onLine)
-    val ink by rememberUpdatedState(onInk)
-    val moveEndpoint by rememberUpdatedState(onMoveEndpoint)
+    val place by rememberLatest(onPlace)
+    val line by rememberLatest(onLine)
+    val ink by rememberLatest(onInk)
+    val moveEndpoint by rememberLatest(onMoveEndpoint)
     val currentHandles by rememberUpdatedState(handles)
     val currentLineMap by rememberUpdatedState(lineMap)
     val currentSnapEnabled by rememberUpdatedState(snapEnabled)
     val currentSnapTarget by rememberUpdatedState(snapTarget)
     val currentActiveStyle by rememberUpdatedState(activeStyle)
     val currentEraserMode by rememberUpdatedState(eraserMode)
-    val partialErase by rememberUpdatedState(onPartialErase)
-    val wholeEraseTap by rememberUpdatedState(onWholeEraseTap)
-    val doubleTapMark by rememberUpdatedState(onDoubleTapMark)
-    val currentDimensionLabel by rememberUpdatedState(dimensionLabel)
+    val partialErase by rememberLatest(onPartialErase)
+    val wholeEraseTap by rememberLatest(onWholeEraseTap)
+    val doubleTapMark by rememberLatest(onDoubleTapMark)
+    val currentDimensionLabel by rememberLatest(dimensionLabel)
     val currentMode by rememberUpdatedState(mode)
     val currentEditable by rememberUpdatedState(editable)
     val currentStylusOnlyDraw by rememberUpdatedState(stylusOnlyDraw)
@@ -422,9 +448,9 @@ internal fun PlanCanvas(
     val currentTwoFingerUndo by rememberUpdatedState(twoFingerUndo)
     val currentCanUndo by rememberUpdatedState(canUndo)
     val currentCanRedo by rememberUpdatedState(canRedo)
-    val currentOnUndo by rememberUpdatedState(onUndo)
-    val currentOnRedo by rememberUpdatedState(onRedo)
-    val currentOnStylusDetected by rememberUpdatedState(onStylusDetected)
+    val currentOnUndo by rememberLatest(onUndo)
+    val currentOnRedo by rememberLatest(onRedo)
+    val currentOnStylusDetected by rememberLatest(onStylusDetected)
 
     val density = LocalDensity.current
     val snapRadiusPx = with(density) { 24.dp.toPx() }
@@ -437,7 +463,7 @@ internal fun PlanCanvas(
 
     LaunchedEffect(state) {
         val loaded = (state as? PageState.Loaded)?.page ?: return@LaunchedEffect
-        onPageSize(PageSize(loaded.width, loaded.height))
+        reportPageSize(PageSize(loaded.width, loaded.height))
     }
 
     // Hoisted draw objects: zero per-frame allocations inside Canvas draw lambda.
@@ -463,12 +489,6 @@ internal fun PlanCanvas(
             is PageState.Error -> Text(current.message)
             is PageState.Loaded -> {
                 val page = current.page
-                // Recycle the base page bitmap when switching pages/files or leaving composition.
-                DisposableEffect(page) {
-                    onDispose {
-                        if (!page.image.isRecycled) page.image.recycle()
-                    }
-                }
 
                 val pageRect = remember(page) { RectF(0f, 0f, page.width, page.height) }
                 val viewport = remember(page, quarterTurns) {
@@ -1338,19 +1358,21 @@ private fun DrawScope.drawSnappingLoupe(
             native.rotate(transform.quarterTurns * 90f)
             dstRect.set(-radius, -radius, radius, radius)
 
-            val useTile = tile != null && !tile.bitmap.isRecycled &&
-                px - halfPts >= tile.region.left && px + halfPts <= tile.region.right &&
-                py - halfPts >= tile.region.top && py + halfPts <= tile.region.bottom
+            val activeTile = tile?.takeIf {
+                !it.bitmap.isRecycled &&
+                    px - halfPts >= it.region.left && px + halfPts <= it.region.right &&
+                    py - halfPts >= it.region.top && py + halfPts <= it.region.bottom
+            }
 
-            if (useTile && tile != null) {
-                val sx = tile.bitmap.width / tile.region.width()
-                val sy = tile.bitmap.height / tile.region.height()
-                val left = ((px - halfPts - tile.region.left) * sx).roundToInt().coerceIn(0, tile.bitmap.width - 1)
-                val top = ((py - halfPts - tile.region.top) * sy).roundToInt().coerceIn(0, tile.bitmap.height - 1)
-                val right = ((px + halfPts - tile.region.left) * sx).roundToInt().coerceIn(left + 1, tile.bitmap.width)
-                val bottom = ((py + halfPts - tile.region.top) * sy).roundToInt().coerceIn(top + 1, tile.bitmap.height)
+            if (activeTile != null) {
+                val sx = activeTile.bitmap.width / activeTile.region.width()
+                val sy = activeTile.bitmap.height / activeTile.region.height()
+                val left = ((px - halfPts - activeTile.region.left) * sx).roundToInt().coerceIn(0, activeTile.bitmap.width - 1)
+                val top = ((py - halfPts - activeTile.region.top) * sy).roundToInt().coerceIn(0, activeTile.bitmap.height - 1)
+                val right = ((px + halfPts - activeTile.region.left) * sx).roundToInt().coerceIn(left + 1, activeTile.bitmap.width)
+                val bottom = ((py + halfPts - activeTile.region.top) * sy).roundToInt().coerceIn(top + 1, activeTile.bitmap.height)
                 srcRect.set(left, top, right, bottom)
-                native.drawBitmap(tile.bitmap, srcRect, dstRect, bitmapPaint)
+                native.drawBitmap(activeTile.bitmap, srcRect, dstRect, bitmapPaint)
             } else if (!page.image.isRecycled) {
                 val sx = page.image.width / page.width
                 val sy = page.image.height / page.height
