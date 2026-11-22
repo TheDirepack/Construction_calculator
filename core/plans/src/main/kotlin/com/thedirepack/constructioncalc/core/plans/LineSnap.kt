@@ -1,4 +1,4 @@
-package com.thedirepack.constructioncalc.core.model
+package com.thedirepack.constructioncalc.core.plans
 
 import kotlin.math.PI
 import kotlin.math.abs
@@ -70,7 +70,7 @@ object LineSnapper {
      * blank paper or inside a solid fill.
      */
     fun snap(image: GrayImage, x: Double, y: Double, radius: Double): LineSnap? {
-        require(x.isFinite() && y.isFinite() && radius.isFinite() && radius >= 2)
+        require(x.isFinite() && y.isFinite() && radius.isFinite() && radius in 2.0..256.0)
         val along = (radius * .4).coerceIn(4.0, 16.0)
         val field = Darkness.around(image, x, y, radius * REACH + along + 3) ?: return null
         val scan = Scan(field, x, y, radius, along)
@@ -109,9 +109,41 @@ private const val MIN_CORNER_ANGLE = 35.0 * PI / 180
 /** How far past the tap radius the cross-sections look, as a multiple of it. */
 private const val REACH = 1.5
 
+/** Ink darkness 0 (paper) to 1 (ink) at a point in image coordinates. */
+interface InkField {
+    fun at(px: Double, py: Double): Double
+}
+
+/**
+ * Darkness over a whole image, already normalized (0 paper, 255 full ink), sampled bilinearly.
+ * Pixel (i, j) is centered at (i + 0.5, j + 0.5).
+ */
+class InkImage(val width: Int, val height: Int, private val ink: ByteArray) : InkField {
+    init {
+        require(width > 0 && height > 0 && ink.size.toLong() == width.toLong() * height)
+    }
+
+    internal fun rawBytes(): ByteArray = ink
+
+    override fun at(px: Double, py: Double): Double {
+        val u = px - .5
+        val v = py - .5
+        val i = floor(u).toInt()
+        val j = floor(v).toInt()
+        val fx = u - i
+        val fy = v - j
+        val top = get(i, j) * (1 - fx) + get(i + 1, j) * fx
+        val bottom = get(i, j + 1) * (1 - fx) + get(i + 1, j + 1) * fx
+        return (top * (1 - fy) + bottom * fy) / 255
+    }
+
+    private fun get(i: Int, j: Int): Double =
+        if (i < 0 || j < 0 || i >= width || j >= height) 0.0 else (ink[j * width + i].toInt() and 0xff).toDouble()
+}
+
 /** Ink darkness 0 to 1 in a window of the image, with bilinear sampling in image coordinates. */
-private class Darkness(val x0: Int, val y0: Int, val w: Int, val h: Int, val values: FloatArray) {
-    fun at(px: Double, py: Double): Double {
+private class Darkness(val x0: Int, val y0: Int, val w: Int, val h: Int, val values: FloatArray) : InkField {
+    override fun at(px: Double, py: Double): Double {
         val u = px - .5 - x0
         val v = py - .5 - y0
         val i = floor(u).toInt()
@@ -214,26 +246,14 @@ private class FittedLine(val px: Double, val py: Double, val angle: Double, val 
     }
 }
 
-private class Scan(val field: Darkness, val x: Double, val y: Double, val radius: Double, val along: Double) {
+private class Scan(val field: InkField, val x: Double, val y: Double, val radius: Double, val along: Double) {
     /** Profiles reach past the radius so a wide stroke whose edge is within reach is seen whole. */
     private val reach = radius * REACH
     private val count = (2 * reach / STEP).toInt() + 1
     private val profiles = Array(ANGLES) { index -> profile(index * PI / ANGLES, -reach, count, along) }
 
-    /** Cross-section at offsets t0, t0 + STEP… along the normal, averaged ±[half] along the direction. */
-    fun profile(angle: Double, t0: Double, size: Int, half: Double, cx: Double = x, cy: Double = y): DoubleArray {
-        val ux = cos(angle)
-        val uy = sin(angle)
-        val nx = -uy
-        val ny = ux
-        val reach = floor(half).toInt()
-        return DoubleArray(size) { k ->
-            val t = t0 + k * STEP
-            var sum = 0.0
-            for (s in -reach..reach) sum += field.at(cx + t * nx + s * ux, cy + t * ny + s * uy)
-            sum / (2 * reach + 1)
-        }
-    }
+    fun profile(angle: Double, t0: Double, size: Int, half: Double, cx: Double = x, cy: Double = y): DoubleArray =
+        crossSection(field, angle, t0, size, half, cx, cy)
 
     /** The strongest nearby line, or with [exclude] the strongest crossing it at a clear angle. */
     fun best(exclude: Double?): Candidate? {
@@ -349,72 +369,6 @@ private class Scan(val field: Darkness, val x: Double, val y: Double, val radius
         return lowest
     }
 
-    /**
-     * The profile peak closest to [around] within [reach] samples: of two lines a few pixels
-     * apart the nearer one, not the darker. Falls back to the highest sample in reach.
-     */
-    private fun nearestPeak(values: DoubleArray, around: Int, reach: Int): Int? {
-        val from = max(0, around - reach)
-        val to = min(values.size - 1, around + reach)
-        var nearest: Int? = null
-        for (k in from..to) {
-            val rising = k == 0 || values[k] >= values[k - 1]
-            val falling = k == values.size - 1 || values[k] > values[k + 1]
-            if (!rising || !falling || values[k] < MIN_PEAK * .5) continue
-            // A flat top counts from its middle.
-            var start = k
-            while (start > 0 && values[start - 1] == values[k]) start--
-            val middle = (start + k) / 2
-            if (nearest == null || abs(middle - around) < abs(nearest - around)) nearest = middle
-        }
-        if (nearest != null) return nearest
-        var best = from
-        for (k in from..to) if (values[k] > values[best]) best = k
-        return best.takeIf { values[it] > 0 }
-    }
-
-    /**
-     * Edges at half height on each side of the peak; returns (center offset, width) in profile
-     * units. Each side's base is the lowest point before the profile climbs into another line, so
-     * ripples along the dark middle of a noisy or compressed stroke are not taken for its edges.
-     */
-    private fun edges(values: DoubleArray, peak: Int): Pair<Double, Double>? {
-        val top = peak
-        val height = values[top]
-        fun base(direction: Int): Double {
-            var lowest = height
-            var k = top + direction
-            while (k in values.indices) {
-                lowest = min(lowest, values[k])
-                val depth = height - lowest
-                if (depth > MIN_PROMINENCE * .5 && values[k] - lowest > .25 * depth) break
-                k += direction
-            }
-            return lowest
-        }
-        val leftBase = base(-1)
-        val rightBase = base(1)
-        if (height - max(leftBase, rightBase) < MIN_PROMINENCE * .5) return null
-        val leftHalf = (height + leftBase) / 2
-        val rightHalf = (height + rightBase) / 2
-        var left: Double? = null
-        for (k in top downTo 1) {
-            if (values[k - 1] < leftHalf) {
-                left = (k - 1 + (leftHalf - values[k - 1]) / (values[k] - values[k - 1])) * STEP
-                break
-            }
-        }
-        var right: Double? = null
-        for (k in top until values.size - 1) {
-            if (values[k + 1] < rightHalf) {
-                right = (k + (values[k] - rightHalf) / (values[k] - values[k + 1])) * STEP
-                break
-            }
-        }
-        if (left == null || right == null) return null
-        return Pair((left + right) / 2, right - left)
-    }
-
     private fun fitLine(points: List<Pair<Double, Double>>): Pair<Double, Double> {
         val n = points.size
         val ms = points.sumOf { it.first } / n
@@ -436,7 +390,91 @@ private fun normalize(angle: Double): Double {
     return a
 }
 
-private fun angleBetween(a: Double, b: Double): Double {
-    val d = abs(normalize(a) - normalize(b))
-    return min(d, PI - d)
+
+/**
+ * Cross-section of [field] through ([cx], [cy]) for a line in direction [angle]: samples at
+ * offsets t0, t0 + STEP… along the normal, each averaged ±[half] pixels along the direction.
+ */
+internal fun crossSection(field: InkField, angle: Double, t0: Double, size: Int, half: Double, cx: Double, cy: Double): DoubleArray {
+    val ux = cos(angle)
+    val uy = sin(angle)
+    val nx = -uy
+    val ny = ux
+    val reach = floor(half).toInt()
+    return DoubleArray(size) { k ->
+        val t = t0 + k * STEP
+        var sum = 0.0
+        for (s in -reach..reach) sum += field.at(cx + t * nx + s * ux, cy + t * ny + s * uy)
+        sum / (2 * reach + 1)
+    }
 }
+
+/** Sample spacing of [crossSection], pixels. */
+internal const val PROFILE_STEP = STEP
+
+/**
+ * The profile peak closest to [around] within [reach] samples: of two lines a few pixels
+ * apart the nearer one, not the darker. Falls back to the highest sample in reach.
+ */
+internal fun nearestPeak(values: DoubleArray, around: Int, reach: Int): Int? {
+    val from = max(0, around - reach)
+    val to = min(values.size - 1, around + reach)
+    var nearest: Int? = null
+    for (k in from..to) {
+        val rising = k == 0 || values[k] >= values[k - 1]
+        val falling = k == values.size - 1 || values[k] > values[k + 1]
+        if (!rising || !falling || values[k] < MIN_PEAK * .5) continue
+        // A flat top counts from its middle.
+        var start = k
+        while (start > 0 && values[start - 1] == values[k]) start--
+        val middle = (start + k) / 2
+        if (nearest == null || abs(middle - around) < abs(nearest - around)) nearest = middle
+    }
+    if (nearest != null) return nearest
+    var best = from
+    for (k in from..to) if (values[k] > values[best]) best = k
+    return best.takeIf { values[it] > 0 }
+}
+
+/**
+ * Edges at half height on each side of the peak; returns (center offset, width) in profile
+ * units. Each side's base is the lowest point before the profile climbs into another line, so
+ * ripples along the dark middle of a noisy or compressed stroke are not taken for its edges.
+ */
+internal fun edges(values: DoubleArray, peak: Int): Pair<Double, Double>? {
+    val top = peak
+    val height = values[top]
+    fun base(direction: Int): Double {
+        var lowest = height
+        var k = top + direction
+        while (k in values.indices) {
+            lowest = min(lowest, values[k])
+            val depth = height - lowest
+            if (depth > MIN_PROMINENCE * .5 && values[k] - lowest > .25 * depth) break
+            k += direction
+        }
+        return lowest
+    }
+    val leftBase = base(-1)
+    val rightBase = base(1)
+    if (height - max(leftBase, rightBase) < MIN_PROMINENCE * .5) return null
+    val leftHalf = (height + leftBase) / 2
+    val rightHalf = (height + rightBase) / 2
+    var left: Double? = null
+    for (k in top downTo 1) {
+        if (values[k - 1] < leftHalf) {
+            left = (k - 1 + (leftHalf - values[k - 1]) / (values[k] - values[k - 1])) * STEP
+            break
+        }
+    }
+    var right: Double? = null
+    for (k in top until values.size - 1) {
+        if (values[k + 1] < rightHalf) {
+            right = (k + (values[k] - rightHalf) / (values[k] - values[k + 1])) * STEP
+            break
+        }
+    }
+    if (left == null || right == null) return null
+    return Pair((left + right) / 2, right - left)
+}
+

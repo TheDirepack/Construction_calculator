@@ -1,4 +1,4 @@
-package com.thedirepack.constructioncalc.core.model
+package com.thedirepack.constructioncalc.core.plans
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull

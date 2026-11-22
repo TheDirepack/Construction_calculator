@@ -9,9 +9,17 @@ junit = "4.13.2"
 kotlinxSerialization = "1.13.0"
 kotlinxCoroutines = "1.11.0"
 pdfBoxAndroid = "2.0.27.0"
+# Same PDFBox release as the Android port, for desktop tests of the same drawing callbacks.
+pdfBox = "2.0.27"
+# Android build and its desktop twin (same release, same Java API).
+opencv = "4.9.0"
+opencvDesktop = "4.9.0-0"
 
 [libraries]
 pdfbox-android = { group = "com.tom-roush", name = "pdfbox-android", version.ref = "pdfBoxAndroid" }
+pdfbox-desktop = { group = "org.apache.pdfbox", name = "pdfbox", version.ref = "pdfBox" }
+opencv-android = { group = "org.opencv", name = "opencv", version.ref = "opencv" }
+opencv-desktop = { group = "org.openpnp", name = "opencv", version.ref = "opencvDesktop" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }

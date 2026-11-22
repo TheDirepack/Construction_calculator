@@ -75,9 +75,10 @@ anything above that disagrees.
   all fitted together; no page-by-page calibration. A zone with a different scale (a detail, an
   enlarged plan) has its own dimensions, overrides the document scale inside its area, and is
   left out of the document fit.
-- **The fit can vary across the sheet.** A photographed or curled sheet is a plane seen in
-  3D: the fit can include perspective and a smooth bend, so a measurement's scale changes along
-  its length, as far as the number and spread of dimensions support it.
+- **The fit can vary across the sheet.** A photographed or curled sheet can be corrected with a
+  2D warp layer (and later a 3D bed-leveling-style mesh) applied purely to the measurements in
+  coordinate space—independent of pixels, PDFs, or images—so a measurement's scale changes smoothly
+  along its length as far as the number and spread of dimensions support it.
 - **Reference sheets.** The snapper is checked against vector PDFs from the local blueprint
   library, rendered at the app's resolutions and also made to look like scans and phone photos
   (perspective, curl, lighting, blur, noise, JPEG) with the exact geometry carried through. The

@@ -11,7 +11,13 @@ are strokes that touch other lines nearby (junctions have no single right answer
 Visual cases come from scans and photos, which have no exact geometry: taps near ink, for
 checking the overlays by eye (`--visual`).
 
-Output goes to build/snap-reference/ (ignored by git); LineSnapReferenceTest reads it.
+Photo cases make a page look like a phone picture of a sheet: perspective, paper curl, uneven
+light, blur, noise and JPEG. The exact geometry goes through the same distortion, so the answer
+stays exact; it is scored across the line (the distortion moves points along it).
+
+Output goes to blueprints_and_libraries/_snap_reference/ (ignored by git, like the library):
+the cases, the images they use, and for every reference page its full-resolution SVG and
+high-resolution render. The core:plans reference tests read it.
 
     python3 -P scripts/snap_reference_cases.py
     python3 -P scripts/snap_reference_cases.py --visual SCAN.pdf:30 --visual photo.jpg
@@ -31,7 +37,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 LIBRARY = ROOT / 'blueprints_and_libraries'
-OUT = ROOT / 'build' / 'snap-reference'
+OUT = LIBRARY / '_snap_reference'
 
 HIGH = 8          # pixels per point for the exact render
 RADIUS = 32.0     # tap search radius in snap pixels, as the app uses (--radius)
@@ -128,6 +134,12 @@ def measured(rng: np.random.Generator, per_page: int) -> list[dict]:
             continue
         for page in pages:
             high = render(pdf, page, HIGH)
+            name = f'{pdf.stem[:24].replace(" ", "_")}_p{page}'
+            keep = OUT / 'source'
+            keep.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(keep / f'{name}_{HIGH * 72}dpi.png'), high)
+            subprocess.run(['pdftocairo', '-svg', '-f', str(page), '-l', str(page), str(pdf), str(keep / f'{name}.svg')],
+                           stderr=subprocess.DEVNULL)
             half_length = int(RADIUS * HIGH / min(SCALES)) + 8
             found = []
             for transpose in (False, True):
@@ -135,21 +147,75 @@ def measured(rng: np.random.Generator, per_page: int) -> list[dict]:
                 for stroke in strokes(np.ascontiguousarray(source), rng, per_page, half_length):
                     stroke['vertical'] = transpose
                     found.append(stroke)
-            name = f'{pdf.stem[:24].replace(" ", "_")}_p{page}'
             print(f'{name}: {len(found)} strokes')
             images = [(scale, 'clean') for scale in SCALES] + \
-                     [(DEGRADED_SCALE, kind) for kind in ('blur', 'jpeg', 'faint', 'lowres')]
+                     [(DEGRADED_SCALE, kind) for kind in ('blur', 'jpeg', 'faint', 'lowres', 'photo')]
             for scale, kind in images:
                 file = OUT / f'{name}_s{scale}_{kind}.png'
-                image = degrade(render(pdf, page, scale), kind, rng)
+                clean = render(pdf, page, scale)
+                warp = Warp(clean.shape, rng) if kind == 'photo' else None
+                image = warp.photo(clean, rng) if warp else degrade(clean, kind, rng)
                 cv2.imwrite(str(file), image)
                 for stroke in found:
-                    case = tap_case(stroke, scale, rng, high, image)
+                    case = tap_case(stroke, scale, rng, high, clean)
                     if case is None:
                         continue
-                    case.update(image=file.name, scale=scale, variant=kind, sheet=name)
+                    vertical = stroke['vertical']
+                    case['direction'] = [0.0, 1.0] if vertical else [1.0, 0.0]
+                    if warp:
+                        tap, truth = case['tap'], case['truth']
+                        ahead = [truth[0] + case['direction'][0], truth[1] + case['direction'][1]]
+                        case['tap'] = [round(v, 3) for v in warp.forward(*tap)]
+                        case['truth'] = [round(v, 4) for v in warp.forward(*truth)]
+                        moved = warp.forward(*ahead)
+                        d = np.subtract(moved, case['truth'])
+                        case['direction'] = [round(float(v), 5) for v in d / np.linalg.norm(d)]
+                        if not (0 <= case['tap'][0] < image.shape[1] and 0 <= case['tap'][1] < image.shape[0]):
+                            continue
+                    case.update(image=file.name, scale=scale, variant=kind, sheet=name,
+                                pdf=str(pdf.relative_to(LIBRARY)), page=page)
                     cases.append(case)
     return cases
+
+
+class Warp:
+    """A phone picture of a sheet: paper curl, then perspective. forward() maps clean-render
+    pixel coordinates to the picture; photo() makes the picture."""
+
+    def __init__(self, shape, rng):
+        h, w = shape
+        self.w, self.h = w, h
+        self.curl = rng.uniform(.004, .012) * h
+        self.waves = rng.uniform(.8, 1.6)
+        jitter = rng.uniform(-.035, .035, (4, 2)) * [w, h]
+        src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+        self.H = cv2.getPerspectiveTransform(src, (src + jitter).astype(np.float32))
+        self.Hinv = np.linalg.inv(self.H)
+
+    def bend(self, x):
+        return self.curl * np.sin(np.pi * self.waves * x / self.w)
+
+    def forward(self, x, y):
+        y = y + self.bend(x)
+        p = self.H @ [x, y, 1]
+        return float(p[0] / p[2]), float(p[1] / p[2])
+
+    def photo(self, image, rng):
+        h, w = image.shape
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float64) + .5
+        q = np.tensordot(self.Hinv, np.stack([xx, yy, np.ones_like(xx)]), axes=1)
+        sx, sy = q[0] / q[2], q[1] / q[2]
+        sy = sy - self.bend(sx)
+        out = cv2.remap(image, (sx - .5).astype(np.float32), (sy - .5).astype(np.float32),
+                        cv2.INTER_LINEAR, borderValue=200)
+        light = 1 - .28 * ((xx / w - rng.uniform(.2, .8)) ** 2 + (yy / h - rng.uniform(.2, .8)) ** 2)
+        tint = rng.uniform(.85, .97)
+        out = out.astype(np.float32) * light * tint + rng.uniform(-6, 10)
+        out = cv2.GaussianBlur(out, (0, 0), rng.uniform(.7, 1.2))
+        out = out + rng.normal(0, 5, out.shape)
+        out = np.clip(out, 0, 255).astype(np.uint8)
+        ok, data = cv2.imencode('.jpg', out, [cv2.IMWRITE_JPEG_QUALITY, 55])
+        return cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
 
 
 def tap_case(stroke: dict, scale: int, rng, high: np.ndarray, image: np.ndarray) -> dict | None:

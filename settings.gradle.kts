@@ -28,6 +28,7 @@ include(":app")
 include(":core:measure") // pure Kotlin: exact fractions, measurements, calculator engine
 include(":core:model")   // pure Kotlin: projects, runs, items, result values, file format
 include(":core:electrical") // pure Kotlin: NEC tables & electrical formulas shared by tools
+include(":core:plans")   // pure Kotlin: line maps, snapping and line finding for drawings (OpenCV API)
 include(":core:data")    // Android: repositories (projects, settings, recent results), share/import
 include(":core:ui")      // Android: theme, tool API, shared inputs (MeasureField…), keypad
 

@@ -34,22 +34,28 @@ import com.thedirepack.constructioncalc.core.data.PlanSymbol
 import com.thedirepack.constructioncalc.core.data.PlanSymbols
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.model.PlanCalibrationLayer
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMeasurement
 import com.thedirepack.constructioncalc.core.model.PlanScaleMode
 import com.thedirepack.constructioncalc.core.model.PlanZone
+import com.thedirepack.constructioncalc.core.model.SheetSize
 import com.thedirepack.constructioncalc.core.model.StoredQuantity
 import com.thedirepack.constructioncalc.core.model.stored
 import com.thedirepack.constructioncalc.core.ui.components.MeasureField
 import com.thedirepack.constructioncalc.core.ui.components.SettingsGroup
 import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.abs
 
-private val zonePresets = listOf(
+private val scalePresets = listOf(
     "¼″ = 1′" to 48L,
     "⅛″ = 1′" to 96L,
     "½″ = 1′" to 24L,
@@ -60,9 +66,27 @@ private val zonePresets = listOf(
     "1:200" to 200L,
 )
 
+private val scaleModeLabels = mapOf(
+    PlanScaleMode.UNIFORM to "Uniform",
+    PlanScaleMode.AXES to "X/Y",
+    PlanScaleMode.AFFINE to "Skew",
+    PlanScaleMode.DISTORTED to "2D Warp",
+)
+
+private fun presetWarning(pageSize: PageSize?): String? {
+    val size = pageSize ?: return null
+    val sheet = SheetSize.of(size.width.toDouble(), size.height.toDouble())
+    return if (sheet == null) {
+        "Page size doesn't match a standard drawing sheet — a preset scale may be inaccurate on a scanned or resized page. Measure a known dimension to check."
+    } else {
+        "Sheet matches ${sheet.label}. Verify with a known dimension if this set was printed at reduced size."
+    }
+}
+
 @Composable
 internal fun ZoneDialog(
     defaultName: String,
+    pageSize: PageSize?,
     onDismiss: () -> Unit,
     onConfirm: (String, StoredQuantity?) -> Unit,
 ) {
@@ -70,9 +94,13 @@ internal fun ZoneDialog(
     var preset by rememberSaveable { mutableStateOf<Long?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New scale zone") },
+        title = { Text("New override scale zone") },
         text = {
-            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "Overrides the document scale inside this region and is left out of the document-wide fit.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it.take(80) },
@@ -80,9 +108,14 @@ internal fun ZoneDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                FilterChip(preset == null, onClick = { preset = null }, label = { Text("Calibrate from a known distance") })
-                for ((label, ratio) in zonePresets) {
+                FilterChip(preset == null, onClick = { preset = null }, label = { Text("Calibrate from known dimensions") })
+                for ((label, ratio) in scalePresets) {
                     FilterChip(preset == ratio, onClick = { preset = ratio }, label = { Text(label) })
+                }
+                if (preset != null) {
+                    presetWarning(pageSize)?.let { warning ->
+                        Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                    }
                 }
             }
         },
@@ -100,18 +133,19 @@ internal fun ZoneDialog(
 
 @Composable
 internal fun ReferenceDialog(
-    zone: PlanZone,
+    targetName: String,
+    hasFit: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (StoredQuantity, Boolean) -> Unit,
 ) {
     var length by remember { mutableStateOf<Quantity?>(null) }
-    var check by rememberSaveable { mutableStateOf(zone.fit() != null) }
+    var check by rememberSaveable { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Known distance") },
+        title = { Text("Known dimension") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(zone.name)
+                Text(targetName)
                 MeasureField(
                     label = "Real-world distance",
                     value = length,
@@ -120,11 +154,11 @@ internal fun ReferenceDialog(
                     isError = length?.value?.signum?.let { it <= 0 } == true,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = check, onCheckedChange = { check = it }, enabled = zone.fit() != null)
+                    Switch(checked = check, onCheckedChange = { check = it }, enabled = hasFit)
                     Column {
                         Text("Check only")
                         Text(
-                            if (check) "Compare with the fit." else "Use this reference to fit the zone.",
+                            if (check) "Compare with the fit without changing it." else "Use this dimension to fit the calibration.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -135,9 +169,157 @@ internal fun ReferenceDialog(
             TextButton(
                 onClick = { length?.let { onConfirm(it.stored(), check) } },
                 enabled = length?.value?.signum?.let { it > 0 } == true,
-            ) { Text("Save reference") }
+            ) { Text("Save dimension") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+internal fun CalibrationDialog(
+    calibration: PlanCalibrationLayer,
+    page: Int,
+    pageSize: PageSize?,
+    pageZones: List<PlanZone>,
+    editable: Boolean,
+    onCalibrationChange: (PlanCalibrationLayer) -> Unit,
+    onZoneChange: (PlanZone) -> Unit,
+    onZoneDelete: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val settings = rememberAppSettings()
+    val fit = remember(calibration, page) { calibration.fit(page) }
+    val activePageMode = calibration.modeFor(page)
+    val hasPageOverride = calibration.pageModes.containsKey(page)
+    val selectedPresetRatio = remember(calibration.preset) {
+        calibration.preset?.toQuantity()?.value?.let { v ->
+            scalePresets.firstOrNull { (_, ratio) -> v == Rational.of(ratio, 72) }?.second
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Calibration layer") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Document scale (all pages)", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    when {
+                        fit == null -> "Pick a preset or use Calibrate to tap known dimensions on any page."
+                        calibration.preset != null && calibration.references.none { !it.check } -> "Preset scale active across all pages."
+                        calibration.references.none { it.check } -> "Fitted from ${calibration.references.size} dimension(s). Add more anywhere to refine or check."
+                        else -> "Fitted across document · check differences below."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text("Document preset", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    FilterChip(
+                        selected = calibration.preset == null,
+                        onClick = { onCalibrationChange(calibration.copy(preset = null)) },
+                        enabled = editable,
+                        label = { Text("None") },
+                    )
+                    for ((label, ratio) in scalePresets) {
+                        FilterChip(
+                            selected = selectedPresetRatio == ratio,
+                            onClick = { onCalibrationChange(calibration.copy(preset = Quantity.inches(Rational.of(ratio, 72)).stored())) },
+                            enabled = editable,
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                if (calibration.preset != null) {
+                    presetWarning(pageSize)?.let { warning ->
+                        Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                    }
+                }
+                Text("Document correction", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    for ((mode, label) in scaleModeLabels) {
+                        FilterChip(
+                            selected = calibration.mode == mode,
+                            onClick = { onCalibrationChange(calibration.copy(mode = mode)) },
+                            enabled = editable,
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                Text("Page ${page + 1} distortion override", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    FilterChip(
+                        selected = !hasPageOverride,
+                        onClick = { onCalibrationChange(calibration.copy(pageModes = calibration.pageModes - page)) },
+                        enabled = editable,
+                        label = { Text("Follow document") },
+                    )
+                    for ((mode, label) in scaleModeLabels) {
+                        FilterChip(
+                            selected = hasPageOverride && activePageMode == mode,
+                            onClick = { onCalibrationChange(calibration.copy(pageModes = calibration.pageModes + (page to mode))) },
+                            enabled = editable,
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                HorizontalDivider()
+                Text("Document dimensions (${calibration.references.size})", style = MaterialTheme.typography.titleMedium)
+                if (calibration.references.isEmpty()) {
+                    Text("No known dimensions recorded yet.", style = MaterialTheme.typography.bodySmall)
+                }
+                calibration.references.forEachIndexed { index, ref ->
+                    val residual = fit?.residuals?.getOrNull(index)
+                    ItemRow(
+                        title = "P${ref.page + 1} · ${if (ref.check) "Check" else "Fit"} · ${settings.format(ref.length.toQuantity())}",
+                        detail = residual?.let { delta ->
+                            val difference = settings.format(Quantity.inches(Rational.of(abs(delta))))
+                            val percent = 100 * delta / ref.length.toQuantity().value.toDouble()
+                            "Diff ${if (delta < 0) "−" else "+"}$difference (${String.format(Locale.getDefault(), "%+.2f", percent)}%)"
+                        },
+                        onDelete = if (editable) ({
+                            onCalibrationChange(calibration.copy(references = calibration.references.filterIndexed { i, _ -> i != index }))
+                        }) else null,
+                    )
+                }
+                if (pageZones.isNotEmpty()) {
+                    HorizontalDivider()
+                    Text("Override zones on Page ${page + 1}", style = MaterialTheme.typography.titleMedium)
+                    for (zone in pageZones) {
+                        val zoneFit = remember(zone) { zone.fit() }
+                        ItemRow(
+                            title = "${zone.name} (${scaleModeLabels[zone.mode]})",
+                            detail = "${zone.references.size} dimension(s)" + if (zoneFit == null) " · Uncalibrated" else "",
+                            onDelete = if (editable) ({ onZoneDelete(zone.id) }) else null,
+                        )
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            for ((mode, label) in scaleModeLabels) {
+                                FilterChip(
+                                    selected = zone.mode == mode,
+                                    onClick = { onZoneChange(zone.copy(mode = mode)) },
+                                    enabled = editable,
+                                    label = { Text(label) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
     )
 }
 
@@ -197,8 +379,7 @@ internal fun PageItemsDialog(
                         Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        val modes = mapOf(PlanScaleMode.UNIFORM to "Uniform", PlanScaleMode.AXES to "X/Y", PlanScaleMode.AFFINE to "Skew")
-                        for ((mode, label) in modes) {
+                        for ((mode, label) in scaleModeLabels) {
                             FilterChip(
                                 selected = zone.mode == mode,
                                 onClick = { onZoneChange(zone.copy(mode = mode)) },
@@ -232,7 +413,7 @@ internal fun PageItemsDialog(
                             enabled = quantity != null,
                             modifier = Modifier.weight(1f),
                         ) {
-                            Text(quantity?.let { "${settings.format(it)} · Use" } ?: "Uncalibrated")
+                            Text(quantity?.let { "≈ ${settings.format(it)} · Use" } ?: "Uncalibrated")
                         }
                         if (editable) TextButton(onClick = { onMeasureDelete(measurement.id) }) { Text("Delete") }
                     }
@@ -268,17 +449,20 @@ private fun ItemRow(title: String, detail: String?, onDelete: (() -> Unit)?) {
 internal fun SymbolSettings() {
     val context = LocalContext.current
     val library = remember(context) { PlanSymbols(context.applicationContext) }
-    var entries by remember(library) { mutableStateOf(library.list()) }
+    var entries by remember(library) { mutableStateOf(emptyList<PlanSymbol>()) }
     var problem by remember { mutableStateOf<String?>(null) }
     var importing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(library) {
+        entries = withContext(Dispatchers.IO) { library.list() }
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             importing = true
             scope.launch {
                 try {
                     library.import(uri)
-                    entries = library.list()
+                    entries = withContext(Dispatchers.IO) { library.list() }
                     problem = null
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -299,8 +483,10 @@ internal fun SymbolSettings() {
         entries.forEach { symbol ->
             Column(Modifier.padding(horizontal = 16.dp)) {
                 ItemRow(symbol.name, null) {
-                    library.remove(symbol.id)
-                    entries = library.list()
+                    scope.launch {
+                        withContext(Dispatchers.IO) { library.remove(symbol.id) }
+                        entries = withContext(Dispatchers.IO) { library.list() }
+                    }
                 }
             }
         }
@@ -314,7 +500,9 @@ internal fun SymbolDialog(
     onSelect: (PlanSymbol) -> Unit,
 ) {
     val context = LocalContext.current
-    val entries = remember(context) { PlanSymbols(context.applicationContext).list() }
+    val entries by produceState<List<PlanSymbol>>(emptyList(), context) {
+        value = withContext(Dispatchers.IO) { PlanSymbols(context.applicationContext).list() }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Place an SVG symbol") },

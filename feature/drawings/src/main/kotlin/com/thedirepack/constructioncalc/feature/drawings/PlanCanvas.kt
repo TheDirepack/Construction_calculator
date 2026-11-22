@@ -21,6 +21,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -44,6 +45,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntSize
@@ -52,6 +54,9 @@ import com.thedirepack.constructioncalc.core.data.drawPlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanPoint
 import com.thedirepack.constructioncalc.core.model.PlanZone
+import com.thedirepack.constructioncalc.core.plans.LineMap
+import com.thedirepack.constructioncalc.core.plans.SnapKind
+import com.thedirepack.constructioncalc.core.plans.SnapTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -60,9 +65,9 @@ import kotlin.math.min
 
 internal enum class DrawingMode(val title: String, val hint: String) {
     Navigate("Pan", "Drag to pan. Pinch to zoom."),
-    Zone("Zone", "Tap or drag between two opposite corners."),
     Reference("Calibrate", "Tap or drag between the ends of a known dimension."),
-    Measure("Measure", "Tap or drag between the ends of a line inside a calibrated zone."),
+    Measure("Measure", "Tap or drag between the ends of a line to measure."),
+    Zone("Zone", "Draw an override zone for a detail with a different scale."),
     Pen("Pen", "Draw with a finger or stylus. Pinch with two fingers to zoom."),
     Highlight("Highlight", "Drag a finger or stylus over the area to highlight."),
     Arrow("Arrow", "Tap or drag from the tail to the tip."),
@@ -146,7 +151,7 @@ private class PageViewport {
     fun move(page: PageBitmap, centroid: Offset, pan: Offset, factor: Float = 1f) {
         val before = transform(page)
         val point = before.toPage(centroid)
-        zoom = (zoom * factor).coerceIn(1f, 8f)
+        zoom = (zoom * factor).coerceIn(1f, 16f)
         val after = transform(page)
         scroll += centroid + pan - after.toScreen(point)
         val rotatedSize = pageSize(page)
@@ -175,7 +180,7 @@ private fun PlanPoint.offset() = Offset(x.toFloat(), y.toFloat())
 
 private fun PageBitmap.hit(point: PlanPoint) = point.x in 0.0..width.toDouble() && point.y in 0.0..height.toDouble()
 
-internal data class PlanLine(
+internal data class CanvasLine(
     val first: PlanPoint,
     val second: PlanPoint,
     val label: String,
@@ -189,9 +194,13 @@ internal fun PlanCanvas(
     mode: DrawingMode,
     zones: List<PlanZone>,
     selectedZone: String?,
-    lines: List<PlanLine>,
+    lines: List<CanvasLine>,
     marks: List<PlanMark>,
     pending: PlanPoint?,
+    lineMap: LineMap?,
+    snapEnabled: Boolean,
+    snapTarget: SnapTarget,
+    onPageSize: (PageSize) -> Unit,
     onPlace: (PlanPoint) -> Unit,
     onLine: (PlanPoint, PlanPoint) -> Unit,
     onInk: (List<InkPoint>) -> Unit,
@@ -214,7 +223,17 @@ internal fun PlanCanvas(
     val place by rememberUpdatedState(onPlace)
     val line by rememberUpdatedState(onLine)
     val ink by rememberUpdatedState(onInk)
+    val currentLineMap by rememberUpdatedState(lineMap)
+    val currentSnapEnabled by rememberUpdatedState(snapEnabled)
+    val currentSnapTarget by rememberUpdatedState(snapTarget)
+    val snapRadiusPx = with(LocalDensity.current) { 24.dp.toPx() }
     val background = MaterialTheme.colorScheme.surfaceContainerHighest
+
+    LaunchedEffect(state) {
+        val loaded = (state as? PageState.Loaded)?.page ?: return@LaunchedEffect
+        onPageSize(PageSize(loaded.width, loaded.height))
+    }
+
     Box(modifier.clipToBounds().background(background), contentAlignment = Alignment.Center) {
         when (val current = state) {
             is PageState.Loading -> CircularProgressIndicator()
@@ -223,6 +242,18 @@ internal fun PlanCanvas(
                 val page = current.page
                 val viewport = remember(page) { PageViewport() }
                 var preview by remember(page, mode) { mutableStateOf(emptyList<InkPoint>()) }
+                var activeSnap by remember(page, mode) { mutableStateOf<SnappedPoint?>(null) }
+
+                fun resolvePoint(screenPos: Offset, transform: PageTransform): Pair<PlanPoint, SnappedPoint?> {
+                    val raw = transform.toPage(screenPos)
+                    if (!currentSnapEnabled) return raw to null
+                    val map = currentLineMap ?: return raw to null
+                    val radiusPt = (snapRadiusPx / transform.scale).toDouble().coerceIn(4.0, 48.0)
+                    val hit = map.snap(raw.x, raw.y, radiusPt, currentSnapTarget) ?: return raw to null
+                    val pt = PlanPoint(hit.x, hit.y)
+                    return pt to SnappedPoint(pt, hit.kind)
+                }
+
                 Canvas(
                     Modifier
                         .fillMaxSize()
@@ -231,13 +262,15 @@ internal fun PlanCanvas(
                         .pointerInput(page, mode) {
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false)
-                                val first = viewport.transform(page).toPage(down.position)
+                                val downTransform = viewport.transform(page)
+                                val (first, firstSnap) = resolvePoint(down.position, downTransform)
                                 val drawing = mode == DrawingMode.Pen || mode == DrawingMode.Highlight
                                 val points = mutableListOf<InkPoint>()
                                 if (page.hit(first) && drawing) {
                                     points += InkPoint(first, down.pressureForInk())
                                     preview = points.toList()
                                 }
+                                if (page.hit(first) && !drawing) activeSnap = firstSnap
                                 var last = first
                                 var lastPosition = down.position
                                 var moved = false
@@ -249,6 +282,7 @@ internal fun PlanCanvas(
                                         if (event.changes.count { it.pressed } > 1) {
                                             multi = true
                                             preview = emptyList()
+                                            activeSnap = null
                                             val center = event.calculateCentroid(useCurrent = false)
                                             if (center != Offset.Unspecified) {
                                                 viewport.move(page, center, event.calculatePan(), event.calculateZoom())
@@ -262,10 +296,12 @@ internal fun PlanCanvas(
                                                 if (mode == DrawingMode.Navigate && moved) {
                                                     viewport.move(page, lastPosition, delta)
                                                 } else {
-                                                    val point = viewport.transform(page).toPage(change.position)
+                                                    val t = viewport.transform(page)
+                                                    val (point, snapped) = if (drawing) t.toPage(change.position) to null else resolvePoint(change.position, t)
                                                     onPage = page.hit(point)
                                                     if (onPage) {
                                                         last = point
+                                                        activeSnap = snapped
                                                         if (drawing && points.isNotEmpty() && points.size < 2_048 && point != points.last().point) {
                                                             points += InkPoint(point, change.pressureForInk())
                                                         }
@@ -290,6 +326,7 @@ internal fun PlanCanvas(
                                     }
                                 } finally {
                                     preview = emptyList()
+                                    activeSnap = null
                                 }
                             }
                         },
@@ -319,8 +356,10 @@ internal fun PlanCanvas(
                             )
                         }
                         for (saved in lines) {
-                            val color = if (saved.isReference) Color(0xFF8E4700) else Color(0xFF126FB4)
+                            val color = if (saved.isReference) Color(0xFFB45309) else Color(0xFF126FB4)
                             drawLine(color, saved.first.offset(), saved.second.offset(), outline)
+                            drawCircle(color, 2.5f / transform.scale, saved.first.offset())
+                            drawCircle(color, 2.5f / transform.scale, saved.second.offset())
                             drawPlanText(saved.label, (saved.first.offset() + saved.second.offset()) / 2f, 12f / transform.scale, color)
                         }
                         for (mark in marks) drawMark(mark)
@@ -329,6 +368,18 @@ internal fun PlanCanvas(
                             drawCircle(Color.White, 5f / transform.scale, point)
                             drawCircle(Color(0xFF126FB4), 3f / transform.scale, point)
                         }
+                        activeSnap?.let { snapped ->
+                            val p = snapped.point.offset()
+                            val r = 7f / transform.scale
+                            val snapColor = Color(0xFF00897B)
+                            if (snapped.kind == SnapKind.CORNER) {
+                                drawRect(snapColor, Offset(p.x - r, p.y - r), Size(r * 2, r * 2), style = Stroke(outline))
+                            } else {
+                                drawCircle(snapColor, r, p, style = Stroke(outline))
+                            }
+                            drawLine(snapColor, Offset(p.x - r * 1.4f, p.y), Offset(p.x + r * 1.4f, p.y), outline)
+                            drawLine(snapColor, Offset(p.x, p.y - r * 1.4f), Offset(p.x, p.y + r * 1.4f), outline)
+                        }
                         when (mode) {
                             DrawingMode.Pen -> drawInk(preview, Color(0xFF155CBD), 1.8f)
                             DrawingMode.Highlight -> drawInk(preview, Color(0x66FFE43C), 11f)
@@ -336,7 +387,8 @@ internal fun PlanCanvas(
                                 drawZone(preview[0].point.offset(), preview[1].point.offset(), Color(0xFF007A73), outline)
                             }
                             else -> if (preview.size == 2) {
-                                drawLine(Color(0xFF126FB4), preview[0].point.offset(), preview[1].point.offset(), outline)
+                                val color = if (mode == DrawingMode.Reference) Color(0xFFB45309) else Color(0xFF126FB4)
+                                drawLine(color, preview[0].point.offset(), preview[1].point.offset(), outline)
                             }
                         }
                     }
@@ -351,7 +403,7 @@ internal fun PlanCanvas(
                         TextButton(onClick = { viewport.zoomFromCenter(page, 1f / 1.5f) }, enabled = viewport.zoom > 1f) {
                             Text("Zoom −")
                         }
-                        TextButton(onClick = { viewport.zoomFromCenter(page, 1.5f) }, enabled = viewport.zoom < 8f) {
+                        TextButton(onClick = { viewport.zoomFromCenter(page, 1.5f) }, enabled = viewport.zoom < 16f) {
                             Text("Zoom +")
                         }
                         TextButton(onClick = { viewport.rotate() }) { Text("Rotate") }

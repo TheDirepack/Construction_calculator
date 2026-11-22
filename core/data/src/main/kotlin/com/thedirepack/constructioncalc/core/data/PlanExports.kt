@@ -98,7 +98,7 @@ object PlanExports {
                 try {
                     drawing.marks.filter { it.page == pageNumber }.forEach { drawPlanMark(page.canvas, it) }
                     drawing.measurements.filter { it.page == pageNumber }.forEach { measure ->
-                        val label = drawing.length(measure)?.let(format) ?: "Uncalibrated"
+                        val label = drawing.length(measure)?.let { "≈ ${format(it)}" } ?: "Uncalibrated"
                         val x1 = measure.first.x.toFloat()
                         val y1 = measure.first.y.toFloat()
                         val x2 = measure.second.x.toFloat()
@@ -129,7 +129,8 @@ object PlanExports {
         val y = crop.lowerLeftY
         val w = crop.width
         val h = crop.height
-        return when (page.rotation) {
+        val rotation = ((page.rotation % 360) + 360) % 360
+        return when (rotation) {
             90 -> Matrix(0f, h / width, -w / height, 0f, x + w, y)
             180 -> Matrix(-w / width, 0f, 0f, -h / height, x + w, y + h)
             270 -> Matrix(0f, -h / width, w / height, 0f, x, y + h)

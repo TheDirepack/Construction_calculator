@@ -5,7 +5,9 @@ import com.thedirepack.constructioncalc.core.measure.Dimension
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import kotlinx.serialization.Serializable
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.sqrt
 
 /** Coordinates in the rendered page, independent of viewport zoom and pan. */
@@ -17,7 +19,7 @@ data class PlanPoint(val x: Double, val y: Double) {
 }
 
 @Serializable
-enum class PlanScaleMode { UNIFORM, AXES, AFFINE }
+enum class PlanScaleMode { UNIFORM, AXES, AFFINE, DISTORTED }
 
 @Serializable
 data class PlanReference(
@@ -25,10 +27,84 @@ data class PlanReference(
     val second: PlanPoint,
     val length: StoredQuantity,
     val check: Boolean = false,
+    /** Page index when stored on the document-wide calibration layer. */
+    val page: Int = 0,
 ) {
     init {
-        require(first != second)
+        require(first != second && page >= 0)
         require(length.dimension == Dimension.LENGTH && length.toQuantity().value.signum > 0)
+    }
+}
+
+/**
+ * Document-wide calibration layer shared across pages. Any number of known dimensions on any page
+ * can be added and fitted together; individual pages can also select their own distortion mode
+ * (such as [PlanScaleMode.DISTORTED] for a photographed or curled sheet). Override [PlanZone]s
+ * live separately and are excluded from this fit.
+ */
+@Serializable
+data class PlanCalibrationLayer(
+    /** Exact real inches per rendered page point for a document-wide preset. */
+    val preset: StoredQuantity? = null,
+    val references: List<PlanReference> = emptyList(),
+    val mode: PlanScaleMode = PlanScaleMode.UNIFORM,
+    /** Optional per-page mode overrides (e.g. a per-page 3D distortion field). */
+    val pageModes: Map<Int, PlanScaleMode> = emptyMap(),
+) {
+    init {
+        require(preset == null || preset.dimension == Dimension.LENGTH && preset.toQuantity().value.signum > 0)
+        require(pageModes.keys.all { it >= 0 })
+    }
+
+    fun modeFor(page: Int): PlanScaleMode = pageModes[page] ?: mode
+
+    /**
+     * Fits calibration for [page]. When [page] uses [PlanScaleMode.DISTORTED] (or has a per-page
+     * override mode and enough references on [page]), its local references determine the per-page
+     * field, anchored by the overall document scale when sparse. Otherwise all document-wide
+     * references are fitted together so calibrating once covers every page.
+     */
+    fun fit(page: Int): PlanCalibration? {
+        val activeMode = modeFor(page)
+        val pageAll = references.filter { it.page == page }
+        val pageFitting = pageAll.filterNot { it.check }
+        val allFitting = references.filterNot { it.check }
+
+        if (allFitting.isEmpty()) {
+            val scale = preset?.toQuantity()?.value?.toDouble() ?: return null
+            val field = ConstantField(DistanceMetric(scale * scale, 0.0, scale * scale))
+            return buildCalibration(field, references)
+        }
+
+        val field = when {
+            activeMode == PlanScaleMode.DISTORTED -> {
+                val base = (if (pageFitting.size >= 2) fitBestConstant(pageFitting) else null)
+                    ?: fitBestConstant(allFitting)
+                    ?: return null
+                if (pageFitting.size >= 2) fitDistortedField(pageFitting, base)
+                else ConstantField(base)
+            }
+            pageModes.containsKey(page) && pageFitting.isNotEmpty() -> {
+                fitMetric(pageFitting, activeMode)?.let(::ConstantField)
+                    ?: fitMetric(allFitting, activeMode)?.let(::ConstantField)
+                    ?: return null
+            }
+            else -> {
+                val metric = fitMetric(allFitting, activeMode) ?: return null
+                ConstantField(metric)
+            }
+        }
+        return buildCalibration(field, references)
+    }
+
+    /** Residuals for references on [page], paired with their index in [references]. */
+    fun residualsForPage(page: Int): Map<Int, Double> {
+        val fit = fit(page) ?: return emptyMap()
+        val out = LinkedHashMap<Int, Double>()
+        references.forEachIndexed { index, ref ->
+            if (ref.page == page) fit.residuals.getOrNull(index)?.let { out[index] = it }
+        }
+        return out
     }
 }
 
@@ -47,7 +123,7 @@ data class PlanZone(
     init {
         require(page >= 0 && first.x != second.x && first.y != second.y)
         require(preset == null || preset.dimension == Dimension.LENGTH && preset.toQuantity().value.signum > 0)
-        require(references.size <= 100 && references.all { contains(it.first) && contains(it.second) })
+        require(references.all { contains(it.first) && contains(it.second) })
     }
 
     fun contains(point: PlanPoint): Boolean =
@@ -63,22 +139,35 @@ data class PlanZone(
 
     fun fit(): PlanCalibration? {
         val fitting = references.filterNot { it.check }
-        val metric = if (fitting.isEmpty()) {
+        val field: ScaleField = if (fitting.isEmpty()) {
             val scale = preset?.toQuantity()?.value?.toDouble() ?: return null
-            DistanceMetric(scale * scale, 0.0, scale * scale)
+            ConstantField(DistanceMetric(scale * scale, 0.0, scale * scale))
+        } else if (mode == PlanScaleMode.DISTORTED) {
+            val base = fitBestConstant(fitting) ?: return null
+            if (fitting.size >= 2) fitDistortedField(fitting, base) else ConstantField(base)
         } else {
-            fitMetric(fitting, mode) ?: return null
+            val metric = fitMetric(fitting, mode) ?: return null
+            ConstantField(metric)
         }
-        if (!metric.valid) return null
-        val residuals = references.map {
-            metric.distance(it.first, it.second) - it.length.toQuantity().value.toDouble()
-        }
-        if (residuals.any { !it.isFinite() }) return null
-        return PlanCalibration(metric, residuals)
+        return buildCalibration(field, references)
     }
 }
 
-/** A fitted metric in real square inches per square page point. */
+private fun buildCalibration(field: ScaleField, references: List<PlanReference>): PlanCalibration? {
+    if (!field.valid) return null
+    val residuals = references.map {
+        field.distance(it.first, it.second) - it.length.toQuantity().value.toDouble()
+    }
+    if (residuals.any { !it.isFinite() }) return null
+    return PlanCalibration(field, residuals)
+}
+
+internal interface ScaleField {
+    val valid: Boolean
+    fun distance(first: PlanPoint, second: PlanPoint): Double
+}
+
+/** A fitted constant metric in real square inches per square page point. */
 internal data class DistanceMetric(val xx: Double, val xy: Double, val yy: Double) {
     val valid: Boolean
         get() = xx.isFinite() && xy.isFinite() && yy.isFinite() && xx > 0 && yy > 0 &&
@@ -93,20 +182,227 @@ internal data class DistanceMetric(val xx: Double, val xy: Double, val yy: Doubl
     }
 }
 
+private class ConstantField(private val metric: DistanceMetric) : ScaleField {
+    override val valid: Boolean get() = metric.valid
+    override fun distance(first: PlanPoint, second: PlanPoint): Double = metric.distance(first, second)
+}
+
+/**
+ * Spatially varying 2D metric over a sheet (e.g., perspective tilt + smooth paper curl on a
+ * photographed plan). Integrates local arc length along every measured segment via 5-point
+ * Gauss-Legendre quadrature so scale changes smoothly over the length of a measurement.
+ */
+private class DistortedField(
+    private val cx: Double,
+    private val cy: Double,
+    private val invRadius: Double,
+    private val l00: Double,
+    private val l01: Double,
+    private val l11: Double,
+    private val params: DoubleArray,
+) : ScaleField {
+    override val valid: Boolean
+        get() = l00.isFinite() && l01.isFinite() && l11.isFinite() && l00 > 0 && l11 > 0 &&
+            params.size == PARAM_COUNT && params.all { it.isFinite() }
+
+    override fun distance(first: PlanPoint, second: PlanPoint): Double {
+        val dx = second.x - first.x
+        val dy = second.y - first.y
+        val bx = l00 * dx + l01 * dy
+        val by = l11 * dy
+        var total = 0.0
+        for (i in GL_NODES.indices) {
+            val t = GL_NODES[i]
+            val u = ((first.x + t * dx) - cx) * invRadius
+            val v = ((first.y + t * dy) - cy) * invRadius
+            total += GL_WEIGHTS[i] * speedAt(u, v, bx, by, params)
+        }
+        return total
+    }
+
+    companion object {
+        const val PARAM_COUNT = 15
+
+        // 5-point Gauss-Legendre quadrature on [0, 1].
+        private val GL_NODES = doubleArrayOf(
+            0.04691007703066802,
+            0.23076534494715845,
+            0.5,
+            0.7692346550528415,
+            0.9530899229693319,
+        )
+        private val GL_WEIGHTS = doubleArrayOf(
+            0.11846344252809454,
+            0.23931433524968324,
+            0.28444444444444444,
+            0.23931433524968324,
+            0.11846344252809454,
+        )
+
+        fun speedAt(uRaw: Double, vRaw: Double, bx: Double, by: Double, p: DoubleArray): Double {
+            // Clamp far extrapolations gently so distant measurements stay well-behaved.
+            val u = uRaw.coerceIn(-2.0, 2.0)
+            val v = vRaw.coerceIn(-2.0, 2.0)
+            val u2 = u * u
+            val uv = u * v
+            val v2 = v * v
+            val logSx = (p[0] + p[1] * u + p[2] * v + p[3] * u2 + p[4] * uv + p[5] * v2).coerceIn(-1.5, 1.5)
+            val logSy = (p[6] + p[7] * u + p[8] * v + p[9] * u2 + p[10] * uv + p[11] * v2).coerceIn(-1.5, 1.5)
+            val shear = (p[12] + p[13] * u + p[14] * v).coerceIn(-1.0, 1.0)
+            val vx = exp(logSx) * bx + shear * by
+            val vy = exp(logSy) * by
+            return hypot(vx, vy)
+        }
+
+        fun segmentLength(
+            first: PlanPoint,
+            second: PlanPoint,
+            cx: Double,
+            cy: Double,
+            invRadius: Double,
+            l00: Double,
+            l01: Double,
+            l11: Double,
+            p: DoubleArray,
+        ): Double {
+            val dx = second.x - first.x
+            val dy = second.y - first.y
+            val bx = l00 * dx + l01 * dy
+            val by = l11 * dy
+            var total = 0.0
+            for (i in GL_NODES.indices) {
+                val t = GL_NODES[i]
+                val u = ((first.x + t * dx) - cx) * invRadius
+                val v = ((first.y + t * dy) - cy) * invRadius
+                total += GL_WEIGHTS[i] * speedAt(u, v, bx, by, p)
+            }
+            return total
+        }
+    }
+}
+
 class PlanCalibration internal constructor(
-    private val metric: DistanceMetric,
+    private val field: ScaleField,
     /** Signed estimated-minus-entered length for each reference, in inches. */
     val residuals: List<Double>,
 ) {
     fun distance(first: PlanPoint, second: PlanPoint): Quantity =
-        Quantity.inches(Rational.of(metric.distance(first, second)))
+        Quantity.inches(Rational.of(field.distance(first, second)))
+}
+
+/** Picks the richest constant metric that the fitting references cleanly determine. */
+private fun fitBestConstant(references: List<PlanReference>): DistanceMetric? =
+    fitMetric(references, PlanScaleMode.AFFINE)?.takeIf { it.valid }
+        ?: fitMetric(references, PlanScaleMode.AXES)?.takeIf { it.valid }
+        ?: fitMetric(references, PlanScaleMode.UNIFORM)?.takeIf { it.valid }
+
+/**
+ * Fits a smooth, positive-definite spatially varying metric using tiered-ridge Levenberg-Marquardt
+ * starting from [base]. Sparse references smoothly stay close to [base]; well-spread references on
+ * a photographed or curled sheet recover linear perspective tilt and quadratic bend.
+ */
+private fun fitDistortedField(references: List<PlanReference>, base: DistanceMetric): ScaleField {
+    val l00 = sqrt(base.xx)
+    val l01 = base.xy / l00
+    val l11Sq = base.yy - l01 * l01
+    if (!l11Sq.isFinite() || l11Sq <= 0) return ConstantField(base)
+    val l11 = sqrt(l11Sq)
+
+    var sumX = 0.0
+    var sumY = 0.0
+    for (ref in references) {
+        sumX += ref.first.x + ref.second.x
+        sumY += ref.first.y + ref.second.y
+    }
+    val cx = sumX / (2 * references.size)
+    val cy = sumY / (2 * references.size)
+    var radius = 1.0
+    for (ref in references) {
+        radius = max(radius, hypot(ref.first.x - cx, ref.first.y - cy))
+        radius = max(radius, hypot(ref.second.x - cx, ref.second.y - cy))
+    }
+    val invRadius = 1.0 / radius
+    val targets = DoubleArray(references.size) { references[it].length.toQuantity().value.toDouble() }
+    val nParams = DistortedField.PARAM_COUNT
+    // Tiered ridge weights: constant offsets free, linear perspective light, quadratic bend moderate.
+    val reg = DoubleArray(nParams) { idx ->
+        when (idx) {
+            0, 6, 12 -> 1e-6
+            1, 2, 7, 8, 13, 14 -> 5e-4
+            else -> 5e-3
+        }
+    }
+    var params = DoubleArray(nParams)
+
+    fun cost(p: DoubleArray): Double {
+        var total = 0.0
+        for (i in references.indices) {
+            val pred = DistortedField.segmentLength(references[i].first, references[i].second, cx, cy, invRadius, l00, l01, l11, p)
+            val r = (pred - targets[i]) / targets[i]
+            total += r * r
+        }
+        for (j in 0 until nParams) total += reg[j] * p[j] * p[j]
+        return total
+    }
+
+    var currentCost = cost(params)
+    var damping = 1e-3
+    val jac = Array(references.size) { DoubleArray(nParams) }
+    val res = DoubleArray(references.size)
+    val eps = 1e-5
+
+    repeat(25) {
+        for (i in references.indices) {
+            val basePred = DistortedField.segmentLength(references[i].first, references[i].second, cx, cy, invRadius, l00, l01, l11, params)
+            res[i] = (basePred - targets[i]) / targets[i]
+            for (j in 0 until nParams) {
+                val orig = params[j]
+                params[j] = orig + eps
+                val shifted = DistortedField.segmentLength(references[i].first, references[i].second, cx, cy, invRadius, l00, l01, l11, params)
+                params[j] = orig
+                jac[i][j] = (shifted - basePred) / (eps * targets[i])
+            }
+        }
+        val system = Array(nParams) { DoubleArray(nParams + 1) }
+        for (j in 0 until nParams) {
+            system[j][j] = reg[j] + damping
+            system[j][nParams] = -reg[j] * params[j]
+            for (k in j until nParams) {
+                var sum = 0.0
+                for (i in references.indices) sum += jac[i][j] * jac[i][k]
+                system[j][k] += sum
+                if (k != j) system[k][j] += sum
+            }
+            var rhs = 0.0
+            for (i in references.indices) rhs -= jac[i][j] * res[i]
+            system[j][nParams] += rhs
+        }
+        val step = solveLinear(system, nParams)
+        if (step == null) {
+            damping *= 10.0
+            return@repeat
+        }
+        val candidate = DoubleArray(nParams) { params[it] + step[it] }
+        val nextCost = cost(candidate)
+        if (nextCost.isFinite() && nextCost < currentCost) {
+            val improvement = currentCost - nextCost
+            params = candidate
+            currentCost = nextCost
+            damping = max(1e-7, damping * 0.3)
+            if (improvement < 1e-12) return DistortedField(cx, cy, invRadius, l00, l01, l11, params)
+        } else {
+            damping *= 5.0
+            if (damping > 1e6) return DistortedField(cx, cy, invRadius, l00, l01, l11, params)
+        }
+    }
+    return DistortedField(cx, cy, invRadius, l00, l01, l11, params)
 }
 
 private fun fitMetric(references: List<PlanReference>, mode: PlanScaleMode): DistanceMetric? {
     val size = when (mode) {
         PlanScaleMode.UNIFORM -> 1
         PlanScaleMode.AXES -> 2
-        PlanScaleMode.AFFINE -> 3
+        PlanScaleMode.AFFINE, PlanScaleMode.DISTORTED -> 3
     }
     if (references.size < size) return null
     val system = Array(size) { DoubleArray(size + 1) }
@@ -119,7 +415,7 @@ private fun fitMetric(references: List<PlanReference>, mode: PlanScaleMode): Dis
         val row = when (mode) {
             PlanScaleMode.UNIFORM -> doubleArrayOf(1.0)
             PlanScaleMode.AXES -> doubleArrayOf(x * x, y * y)
-            PlanScaleMode.AFFINE -> doubleArrayOf(x * x, 2 * x * y, y * y)
+            PlanScaleMode.AFFINE, PlanScaleMode.DISTORTED -> doubleArrayOf(x * x, 2 * x * y, y * y)
         }
         val scale = reference.length.toQuantity().value.toDouble() / length
         if (!scale.isFinite() || scale <= 0 || !((scale * scale).isFinite())) return null
@@ -128,9 +424,18 @@ private fun fitMetric(references: List<PlanReference>, mode: PlanScaleMode): Dis
             system[i][size] += row[i] * scale * scale
         }
     }
+    val solved = solveLinear(system, size) ?: return null
+    return when (mode) {
+        PlanScaleMode.UNIFORM -> DistanceMetric(solved[0], 0.0, solved[0])
+        PlanScaleMode.AXES -> DistanceMetric(solved[0], 0.0, solved[1])
+        PlanScaleMode.AFFINE, PlanScaleMode.DISTORTED -> DistanceMetric(solved[0], solved[1], solved[2])
+    }
+}
+
+private fun solveLinear(system: Array<DoubleArray>, size: Int): DoubleArray? {
     for (column in 0 until size) {
         val pivot = (column until size).maxBy { abs(system[it][column]) }
-        if (abs(system[pivot][column]) < 1e-8) return null
+        if (abs(system[pivot][column]) < 1e-10) return null
         val current = system[column]
         system[column] = system[pivot]
         system[pivot] = current
@@ -142,11 +447,7 @@ private fun fitMetric(references: List<PlanReference>, mode: PlanScaleMode): Dis
             for (j in column..size) system[i][j] -= factor * system[column][j]
         }
     }
-    return when (mode) {
-        PlanScaleMode.UNIFORM -> DistanceMetric(system[0][size], 0.0, system[0][size])
-        PlanScaleMode.AXES -> DistanceMetric(system[0][size], 0.0, system[1][size])
-        PlanScaleMode.AFFINE -> DistanceMetric(system[0][size], system[1][size], system[2][size])
-    }
+    return DoubleArray(size) { system[it][size] }
 }
 
 @Serializable
@@ -177,7 +478,8 @@ data class PlanMark(
 data class PlanMeasurement(
     val id: String = newId(),
     val page: Int,
-    val zoneId: String,
+    /** Override zone id, or null when measured against the document-wide calibration layer. */
+    val zoneId: String? = null,
     val first: PlanPoint,
     val second: PlanPoint,
 ) {
@@ -191,6 +493,9 @@ data class PlanDrawing(
     val id: String = newId(),
     val name: String,
     val sha256: String,
+    /** Document-wide calibration layer (shared across pages, with optional per-page distortion). */
+    val calibration: PlanCalibrationLayer = PlanCalibrationLayer(),
+    /** Regions with a different scale from the rest of the document (details, enlarged plans). */
     val zones: List<PlanZone> = emptyList(),
     val measurements: List<PlanMeasurement> = emptyList(),
     val marks: List<PlanMark> = emptyList(),
@@ -200,9 +505,37 @@ data class PlanDrawing(
         require(sha256.length == 64 && sha256.all { it in '0'..'9' || it in 'a'..'f' })
     }
 
-    fun length(measurement: PlanMeasurement): Quantity? =
-        zones.firstOrNull {
-            it.id == measurement.zoneId && it.page == measurement.page &&
-                it.contains(measurement.first) && it.contains(measurement.second)
-        }?.fit()?.distance(measurement.first, measurement.second)
+    /**
+     * Resolves the override zone that contains both [first] and [second] on [page], or null if
+     * both points lie outside all override zones. Throws nothing; use [crossesZoneBoundary] to
+     * tell "outside every zone" from "straddles a zone boundary".
+     */
+    fun zoneContaining(page: Int, first: PlanPoint, second: PlanPoint): PlanZone? =
+        zones.singleOrNull { it.page == page && it.contains(first) && it.contains(second) }
+
+    fun crossesZoneBoundary(page: Int, first: PlanPoint, second: PlanPoint): Boolean {
+        val a = zones.firstOrNull { it.page == page && it.contains(first) }
+        val b = zones.firstOrNull { it.page == page && it.contains(second) }
+        return a != b
+    }
+
+    /** Fits the calibration governing a span from [first] to [second] on [page]. */
+    fun calibrationFor(page: Int, first: PlanPoint, second: PlanPoint): PlanCalibration? {
+        if (crossesZoneBoundary(page, first, second)) return null
+        val zone = zoneContaining(page, first, second)
+        return if (zone != null) zone.fit() else calibration.fit(page)
+    }
+
+    fun length(measurement: PlanMeasurement): Quantity? {
+        val zoneId = measurement.zoneId
+        if (zoneId != null) {
+            val zone = zones.firstOrNull {
+                it.id == zoneId && it.page == measurement.page &&
+                    it.contains(measurement.first) && it.contains(measurement.second)
+            }
+            return zone?.fit()?.distance(measurement.first, measurement.second)
+        }
+        return calibrationFor(measurement.page, measurement.first, measurement.second)
+            ?.distance(measurement.first, measurement.second)
+    }
 }

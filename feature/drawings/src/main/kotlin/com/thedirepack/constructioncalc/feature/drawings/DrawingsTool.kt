@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -43,10 +42,13 @@ import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanMeasurement
 import com.thedirepack.constructioncalc.core.model.PlanPoint
+import com.thedirepack.constructioncalc.core.model.PlanReference
 import com.thedirepack.constructioncalc.core.model.PlanZone
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.newId
+import com.thedirepack.constructioncalc.core.plans.LineMap
+import com.thedirepack.constructioncalc.core.plans.SnapTarget
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
 import com.thedirepack.constructioncalc.core.ui.format
@@ -74,7 +76,7 @@ object DrawingsTool : ToolModule {
     override fun Content(host: ToolHost) = DrawingsScreen(host)
 
     @Composable
-    override fun SettingsContent() = SymbolSettings()
+    override fun SettingsContent() = DrawingsSettingsScreen()
 }
 
 @Composable
@@ -129,7 +131,7 @@ private fun DrawingsScreen(host: ToolHost) {
 
     fun publish(measurement: PlanMeasurement, quantity: Quantity, name: String) {
         host.publish(
-            listOf(ResultValue.of(measurement.id, "Plan distance", quantity, appSettings.format(quantity))),
+            listOf(ResultValue.of(measurement.id, "Plan distance", quantity, "≈ " + appSettings.format(quantity))),
             context = name,
             immediate = true,
         )
@@ -146,7 +148,7 @@ private fun DrawingsScreen(host: ToolHost) {
         subtitle = if (host.target != null || drawing != null) project?.name else null,
         actions = {
             if (drawing != null || project == null) {
-                TextButton(onClick = host::openSettings) { Text("Symbols") }
+                TextButton(onClick = host::openSettings) { Text("Settings") }
             }
         },
     ) { padding ->
@@ -204,6 +206,8 @@ private fun DrawingList(
 
 private data class Span(val first: PlanPoint, val second: PlanPoint)
 
+private data class PendingReference(val zone: PlanZone?, val span: Span)
+
 @Composable
 private fun DrawingEditor(
     drawing: PlanDrawing,
@@ -216,6 +220,8 @@ private fun DrawingEditor(
 ) {
     val context = LocalContext.current
     val settings = rememberAppSettings()
+    val (prefs, prefsStore) = rememberDrawingsPrefs()
+    val lineStore = remember(context) { PlanLineStore(context.applicationContext) }
     val scope = rememberCoroutineScope()
     val pageCount by produceState<Int?>(null, file) {
         value = try {
@@ -227,35 +233,67 @@ private fun DrawingEditor(
         }
     }
     var page by rememberSaveable(drawing.id) { mutableStateOf(0) }
+    var pageSize by remember(drawing.id, page) { mutableStateOf<PageSize?>(null) }
     var mode by remember(drawing.id) { mutableStateOf(DrawingMode.Navigate) }
     var selectedZoneId by remember(drawing.id, page) { mutableStateOf<String?>(null) }
     var pending by remember(drawing.id, page, mode) { mutableStateOf<PlanPoint?>(null) }
     var newZone by remember(drawing.id, page) { mutableStateOf<Span?>(null) }
-    var reference by remember(drawing.id, page) { mutableStateOf<Pair<PlanZone, Span>?>(null) }
+    var pendingReference by remember(drawing.id, page) { mutableStateOf<PendingReference?>(null) }
     var labelPoint by remember(drawing.id, page) { mutableStateOf<PlanPoint?>(null) }
     var symbolPoint by remember(drawing.id, page) { mutableStateOf<PlanPoint?>(null) }
     var showOptions by remember { mutableStateOf(false) }
     var showCalibration by remember { mutableStateOf(false) }
     var showItems by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+
+    // Pre-computed line map for the active page (built once in the background and cached).
+    val lineMap by produceState<LineMap?>(null, drawing.sha256, file, page) {
+        value = null
+        value = try {
+            lineStore.getOrBuild(drawing.sha256, file, page)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    val snapEnabled = when (mode) {
+        DrawingMode.Reference -> prefs.snapCalibration
+        DrawingMode.Measure -> prefs.snapMeasurements
+        else -> false
+    }
+    val snapTarget = when (mode) {
+        DrawingMode.Reference -> prefs.calibrationTarget
+        DrawingMode.Measure -> prefs.measurementTarget
+        else -> SnapTarget.CENTER
+    }
+
     val pageZones = remember(drawing.zones, page) { drawing.zones.filter { it.page == page } }
     val zone = pageZones.firstOrNull { it.id == selectedZoneId } ?: pageZones.firstOrNull()
     val marks = remember(drawing.marks, page) { drawing.marks.filter { it.page == page } }
     val measurements = remember(drawing.measurements, page) { drawing.measurements.filter { it.page == page } }
-    val fittedMeasurements = remember(pageZones, measurements) {
-        val fits = pageZones.associate { it.id to (it to it.fit()) }
-        measurements.map { measurement ->
-            val match = fits[measurement.zoneId]
-            val length = match?.takeIf { (zone, _) -> zone.contains(measurement.first) && zone.contains(measurement.second) }
-                ?.second?.distance(measurement.first, measurement.second)
-            measurement to length
+    val docFit = remember(drawing.calibration, page) { drawing.calibration.fit(page) }
+    val fittedMeasurements = remember(drawing, measurements) {
+        measurements.map { measurement -> measurement to drawing.length(measurement) }
+    }
+    val calibrationLines = remember(drawing.calibration, pageZones, page, prefs.showCalibrationLayer, settings) {
+        if (!prefs.showCalibrationLayer) emptyList()
+        else {
+            val docRefs = drawing.calibration.references.filter { it.page == page }.map { ref ->
+                CanvasLine(ref.first, ref.second, settings.format(ref.length.toQuantity()), isReference = true)
+            }
+            val zoneRefs = pageZones.flatMap { z ->
+                z.references.map { ref ->
+                    CanvasLine(ref.first, ref.second, settings.format(ref.length.toQuantity()), isReference = true)
+                }
+            }
+            docRefs + zoneRefs
         }
     }
-    val planLines = fittedMeasurements.map { (measurement, length) ->
-        PlanLine(measurement.first, measurement.second, length?.let { settings.format(it) } ?: "Uncalibrated")
-    } + zone?.references.orEmpty().map { ref ->
-        PlanLine(ref.first, ref.second, settings.format(ref.length.toQuantity()), isReference = true)
-    }
+    val displayedLines = fittedMeasurements.map { (measurement, length) ->
+        CanvasLine(measurement.first, measurement.second, length?.let { "≈ " + settings.format(it) } ?: "Uncalibrated")
+    } + calibrationLines
 
     fun addMark(mark: PlanMark) {
         onChange { it.copy(marks = it.marks + mark) }
@@ -267,36 +305,40 @@ private fun DrawingEditor(
         when (mode) {
             DrawingMode.Zone -> {
                 if (first.x == second.x || first.y == second.y) {
-                    host.showMessage("A scale zone needs a width and height.")
+                    host.showMessage("An override zone needs a width and height.")
                     return
                 }
                 val temporary = PlanZone(name = "Scale zone", page = page, first = first, second = second)
                 if (pageZones.any { it.overlaps(temporary) }) {
-                    host.showMessage("Scale zones cannot overlap.")
+                    host.showMessage("Override scale zones cannot overlap.")
                 } else newZone = Span(first, second)
             }
             DrawingMode.Reference -> {
-                val containing = pageZones.singleOrNull { it.contains(first) && it.contains(second) }
-                if (containing == null) host.showMessage("Put both reference points inside one scale zone.")
-                else {
-                    selectedZoneId = containing.id
-                    reference = containing to Span(first, second)
+                if (drawing.crossesZoneBoundary(page, first, second)) {
+                    host.showMessage("Keep a calibration dimension either inside one override zone or outside all zones.")
+                    return
                 }
+                val containing = drawing.zoneContaining(page, first, second)
+                if (containing != null) selectedZoneId = containing.id
+                pendingReference = PendingReference(containing, Span(first, second))
             }
             DrawingMode.Measure -> {
-                val containing = pageZones.singleOrNull { it.contains(first) && it.contains(second) }
-                if (containing == null) {
-                    host.showMessage("Put both endpoints inside one scale zone. Split measurements at zone boundaries.")
+                if (drawing.crossesZoneBoundary(page, first, second)) {
+                    host.showMessage("Split measurements at override zone boundaries.")
                     return
                 }
-                val fit = containing.fit()
+                val containing = drawing.zoneContaining(page, first, second)
+                val fit = drawing.calibrationFor(page, first, second)
                 if (fit == null) {
-                    host.showMessage("Calibrate this scale zone before measuring.")
+                    host.showMessage(
+                        if (containing != null) "Calibrate “${containing.name}” before measuring inside it."
+                        else "Calibrate the sheet (or pick a preset scale) before measuring.",
+                    )
                     return
                 }
-                val saved = PlanMeasurement(page = page, zoneId = containing.id, first = first, second = second)
+                val saved = PlanMeasurement(page = page, zoneId = containing?.id, first = first, second = second)
                 onChange { it.copy(measurements = it.measurements + saved) }
-                selectedZoneId = containing.id
+                if (containing != null) selectedZoneId = containing.id
                 publish(saved, fit.distance(first, second))
             }
             DrawingMode.Arrow, DrawingMode.Line, DrawingMode.Rectangle -> {
@@ -330,7 +372,7 @@ private fun DrawingEditor(
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    context.contentResolver.openOutputStream(uri)?.use { stream ->
+                    context.contentResolver.openOutputStream(uri, "wt")?.use { stream ->
                         if (pdf) PlanExports.writePdf(context, drawing, stream, { quantity -> settings.format(quantity) })
                         else PlanExports.writeJson(drawing, stream)
                     } ?: error("Could not open the export destination.")
@@ -361,19 +403,34 @@ private fun DrawingEditor(
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            TextButton(onClick = { page-- }, enabled = page > 0) { Text("Previous") }
-            Text("${page + 1} / $count")
+            TextButton(onClick = { page-- }, enabled = page > 0) { Text("Prev") }
+            Text("${page + 1}/$count")
             TextButton(onClick = { page++ }, enabled = page + 1 < count) { Text("Next") }
-            TextButton(onClick = { showCalibration = true }, enabled = zone != null) { Text(zone?.name ?: "No scale zone") }
-            DropdownMenu(expanded = showCalibration, onDismissRequest = { showCalibration = false }) {
-                for (choice in pageZones) {
-                    DropdownMenuItem(text = { Text(choice.name) }, onClick = {
-                        showCalibration = false
-                        selectedZoneId = choice.id
-                        showItems = true
-                    })
-                }
+            TextButton(onClick = { showCalibration = true }) {
+                Text(if (docFit != null) "Scale ✓" else "Scale")
+            }
+            FilterChip(
+                selected = prefs.showCalibrationLayer,
+                onClick = { DrawingsSettings.setShowCalibrationLayer(prefsStore, !prefs.showCalibrationLayer) },
+                label = { Text("Cal layer") },
+            )
+            if (mode == DrawingMode.Reference || mode == DrawingMode.Measure) {
+                FilterChip(
+                    selected = snapEnabled,
+                    onClick = {
+                        if (mode == DrawingMode.Reference) DrawingsSettings.setSnapCalibration(prefsStore, !prefs.snapCalibration)
+                        else DrawingsSettings.setSnapMeasurements(prefsStore, !prefs.snapMeasurements)
+                    },
+                    label = {
+                        Text(
+                            if (!snapEnabled) "Snap: Off"
+                            else if (lineMap == null) "Snap: …"
+                            else "Snap: ${if (snapTarget == SnapTarget.EDGE) "Edge" else "Center"}",
+                        )
+                    },
+                )
             }
             TextButton(onClick = { showOptions = true }, enabled = !busy) { Text(if (busy) "Saving…" else "More") }
             DropdownMenu(expanded = showOptions, onDismissRequest = { showOptions = false }) {
@@ -389,7 +446,7 @@ private fun DrawingEditor(
                     showOptions = false
                     showItems = true
                 })
-                DropdownMenuItem(text = { Text("SVG symbol settings") }, onClick = {
+                DropdownMenuItem(text = { Text("Snapping & symbol settings") }, onClick = {
                     showOptions = false
                     host.openSettings()
                 })
@@ -408,7 +465,7 @@ private fun DrawingEditor(
         Text(
             if (pending == null) mode.hint else "Tap the second point.",
             style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
         )
         PlanCanvas(
             file = file,
@@ -416,9 +473,13 @@ private fun DrawingEditor(
             mode = if (editable) mode else DrawingMode.Navigate,
             zones = pageZones,
             selectedZone = zone?.id,
-            lines = planLines,
+            lines = displayedLines,
             marks = marks,
             pending = pending,
+            lineMap = lineMap,
+            snapEnabled = snapEnabled,
+            snapTarget = snapTarget,
+            onPageSize = { pageSize = it },
             onPlace = ::tap,
             onLine = ::applySpan,
             onInk = { points ->
@@ -437,12 +498,12 @@ private fun DrawingEditor(
         fittedMeasurements.lastOrNull { it.second != null }?.let { (measurement, value) ->
             val length = requireNotNull(value)
             TextButton(onClick = { publish(measurement, length) }) {
-                Text("${settings.format(length)} · Use measurement")
+                Text("≈ ${settings.format(length)} · Use measurement")
             }
         }
     }
     newZone?.let { span ->
-        ZoneDialog(defaultName = "Zone ${drawing.zones.size + 1}", onDismiss = { newZone = null }) { name, preset ->
+        ZoneDialog(defaultName = "Zone ${drawing.zones.size + 1}", pageSize = pageSize, onDismiss = { newZone = null }) { name, preset ->
             val saved = PlanZone(name = name, page = page, first = span.first, second = span.second, preset = preset)
             onChange { it.copy(zones = it.zones + saved) }
             selectedZoneId = saved.id
@@ -450,19 +511,37 @@ private fun DrawingEditor(
             mode = if (preset == null) DrawingMode.Reference else DrawingMode.Measure
         }
     }
-    reference?.let { (target, span) ->
-        ReferenceDialog(target, onDismiss = { reference = null }) { length, check ->
-            if (target.references.size >= 100) {
-                host.showMessage("This zone already has 100 reference measurements.")
-                return@ReferenceDialog
+    pendingReference?.let { target ->
+        val title = target.zone?.name ?: "Document calibration (Page ${page + 1})"
+        val hasFit = target.zone?.let { it.fit() != null } ?: (docFit != null)
+        ReferenceDialog(title, hasFit = hasFit, onDismiss = { pendingReference = null }) { length, check ->
+            val ref = PlanReference(target.span.first, target.span.second, length, check, page = page)
+            if (target.zone != null) {
+                onChange { current ->
+                    current.copy(zones = current.zones.map {
+                        if (it.id == target.zone.id) it.copy(references = it.references + ref) else it
+                    })
+                }
+            } else {
+                onChange { current ->
+                    current.copy(calibration = current.calibration.copy(references = current.calibration.references + ref))
+                }
             }
-            onChange { current ->
-                current.copy(zones = current.zones.map {
-                    if (it.id == target.id) it.copy(references = it.references + com.thedirepack.constructioncalc.core.model.PlanReference(span.first, span.second, length, check)) else it
-                })
-            }
-            reference = null
+            pendingReference = null
         }
+    }
+    if (showCalibration) {
+        CalibrationDialog(
+            calibration = drawing.calibration,
+            page = page,
+            pageSize = pageSize,
+            pageZones = pageZones,
+            editable = editable,
+            onCalibrationChange = { updated -> onChange { it.copy(calibration = updated) } },
+            onZoneChange = { updated -> onChange { c -> c.copy(zones = c.zones.map { if (it.id == updated.id) updated else it }) } },
+            onZoneDelete = { id -> onChange { c -> c.copy(zones = c.zones.filterNot { it.id == id }) } },
+            onDismiss = { showCalibration = false },
+        )
     }
     labelPoint?.let { point ->
         TextMarkupDialog(onDismiss = { labelPoint = null }) { text ->

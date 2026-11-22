@@ -1,4 +1,4 @@
-package com.thedirepack.constructioncalc.core.model
+package com.thedirepack.constructioncalc.core.plans
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -26,8 +26,12 @@ import kotlin.math.hypot
  * to results.json for checking by eye.
  */
 class LineSnapReferenceTest {
-    private val folder = listOf(File("../../build/snap-reference"), File("build/snap-reference"))
-        .firstOrNull { File(it, "cases.json").isFile }
+    private val folder = listOf(
+        File("../../blueprints_and_libraries/_snap_reference"),
+        File("blueprints_and_libraries/_snap_reference"),
+        File("../../build/snap-reference"),
+        File("build/snap-reference"),
+    ).firstOrNull { File(it, "cases.json").isFile }
 
     @Test
     fun snapsToTheCenterOfLinesOnRealSheets() {
