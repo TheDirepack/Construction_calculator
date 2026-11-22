@@ -62,12 +62,29 @@ def _load_cubicasa_split_ids(txt_path: Path) -> set[str]:
     return {line.strip().strip('/') for line in txt_path.read_text().splitlines() if line.strip()}
 
 
+REAL_CONSTRUCTION_HINTS = (
+    'new_downloads_202611',
+    'rinker_hall',
+    'njatc_plant',
+    'freefarmhouse',
+    'field_album_1',
+    'state_dot_samples',
+    'user_scans',
+)
+
+
+def _is_real_construction(gid: str, source_path: str) -> bool:
+    hay = f'{gid} {source_path}'.lower()
+    return any(h in hay for h in REAL_CONSTRUCTION_HINTS)
+
+
 def build_pretrain_manifests(
     data_root: Path,
     work_root: Path,
     *,
     fpcad_train_dir: Path | None = None,
     pool_val_fraction: float = 0.10,
+    include_reserve: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Discover all eligible blueprint training images and strictly exclude val/test plans."""
     pool_dir = work_root / 'pool'
@@ -95,17 +112,21 @@ def build_pretrain_manifests(
         'locked_eval_groups_count': len(locked_eval_groups),
     }
 
-    # 1. Real blueprints from curated page pool (background + reserve + label_queue)
-    for role, bucket_name, weight in (
-        ('background', 'pool_background', 0.28),
-        ('reserve', 'pool_reserve', 0.10),
-        ('label_queue', 'pool_electrical_unlabeled', 0.12),
-    ):
+    # 1. Real construction drawings & curated pool (deduplicated by image_sha256)
+    seen_sha: set[str] = set()
+    real_tr: dict[str, list[str]] = defaultdict(list)
+    real_va: dict[str, list[str]] = defaultdict(list)
+    other_tr: dict[str, list[str]] = defaultdict(list)
+    other_va: dict[str, list[str]] = defaultdict(list)
+
+    roles_to_scan = ['label_queue', 'background']
+    if include_reserve:
+        roles_to_scan.append('reserve')
+
+    for role in roles_to_scan:
         rdir = pool_dir / role
         if not rdir.is_dir():
             continue
-        tr_groups: dict[str, list[str]] = defaultdict(list)
-        va_groups: dict[str, list[str]] = defaultdict(list)
         for jpath in sorted(rdir.glob('*.json')):
             rel = f'{role}/{jpath.name}'
             if rel in excluded_rel:
@@ -115,21 +136,44 @@ def build_pretrain_manifests(
                 doc = json.loads(jpath.read_text())
             except Exception:
                 continue
+            sha = doc.get('image_sha256')
+            if sha:
+                if sha in seen_sha:
+                    audit['excluded_counts']['duplicate_sha256'] += 1
+                    continue
+                seen_sha.add(sha)
             img_path = (jpath.parent / doc['image_path']).resolve()
             if not img_path.is_file():
                 continue
             gid = str(doc.get('project_family_id') or jpath.stem)
-            if gid in locked_eval_groups or group_is_holdout(gid, val_fraction=pool_val_fraction):
-                va_groups[gid].append(str(img_path))
-                audit['val_monitor_counts'][bucket_name] += 1
-                audit['excluded_counts'][f'{role}_holdout'] += 1
+            src_path = str((doc.get('pool') or {}).get('source_path') or jpath.name)
+            is_real = _is_real_construction(gid, src_path) or role == 'label_queue'
+            is_val = gid in locked_eval_groups or group_is_holdout(gid, val_fraction=pool_val_fraction)
+            if is_real:
+                if is_val:
+                    real_va[gid].append(str(img_path))
+                    audit['val_monitor_counts']['real_construction_drawings'] += 1
+                    audit['excluded_counts']['real_construction_holdout'] += 1
+                else:
+                    real_tr[gid].append(str(img_path))
+                    audit['included_counts']['real_construction_drawings'] += 1
             else:
-                tr_groups[gid].append(str(img_path))
-                audit['included_counts'][bucket_name] += 1
-        if tr_groups:
-            train_buckets[bucket_name] = {'weight': weight, 'groups': dict(tr_groups)}
-        if va_groups:
-            val_buckets[bucket_name] = {'weight': weight, 'groups': dict(va_groups)}
+                if is_val:
+                    other_va[gid].append(str(img_path))
+                    audit['val_monitor_counts']['pool_other_background'] += 1
+                    audit['excluded_counts']['pool_other_holdout'] += 1
+                else:
+                    other_tr[gid].append(str(img_path))
+                    audit['included_counts']['pool_other_background'] += 1
+
+    if real_tr:
+        train_buckets['real_construction_drawings'] = {'weight': 0.55, 'groups': dict(real_tr)}
+    if real_va:
+        val_buckets['real_construction_drawings'] = {'weight': 0.55, 'groups': dict(real_va)}
+    if other_tr:
+        train_buckets['pool_other_background'] = {'weight': 0.08, 'groups': dict(other_tr)}
+    if other_va:
+        val_buckets['pool_other_background'] = {'weight': 0.15, 'groups': dict(other_va)}
 
     # 2. Official CubiCasa5K: train.txt ONLY (strictly exclude val.txt and test.txt)
     cc_root = data_root / '5_datasets' / 'cubicasa5k_official' / 'cubicasa5k'
@@ -155,9 +199,9 @@ def build_pretrain_manifests(
         audit['excluded_counts']['cubicasa5k_val'] = len(cc_val_ids)
         audit['excluded_counts']['cubicasa5k_test'] = len(cc_test_ids)
         if cc_tr_groups:
-            train_buckets['cubicasa5k_train'] = {'weight': 0.22, 'groups': cc_tr_groups}
+            train_buckets['cubicasa5k_train'] = {'weight': 0.15, 'groups': cc_tr_groups}
         if cc_va_groups:
-            val_buckets['cubicasa5k_val_readonly'] = {'weight': 0.25, 'groups': cc_va_groups}
+            val_buckets['cubicasa5k_val_readonly'] = {'weight': 0.30, 'groups': cc_va_groups}
 
     # 3. FloorPlanCAD full train PNGs ONLY (never test-00.tar.xz, never coco_vis)
     if fpcad_train_dir and fpcad_train_dir.is_dir():
@@ -171,7 +215,7 @@ def build_pretrain_manifests(
             fp_groups[gid].append(str(png.resolve()))
             audit['included_counts']['floorplancad_train'] += 1
         if fp_groups:
-            train_buckets['floorplancad_train'] = {'weight': 0.20, 'groups': dict(fp_groups)}
+            train_buckets['floorplancad_train'] = {'weight': 0.18, 'groups': dict(fp_groups)}
 
     # 4. Rendered vector layouts: exclude ALL cubicasa5k_hf / resplan val & test IDs
     bl_dir = pool_dir / 'background_layouts'
@@ -199,7 +243,7 @@ def build_pretrain_manifests(
             bl_groups[gid] = [str(img_path)]
             audit['included_counts']['rendered_layouts_train'] += 1
         if bl_groups:
-            train_buckets['rendered_layouts_train'] = {'weight': 0.08, 'groups': bl_groups}
+            train_buckets['rendered_layouts_train'] = {'weight': 0.04, 'groups': bl_groups}
 
     audit['excluded_counts'] = dict(audit['excluded_counts'])
     audit['included_counts'] = dict(audit['included_counts'])
@@ -292,6 +336,15 @@ def train(args: argparse.Namespace) -> None:
     ) if val_ds is not None else None
 
     model = Yolo26P2SSLModel('yolo26n-p2.yaml', imgsz=args.imgsz).to(device)
+    if args.init_weights and args.init_weights.is_file() and not (args.resume and (out_dir / 'last_pretrain.pt').is_file()):
+        init_ckpt = torch.load(args.init_weights, map_location=device, weights_only=False)
+        if 'model' in init_ckpt:
+            missing, unexpected = model.load_state_dict(init_ckpt['model'], strict=False)
+            print(f'Warm-started full SSL model from {args.init_weights} (missing={len(missing)}, unexpected={len(unexpected)})', flush=True)
+        else:
+            sd = init_ckpt.get('backbone_neck_state_dict', init_ckpt)
+            missing, unexpected = model.det_model.load_state_dict(sd, strict=False)
+            print(f'Warm-started backbone+neck from {args.init_weights} (loaded={len(sd)}, missing={len(missing)}, unexpected={len(unexpected)})', flush=True)
     criterion = BlueprintSSLLoss().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
 
@@ -443,6 +496,8 @@ def main() -> None:
     p.add_argument('--workers', type=int, default=2)
     p.add_argument('--pool-val-fraction', type=float, default=0.10)
     p.add_argument('--seed', type=int, default=2026)
+    p.add_argument('--init-weights', type=Path, default=None,
+                   help='Optional prior SSL checkpoint (last_pretrain.pt or best_yolo26n_p2_backbone.pt) to warm-start from')
     p.add_argument('--resume', action='store_true')
     p.add_argument('--run', action='store_true', help='Explicitly start GPU pretraining')
     train(p.parse_args())

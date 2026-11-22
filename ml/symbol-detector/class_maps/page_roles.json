@@ -82,10 +82,36 @@
       "group": "set:freefarmhouse"
     },
     {
+      "glob": "1_blueprints/wikimedia_us_drawings/Architect and engineer _1920_ _14782667522_.jpg",
+      "role": "skip",
+      "why": "excluded by 1_blueprints/EXCLUSION_ANALYSIS.json (trade periodical article page, not a plan)"
+    },
+    {
       "glob": "1_blueprints/wikimedia_us_drawings/**",
       "role": "background",
       "group": "set:wikimedia_us_drawings",
       "why": "crops and sheet series of the same buildings"
+    },
+    {
+      "glob": "1_blueprints/new_downloads_202611*/**/*SPECS*",
+      "role": "skip",
+      "why": "specification volumes, not drawing sheets"
+    },
+    {
+      "glob": "1_blueprints/new_downloads_202611*/**/*RFP*",
+      "role": "skip",
+      "why": "RFP text documents, not drawing sheets"
+    },
+    {
+      "glob": "1_blueprints/new_downloads_202611*/**/page_texts/**",
+      "role": "skip",
+      "why": "extracted text dumps"
+    },
+    {
+      "glob": "1_blueprints/new_downloads_202611*/**",
+      "role": "auto_text",
+      "group": "file",
+      "why": "complete bid/construction drawing sets: route electrical sheets to label_queue, others to background"
     },
     {
       "glob": "1_blueprints/library_of_congress/**",
@@ -161,6 +187,11 @@
       "role": "background",
       "group": "regex:^([a-z]{2}\\d{3})",
       "why": "site ids like ak0631/ak0632 are neighbouring buildings of one survey"
+    },
+    {
+      "glob": "4_archives/uw_cities_and_buildings_full/**",
+      "role": "skip",
+      "why": "excluded by 4_archives/uw_cities_and_buildings_full/EXCLUSION_ANALYSIS.json (10,893 building photos, 0 blueprints)"
     },
     {
       "glob": "4_archives/uw_cities_and_buildings/**",
