@@ -2,7 +2,10 @@ package com.thedirepack.constructioncalc.feature.drawings
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -170,15 +173,35 @@ internal fun RevisionOverlayDialog(
                         val layerImage = remember(layer) { layer.image.asImageBitmap() }
                         Canvas(
                             Modifier.fillMaxWidth().height(230.dp).background(Color.White)
-                                .pointerInput(base, zoom, panning) {
-                                    detectDragGestures { event, delta ->
-                                        event.consume()
-                                        if (panning) {
-                                            pan += delta
-                                        } else {
-                                            val fit = minOf(size.width / base.width, size.height / base.height)
-                                            position += delta / (fit * zoom)
-                                        }
+                                .pointerInput(base, panning) {
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false)
+                                        var lastPos = down.position
+                                        var multi = false
+                                        do {
+                                            val event = awaitPointerEvent()
+                                            if (event.changes.count { it.pressed } > 1) {
+                                                multi = true
+                                                val z = event.calculateZoom()
+                                                val nextZoom = (zoom * z).coerceIn(1f, 5f)
+                                                zoom = nextZoom
+                                                pan = if (nextZoom <= 1.01f) Offset.Zero else pan + event.calculatePan()
+                                                event.changes.forEach { it.consume() }
+                                            } else if (!multi) {
+                                                val change = event.changes.firstOrNull { it.id == down.id }
+                                                if (change != null) {
+                                                    val delta = change.position - lastPos
+                                                    lastPos = change.position
+                                                    if (panning) {
+                                                        pan += delta
+                                                    } else {
+                                                        val fit = minOf(size.width / base.width, size.height / base.height)
+                                                        position += delta / (fit * zoom)
+                                                    }
+                                                    change.consume()
+                                                }
+                                            }
+                                        } while (event.changes.any { it.pressed })
                                     }
                                 },
                         ) {

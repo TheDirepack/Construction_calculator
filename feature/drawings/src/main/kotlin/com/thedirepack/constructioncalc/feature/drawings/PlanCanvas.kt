@@ -6,23 +6,29 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.view.MotionEvent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.calculateCentroid
-import androidx.compose.foundation.gestures.calculatePan
-import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -31,8 +37,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,11 +54,20 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntSize
@@ -66,20 +81,30 @@ import com.thedirepack.constructioncalc.core.plans.LineMap
 import com.thedirepack.constructioncalc.core.plans.SnapKind
 import com.thedirepack.constructioncalc.core.plans.SnapTarget
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-
-internal data class InkPoint(val point: PlanPoint, val pressure: Float)
 
 internal data class PageBitmap(val image: Bitmap, val width: Float, val height: Float)
 
 private data class RegionTile(val bitmap: Bitmap, val region: RectF, val scale: Float)
 
 private data class LoupeState(val screenPos: Offset, val pagePoint: PlanPoint, val snapped: SnappedPoint?)
+
+private data class StylusHoverState(
+    val screenPos: Offset,
+    val pagePoint: PlanPoint,
+    val isEraser: Boolean,
+    val snapped: SnappedPoint?,
+)
 
 private sealed interface PageState {
     data object Loading : PageState
@@ -111,41 +136,115 @@ internal fun loadPage(file: File, pageIndex: Int, maxPixels: Float = 2000f): Pag
         }
     }
 
-private class PageViewport(quarterTurns: Int) {
+private class PageViewport(val quarterTurns: Int) {
     var size by mutableStateOf(IntSize.Zero)
     var scroll by mutableStateOf(Offset.Zero)
-    var zoom by mutableStateOf(1f)
-    val quarterTurns = quarterTurns
+    var zoom by mutableStateOf(FIT_CANVAS_ZOOM)
+    private var animJob: Job? = null
 
-    private fun pageSize(page: PageBitmap) =
-        if (quarterTurns % 2 == 0) Size(page.width, page.height) else Size(page.height, page.width)
-
-    fun transform(page: PageBitmap): PageTransform {
-        val rotatedSize = pageSize(page)
-        val fit = min(size.width / rotatedSize.width, size.height / rotatedSize.height).coerceAtLeast(0.001f)
-        val scale = fit * zoom
-        return PageTransform(
-            center() + scroll,
-            Offset(page.width / 2, page.height / 2),
-            scale,
-            quarterTurns,
-        )
+    fun cancelAnimations() {
+        animJob?.cancel()
+        animJob = null
     }
 
-    fun zoomFromCenter(page: PageBitmap, factor: Float) = move(page, center(), Offset.Zero, factor)
+    fun state(): ViewportState = ViewportState(zoom, scroll)
 
     private fun center() = Offset(size.width / 2f, size.height / 2f)
 
+    fun transform(page: PageBitmap): PageTransform = computePageTransform(
+        state = state(),
+        pageWidth = page.width,
+        pageHeight = page.height,
+        quarterTurns = quarterTurns,
+        viewportWidth = size.width.toFloat(),
+        viewportHeight = size.height.toFloat(),
+    )
+
     fun move(page: PageBitmap, centroid: Offset, pan: Offset, factor: Float = 1f) {
-        val before = transform(page)
-        val point = before.toPage(centroid)
-        zoom = (zoom * factor).coerceIn(1f, 16f)
-        val after = transform(page)
-        scroll += centroid + pan - after.toScreen(point)
-        val rotatedSize = pageSize(page)
-        val x = ((rotatedSize.width * after.scale - size.width) / 2 + size.width * .25f).coerceAtLeast(0f)
-        val y = ((rotatedSize.height * after.scale - size.height) / 2 + size.height * .25f).coerceAtLeast(0f)
-        scroll = Offset(scroll.x.coerceIn(-x, x), scroll.y.coerceIn(-y, y))
+        cancelAnimations()
+        val next = computeViewportMove(
+            current = state(),
+            pageWidth = page.width,
+            pageHeight = page.height,
+            quarterTurns = quarterTurns,
+            viewportWidth = size.width.toFloat(),
+            viewportHeight = size.height.toFloat(),
+            centroid = centroid,
+            pan = pan,
+            zoomFactor = factor,
+        )
+        zoom = next.zoom
+        scroll = next.scroll
+    }
+
+    fun zoomFromCenter(scope: CoroutineScope, page: PageBitmap, factor: Float) {
+        val target = computeViewportMove(
+            current = state(),
+            pageWidth = page.width,
+            pageHeight = page.height,
+            quarterTurns = quarterTurns,
+            viewportWidth = size.width.toFloat(),
+            viewportHeight = size.height.toFloat(),
+            centroid = center(),
+            pan = Offset.Zero,
+            zoomFactor = factor,
+        )
+        animateTo(scope, page, target)
+    }
+
+    fun animateTo(scope: CoroutineScope, page: PageBitmap, target: ViewportState) {
+        cancelAnimations()
+        val startZoom = zoom
+        val startScroll = scroll
+        val endZoom = target.zoom.coerceIn(MIN_CANVAS_ZOOM, MAX_CANVAS_ZOOM)
+        val endScroll = clampViewportScroll(
+            scroll = target.scroll,
+            pageWidth = page.width,
+            pageHeight = page.height,
+            quarterTurns = quarterTurns,
+            viewportWidth = size.width.toFloat(),
+            viewportHeight = size.height.toFloat(),
+            zoom = endZoom,
+        )
+        animJob = scope.launch {
+            animate(
+                initialValue = 0f,
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+            ) { t, _ ->
+                zoom = startZoom + (endZoom - startZoom) * t
+                scroll = Offset(
+                    startScroll.x + (endScroll.x - startScroll.x) * t,
+                    startScroll.y + (endScroll.y - startScroll.y) * t,
+                )
+            }
+        }
+    }
+
+    fun fling(scope: CoroutineScope, page: PageBitmap, velocityPxPerSec: Offset) {
+        cancelAnimations()
+        if (hypot(velocityPxPerSec.x, velocityPxPerSec.y) < 120f) return
+        animJob = scope.launch {
+            var vx = velocityPxPerSec.x.coerceIn(-6000f, 6000f)
+            var vy = velocityPxPerSec.y.coerceIn(-6000f, 6000f)
+            while (hypot(vx, vy) >= 20f) {
+                delay(16L)
+                val dt = 0.016f
+                val clamped = clampViewportScroll(
+                    scroll = scroll + Offset(vx * dt, vy * dt),
+                    pageWidth = page.width,
+                    pageHeight = page.height,
+                    quarterTurns = quarterTurns,
+                    viewportWidth = size.width.toFloat(),
+                    viewportHeight = size.height.toFloat(),
+                    zoom = zoom,
+                )
+                if (clamped == scroll) break
+                scroll = clamped
+                vx *= 0.90f
+                vy *= 0.90f
+            }
+        }
     }
 
     /** Visible page-coordinate bounds with a small margin for smooth panning. */
@@ -171,24 +270,40 @@ private class PageViewport(quarterTurns: Int) {
     }
 }
 
-private data class PageTransform(val offset: Offset, val pageCenter: Offset, val scale: Float, val quarterTurns: Int) {
-    fun toScreen(point: PlanPoint) = offset + (point.offset() - pageCenter).rotated(quarterTurns) * scale
-    fun toPage(point: Offset): PlanPoint {
-        val local = ((point - offset) / scale).rotated((4 - quarterTurns) % 4) + pageCenter
-        return PlanPoint(local.x.toDouble(), local.y.toDouble())
-    }
-}
-
-private fun Offset.rotated(quarterTurns: Int) = when (quarterTurns) {
-    1 -> Offset(-y, x)
-    2 -> Offset(-x, -y)
-    3 -> Offset(y, -x)
-    else -> this
-}
-
-private fun PlanPoint.offset() = Offset(x.toFloat(), y.toFloat())
+private fun PlanPoint.offset() = toOffset()
 
 private fun PageBitmap.hit(point: PlanPoint) = point.x in 0.0..width.toDouble() && point.y in 0.0..height.toDouble()
+
+private fun isStylusBarrelPressed(event: PointerEvent): Boolean {
+    val motionState = event.motionEvent?.buttonState
+    if (motionState != null) {
+        return (motionState and (MotionEvent.BUTTON_STYLUS_PRIMARY or MotionEvent.BUTTON_STYLUS_SECONDARY)) != 0
+    }
+    return event.buttons.isSecondaryPressed
+}
+
+private fun computeTouchTransform(changes: List<PointerInputChange>): Triple<Offset, Offset, Float>? {
+    val tracked = changes.filter { it.type == PointerType.Touch && it.pressed && it.previousPressed }
+    if (tracked.size < 2) return null
+    var prevSum = Offset.Zero
+    var curSum = Offset.Zero
+    for (c in tracked) {
+        prevSum += c.previousPosition
+        curSum += c.position
+    }
+    val inv = 1f / tracked.size
+    val prevCentroid = prevSum * inv
+    val curCentroid = curSum * inv
+    val pan = curCentroid - prevCentroid
+    var prevDist = 0f
+    var curDist = 0f
+    for (c in tracked) {
+        prevDist += (c.previousPosition - prevCentroid).getDistance()
+        curDist += (c.position - curCentroid).getDistance()
+    }
+    val zoom = if (prevDist > 4f) curDist / prevDist else 1f
+    return Triple(prevCentroid, pan, zoom)
+}
 
 internal data class CanvasLine(
     val first: PlanPoint,
@@ -241,12 +356,31 @@ internal fun PlanCanvas(
     eraserMode: EraserMode = EraserMode.PARTIAL,
     onPartialErase: (List<PlanPoint>, Double) -> Unit = { _, _ -> },
     dimensionLabel: (PlanMark) -> String? = { null },
+    pageCount: Int = 1,
+    onPageStep: ((Int) -> Unit)? = null,
+    onOpenSheets: (() -> Unit)? = null,
+    editable: Boolean = true,
+    stylusOnlyDraw: Boolean = false,
+    stylusPressure: Boolean = true,
+    stylusBarrelAction: StylusBarrelAction = StylusBarrelAction.ERASER,
+    stylusHoverPreview: Boolean = true,
+    twoFingerUndo: Boolean = true,
+    canUndo: Boolean = false,
+    canRedo: Boolean = false,
+    onUndo: () -> Unit = {},
+    onRedo: () -> Unit = {},
+    onDoubleTapMark: (PlanMark) -> Unit = {},
+    onWholeEraseTap: (PlanPoint, Double) -> Unit = { _, _ -> },
+    onStylusDetected: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
     val views = remember(context) { context.getSharedPreferences("drawing-views", 0) }
     val viewKey = "$drawingId/$pageIndex"
     val setCropProvider by rememberUpdatedState(onCropProvider)
     val selected by rememberUpdatedState(selectedMark)
+    val currentMarks by rememberUpdatedState(marks)
     val moveMark by rememberUpdatedState(onMoveMark)
     val state by key(file, pageIndex) {
         produceState<PageState>(PageState.Loading) {
@@ -276,9 +410,25 @@ internal fun PlanCanvas(
     val currentActiveStyle by rememberUpdatedState(activeStyle)
     val currentEraserMode by rememberUpdatedState(eraserMode)
     val partialErase by rememberUpdatedState(onPartialErase)
+    val wholeEraseTap by rememberUpdatedState(onWholeEraseTap)
+    val doubleTapMark by rememberUpdatedState(onDoubleTapMark)
     val currentDimensionLabel by rememberUpdatedState(dimensionLabel)
+    val currentMode by rememberUpdatedState(mode)
+    val currentEditable by rememberUpdatedState(editable)
+    val currentStylusOnlyDraw by rememberUpdatedState(stylusOnlyDraw)
+    val currentStylusPressure by rememberUpdatedState(stylusPressure)
+    val currentBarrelAction by rememberUpdatedState(stylusBarrelAction)
+    val currentStylusHoverPreview by rememberUpdatedState(stylusHoverPreview)
+    val currentTwoFingerUndo by rememberUpdatedState(twoFingerUndo)
+    val currentCanUndo by rememberUpdatedState(canUndo)
+    val currentCanRedo by rememberUpdatedState(canRedo)
+    val currentOnUndo by rememberUpdatedState(onUndo)
+    val currentOnRedo by rememberUpdatedState(onRedo)
+    val currentOnStylusDetected by rememberUpdatedState(onStylusDetected)
+
     val density = LocalDensity.current
     val snapRadiusPx = with(density) { 24.dp.toPx() }
+    val doubleTapRadiusPx = with(density) { 48.dp.toPx() }
     val loupeRadiusPx = with(density) { 54.dp.toPx() }
     val loupeMarginPx = with(density) { 14.dp.toPx() }
     val loupeBorderPx = with(density) { 2.5.dp.toPx() }
@@ -324,7 +474,7 @@ internal fun PlanCanvas(
                 val viewport = remember(page, quarterTurns) {
                     PageViewport(quarterTurns).apply {
                         if (views.getInt("$viewKey/rotation", 0) == quarterTurns) {
-                            zoom = views.getFloat("$viewKey/zoom", 1f)
+                            zoom = views.getFloat("$viewKey/zoom", FIT_CANVAS_ZOOM).coerceIn(MIN_CANVAS_ZOOM, MAX_CANVAS_ZOOM)
                             scroll = Offset(views.getFloat("$viewKey/x", 0f), views.getFloat("$viewKey/y", 0f))
                         }
                     }
@@ -336,6 +486,7 @@ internal fun PlanCanvas(
                         }
                     }
                     onDispose {
+                        viewport.cancelAnimations()
                         setCropProvider(null)
                         views.edit().putInt("$viewKey/rotation", quarterTurns)
                             .putFloat("$viewKey/zoom", viewport.zoom)
@@ -351,6 +502,9 @@ internal fun PlanCanvas(
                 var activeSnap by remember(page, mode) { mutableStateOf<SnappedPoint?>(null) }
                 var loupe by remember(page, mode) { mutableStateOf<LoupeState?>(null) }
                 var endpointDrag by remember(page, mode) { mutableStateOf<EndpointDrag?>(null) }
+                var hoverState by remember(page) { mutableStateOf<StylusHoverState?>(null) }
+                var stylusHovering by remember(page) { mutableStateOf(false) }
+                var lastStylusActivityMs by remember(page) { mutableStateOf(0L) }
                 var regionTile by remember(page) { mutableStateOf<RegionTile?>(null) }
 
                 // Recycle high-zoom region tiles cleanly whenever replaced or disposed.
@@ -398,9 +552,9 @@ internal fun PlanCanvas(
                     }
                 }
 
-                fun resolvePoint(screenPos: Offset, transform: PageTransform): Pair<PlanPoint, SnappedPoint?> {
+                fun resolvePoint(screenPos: Offset, transform: PageTransform, snapAllowed: Boolean = currentMode.snaps): Pair<PlanPoint, SnappedPoint?> {
                     val raw = transform.toPage(screenPos)
-                    if (!currentSnapEnabled) return raw to null
+                    if (!currentSnapEnabled || !snapAllowed) return raw to null
                     val map = currentLineMap ?: return raw to null
                     val radiusPt = (snapRadiusPx / transform.scale).toDouble().coerceIn(4.0, 48.0)
                     val hit = map.snap(raw.x, raw.y, radiusPt, currentSnapTarget) ?: return raw to null
@@ -413,16 +567,132 @@ internal fun PlanCanvas(
                         .fillMaxSize()
                         .onSizeChanged { viewport.size = it }
                         .semantics { contentDescription = "Drawing page ${pageIndex + 1}. ${mode.hint}" }
+                        .pointerInput(page, viewport) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val stylusChange = event.changes.firstOrNull {
+                                        it.type == PointerType.Stylus || it.type == PointerType.Eraser
+                                    }
+                                    val firstChange = stylusChange ?: event.changes.firstOrNull() ?: continue
+                                    val isStylusOrEraser = stylusChange != null
+                                    if (isStylusOrEraser) {
+                                        currentOnStylusDetected()
+                                        lastStylusActivityMs = firstChange.uptimeMillis
+                                    }
+                                    when (event.type) {
+                                        PointerEventType.Scroll -> {
+                                            val dy = firstChange.scrollDelta.y
+                                            if (dy != 0f) {
+                                                val factor = if (dy < 0f) 1.15f else 1f / 1.15f
+                                                viewport.move(page, firstChange.position, Offset.Zero, factor)
+                                                firstChange.consume()
+                                            }
+                                        }
+                                        PointerEventType.Enter, PointerEventType.Move -> {
+                                            if (isStylusOrEraser && !firstChange.pressed) {
+                                                stylusHovering = true
+                                                if (currentStylusHoverPreview) {
+                                                    val t = viewport.transform(page)
+                                                    val (pt, snapped) = resolvePoint(firstChange.position, t)
+                                                    val barrelPressed = isStylusBarrelPressed(event)
+                                                    hoverState = if (page.hit(pt)) {
+                                                        StylusHoverState(
+                                                            screenPos = firstChange.position,
+                                                            pagePoint = pt,
+                                                            isEraser = firstChange.type == PointerType.Eraser ||
+                                                                (barrelPressed && currentBarrelAction == StylusBarrelAction.ERASER),
+                                                            snapped = snapped,
+                                                        )
+                                                    } else null
+                                                } else {
+                                                    hoverState = null
+                                                }
+                                            } else if (firstChange.pressed) {
+                                                hoverState = null
+                                            }
+                                        }
+                                        PointerEventType.Exit -> {
+                                            if (isStylusOrEraser || !event.changes.any { it.pressed }) {
+                                                stylusHovering = false
+                                                hoverState = null
+                                            }
+                                        }
+                                        PointerEventType.Press -> {
+                                            if (isStylusOrEraser) hoverState = null
+                                        }
+                                        PointerEventType.Release -> {
+                                            if (isStylusOrEraser && !event.changes.any { it.pressed }) {
+                                                stylusHovering = false
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         .pointerInput(page, mode, viewport) {
+                            var lastEmptyTapMs = 0L
+                            var lastEmptyTapPos = Offset.Zero
+                            var lastMarkTapMs = 0L
+                            var lastMarkTapPos = Offset.Zero
+                            var lastMarkTapId: String? = null
+                            fun toggleDoubleTapZoom(tapPos: Offset) {
+                                viewport.animateTo(
+                                    scope,
+                                    page,
+                                    computeDoubleTapTarget(
+                                        current = viewport.state(),
+                                        tapPos = tapPos,
+                                        pageWidth = page.width,
+                                        pageHeight = page.height,
+                                        quarterTurns = quarterTurns,
+                                        viewportWidth = viewport.size.width.toFloat(),
+                                        viewportHeight = viewport.size.height.toFloat(),
+                                    ),
+                                )
+                            }
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false)
+                                viewport.cancelAnimations()
+                                val downType = down.type
+                                val isStylusPointer = downType == PointerType.Stylus || downType == PointerType.Eraser
+                                if (isStylusPointer) {
+                                    currentOnStylusDetected()
+                                    lastStylusActivityMs = down.uptimeMillis
+                                    hoverState = null
+                                }
+                                val isBarrelDown = downType == PointerType.Stylus && isStylusBarrelPressed(currentEvent)
+                                val downIntent = resolvePointerIntent(
+                                    pointerType = downType,
+                                    barrelPressed = isBarrelDown,
+                                    mode = mode,
+                                    editable = currentEditable,
+                                    stylusOnlyDraw = currentStylusOnlyDraw,
+                                    barrelAction = currentBarrelAction,
+                                    stylusHovering = stylusHovering,
+                                    nowMs = down.uptimeMillis,
+                                    lastStylusActivityMs = lastStylusActivityMs,
+                                )
+                                if (downIntent == PointerIntent.IGNORE) {
+                                    do {
+                                        val ev = awaitPointerEvent()
+                                    } while (ev.changes.any { it.pressed })
+                                    return@awaitEachGesture
+                                }
+
+                                val tempErase = downIntent == PointerIntent.TEMP_ERASE
+                                val effectiveWholeErase = (tempErase || (downIntent == PointerIntent.ACTIVE_TOOL && mode == DrawingMode.Eraser)) &&
+                                    currentEraserMode == EraserMode.WHOLE
+                                val partialErasing = (tempErase || (downIntent == PointerIntent.ACTIVE_TOOL && mode == DrawingMode.Eraser)) &&
+                                    currentEraserMode == EraserMode.PARTIAL
+                                val drawing = !tempErase && downIntent == PointerIntent.ACTIVE_TOOL && mode.isFreehand
+                                val adjustActive = !tempErase && downIntent == PointerIntent.ACTIVE_TOOL && mode == DrawingMode.Adjust
+
                                 val downTransform = viewport.transform(page)
                                 val (first, firstSnap) = resolvePoint(down.position, downTransform)
-                                val drawing = mode.isFreehand
-                                val partialErasing = mode == DrawingMode.Eraser && currentEraserMode == EraserMode.PARTIAL
                                 val touchRadiusPt = (snapRadiusPx / downTransform.scale).toDouble()
                                 val rawFirst = downTransform.toPage(down.position)
-                                val mark = selected.takeIf { mode == DrawingMode.Adjust }
+                                val mark = selected.takeIf { adjustActive }
                                 val markHandle = mark?.editHandles()?.let { points ->
                                     points.indices.minByOrNull { i ->
                                         EditorActions.segmentDistance(rawFirst, points[i], points[i])
@@ -431,64 +701,175 @@ internal fun PlanCanvas(
                                 val grabbedMark = mark?.takeIf {
                                     markHandle != null || markAt(listOf(it), rawFirst, touchRadiusPt * .55) != null
                                 }
-                                val grabbed = if (mode == DrawingMode.Adjust && grabbedMark == null) {
-                                    EditorActions.handleAt(currentHandles, downTransform.toPage(down.position), touchRadiusPt)
+                                val grabbed = if (adjustActive && grabbedMark == null) {
+                                    EditorActions.handleAt(currentHandles, rawFirst, touchRadiusPt)
                                 } else null
                                 val anchor = grabbed?.takeUnless { it.target is EndpointTarget.Path }?.let { g ->
                                     currentHandles.firstOrNull { it.target == g.target && it.end != g.end }?.point
                                 }
-                                // In Adjust, a drag that doesn't start on a handle pans the sheet.
-                                val pans = mode == DrawingMode.Navigate || (mode == DrawingMode.Adjust && grabbed == null && grabbedMark == null)
-                                val points = mutableListOf<InkPoint>()
+                                // In Adjust, a drag that doesn't start on a handle pans the sheet; Pencil finger-pan also pans.
+                                val pans = downIntent == PointerIntent.PAN_ONLY ||
+                                    (adjustActive && grabbed == null && grabbedMark == null)
+
+                                val inkFilter = InkStrokeFilter(pressureSensitive = currentStylusPressure)
                                 val eraserTrace = mutableListOf<PlanPoint>()
                                 if (page.hit(first) && drawing) {
-                                    points += InkPoint(first, down.pressureForInk())
-                                    preview = points.toList()
+                                    val minSpacingPt = (1.25f / downTransform.scale).toDouble()
+                                    inkFilter.append(first, down.pressure, isStylusPointer, minSpacingPt)
+                                    preview = inkFilter.points
                                 }
                                 if (page.hit(rawFirst) && partialErasing) {
                                     eraserTrace += rawFirst
                                     eraserPreview = eraserTrace.toList()
                                     eraserHead = rawFirst
                                 }
-                                if (page.hit(first) && !drawing && !partialErasing && !pans) {
+                                val showLoupe = !isStylusPointer || viewport.zoom < 2.5f
+                                if (page.hit(first) && !drawing && !partialErasing && !effectiveWholeErase && !pans) {
                                     activeSnap = firstSnap
-                                    if (mode.usesLoupe) {
+                                    if (mode.usesLoupe && showLoupe) {
                                         loupe = LoupeState(down.position, first, firstSnap)
                                     }
                                 }
                                 if (grabbed != null) endpointDrag = EndpointDrag(grabbed, anchor, grabbed.point)
+
                                 var last = first
                                 var lastPosition = down.position
                                 var moved = false
                                 var multi = false
+                                var suppressedByStylus = false
                                 var onPage = page.hit(first)
+
+                                val velocityTracker = VelocityTracker()
+                                if (pans) velocityTracker.addPointerInputChange(down)
+
+                                // Multi-touch state (strictly Touch pointers; never mixes resting palm with stylus)
+                                var peakTouchCount = if (downType == PointerType.Touch) 1 else 0
+                                var multiStartMs = down.uptimeMillis
+                                var multiEndMs = down.uptimeMillis
+                                val startPositions = mutableMapOf<Long, Offset>()
+                                if (downType == PointerType.Touch) startPositions[down.id.value] = down.position
+                                var maxTouchTravelPx = 0f
+                                var cumulativeZoom = 1f
+                                var continuationPointerId: Long? = null
+                                var continuationPrevPos = Offset.Zero
+
                                 try {
                                     do {
                                         val event = awaitPointerEvent()
-                                        if (event.changes.count { it.pressed } > 1) {
-                                            multi = true
-                                            preview = emptyList()
-                                            eraserPreview = emptyList()
-                                            eraserHead = null
-                                            activeSnap = null
-                                            loupe = null
-                                            endpointDrag = null
-                                            markPreview = null
-                                            val center = event.calculateCentroid(useCurrent = false)
-                                            if (center != Offset.Unspecified) {
-                                                viewport.move(page, center, event.calculatePan(), event.calculateZoom())
+                                        val stylusPressedNow = event.changes.any {
+                                            it.pressed && (it.type == PointerType.Stylus || it.type == PointerType.Eraser)
+                                        }
+                                        if (stylusPressedNow) {
+                                            lastStylusActivityMs = event.changes.maxOf { it.uptimeMillis }
+                                            if (downType == PointerType.Touch && !pans && !multi &&
+                                                (!moved || event.changes.first().uptimeMillis - down.uptimeMillis <= PALM_INTERRUPT_WINDOW_MS)
+                                            ) {
+                                                suppressedByStylus = true
+                                                preview = emptyList()
+                                                eraserPreview = emptyList()
+                                                eraserHead = null
+                                                activeSnap = null
+                                                loupe = null
+                                                endpointDrag = null
+                                                markPreview = null
+                                                break
                                             }
-                                            event.changes.forEach { it.consume() }
-                                        } else if (!multi) {
+                                        }
+
+                                        val pressedTouches = if (downType == PointerType.Touch) {
+                                            event.changes.filter { it.type == PointerType.Touch && it.pressed }
+                                        } else emptyList()
+
+                                        if (downType == PointerType.Touch && pressedTouches.size > 1) {
+                                            if (!multi) {
+                                                multi = true
+                                                multiStartMs = down.uptimeMillis
+                                                peakTouchCount = pressedTouches.size
+                                                cumulativeZoom = 1f
+                                                if (moved) maxTouchTravelPx = maxOf(maxTouchTravelPx, (lastPosition - down.position).getDistance())
+                                                preview = emptyList()
+                                                eraserPreview = emptyList()
+                                                eraserHead = null
+                                                activeSnap = null
+                                                loupe = null
+                                                endpointDrag = null
+                                                markPreview = null
+                                                velocityTracker.resetTracking()
+                                            } else {
+                                                peakTouchCount = maxOf(peakTouchCount, pressedTouches.size)
+                                            }
+                                            for (c in pressedTouches) {
+                                                startPositions.putIfAbsent(c.id.value, c.previousPosition)
+                                                val travel = (c.position - (startPositions[c.id.value] ?: c.position)).getDistance()
+                                                if (travel > maxTouchTravelPx) maxTouchTravelPx = travel
+                                            }
+                                            computeTouchTransform(event.changes)?.let { (centroid, pan, zoom) ->
+                                                cumulativeZoom *= zoom
+                                                viewport.move(page, centroid, pan, zoom)
+                                            }
+                                            continuationPointerId = null
+                                            multiEndMs = event.changes.maxOfOrNull { it.uptimeMillis } ?: multiEndMs
+                                            pressedTouches.forEach { it.consume() }
+                                        } else if (multi) {
+                                            for (c in event.changes) {
+                                                if (c.type == PointerType.Touch) {
+                                                    startPositions.putIfAbsent(c.id.value, c.previousPosition)
+                                                    val travel = (c.position - (startPositions[c.id.value] ?: c.position)).getDistance()
+                                                    if (travel > maxTouchTravelPx) maxTouchTravelPx = travel
+                                                    multiEndMs = maxOf(multiEndMs, c.uptimeMillis)
+                                                }
+                                            }
+                                            if (pressedTouches.size == 1) {
+                                                val only = pressedTouches[0]
+                                                if (continuationPointerId != only.id.value) {
+                                                    continuationPointerId = only.id.value
+                                                    continuationPrevPos = only.position
+                                                    velocityTracker.resetTracking()
+                                                    velocityTracker.addPosition(only.uptimeMillis, only.position)
+                                                } else {
+                                                    val delta = only.position - continuationPrevPos
+                                                    continuationPrevPos = only.position
+                                                    if (delta != Offset.Zero) {
+                                                        viewport.move(page, only.position, delta, 1f)
+                                                    }
+                                                    velocityTracker.addPointerInputChange(only)
+                                                }
+                                                only.consume()
+                                            }
+                                        } else {
                                             val change = event.changes.firstOrNull { it.id == down.id }
                                             if (change != null) {
                                                 val delta = change.position - lastPosition
                                                 moved = moved || (change.position - down.position).getDistance() > viewConfiguration.touchSlop
                                                 if (pans) {
+                                                    velocityTracker.addPointerInputChange(change)
                                                     if (moved) viewport.move(page, lastPosition, delta)
-                                                } else {
+                                                } else if (!effectiveWholeErase) {
                                                     val t = viewport.transform(page)
-                                                    val (point, snapped) = if (drawing || grabbedMark != null || partialErasing) t.toPage(change.position) to null else resolvePoint(change.position, t)
+                                                    val minSpacingPt = (1.25f / t.scale).toDouble()
+                                                    if (drawing) {
+                                                        for (h in change.historical) {
+                                                            val hp = t.toPage(h.position)
+                                                            if (page.hit(hp)) {
+                                                                inkFilter.append(hp, change.pressure, isStylusPointer, minSpacingPt)
+                                                                last = hp
+                                                            }
+                                                        }
+                                                    } else if (partialErasing) {
+                                                        for (h in change.historical) {
+                                                            val hp = t.toPage(h.position)
+                                                            if (page.hit(hp) && eraserTrace.size < 2_048 &&
+                                                                (eraserTrace.isEmpty() || eraserTrace.last() != hp)
+                                                            ) {
+                                                                eraserTrace += hp
+                                                            }
+                                                        }
+                                                    }
+                                                    val (point, snapped) = if (drawing || grabbedMark != null || partialErasing) {
+                                                        t.toPage(change.position) to null
+                                                    } else {
+                                                        resolvePoint(change.position, t)
+                                                    }
                                                     onPage = page.hit(point)
                                                     if (onPage) {
                                                         last = point
@@ -500,13 +881,13 @@ internal fun PlanCanvas(
                                                             eraserPreview = eraserTrace.toList()
                                                             eraserHead = point
                                                         }
-                                                        if (mode.usesLoupe) {
+                                                        if (mode.usesLoupe && (!isStylusPointer || viewport.zoom < 2.5f)) {
                                                             loupe = LoupeState(change.position, point, snapped)
                                                         }
-                                                        if (drawing && points.isNotEmpty() && points.size < 2_048 && point != points.last().point) {
-                                                            points += InkPoint(point, change.pressureForInk())
+                                                        if (drawing) {
+                                                            inkFilter.append(point, change.pressure, isStylusPointer, minSpacingPt)
+                                                            preview = inkFilter.points
                                                         }
-                                                        if (drawing) preview = points.toList()
                                                         endpointDrag = endpointDrag?.copy(point = point)
                                                         if (moved && grabbedMark != null) {
                                                             val dx = point.x - rawFirst.x
@@ -524,17 +905,86 @@ internal fun PlanCanvas(
                                             }
                                         }
                                     } while (event.changes.any { it.pressed })
-                                    if (!multi && page.hit(first) && mode != DrawingMode.Navigate) {
-                                        when {
-                                            grabbedMark != null && moved -> if (onPage) markPreview?.let(moveMark)
-                                            grabbed != null -> if (moved && onPage) moveEndpoint(grabbed, last) else place(rawFirst, touchRadiusPt)
-                                            partialErasing && eraserTrace.isNotEmpty() -> partialErase(eraserTrace.toList(), touchRadiusPt * 0.6)
-                                            mode == DrawingMode.Adjust && !moved -> place(rawFirst, touchRadiusPt)
-                                            drawing && points.isNotEmpty() -> ink(points.toList())
-                                            pans -> if (!moved) place(first, touchRadiusPt)
-                                            mode == DrawingMode.Route && onPage -> place(last, touchRadiusPt)
-                                            !moved && onPage -> place(last, touchRadiusPt)
-                                            moved && onPage && mode.usesSpan -> line(first, last)
+
+                                    if (!suppressedByStylus && multi) {
+                                        val tapAction = evaluateMultiFingerTap(
+                                            enabled = currentTwoFingerUndo,
+                                            peakTouchCount = peakTouchCount,
+                                            durationMs = multiEndMs - multiStartMs,
+                                            maxPointerTravelPx = maxTouchTravelPx,
+                                            touchSlopPx = viewConfiguration.touchSlop,
+                                            cumulativeZoom = cumulativeZoom,
+                                        )
+                                        when (tapAction) {
+                                            MultiTapAction.UNDO -> if (currentEditable && currentCanUndo) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                currentOnUndo()
+                                            }
+                                            MultiTapAction.REDO -> if (currentEditable && currentCanRedo) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                currentOnRedo()
+                                            }
+                                            MultiTapAction.NONE -> {
+                                                val vel = velocityTracker.calculateVelocity()
+                                                if (continuationPointerId != null && hypot(vel.x, vel.y) > 120f) {
+                                                    viewport.fling(scope, page, Offset(vel.x, vel.y))
+                                                }
+                                            }
+                                        }
+                                    } else if (!suppressedByStylus && !multi) {
+                                        if (pans && moved) {
+                                            val vel = velocityTracker.calculateVelocity()
+                                            viewport.fling(scope, page, Offset(vel.x, vel.y))
+                                        } else if (pans && !moved && downIntent == PointerIntent.PAN_ONLY) {
+                                            if (isDoubleTap(lastEmptyTapMs, lastEmptyTapPos, down.uptimeMillis, down.position, doubleTapRadiusPx)) {
+                                                lastEmptyTapMs = 0L
+                                                toggleDoubleTapZoom(down.position)
+                                            } else {
+                                                lastEmptyTapMs = down.uptimeMillis
+                                                lastEmptyTapPos = down.position
+                                            }
+                                        } else if (page.hit(first) && downIntent != PointerIntent.IGNORE) {
+                                            when {
+                                                effectiveWholeErase -> wholeEraseTap(rawFirst, touchRadiusPt)
+                                                grabbedMark != null && moved -> if (onPage) markPreview?.let(moveMark)
+                                                grabbedMark != null && !moved -> {
+                                                    if (isDoubleTap(lastMarkTapMs, lastMarkTapPos, down.uptimeMillis, down.position, doubleTapRadiusPx) &&
+                                                        lastMarkTapId == grabbedMark.id
+                                                    ) {
+                                                        lastMarkTapMs = 0L
+                                                        lastMarkTapId = null
+                                                        doubleTapMark(grabbedMark)
+                                                    } else {
+                                                        lastMarkTapMs = down.uptimeMillis
+                                                        lastMarkTapPos = down.position
+                                                        lastMarkTapId = grabbedMark.id
+                                                        place(rawFirst, touchRadiusPt)
+                                                    }
+                                                }
+                                                grabbed != null -> if (moved && onPage) moveEndpoint(grabbed, last) else place(rawFirst, touchRadiusPt)
+                                                partialErasing && eraserTrace.isNotEmpty() -> partialErase(eraserTrace.toList(), touchRadiusPt * 0.6)
+                                                adjustActive && !moved -> {
+                                                    val hitMark = markAt(currentMarks, rawFirst, touchRadiusPt * .55)
+                                                    if (hitMark != null) {
+                                                        lastMarkTapMs = down.uptimeMillis
+                                                        lastMarkTapPos = down.position
+                                                        lastMarkTapId = hitMark.id
+                                                        lastEmptyTapMs = 0L
+                                                        place(rawFirst, touchRadiusPt)
+                                                    } else if (isDoubleTap(lastEmptyTapMs, lastEmptyTapPos, down.uptimeMillis, down.position, doubleTapRadiusPx)) {
+                                                        lastEmptyTapMs = 0L
+                                                        toggleDoubleTapZoom(down.position)
+                                                    } else {
+                                                        lastEmptyTapMs = down.uptimeMillis
+                                                        lastEmptyTapPos = down.position
+                                                        place(rawFirst, touchRadiusPt)
+                                                    }
+                                                }
+                                                drawing && inkFilter.size > 0 -> ink(inkFilter.points.toList())
+                                                downIntent == PointerIntent.ACTIVE_TOOL && mode == DrawingMode.Route && onPage -> place(last, touchRadiusPt)
+                                                downIntent == PointerIntent.ACTIVE_TOOL && !moved && onPage -> place(last, touchRadiusPt)
+                                                downIntent == PointerIntent.ACTIVE_TOOL && moved && onPage && mode.usesSpan -> line(first, last)
+                                            }
                                         }
                                     }
                                 } finally {
@@ -664,7 +1114,10 @@ internal fun PlanCanvas(
                             drawCircle(Color.White, 5f / transform.scale, point)
                             drawCircle(Color(0xFF126FB4), 3f / transform.scale, point)
                         }
-                        activeSnap?.let { snapped ->
+                        val snapToDraw = activeSnap ?: hoverState?.takeIf {
+                            currentStylusHoverPreview && mode.snaps && !it.isEraser && preview.isEmpty() && eraserPreview.isEmpty()
+                        }?.snapped
+                        snapToDraw?.let { snapped ->
                             val p = snapped.point.offset()
                             val r = 7f / transform.scale
                             val snapColor = Color(0xFF00897B)
@@ -696,19 +1149,7 @@ internal fun PlanCanvas(
                                 currentActiveStyle?.width?.toFloat() ?: 12f,
                                 inkPath,
                             )
-                            DrawingMode.Eraser -> {
-                                if (eraserPreview.size >= 2) {
-                                    val eraserColor = Color(0x55D32F2F)
-                                    val eraserStroke = (snapRadiusPx * 1.2f) / transform.scale
-                                    for (i in 0 until eraserPreview.lastIndex) {
-                                        drawLine(eraserColor, eraserPreview[i].offset(), eraserPreview[i + 1].offset(), eraserStroke, StrokeCap.Round)
-                                    }
-                                }
-                                eraserHead?.let { head ->
-                                    val er = (snapRadiusPx * 0.6f) / transform.scale
-                                    drawCircle(Color(0x99D32F2F), er, head.offset(), style = Stroke(outline))
-                                }
-                            }
+                            DrawingMode.Eraser -> Unit
                             DrawingMode.Zone -> if (preview.size == 2) {
                                 drawZone(preview[0].point.offset(), preview[1].point.offset(), Color(0xFF007A73), outline)
                             }
@@ -718,6 +1159,50 @@ internal fun PlanCanvas(
                             else -> if (preview.size == 2) {
                                 val color = if (mode == DrawingMode.Reference) Color(0xFFB45309) else (previewColor ?: Color(0xFF126FB4))
                                 drawLine(color, preview[0].point.offset(), preview[1].point.offset(), outline)
+                            }
+                        }
+                        if (eraserPreview.size >= 2) {
+                            val eraserColor = Color(0x55D32F2F)
+                            val eraserStroke = (snapRadiusPx * 1.2f) / transform.scale
+                            for (i in 0 until eraserPreview.lastIndex) {
+                                drawLine(eraserColor, eraserPreview[i].offset(), eraserPreview[i + 1].offset(), eraserStroke, StrokeCap.Round)
+                            }
+                        }
+                        eraserHead?.let { head ->
+                            val er = (snapRadiusPx * 0.6f) / transform.scale
+                            drawCircle(Color(0x99D32F2F), er, head.offset(), style = Stroke(outline))
+                        }
+                    }
+
+                    // Stylus hover cursor rendered cleanly in screen space when hovering above the sheet.
+                    hoverState?.takeIf {
+                        currentStylusHoverPreview && preview.isEmpty() && eraserPreview.isEmpty() &&
+                            endpointDrag == null && markPreview == null && loupe == null
+                    }?.let { activeHover ->
+                        when {
+                            activeHover.isEraser || mode == DrawingMode.Eraser -> {
+                                drawCircle(
+                                    color = Color(0x88D32F2F),
+                                    radius = snapRadiusPx * 0.6f,
+                                    center = activeHover.screenPos,
+                                    style = Stroke(2f),
+                                )
+                            }
+                            mode.isFreehand -> {
+                                val style = currentActiveStyle
+                                val baseColor = style?.let { Color(it.color.toInt()) }
+                                    ?: if (mode == DrawingMode.Highlight) Color(0xFFFFE43C) else Color(0xFF155CBD)
+                                val widthPt = style?.width?.toFloat() ?: if (mode == DrawingMode.Highlight) 12f else 2f
+                                val r = (widthPt * transform.scale / 2f).coerceIn(4f, 44f)
+                                drawCircle(baseColor.copy(alpha = 0.25f), r, activeHover.screenPos)
+                                drawCircle(baseColor.copy(alpha = 0.85f), r, activeHover.screenPos, style = Stroke(1.5f))
+                            }
+                            mode.snaps -> {
+                                val accent = if (activeHover.snapped != null) Color(0xFF00897B) else Color(0xFF126FB4)
+                                val arm = 10f
+                                val p = activeHover.screenPos
+                                drawLine(accent, Offset(p.x - arm, p.y), Offset(p.x + arm, p.y), 1.5f)
+                                drawLine(accent, Offset(p.x, p.y - arm), Offset(p.x, p.y + arm), 1.5f)
                             }
                         }
                     }
@@ -742,20 +1227,68 @@ internal fun PlanCanvas(
                         )
                     }
                 }
+                if (pageCount > 1 && onPageStep != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = MaterialTheme.shapes.medium,
+                        shadowElevation = 2.dp,
+                        modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { onPageStep((pageIndex - 1).coerceAtLeast(0)) },
+                                enabled = pageIndex > 0,
+                            ) {
+                                Icon(painterResource(R.drawable.ic_plan_prev), contentDescription = "Previous page")
+                            }
+                            TextButton(
+                                onClick = { onOpenSheets?.invoke() },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                            ) {
+                                Text("${pageIndex + 1}/$pageCount", style = MaterialTheme.typography.labelMedium)
+                            }
+                            IconButton(
+                                onClick = { onPageStep((pageIndex + 1).coerceAtMost(pageCount - 1)) },
+                                enabled = pageIndex + 1 < pageCount,
+                            ) {
+                                Icon(painterResource(R.drawable.ic_plan_next), contentDescription = "Next page")
+                            }
+                        }
+                    }
+                }
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
                     shape = MaterialTheme.shapes.medium,
                     shadowElevation = 2.dp,
                     modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
                 ) {
-                    Row {
-                        IconButton(onClick = { viewport.zoomFromCenter(page, 1f / 1.5f) }, enabled = viewport.zoom > 1f) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { viewport.zoomFromCenter(scope, page, 1f / 1.5f) },
+                            enabled = viewport.zoom > MIN_CANVAS_ZOOM + 0.01f,
+                        ) {
                             Icon(painterResource(R.drawable.ic_plan_zoom_out), contentDescription = "Zoom out")
                         }
-                        IconButton(onClick = { viewport.zoomFromCenter(page, 1.5f) }, enabled = viewport.zoom < 16f) {
+                        val offFit = abs(viewport.zoom - FIT_CANVAS_ZOOM) > 0.04f || viewport.scroll != Offset.Zero
+                        TextButton(
+                            onClick = {
+                                val target = if (offFit) ViewportState(FIT_CANVAS_ZOOM, Offset.Zero) else ViewportState(2.0f, Offset.Zero)
+                                viewport.animateTo(scope, page, target)
+                            },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                        ) {
+                            if (offFit) {
+                                Icon(painterResource(R.drawable.ic_plan_fit), contentDescription = "Fit to page", Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                            }
+                            Text("${(viewport.zoom * 100).roundToInt()}%", style = MaterialTheme.typography.labelMedium)
+                        }
+                        IconButton(
+                            onClick = { viewport.zoomFromCenter(scope, page, 1.5f) },
+                            enabled = viewport.zoom < MAX_CANVAS_ZOOM - 0.01f,
+                        ) {
                             Icon(painterResource(R.drawable.ic_plan_zoom_in), contentDescription = "Zoom in")
                         }
-
                     }
                 }
             }
@@ -868,12 +1401,9 @@ private fun DrawScope.drawSnappingLoupe(
     }
 }
 
-private fun androidx.compose.ui.input.pointer.PointerInputChange.pressureForInk(): Float =
-    if (type == PointerType.Stylus || type == PointerType.Eraser) pressure.takeIf { it.isFinite() }?.coerceIn(.15f, 1f) ?: 1f else 1f
-
 private fun DrawScope.drawZone(a: Offset, b: Offset, color: Color, width: Float) {
     val start = Offset(minOf(a.x, b.x), minOf(a.y, b.y))
-    val size = Size(kotlin.math.abs(a.x - b.x), kotlin.math.abs(a.y - b.y))
+    val size = Size(abs(a.x - b.x), abs(a.y - b.y))
     drawRect(color.copy(alpha = .10f), start, size)
     drawRect(color, start, size, style = Stroke(width))
 }

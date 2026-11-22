@@ -3,14 +3,25 @@ package com.thedirepack.constructioncalc.feature.drawings
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.thedirepack.constructioncalc.core.ui.R as CoreR
 import com.thedirepack.constructioncalc.core.data.PlanSymbols
 import com.thedirepack.constructioncalc.core.data.PlanSymbol
 import com.thedirepack.constructioncalc.core.model.newId
@@ -590,9 +601,9 @@ internal fun DrawingEditor(
         val statusZone = zone?.takeIf { session.selectedZoneId == it.id }
         val activeScaleStatus = statusZone?.let { zoneStatus[it.id] } ?: docSummary.status
         val activeScaleLabel = if (statusZone != null) {
-            "Scale · ${statusZone.name} · ${activeScaleStatus.label}"
+            "${statusZone.name} · ${activeScaleStatus.label}"
         } else {
-            "Scale · ${docSummary.status.label}"
+            docSummary.status.label
         }
         EditorStatusBar(
             revisionLabel = identity?.let { "Rev ${it.revision} · ${revisionStatus?.label.orEmpty()}" } ?: "Rev unassigned",
@@ -612,6 +623,14 @@ internal fun DrawingEditor(
                     DrawingsSettings.setMeasurementTarget(prefsStore, target)
                 }
             },
+            stylusOnlyDraw = prefs.stylusOnlyDraw,
+            stylusPressure = prefs.stylusPressure,
+            stylusBarrelAction = prefs.stylusBarrelAction,
+            twoFingerUndo = prefs.twoFingerUndo,
+            onToggleStylusOnly = { DrawingsSettings.setStylusOnlyDraw(prefsStore, it) },
+            onToggleStylusPressure = { DrawingsSettings.setStylusPressure(prefsStore, it) },
+            onStylusBarrelAction = { DrawingsSettings.setStylusBarrelAction(prefsStore, it) },
+            onToggleTwoFingerUndo = { DrawingsSettings.setTwoFingerUndo(prefsStore, it) },
             returnLabel = returnLabel,
             onReturn = onReturnToSheet,
         )
@@ -687,9 +706,16 @@ internal fun DrawingEditor(
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val landscape = maxWidth > maxHeight && maxWidth >= 560.dp
+            val toolColors = remember(styleVersion, mode) {
+                buildMap {
+                    put(DrawingMode.Pen, styleStore.read(DrawingMode.Pen).color)
+                    put(DrawingMode.Highlight, styleStore.read(DrawingMode.Highlight).color)
+                    if (mode.supportsStyle()) put(mode, styleStore.read(mode).color)
+                }
+            }
             val strip: @Composable () -> Unit = {
                 if (editable) {
-                    EditorTools(mode, landscape, ::switchMode)
+                    EditorTools(mode, landscape, toolColors, ::switchMode)
                 }
             }
             val canvas: @Composable (Modifier) -> Unit = { canvasModifier ->
@@ -756,6 +782,35 @@ internal fun DrawingEditor(
                             }
                         },
                         dimensionLabel = formatDimension,
+                        pageCount = count,
+                        onPageStep = ::goToPage,
+                        onOpenSheets = { sheetsOpen = true },
+                        editable = editable,
+                        stylusOnlyDraw = prefs.stylusOnlyDraw,
+                        stylusPressure = prefs.stylusPressure,
+                        stylusBarrelAction = prefs.stylusBarrelAction,
+                        stylusHoverPreview = prefs.stylusHoverPreview,
+                        twoFingerUndo = prefs.twoFingerUndo,
+                        canUndo = editable && history.canUndo,
+                        canRedo = editable && history.canRedo,
+                        onUndo = { clearSelection(); undo() },
+                        onRedo = { clearSelection(); redo() },
+                        onWholeEraseTap = { point, radius ->
+                            val strokes = visibleMarks.filter { it.kind == PlanMarkKind.INK || it.kind == PlanMarkKind.HIGHLIGHT }
+                            markAt(strokes, point, radius * .55)?.let(::deleteMark)
+                        },
+                        onDoubleTapMark = { mark ->
+                            when (mark.kind) {
+                                PlanMarkKind.DETAIL_LINK -> {
+                                    val targetDrawingId = mark.targetDrawingId ?: drawing.id
+                                    val targetPage = mark.targetPage ?: page
+                                    clearSelection()
+                                    onJumpToSheet(targetDrawingId, targetPage, page)
+                                }
+                                PlanMarkKind.PHOTO -> session = session.open(EditorDialog.ViewPhoto(mark.id))
+                                else -> Unit
+                            }
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                     val selectedMeasurement = fittedMeasurements.firstOrNull { it.first.id == selectedMeasurementId }
@@ -775,26 +830,40 @@ internal fun DrawingEditor(
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         if (selectedMark.kind == PlanMarkKind.DETAIL_LINK) {
-                                            TextButton(onClick = {
-                                                val targetDrawingId = selectedMark.targetDrawingId ?: drawing.id
-                                                val targetPage = selectedMark.targetPage ?: page
-                                                clearSelection()
-                                                onJumpToSheet(targetDrawingId, targetPage, page)
-                                            }) { Text("Open sheet") }
-                                            TextButton(onClick = {
-                                                session = session.open(EditorDialog.EditDetailLink(selectedMark.id))
-                                            }) { Text("Edit link") }
+                                            ToolTooltipIconButton(
+                                                label = "Open sheet",
+                                                iconRes = R.drawable.ic_plan_open_sheet,
+                                                onClick = {
+                                                    val targetDrawingId = selectedMark.targetDrawingId ?: drawing.id
+                                                    val targetPage = selectedMark.targetPage ?: page
+                                                    clearSelection()
+                                                    onJumpToSheet(targetDrawingId, targetPage, page)
+                                                },
+                                            )
+                                            ToolTooltipIconButton(
+                                                label = "Edit link",
+                                                iconRes = CoreR.drawable.ic_edit,
+                                                onClick = { session = session.open(EditorDialog.EditDetailLink(selectedMark.id)) },
+                                            )
                                         }
                                         if (selectedMark.kind == PlanMarkKind.PHOTO) {
-                                            TextButton(onClick = {
-                                                session = session.open(EditorDialog.ViewPhoto(selectedMark.id))
-                                            }) { Text("View photo") }
-                                            TextButton(onClick = { editText = true }) { Text("Caption") }
+                                            ToolTooltipIconButton(
+                                                label = "View photo",
+                                                iconRes = R.drawable.ic_plan_tool_photo,
+                                                onClick = { session = session.open(EditorDialog.ViewPhoto(selectedMark.id)) },
+                                            )
+                                            ToolTooltipIconButton(
+                                                label = "Edit caption",
+                                                iconRes = CoreR.drawable.ic_edit,
+                                                onClick = { editText = true },
+                                            )
                                         }
                                         if (selectedMark.kind in listOf(PlanMarkKind.TEXT, PlanMarkKind.CALLOUT, PlanMarkKind.CLOUD_CALLOUT, PlanMarkKind.DIMENSION)) {
-                                            TextButton(onClick = { editText = true }) {
-                                                Text(if (selectedMark.kind == PlanMarkKind.DIMENSION) "Label" else "Edit text")
-                                            }
+                                            ToolTooltipIconButton(
+                                                label = if (selectedMark.kind == PlanMarkKind.DIMENSION) "Edit label" else "Edit text",
+                                                iconRes = CoreR.drawable.ic_edit,
+                                                onClick = { editText = true },
+                                            )
                                         }
                                         if (selectedMark.kind == PlanMarkKind.SYMBOL) {
                                             TextButton(onClick = { editMarkCircuit = true }) {
@@ -805,16 +874,29 @@ internal fun DrawingEditor(
                                             }
                                         }
                                         if (selectedMark.kind.supportsStyle()) {
-                                            TextButton(onClick = {
-                                                session = session.open(EditorDialog.EditMarkStyle(selectedMark.id))
-                                            }) { Text("Style") }
+                                            val markStyle = MarkupToolStyle.fromMark(selectedMark)
+                                            ToolTooltipIconButton(
+                                                label = "Markup style",
+                                                iconRes = R.drawable.ic_plan_palette,
+                                                badgeDotColor = markStyle.color,
+                                                onClick = { session = session.open(EditorDialog.EditMarkStyle(selectedMark.id)) },
+                                            )
                                         }
-                                        TextButton(onClick = {
-                                            val duplicate = selectedMark.copy(id = newId()).move(12.0, 12.0)
-                                            addMark(duplicate)
-                                            selectedMarkId = duplicate.id
-                                        }) { Text("Duplicate") }
-                                        TextButton(onClick = { deleteMark(selectedMark) }) { Text("Delete") }
+                                        ToolTooltipIconButton(
+                                            label = "Duplicate mark",
+                                            iconRes = R.drawable.ic_plan_duplicate,
+                                            onClick = {
+                                                val duplicate = selectedMark.copy(id = newId()).move(12.0, 12.0)
+                                                addMark(duplicate)
+                                                selectedMarkId = duplicate.id
+                                            },
+                                        )
+                                        ToolTooltipIconButton(
+                                            label = "Delete mark",
+                                            iconRes = CoreR.drawable.ic_delete,
+                                            tint = MaterialTheme.colorScheme.error,
+                                            onClick = { deleteMark(selectedMark) },
+                                        )
                                     }
                                     selectedPath != null -> {
                                         val path = selectedPath.path
@@ -879,9 +961,12 @@ internal fun DrawingEditor(
                                                 Text(if (eraserMode == option) "• ${option.label}" else option.label)
                                             }
                                         }
-                                        TextButton(onClick = { highlightsVisible = !highlightsVisible; clearSelection() }) {
-                                            Text(if (highlightsVisible) "Hide highlights" else "Show highlights")
-                                        }
+                                        ToolTooltipIconButton(
+                                            label = if (highlightsVisible) "Hide highlights" else "Show highlights",
+                                            iconRes = if (highlightsVisible) R.drawable.ic_plan_visibility else R.drawable.ic_plan_visibility_off,
+                                            selected = !highlightsVisible,
+                                            onClick = { highlightsVisible = !highlightsVisible; clearSelection() },
+                                        )
                                     }
                                     mode == DrawingMode.Route && routePoints.isEmpty() -> {
                                         TextButton(onClick = { editCircuit = true }) { Text(circuitTag.ifBlank { "Circuit" }) }
@@ -939,22 +1024,57 @@ internal fun DrawingEditor(
                                     }
                                     activeToolStyle != null -> Row(
                                         Modifier.horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
-                                        TextButton(onClick = { session = session.open(EditorDialog.EditMarkStyle(null)) }) {
+                                        val quickSwatches = if (mode == DrawingMode.Highlight) {
+                                            listOf(
+                                                MarkupColorOption("Yellow", 0xFFFFE43CL),
+                                                MarkupColorOption("Green", 0xFF2E7D32L),
+                                                MarkupColorOption("Blue", 0xFF155CBDL),
+                                                MarkupColorOption("Red", 0xFFC62828L),
+                                                MarkupColorOption("Orange", 0xFFE65100L),
+                                            )
+                                        } else {
+                                            listOf(
+                                                MarkupColorOption("Blue", 0xFF155CBDL),
+                                                MarkupColorOption("Red", 0xFFC62828L),
+                                                MarkupColorOption("Green", 0xFF2E7D32L),
+                                                MarkupColorOption("Orange", 0xFFE65100L),
+                                                MarkupColorOption("Black", 0xFF111111L),
+                                            )
+                                        }
+                                        for (swatch in quickSwatches) {
+                                            val isSelectedColor = (activeToolStyle.color and 0xFFFFFFL) == (swatch.argb and 0xFFFFFFL)
+                                            val ringColor = if (isSelectedColor) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
                                             Box(
                                                 Modifier
-                                                    .size(12.dp)
+                                                    .size(26.dp)
                                                     .clip(CircleShape)
-                                                    .background(Color(activeToolStyle.color.toInt())),
+                                                    .background(Color(swatch.argb.toInt()))
+                                                    .border(if (isSelectedColor) 2.5.dp else 1.dp, ringColor, CircleShape)
+                                                    .clickable {
+                                                        styleStore.save(mode, activeToolStyle.copy(color = swatch.argb))
+                                                        styleVersion++
+                                                    }
+                                                    .semantics { contentDescription = "Color ${swatch.name}" },
                                             )
-                                            val opacityTxt = if (activeToolStyle.opacity < 0.99f) " · ${(activeToolStyle.opacity * 100).roundToInt()}%" else ""
-                                            Text("  Style · ${activeToolStyle.width.roundToInt()}pt$opacityTxt ▾")
+                                        }
+                                        TextButton(
+                                            onClick = { session = session.open(EditorDialog.EditMarkStyle(null)) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                        ) {
+                                            Icon(painterResource(R.drawable.ic_plan_palette), contentDescription = "More style options", Modifier.size(16.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("${activeToolStyle.width.roundToInt()}pt")
                                         }
                                         if (mode == DrawingMode.Highlight) {
-                                            TextButton(onClick = { highlightsVisible = !highlightsVisible; clearSelection() }) {
-                                                Text(if (highlightsVisible) "Hide highlights" else "Show highlights")
-                                            }
+                                            ToolTooltipIconButton(
+                                                label = if (highlightsVisible) "Hide highlights" else "Show highlights",
+                                                iconRes = if (highlightsVisible) R.drawable.ic_plan_visibility else R.drawable.ic_plan_visibility_off,
+                                                selected = !highlightsVisible,
+                                                onClick = { highlightsVisible = !highlightsVisible; clearSelection() },
+                                            )
                                         }
                                     }
                                 }

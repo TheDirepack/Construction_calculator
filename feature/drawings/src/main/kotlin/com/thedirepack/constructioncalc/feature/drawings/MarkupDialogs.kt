@@ -4,6 +4,10 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -42,10 +46,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -513,12 +522,90 @@ internal fun PhotoViewerDialog(
             ) {
                 val loaded = bitmap
                 if (loaded != null && !loaded.isRecycled) {
-                    Image(
-                        bitmap = loaded.asImageBitmap(),
-                        contentDescription = caption.ifBlank { "Field photo" },
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp),
-                    )
+                    var photoZoom by remember(photoSha256) { mutableStateOf(1f) }
+                    var photoOffset by remember(photoSha256) { mutableStateOf(Offset.Zero) }
+                    val doubleTapDist = with(LocalDensity.current) { 48.dp.toPx() }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 260.dp)
+                            .clipToBounds()
+                            .pointerInput(photoSha256) {
+                                var lastTapMs = 0L
+                                var lastTapPos = Offset.Zero
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    var lastPos = down.position
+                                    var moved = false
+                                    var multi = false
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        if (event.changes.count { it.pressed } > 1) {
+                                            multi = true
+                                            val nextZoom = (photoZoom * event.calculateZoom()).coerceIn(1f, 5f)
+                                            photoZoom = nextZoom
+                                            photoOffset = if (nextZoom <= 1.02f) Offset.Zero else photoOffset + event.calculatePan()
+                                            event.changes.forEach { it.consume() }
+                                        } else if (!multi && photoZoom > 1.02f) {
+                                            val change = event.changes.firstOrNull { it.id == down.id }
+                                            if (change != null) {
+                                                val delta = change.position - lastPos
+                                                moved = moved || (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+                                                lastPos = change.position
+                                                if (moved) {
+                                                    photoOffset += delta
+                                                    change.consume()
+                                                }
+                                            }
+                                        } else if (!multi) {
+                                            val change = event.changes.firstOrNull { it.id == down.id }
+                                            if (change != null) {
+                                                moved = moved || (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+                                            }
+                                        }
+                                    } while (event.changes.any { it.pressed })
+                                    if (!multi && !moved) {
+                                        if (isDoubleTap(lastTapMs, lastTapPos, down.uptimeMillis, down.position, doubleTapDist)) {
+                                            lastTapMs = 0L
+                                            if (photoZoom > 1.25f) {
+                                                photoZoom = 1f
+                                                photoOffset = Offset.Zero
+                                            } else {
+                                                photoZoom = 2.5f
+                                            }
+                                        } else {
+                                            lastTapMs = down.uptimeMillis
+                                            lastTapPos = down.position
+                                        }
+                                    }
+                                }
+                            },
+                    ) {
+                        Image(
+                            bitmap = loaded.asImageBitmap(),
+                            contentDescription = caption.ifBlank { "Field photo" },
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 260.dp)
+                                .graphicsLayer {
+                                    scaleX = photoZoom
+                                    scaleY = photoZoom
+                                    translationX = photoOffset.x
+                                    translationY = photoOffset.y
+                                },
+                        )
+                    }
+                    if (photoZoom > 1.05f) {
+                        FilterChip(
+                            selected = true,
+                            onClick = {
+                                photoZoom = 1f
+                                photoOffset = Offset.Zero
+                            },
+                            label = { Text("Reset zoom (${(photoZoom * 100).roundToInt()}%)") },
+                        )
+                    }
                 } else {
                     Text(
                         if (photoSha256 == null) "No photo attached."
