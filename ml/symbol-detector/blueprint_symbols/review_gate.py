@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from typing import Any
+from blueprint_symbols.electrical_device_attributes import validate_device_attributes
 
 
 def _numbers(value: Any, size: int, label: str) -> list[float]:
@@ -56,8 +57,7 @@ def review_decision(item: dict, taxonomy: Mapping[str, list[str]], *, coord_max:
         point = _numbers(item.get('wall_contact_cell'), 2, 'wall_contact_cell')
         if not all(0 <= n <= coord_max for n in point):
             raise ValueError('wall_contact_cell is out of bounds')
-    if not isinstance(item.get('attributes'), dict):
-        raise ValueError('Accepted device attributes must be an object')
+    validate_device_attributes(dtype, item.get('attributes'))
     if not isinstance(item.get('pdf_page'), int) or item['pdf_page'] < 1:
         raise ValueError('pdf_page must be positive 1-based integer')
     if not isinstance(item.get('device_index'), int) or item['device_index'] < 0:
