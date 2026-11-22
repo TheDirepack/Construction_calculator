@@ -4,6 +4,7 @@ import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanPoint
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -124,7 +125,7 @@ class CanvasEditingTest {
         assertEquals(listOf(box), eraseStrokePartially(box, listOf(PlanPoint(10.0, 10.0)), 10.0))
     }
 
-    @Test fun cloudAndCloudCalloutSupportHandlesIndependentNoteAndHitTests() {
+    @Test fun cloudAndCloudCalloutSupportHandlesInsideCloudAndHitTests() {
         val cloud = PlanMark(page = 0, kind = PlanMarkKind.CLOUD, points = listOf(PlanPoint(10.0, 20.0), PlanPoint(60.0, 70.0)))
         assertEquals(4, cloud.editHandles().size)
         assertEquals(
@@ -136,39 +137,64 @@ class CanvasEditingTest {
         val cc = PlanMark(
             page = 0,
             kind = PlanMarkKind.CLOUD_CALLOUT,
-            points = listOf(PlanPoint(10.0, 20.0), PlanPoint(60.0, 70.0), PlanPoint(90.0, 25.0)),
+            points = listOf(PlanPoint(10.0, 20.0), PlanPoint(60.0, 70.0)),
             text = "RFI-4",
-            width = 12.0,
+            width = 13.0,
         )
         val handles = cc.editHandles()
-        assertEquals(5, handles.size)
-        assertEquals(PlanPoint(90.0, 25.0), handles[4])
-        // Dragging handle 4 moves only the note box.
+        assertEquals(4, handles.size)
         assertEquals(
-            listOf(PlanPoint(10.0, 20.0), PlanPoint(60.0, 70.0), PlanPoint(120.0, 35.0)),
-            cc.resize(4, PlanPoint(120.0, 35.0)).points,
+            listOf(PlanPoint(10.0, 20.0), PlanPoint(90.0, 85.0)),
+            cc.resize(1, PlanPoint(90.0, 85.0)).points,
         )
-        // Dragging cloud body moves all 3 points together.
         assertEquals(
-            listOf(PlanPoint(15.0, 16.0), PlanPoint(65.0, 66.0), PlanPoint(95.0, 21.0)),
+            listOf(PlanPoint(15.0, 16.0), PlanPoint(65.0, 66.0)),
             cc.move(5.0, -4.0).points,
         )
-        assertNotNull(markAt(listOf(cc), PlanPoint(95.0, 30.0), 4.0))
+        assertNotNull(markAt(listOf(cc), PlanPoint(35.0, 45.0), 4.0))
+        // Hits inside the cloud only (no external leader box outside).
+        assertNull(markAt(listOf(cc), PlanPoint(95.0, 30.0), 4.0))
+
+        // Legacy 3-point cloud callout stays safe for handles & hit testing.
+        val legacyCc = cc.copy(points = listOf(PlanPoint(10.0, 20.0), PlanPoint(60.0, 70.0), PlanPoint(90.0, 25.0)))
+        assertEquals(4, legacyCc.editHandles().size)
+        assertNotNull(markAt(listOf(legacyCc), PlanPoint(30.0, 40.0), 4.0))
     }
 
-    @Test fun dimensionPhotoAndDetailLinkEditAndHitTest() {
+    @Test fun dimensionPhotoAndDetailLinkEditHitTestAndTransparentStyles() {
         val dim = PlanMark(page = 0, kind = PlanMarkKind.DIMENSION, points = listOf(PlanPoint(0.0, 0.0), PlanPoint(50.0, 0.0)))
         assertEquals(2, dim.editHandles().size)
         assertEquals(listOf(PlanPoint(0.0, 0.0), PlanPoint(75.0, 0.0)), dim.resize(1, PlanPoint(75.0, 0.0)).points)
         assertNotNull(markAt(listOf(dim), PlanPoint(25.0, 3.0), 4.0))
 
-        val photo = PlanMark(page = 0, kind = PlanMarkKind.PHOTO, points = listOf(PlanPoint(40.0, 40.0)), photoSha256 = "a".repeat(64))
+        val photo = PlanMark(
+            page = 0,
+            kind = PlanMarkKind.PHOTO,
+            points = listOf(PlanPoint(40.0, 40.0)),
+            text = "Panel LP-2",
+            width = 24.0,
+            photoSha256 = "a".repeat(64),
+        )
         assertEquals(emptyList<PlanPoint>(), photo.editHandles())
         assertEquals(listOf(PlanPoint(50.0, 35.0)), photo.move(10.0, -5.0).points)
         assertNotNull(markAt(listOf(photo), PlanPoint(43.0, 42.0), 4.0))
+        // Tapping over the caption to the right of the badge also hits the photo mark.
+        assertNotNull(markAt(listOf(photo), PlanPoint(85.0, 40.0), 4.0))
+        assertNull(markAt(listOf(photo), PlanPoint(200.0, 40.0), 4.0))
 
         val detail = PlanMark(page = 0, kind = PlanMarkKind.DETAIL_LINK, points = listOf(PlanPoint(80.0, 80.0)), targetPage = 3)
         assertNotNull(markAt(listOf(detail), PlanPoint(84.0, 80.0), 4.0))
         assertEquals(listOf(PlanPoint(90.0, 90.0)), detail.move(10.0, 10.0).points)
+
+        for (mode in listOf(DrawingMode.Callout, DrawingMode.CloudCallout, DrawingMode.Text, DrawingMode.Dimension)) {
+            val style = MarkupToolStyle.defaultFor(mode)
+            assertNull("$mode should default to transparent fillColor", style.fillColor)
+            assertEquals(0f, style.fillOpacity, 1e-6f)
+        }
+        val plainCallout = PlanMark(page = 0, kind = PlanMarkKind.CALLOUT, points = listOf(PlanPoint(0.0, 0.0), PlanPoint(20.0, 20.0)), text = "Note")
+        val extracted = MarkupToolStyle.fromMark(plainCallout)
+        assertNull(extracted.fillColor)
+        assertEquals(0f, extracted.fillOpacity, 1e-6f)
+        assertFalse(plainCallout.fillOpacity > 0f)
     }
 }

@@ -511,7 +511,7 @@ fun drawPlanMark(
             drawStyledArrowHeads(canvas, paint, path, arrowStyle, x, y, endX, endY)
             // Bold legible label offset off the dimension line, transparent by default (optional fill via style).
             val labelText = dimensionLabel?.invoke(mark) ?: mark.text.ifBlank { "Dimension" }
-            val labelSize = maxOf(14f, width * 6.0f).coerceAtMost(32f)
+            val labelSize = maxOf(18f, width * 7.5f).coerceAtMost(44f)
             paint.typeface = Typeface.DEFAULT_BOLD
             paint.textSize = labelSize
             val textW = paint.measureText(labelText)

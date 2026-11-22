@@ -79,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.data.PlanExportCrop
 import com.thedirepack.constructioncalc.core.data.drawPlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMark
+import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanPoint
 import com.thedirepack.constructioncalc.core.model.PlanZone
 import com.thedirepack.constructioncalc.core.plans.LineMap
@@ -749,9 +750,7 @@ internal fun PlanCanvas(
                                 val grabbed = if (canGrabHandle && grabbedMark == null) {
                                     EditorActions.handleAt(currentHandles, rawFirst, touchRadiusPt)
                                 } else null
-                                val anchor = grabbed?.takeUnless {
-                                    it.target is EndpointTarget.Path || it.target is EndpointTarget.StagedReference
-                                }?.let { g ->
+                                val anchor = grabbed?.takeUnless { it.target is EndpointTarget.Path }?.let { g ->
                                     currentHandles.firstOrNull { it.target == g.target && it.end != g.end }?.point
                                 }
                                 // In Adjust, a drag that doesn't start on a handle pans the sheet; Pencil finger-pan also pans.
@@ -1098,7 +1097,7 @@ internal fun PlanCanvas(
                                 canvas.nativeCanvas.drawBitmap(tile.bitmap, null, tile.region, bitmapPaint)
                             }
                         }
-                        val outline = 1.5f / transform.scale
+                        val outline = outlinePx / transform.scale
                         for (zone in zones) {
                             drawZone(
                                 zone.first.offset(),
@@ -1109,10 +1108,24 @@ internal fun PlanCanvas(
                         }
                         for (saved in lines) {
                             val color = if (saved.isReference) Color(0xFFB45309) else Color(0xFF126FB4)
-                            drawLine(color, saved.first.offset(), saved.second.offset(), outline)
-                            drawCircle(color, 2.5f / transform.scale, saved.first.offset())
-                            drawCircle(color, 2.5f / transform.scale, saved.second.offset())
-                            drawPlanText(saved.label, (saved.first.offset() + saved.second.offset()) / 2f, 12f / transform.scale, color, textPaint)
+                            val p1 = saved.first.offset()
+                            val p2 = saved.second.offset()
+                            drawLine(color, p1, p2, outline * 1.15f)
+                            val dotR = dotPx / transform.scale
+                            drawCircle(color, dotR, p1)
+                            drawCircle(color, dotR, p2)
+                            val dx = p2.x - p1.x
+                            val dy = p2.y - p1.y
+                            val segLen = hypot(dx, dy).coerceAtLeast(1f)
+                            var nx = -dy / segLen
+                            var ny = dx / segLen
+                            if (ny > 0f) {
+                                nx = -nx
+                                ny = -ny
+                            }
+                            val textOffset = (measureTextPx * 0.78f) / transform.scale
+                            val labelPos = (p1 + p2) / 2f + Offset(nx * textOffset, ny * textOffset)
+                            drawPlanText(saved.label, labelPos, measureTextPx / transform.scale, color, textPaint, centered = true)
                         }
                         for (saved in savedRoutes) {
                             val color = if (saved.focused) Color(0xFFD81B60) else Color(0x997B1FA2)
@@ -1121,7 +1134,7 @@ internal fun PlanCanvas(
                                 drawLine(color, saved.points[i].offset(), saved.points[i + 1].offset(), width, cap = StrokeCap.Round)
                             }
                             saved.points.firstOrNull()?.let { start ->
-                                drawPlanText(saved.label, start.offset() + Offset(4f / transform.scale, 0f), 11f / transform.scale, color, textPaint)
+                                drawPlanText(saved.label, start.offset() + Offset(4f / transform.scale, 0f), routeTextPx / transform.scale, color, textPaint)
                             }
                         }
                         for ((path, label) in savedPaths) {
@@ -1136,7 +1149,7 @@ internal fun PlanCanvas(
                                 drawLine(edgeColor, a, b, if (selectedPath) outline * 2f else outline, cap = StrokeCap.Round)
                             }
                             drawPlanText(label, path.points.first().offset() + Offset(4f / transform.scale, 0f),
-                                11f / transform.scale, color, textPaint)
+                                routeTextPx / transform.scale, color, textPaint)
                         }
                         // Draw active polyline route
                         if (routePoints.isNotEmpty()) {
@@ -1146,17 +1159,25 @@ internal fun PlanCanvas(
                                 val b = routePoints[i + 1].offset()
                                 drawLine(routeColor, a, b, outline * 1.4f, cap = StrokeCap.Round)
                                 routeLegLabels.getOrNull(i)?.let { legLabel ->
-                                    drawPlanText(legLabel, (a + b) / 2f, 12f / transform.scale, routeColor, textPaint)
+                                    drawPlanText(legLabel, (a + b) / 2f, routeTextPx / transform.scale, routeColor, textPaint, centered = true)
+                                }
+                            }
+                            if (mode == DrawingMode.Route && aimPoint != null) {
+                                val a = routePoints.last()
+                                val b = aimPoint!!
+                                drawLine(routeColor.copy(alpha = 0.7f), a.offset(), b.offset(), outline * 1.15f, cap = StrokeCap.Round)
+                                currentLiveMeasureLabel?.invoke(a, b)?.let { legText ->
+                                    drawPlanText(legText, (a.offset() + b.offset()) / 2f, routeTextPx / transform.scale, routeColor, textPaint, centered = true)
                                 }
                             }
                             for ((cornerPt, angleLabel) in routeCornerLabels) {
                                 val pos = cornerPt.offset() + Offset(4f / transform.scale, -4f / transform.scale)
-                                drawPlanText(angleLabel, pos, 10.5f / transform.scale, Color(0xFF4A148C), textPaint)
+                                drawPlanText(angleLabel, pos, smallTextPx / transform.scale, Color(0xFF4A148C), textPaint)
                             }
                             for (pt in routePoints) {
                                 val pos = pt.offset()
-                                drawCircle(Color.White, 4.5f / transform.scale, pos)
-                                drawCircle(routeColor, 3f / transform.scale, pos)
+                                drawCircle(Color.White, (dotPx * 1.3f) / transform.scale, pos)
+                                drawCircle(routeColor, (dotPx * 0.85f) / transform.scale, pos)
                             }
                         }
                         drawIntoCanvas { canvas ->
@@ -1170,39 +1191,55 @@ internal fun PlanCanvas(
                         }
                         (markPreview ?: selectedMark)?.let { mark ->
                             val points = mark.editHandles().ifEmpty { listOf(mark.points.first()) }
-                            val r = 5f / transform.scale
+                            val r = (handlePx * 0.9f) / transform.scale
                             for (point in points) {
                                 drawCircle(Color.White, r, point.offset())
                                 drawCircle(Color(0xFF126FB4), r, point.offset(), style = Stroke(outline))
                             }
                         }
-                        if (mode == DrawingMode.Adjust) {
-                            val r = 4f / transform.scale
+                        if (mode == DrawingMode.Adjust || mode == DrawingMode.Reference) {
+                            val r = handlePx / transform.scale
                             for (handle in handles) {
                                 val pathVertex = handle.target is EndpointTarget.Path
-                                val drag = endpointDrag?.takeIf { pathVertex && it.handle == handle }
+                                val stagedRef = handle.target is EndpointTarget.StagedReference
+                                val drag = endpointDrag?.takeIf {
+                                    (pathVertex || stagedRef) && it.handle == handle
+                                }
                                 val p = (drag?.point ?: handle.point).offset()
                                 val activeVertex = pathVertex && handle.end == selectedPathVertex
-                                drawRect(if (activeVertex) Color(0xFF126FB4) else Color.White,
-                                    Offset(p.x - r, p.y - r), Size(r * 2, r * 2))
-                                drawRect(Color(0xFF126FB4), Offset(p.x - r, p.y - r), Size(r * 2, r * 2), style = Stroke(outline))
+                                val fillColor = when {
+                                    activeVertex -> Color(0xFF126FB4)
+                                    stagedRef -> Color(0xFFFFF3E0)
+                                    else -> Color.White
+                                }
+                                val strokeColor = if (stagedRef) Color(0xFFB45309) else Color(0xFF126FB4)
+                                drawRect(fillColor, Offset(p.x - r, p.y - r), Size(r * 2, r * 2))
+                                drawRect(strokeColor, Offset(p.x - r, p.y - r), Size(r * 2, r * 2), style = Stroke(outline))
                             }
                             endpointDrag?.let { drag ->
                                 drag.anchor?.let { drawLine(Color(0xFF00897B), it.offset(), drag.point.offset(), outline * 1.5f) }
-                                drawCircle(Color(0xFF00897B), 3.5f / transform.scale, drag.point.offset())
+                                drawCircle(Color(0xFF00897B), (dotPx * 1.1f) / transform.scale, drag.point.offset())
                             }
                         }
                         pending?.let {
                             val point = it.offset()
-                            drawCircle(Color.White, 5f / transform.scale, point)
-                            drawCircle(Color(0xFF126FB4), 3f / transform.scale, point)
+                            val ptColor = if (mode == DrawingMode.Reference) Color(0xFFB45309) else Color(0xFF126FB4)
+                            drawCircle(Color.White, (handlePx * 0.95f) / transform.scale, point)
+                            drawCircle(ptColor, (dotPx * 1.1f) / transform.scale, point)
                         }
                         val snapToDraw = activeSnap ?: hoverState?.takeIf {
                             currentStylusHoverPreview && mode.snaps && !it.isEraser && preview.isEmpty() && eraserPreview.isEmpty()
                         }?.snapped
+                        if (aimPoint != null && snapToDraw == null && (mode == DrawingMode.Route || (mode.usesSpan && currentSpanInputMode == SpanInputMode.POINTS_ON_RELEASE))) {
+                            val p = aimPoint!!.offset()
+                            val arm = (handlePx * 1.6f) / transform.scale
+                            val aimColor = if (mode == DrawingMode.Reference) Color(0xFFB45309) else Color(0xFF126FB4)
+                            drawLine(aimColor, Offset(p.x - arm, p.y), Offset(p.x + arm, p.y), outline * 0.9f)
+                            drawLine(aimColor, Offset(p.x, p.y - arm), Offset(p.x, p.y + arm), outline * 0.9f)
+                        }
                         snapToDraw?.let { snapped ->
                             val p = snapped.point.offset()
-                            val r = 7f / transform.scale
+                            val r = (handlePx * 1.2f) / transform.scale
                             val snapColor = Color(0xFF00897B)
                             if (snapped.kind != SnapKind.LINE) {
                                 drawRect(snapColor, Offset(p.x - r, p.y - r), Size(r * 2, r * 2), style = Stroke(outline))
@@ -1216,22 +1253,30 @@ internal fun PlanCanvas(
                                 SnapKind.END -> "End"
                                 SnapKind.LINE -> "Line"
                             }
-                            drawPlanText(snapLabel, Offset(p.x + r * 1.5f, p.y - r * 1.5f), 10f / transform.scale, snapColor, snapLabelPaint)
+                            drawPlanText(snapLabel, Offset(p.x + r * 1.5f, p.y - r * 1.5f), smallTextPx / transform.scale, snapColor, snapLabelPaint)
                         }
                         val previewColor = currentActiveStyle?.let { Color(it.color.toInt()) }
                         when (mode) {
-                            DrawingMode.Pen -> drawInk(
-                                preview,
-                                previewColor?.copy(alpha = currentActiveStyle?.opacity ?: 1f) ?: Color(0xFF155CBD),
-                                currentActiveStyle?.width?.toFloat() ?: 1.8f,
-                                inkPath,
-                            )
-                            DrawingMode.Highlight -> drawInk(
-                                preview,
-                                previewColor?.copy(alpha = currentActiveStyle?.opacity ?: 0.40f) ?: Color(0x66FFE43C),
-                                currentActiveStyle?.width?.toFloat() ?: 12f,
-                                inkPath,
-                            )
+                            DrawingMode.Pen -> {
+                                val penColor = previewColor?.copy(alpha = currentActiveStyle?.opacity ?: 1f) ?: Color(0xFF155CBD)
+                                val penWidth = currentActiveStyle?.width?.toFloat() ?: 1.8f
+                                drawInk(preview, penColor, penWidth, inkPath)
+                                inkHead?.let { head ->
+                                    val r = maxOf(penWidth / 2f, outline * 2.2f)
+                                    drawCircle(penColor.copy(alpha = 0.25f), r, head.offset())
+                                    drawCircle(penColor.copy(alpha = 0.85f), r, head.offset(), style = Stroke(outline * 0.8f))
+                                }
+                            }
+                            DrawingMode.Highlight -> {
+                                val hlColor = previewColor?.copy(alpha = currentActiveStyle?.opacity ?: 0.40f) ?: Color(0x66FFE43C)
+                                val hlWidth = currentActiveStyle?.width?.toFloat() ?: 12f
+                                drawInk(preview, hlColor, hlWidth, inkPath)
+                                inkHead?.let { head ->
+                                    val r = maxOf(hlWidth / 2f, outline * 2.5f)
+                                    drawCircle(hlColor.copy(alpha = 0.35f), r, head.offset())
+                                    drawCircle(hlColor.copy(alpha = 0.9f), r, head.offset(), style = Stroke(outline * 0.8f))
+                                }
+                            }
                             DrawingMode.Eraser -> Unit
                             DrawingMode.Zone -> if (preview.size == 2) {
                                 drawZone(preview[0].point.offset(), preview[1].point.offset(), Color(0xFF007A73), outline)
@@ -1239,21 +1284,50 @@ internal fun PlanCanvas(
                             DrawingMode.Rectangle, DrawingMode.Cloud, DrawingMode.CloudCallout -> if (preview.size == 2) {
                                 drawZone(preview[0].point.offset(), preview[1].point.offset(), previewColor ?: Color(0xFF007A73), outline)
                             }
+                            DrawingMode.Callout -> if (preview.size == 2) {
+                                val a = preview[0].point.offset()
+                                val b = preview[1].point.offset()
+                                val c = previewColor ?: Color(0xFFC62828)
+                                drawLine(c, a, b, outline)
+                                val boxW = (64f / transform.scale).coerceAtLeast(18f)
+                                val boxH = (26f / transform.scale).coerceAtLeast(10f)
+                                drawRect(
+                                    c,
+                                    b,
+                                    Size(boxW, boxH),
+                                    style = Stroke(outline, pathEffect = PathEffect.dashPathEffect(floatArrayOf(outline * 3f, outline * 2f), 0f)),
+                                )
+                            }
                             else -> if (preview.size == 2) {
                                 val color = if (mode == DrawingMode.Reference) Color(0xFFB45309) else (previewColor ?: Color(0xFF126FB4))
-                                drawLine(color, preview[0].point.offset(), preview[1].point.offset(), outline)
+                                val p0 = preview[0].point.offset()
+                                val p1 = preview[1].point.offset()
+                                drawLine(color, p0, p1, outline * 1.15f)
+                                drawCircle(color, dotPx / transform.scale, p0)
+                                drawCircle(color, dotPx / transform.scale, p1)
+                                currentLiveMeasureLabel?.invoke(preview[0].point, preview[1].point)?.let { liveText ->
+                                    val dx = p1.x - p0.x
+                                    val dy = p1.y - p0.y
+                                    val segLen = hypot(dx, dy).coerceAtLeast(1f)
+                                    var nx = -dy / segLen
+                                    var ny = dx / segLen
+                                    if (ny > 0f) { nx = -nx; ny = -ny }
+                                    val off = (measureTextPx * 0.78f) / transform.scale
+                                    drawPlanText(liveText, (p0 + p1) / 2f + Offset(nx * off, ny * off), measureTextPx / transform.scale, color, textPaint, centered = true)
+                                }
                             }
                         }
                         if (eraserPreview.size >= 2) {
                             val eraserColor = Color(0x55D32F2F)
-                            val eraserStroke = (snapRadiusPx * 1.2f) / transform.scale
+                            val eraserStroke = (currentEraserRadiusPx * 2f) / transform.scale
                             for (i in 0 until eraserPreview.lastIndex) {
                                 drawLine(eraserColor, eraserPreview[i].offset(), eraserPreview[i + 1].offset(), eraserStroke, StrokeCap.Round)
                             }
                         }
                         eraserHead?.let { head ->
-                            val er = (snapRadiusPx * 0.6f) / transform.scale
-                            drawCircle(Color(0x99D32F2F), er, head.offset(), style = Stroke(outline))
+                            val er = currentEraserRadiusPx / transform.scale
+                            drawCircle(Color(0x28D32F2F), er, head.offset())
+                            drawCircle(Color(0xAAD32F2F), er, head.offset(), style = Stroke(outline))
                         }
                     }
 
@@ -1266,7 +1340,7 @@ internal fun PlanCanvas(
                             activeHover.isEraser || mode == DrawingMode.Eraser -> {
                                 drawCircle(
                                     color = Color(0x88D32F2F),
-                                    radius = snapRadiusPx * 0.6f,
+                                    radius = currentEraserRadiusPx,
                                     center = activeHover.screenPos,
                                     style = Stroke(2f),
                                 )
@@ -1514,19 +1588,42 @@ private fun DrawScope.drawInk(points: List<InkPoint>, color: Color, width: Float
     }
 }
 
-private fun DrawScope.drawPlanText(text: String, point: Offset, textSize: Float, color: Color, paint: Paint) {
+private fun DrawScope.drawPlanText(
+    text: String,
+    point: Offset,
+    textSize: Float,
+    color: Color,
+    paint: Paint,
+    centered: Boolean = false,
+) {
     if (text.isBlank()) return
     drawIntoCanvas { canvas ->
+        val native = canvas.nativeCanvas
         paint.textSize = textSize
-        paint.color = color.toArgb()
+        paint.isFakeBoldText = true
+        paint.textAlign = if (centered) Paint.Align.CENTER else Paint.Align.LEFT
+        val fm = paint.fontMetrics
+        val lineHeight = (fm.descent - fm.ascent).coerceAtLeast(textSize)
         var line = 0
         var start = 0
         while (start <= text.length) {
             val end = text.indexOf('\n', start).let { if (it < 0) text.length else it }
-            canvas.nativeCanvas.drawText(text, start, end, point.x, point.y + textSize * (line + 1), paint)
+            val lineStr = text.substring(start, end)
+            val y = (if (centered) point.y - (fm.ascent + fm.descent) / 2f else point.y - fm.ascent) + lineHeight * line
+            paint.style = Paint.Style.STROKE
+            paint.strokeJoin = Paint.Join.ROUND
+            paint.strokeWidth = maxOf(0.5f, textSize * 0.22f)
+            paint.color = android.graphics.Color.WHITE
+            paint.alpha = 225
+            native.drawText(lineStr, point.x, y, paint)
+            paint.style = Paint.Style.FILL
+            paint.color = color.toArgb()
+            paint.alpha = 255
+            native.drawText(lineStr, point.x, y, paint)
             line++
             start = end + 1
         }
+        paint.textAlign = Paint.Align.LEFT
     }
 }
 

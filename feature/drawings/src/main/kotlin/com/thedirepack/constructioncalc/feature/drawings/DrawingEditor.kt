@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -164,6 +165,7 @@ internal fun DrawingEditor(
     var editMarkCircuit by remember(drawing.id) { mutableStateOf(false) }
     var editMarkArea by remember(drawing.id) { mutableStateOf(false) }
     var eraserMode by rememberSaveable(drawing.id) { mutableStateOf(EraserMode.PARTIAL) }
+    var eraserSizeOpen by remember(drawing.id) { mutableStateOf(false) }
     var countGrouping by rememberSaveable(drawing.id) { mutableStateOf(CountGrouping.DEVICE) }
     val styleStore = remember(views) { MarkupStyleStore(views) }
     var styleVersion by remember { mutableStateOf(0) }
@@ -173,6 +175,7 @@ internal fun DrawingEditor(
     var routeFinished by remember(drawing.id) { mutableStateOf(false) }
     var highlightsVisible by rememberSaveable(drawing.id) { mutableStateOf(true) }
     var editText by remember(drawing.id) { mutableStateOf(false) }
+    var calibrationDraft by remember(drawing.id) { mutableStateOf<List<StagedCalibrationRef>?>(null) }
     val sheetStore = remember(views, drawing.id, drawing.sha256) {
         SheetNavigationStore(views, "${drawing.id}/${drawing.sha256}")
     }
@@ -234,6 +237,7 @@ internal fun DrawingEditor(
         selectedVertex = null
         selectedEdge = null
         selectedMeasurementId = null
+        editText = false
     }
 
     var handledJumpSerial by rememberSaveable(drawing.id) { mutableStateOf(0) }
@@ -249,10 +253,38 @@ internal fun DrawingEditor(
         }
     }
 
+    fun seedCalibrationDraft(): List<StagedCalibrationRef> = buildList {
+        drawing.calibration.references.forEach { add(StagedCalibrationRef(zoneId = null, ref = it)) }
+        drawing.zones.forEach { z -> z.references.forEach { add(StagedCalibrationRef(zoneId = z.id, ref = it)) } }
+    }
+
+    fun applyDraftToDrawing(draft: List<StagedCalibrationRef>): PlanDrawing {
+        val docRefs = draft.filter { it.zoneId == null }.map { it.ref }
+        return drawing.copy(
+            calibration = drawing.calibration.copy(references = docRefs),
+            zones = drawing.zones.map { z -> z.copy(references = draft.filter { it.zoneId == z.id }.map { it.ref }) },
+        )
+    }
+
+    LaunchedEffect(mode) {
+        if (mode == DrawingMode.Reference && calibrationDraft == null) {
+            calibrationDraft = seedCalibrationDraft()
+            DrawingsSettings.setShowCalibrationLayer(prefsStore, true)
+        } else if (mode != DrawingMode.Reference && calibrationDraft != null) {
+            calibrationDraft = null
+        }
+    }
+
     fun switchMode(next: DrawingMode) {
         if (next != mode) {
             clearSelection()
             routeFinished = false
+            if (next == DrawingMode.Reference) {
+                if (calibrationDraft == null) calibrationDraft = seedCalibrationDraft()
+                DrawingsSettings.setShowCalibrationLayer(prefsStore, true)
+            } else if (mode == DrawingMode.Reference) {
+                calibrationDraft = null
+            }
         }
         session = session.withMode(next)
         if (next == DrawingMode.Symbol && symbol == null) session = session.open(EditorDialog.PickSymbol)
@@ -318,13 +350,26 @@ internal fun DrawingEditor(
     }
     val selectedPath = pagePaths.firstOrNull { it.path.id == selectedPathId }.takeIf { mode == DrawingMode.Adjust }
     val selectedMark = visibleMarks.firstOrNull { it.id == selectedMarkId }
+    val activeCalibrationDraft = calibrationDraft.takeIf { mode == DrawingMode.Reference }
+    val draftDrawing = remember(drawing, activeCalibrationDraft) {
+        activeCalibrationDraft?.let(::applyDraftToDrawing) ?: drawing
+    }
     val docSummary = remember(drawing.calibration, page) { CalibrationDiagnostics.evaluate(drawing.calibration, page) }
     val fittedMeasurements = remember(drawing, page) {
         drawing.measurements.filter { it.page == page }.map { it to drawing.length(it) }
     }
-    val calibrationLines = remember(drawing.calibration, pageZones, page, prefs.showCalibrationLayer, settings) {
-        if (!prefs.showCalibrationLayer) emptyList()
-        else {
+    val calibrationLines = remember(drawing.calibration, pageZones, page, prefs.showCalibrationLayer, activeCalibrationDraft, settings) {
+        if (activeCalibrationDraft != null) {
+            activeCalibrationDraft.mapIndexedNotNull { idx, item ->
+                if (item.ref.page != page) null
+                else {
+                    val tag = if (item.ref.check) " (Check)" else ""
+                    CanvasLine(item.ref.first, item.ref.second, "#${idx + 1} · ${settings.format(item.ref.length.toQuantity())}$tag", isReference = true)
+                }
+            }
+        } else if (!prefs.showCalibrationLayer) {
+            emptyList()
+        } else {
             val refs = drawing.calibration.references.filter { it.page == page } + pageZones.flatMap { it.references }
             refs.map { ref -> CanvasLine(ref.first, ref.second, settings.format(ref.length.toQuantity()), isReference = true) }
         }
@@ -353,11 +398,19 @@ internal fun DrawingEditor(
             )
         }
     }
-    val handles = remember(drawing, page, mode, prefs.showCalibrationLayer, selectedMeasurementId, selectedMark, selectedPath) {
+    val handles = remember(drawing, page, mode, prefs.showCalibrationLayer, activeCalibrationDraft, selectedMeasurementId, selectedMark, selectedPath) {
         if (selectedPath != null) {
             val path = selectedPath.path
             val target = EndpointTarget.Path(path.id)
             path.points.mapIndexed { i, point -> EndpointHandle(target, i, point) }
+        } else if (mode == DrawingMode.Reference && activeCalibrationDraft != null) {
+            activeCalibrationDraft.filter { it.ref.page == page }.flatMap { item ->
+                val target = EndpointTarget.StagedReference(item.id)
+                listOf(
+                    EndpointHandle(target, 0, item.ref.first),
+                    EndpointHandle(target, 1, item.ref.second),
+                )
+            }
         } else if (mode == DrawingMode.Adjust && selectedMark == null) {
             EditorActions.handles(drawing, page, includeReferences = prefs.showCalibrationLayer).filter {
                 when (val target = it.target) {
@@ -457,7 +510,37 @@ internal fun DrawingEditor(
             }
             DrawingMode.Eraser -> {
                 val strokes = visibleMarks.filter { it.kind == PlanMarkKind.INK || it.kind == PlanMarkKind.HIGHLIGHT }
-                markAt(strokes, point, radius * .55)?.let(::deleteMark)
+                markAt(strokes, point, radius)?.let(::deleteMark)
+            }
+            DrawingMode.Text -> {
+                val editableTextMarks = visibleMarks.filter {
+                    it.kind == PlanMarkKind.TEXT || it.kind == PlanMarkKind.CALLOUT ||
+                        it.kind == PlanMarkKind.CLOUD || it.kind == PlanMarkKind.CLOUD_CALLOUT
+                }
+                val hit = markAt(editableTextMarks, point, radius * .65)
+                if (hit != null) {
+                    clearSelection()
+                    selectedMarkId = hit.id
+                    editText = true
+                } else {
+                    apply(EditorActions.tap(session, drawing, point, radius, activeToolStyle))
+                }
+            }
+            DrawingMode.Photo -> {
+                val hit = markAt(visibleMarks.filter { it.kind == PlanMarkKind.PHOTO }, point, radius * .85)
+                if (hit != null) session = session.open(EditorDialog.ViewPhoto(hit.id))
+                else apply(EditorActions.tap(session, drawing, point, radius, activeToolStyle))
+            }
+            DrawingMode.DetailLink -> {
+                val hit = markAt(visibleMarks.filter { it.kind == PlanMarkKind.DETAIL_LINK }, point, radius * .85)
+                if (hit != null) {
+                    val targetDrawingId = hit.targetDrawingId ?: drawing.id
+                    val targetPage = hit.targetPage ?: page
+                    clearSelection()
+                    onJumpToSheet(targetDrawingId, targetPage, page)
+                } else {
+                    apply(EditorActions.tap(session, drawing, point, radius, activeToolStyle))
+                }
             }
             DrawingMode.Symbol -> {
                 val current = symbol
@@ -761,11 +844,31 @@ internal fun DrawingEditor(
                         selectedMark = selectedMark,
                         onMoveMark = { replaceMark(it) },
                         onMoveEndpoint = { handle, point ->
-                            if (handle.target is EndpointTarget.Path) {
-                                selectedVertex = handle.end
-                                selectedEdge = null
+                            val target = handle.target
+                            if (target is EndpointTarget.StagedReference) {
+                                val draft = calibrationDraft ?: return@PlanCanvas
+                                val item = draft.firstOrNull { it.id == target.id } ?: return@PlanCanvas
+                                val first = if (handle.end == 0) point else item.ref.first
+                                val second = if (handle.end == 1) point else item.ref.second
+                                if (first == second) return@PlanCanvas
+                                val targetZone = item.zoneId?.let { id -> drawing.zones.firstOrNull { it.id == id } }
+                                if (targetZone != null && (!targetZone.contains(first) || !targetZone.contains(second))) {
+                                    host.showMessage("Keep the dimension inside “${targetZone.name}”.")
+                                    return@PlanCanvas
+                                }
+                                if (targetZone == null && drawing.zones.any { it.page == page && (it.contains(first) || it.contains(second)) }) {
+                                    host.showMessage("A document dimension can't reach into an override zone.")
+                                    return@PlanCanvas
+                                }
+                                val updatedRef = item.ref.copy(first = first, second = second)
+                                calibrationDraft = draft.map { if (it.id == target.id) it.copy(ref = updatedRef) else it }
+                            } else {
+                                if (target is EndpointTarget.Path) {
+                                    selectedVertex = handle.end
+                                    selectedEdge = null
+                                }
+                                apply(EditorActions.moveEndpoint(session, drawing, handle, point))
                             }
-                            apply(EditorActions.moveEndpoint(session, drawing, handle, point))
                         },
                         activeStyle = activeToolStyle,
                         eraserMode = eraserMode,
@@ -799,7 +902,7 @@ internal fun DrawingEditor(
                         onRedo = { clearSelection(); redo() },
                         onWholeEraseTap = { point, radius ->
                             val strokes = visibleMarks.filter { it.kind == PlanMarkKind.INK || it.kind == PlanMarkKind.HIGHLIGHT }
-                            markAt(strokes, point, radius * .55)?.let(::deleteMark)
+                            markAt(strokes, point, radius)?.let(::deleteMark)
                         },
                         onDoubleTapMark = { mark ->
                             when (mark.kind) {
@@ -810,15 +913,29 @@ internal fun DrawingEditor(
                                     onJumpToSheet(targetDrawingId, targetPage, page)
                                 }
                                 PlanMarkKind.PHOTO -> session = session.open(EditorDialog.ViewPhoto(mark.id))
+                                PlanMarkKind.TEXT, PlanMarkKind.CALLOUT, PlanMarkKind.CLOUD, PlanMarkKind.CLOUD_CALLOUT, PlanMarkKind.DIMENSION -> {
+                                    clearSelection()
+                                    selectedMarkId = mark.id
+                                    editText = true
+                                }
                                 else -> Unit
                             }
                         },
+                        spanInputMode = prefs.spanInputModeFor(mode),
+                        eraserSizeDp = prefs.eraserSizeDp,
+                        liveMeasureLabel = { a, b ->
+                            if (draftDrawing.crossesZoneBoundary(page, a, b)) null
+                            else draftDrawing.calibrationFor(page, a, b)?.let { fit -> "≈ ${settings.format(fit.distance(a, b))}" }
+                        },
+                        onTapStagedRef = { stagedId -> session = session.open(EditorDialog.EditStagedReference(stagedId)) },
                         modifier = Modifier.fillMaxSize(),
                     )
                     val selectedMeasurement = fittedMeasurements.firstOrNull { it.first.id == selectedMeasurementId }
                     val latest = fittedMeasurements.lastOrNull().takeIf { mode == DrawingMode.Measure }
                     val result = selectedMeasurement ?: latest
-                    val hasActions = selectedMark != null || selectedPath != null || result != null || routePoints.isNotEmpty() || session.firstPoint != null
+                    val hasActions = selectedMark != null || selectedPath != null || result != null ||
+                        routePoints.isNotEmpty() || session.firstPoint != null ||
+                        mode == DrawingMode.Reference || mode == DrawingMode.Zone || mode == DrawingMode.Measure
                     if (hasActions || mode == DrawingMode.Route || mode == DrawingMode.Eraser || (mode == DrawingMode.Symbol && symbol != null) || activeToolStyle != null) {
                         Surface(
                             tonalElevation = 4.dp,
@@ -832,16 +949,19 @@ internal fun DrawingEditor(
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         if (selectedMark.kind == PlanMarkKind.DETAIL_LINK) {
-                                            ToolTooltipIconButton(
-                                                label = "Open sheet",
-                                                iconRes = R.drawable.ic_plan_open_sheet,
+                                            TextButton(
                                                 onClick = {
                                                     val targetDrawingId = selectedMark.targetDrawingId ?: drawing.id
                                                     val targetPage = selectedMark.targetPage ?: page
                                                     clearSelection()
                                                     onJumpToSheet(targetDrawingId, targetPage, page)
                                                 },
-                                            )
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                            ) {
+                                                Icon(painterResource(R.drawable.ic_plan_open_sheet), contentDescription = null, Modifier.size(16.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("Open sheet")
+                                            }
                                             ToolTooltipIconButton(
                                                 label = "Edit link",
                                                 iconRes = CoreR.drawable.ic_edit,
@@ -849,18 +969,21 @@ internal fun DrawingEditor(
                                             )
                                         }
                                         if (selectedMark.kind == PlanMarkKind.PHOTO) {
-                                            ToolTooltipIconButton(
-                                                label = "View photo",
-                                                iconRes = R.drawable.ic_plan_tool_photo,
+                                            TextButton(
                                                 onClick = { session = session.open(EditorDialog.ViewPhoto(selectedMark.id)) },
-                                            )
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                            ) {
+                                                Icon(painterResource(R.drawable.ic_plan_tool_photo), contentDescription = null, Modifier.size(16.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("View photo")
+                                            }
                                             ToolTooltipIconButton(
                                                 label = "Edit caption",
                                                 iconRes = CoreR.drawable.ic_edit,
                                                 onClick = { editText = true },
                                             )
                                         }
-                                        if (selectedMark.kind in listOf(PlanMarkKind.TEXT, PlanMarkKind.CALLOUT, PlanMarkKind.CLOUD_CALLOUT, PlanMarkKind.DIMENSION)) {
+                                        if (selectedMark.kind in listOf(PlanMarkKind.TEXT, PlanMarkKind.CALLOUT, PlanMarkKind.CLOUD, PlanMarkKind.CLOUD_CALLOUT, PlanMarkKind.DIMENSION)) {
                                             ToolTooltipIconButton(
                                                 label = if (selectedMark.kind == PlanMarkKind.DIMENSION) "Edit label" else "Edit text",
                                                 iconRes = CoreR.drawable.ic_edit,
@@ -963,12 +1086,76 @@ internal fun DrawingEditor(
                                                 Text(if (eraserMode == option) "• ${option.label}" else option.label)
                                             }
                                         }
+                                        TextButton(onClick = { eraserSizeOpen = true }) {
+                                            Text("Size ${prefs.eraserSizeDp}dp")
+                                        }
                                         ToolTooltipIconButton(
                                             label = if (highlightsVisible) "Hide highlights" else "Show highlights",
                                             iconRes = if (highlightsVisible) R.drawable.ic_plan_visibility else R.drawable.ic_plan_visibility_off,
                                             selected = !highlightsVisible,
                                             onClick = { highlightsVisible = !highlightsVisible; clearSelection() },
                                         )
+                                    }
+                                    mode == DrawingMode.Reference -> {
+                                        val draft = calibrationDraft.orEmpty()
+                                        val previewSummary = remember(draftDrawing.calibration, page) {
+                                            CalibrationDiagnostics.evaluate(draftDrawing.calibration, page)
+                                        }
+                                        val statusText = when {
+                                            session.firstPoint != null -> "Calibrate · Point 2 (or drag handles)"
+                                            draft.isEmpty() -> "Calibrate · Place a known dimension"
+                                            else -> "Calibrate · ${draft.size} dim(s) · ${previewSummary.status.label}"
+                                        }
+                                        Text(
+                                            statusText,
+                                            Modifier.padding(start = 8.dp, top = 6.dp, end = 8.dp),
+                                            style = MaterialTheme.typography.labelLarge,
+                                        )
+                                        Row(
+                                            Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 2.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                        ) {
+                                            if (session.firstPoint != null) {
+                                                TextButton(onClick = { session = session.copy(op = EditOp.Idle) }) { Text("Clear pt") }
+                                            }
+                                            TextButton(
+                                                onClick = { session = session.open(EditorDialog.StagedCalibrationList) },
+                                                enabled = draft.isNotEmpty(),
+                                            ) { Text("Dims (${draft.size})") }
+                                            val refSpanMode = prefs.spanInputModeFor(DrawingMode.Reference)
+                                            TextButton(onClick = {
+                                                val next = if (refSpanMode == SpanInputMode.POINTS_ON_RELEASE) SpanInputMode.DRAG_ACROSS else SpanInputMode.POINTS_ON_RELEASE
+                                                DrawingsSettings.setSpanInputMode(prefsStore, DrawingMode.Reference, next)
+                                            }) { Text(refSpanMode.shortLabel) }
+                                            FilledTonalButton(
+                                                onClick = {
+                                                    val committed = applyDraftToDrawing(draft)
+                                                    editDrawing {
+                                                        it.copy(calibration = committed.calibration, zones = committed.zones)
+                                                    }
+                                                    DrawingsSettings.setShowCalibrationLayer(prefsStore, true)
+                                                    val finalStatus = CalibrationDiagnostics.evaluate(committed.calibration, page).status.label
+                                                    host.showMessage("Calibration applied · $finalStatus (${draft.size} dim(s))")
+                                                    calibrationDraft = null
+                                                    switchMode(DrawingMode.Adjust)
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                            ) { Text("Submit") }
+                                            TextButton(onClick = {
+                                                calibrationDraft = null
+                                                switchMode(DrawingMode.Adjust)
+                                            }) { Text("Cancel") }
+                                        }
+                                    }
+                                    mode == DrawingMode.Zone -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            if (session.firstPoint != null) "Tap the opposite zone corner."
+                                            else "Tap or drag opposite zone corners.",
+                                            Modifier.padding(8.dp),
+                                            style = MaterialTheme.typography.labelMedium,
+                                        )
+                                        TextButton(onClick = { switchMode(DrawingMode.Adjust) }) { Text("Cancel") }
                                     }
                                     mode == DrawingMode.Route && routePoints.isEmpty() -> {
                                         TextButton(onClick = { editCircuit = true }) { Text(circuitTag.ifBlank { "Circuit" }) }
@@ -994,22 +1181,24 @@ internal fun DrawingEditor(
                                         onSendRoute = { session = session.open(EditorDialog.SendRoute) },
                                     )
                                     session.firstPoint != null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                        val isTwoPt = prefs.spanInputModeFor(mode) == SpanInputMode.POINTS_ON_RELEASE
                                         Text(
                                             when (mode) {
-                                                DrawingMode.Callout -> "Tap where the note goes."
+                                                DrawingMode.Callout -> "Place the text box."
                                                 DrawingMode.CloudCallout -> "Tap the opposite cloud corner."
-                                                else -> "Tap the second point."
+                                                else -> if (isTwoPt) "Aim & release point 2." else "Tap the second point."
                                             },
                                             Modifier.padding(8.dp),
                                             style = MaterialTheme.typography.labelMedium,
                                         )
+                                        TextButton(onClick = { session = session.copy(op = EditOp.Idle) }) { Text("Clear") }
                                         if (activeToolStyle != null) {
                                             TextButton(onClick = { session = session.open(EditorDialog.EditMarkStyle(null)) }) {
                                                 Text("Style")
                                             }
                                         }
                                     }
-                                    result != null -> {
+                                    result != null -> Row(verticalAlignment = Alignment.CenterVertically) {
                                         val (measurement, length) = result
                                         TextButton(onClick = {
                                             if (selectedMeasurement != null || length == null) {
@@ -1023,6 +1212,23 @@ internal fun DrawingEditor(
                                                 if (length != null) Text(scaleFor(measurement.first, measurement.second), style = MaterialTheme.typography.labelSmall)
                                             }
                                         }
+                                        if (mode == DrawingMode.Measure) {
+                                            val mSpan = prefs.spanInputModeFor(DrawingMode.Measure)
+                                            TextButton(onClick = {
+                                                val next = if (mSpan == SpanInputMode.POINTS_ON_RELEASE) SpanInputMode.DRAG_ACROSS else SpanInputMode.POINTS_ON_RELEASE
+                                                DrawingsSettings.setSpanInputMode(prefsStore, DrawingMode.Measure, next)
+                                            }) { Text(mSpan.shortLabel) }
+                                        }
+                                    }
+                                    mode == DrawingMode.Measure -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                        val mSpan = prefs.spanInputModeFor(DrawingMode.Measure)
+                                        TextButton(onClick = { session = session.open(EditorDialog.Calibration) }) {
+                                            Text("Scale · ${docSummary.status.label}")
+                                        }
+                                        TextButton(onClick = {
+                                            val next = if (mSpan == SpanInputMode.POINTS_ON_RELEASE) SpanInputMode.DRAG_ACROSS else SpanInputMode.POINTS_ON_RELEASE
+                                            DrawingsSettings.setSpanInputMode(prefsStore, DrawingMode.Measure, next)
+                                        }) { Text(mSpan.shortLabel) }
                                     }
                                     activeToolStyle != null -> Row(
                                         Modifier.horizontalScroll(rememberScrollState()),
@@ -1084,21 +1290,28 @@ internal fun DrawingEditor(
                         }
                     }
                     if (selectedMark != null && editText) {
-                        val isOptionalText = selectedMark.kind == PlanMarkKind.DIMENSION || selectedMark.kind == PlanMarkKind.PHOTO
-                        val textDialogTitle = when (selectedMark.kind) {
-                            PlanMarkKind.DIMENSION -> "Dimension label"
-                            PlanMarkKind.PHOTO -> "Photo caption"
-                            else -> "Edit text"
-                        }
-                        TextMarkupDialog(
-                            onDismiss = { editText = false },
-                            initial = selectedMark.text,
-                            title = textDialogTitle,
-                            label = if (selectedMark.kind == PlanMarkKind.DIMENSION || selectedMark.kind == PlanMarkKind.PHOTO) "Label" else "Text",
-                            allowEmpty = isOptionalText,
-                        ) { text ->
-                            replaceMark(selectedMark.copy(text = text))
-                            editText = false
+                        key(selectedMark.id) {
+                            val isOptionalText = selectedMark.kind == PlanMarkKind.DIMENSION || selectedMark.kind == PlanMarkKind.PHOTO || selectedMark.kind == PlanMarkKind.CLOUD
+                            val textDialogTitle = when (selectedMark.kind) {
+                                PlanMarkKind.DIMENSION -> "Dimension label"
+                                PlanMarkKind.PHOTO -> "Photo caption"
+                                PlanMarkKind.CLOUD, PlanMarkKind.CLOUD_CALLOUT -> "Cloud note"
+                                PlanMarkKind.CALLOUT -> "Arrow callout text"
+                                else -> "Edit text"
+                            }
+                            TextMarkupDialog(
+                                onDismiss = { editText = false },
+                                initial = selectedMark.text,
+                                title = textDialogTitle,
+                                label = if (selectedMark.kind == PlanMarkKind.DIMENSION || selectedMark.kind == PlanMarkKind.PHOTO) "Label" else "Text",
+                                helperText = if (selectedMark.kind == PlanMarkKind.DIMENSION) {
+                                    "Measured: ${formatDimension(selectedMark)}. Enter an optional prefix label:"
+                                } else null,
+                                allowEmpty = isOptionalText,
+                            ) { text ->
+                                replaceMark(selectedMark.copy(text = text))
+                                editText = false
+                            }
                         }
                     }
                 }
@@ -1112,6 +1325,16 @@ internal fun DrawingEditor(
     }
 
     if (settingsOpen) DrawingSettingsDialog { settingsOpen = false }
+    if (eraserSizeOpen) {
+        EraserSizeDialog(
+            initialDp = prefs.eraserSizeDp,
+            onDismiss = { eraserSizeOpen = false },
+            onConfirm = { dp ->
+                DrawingsSettings.setEraserSizeDp(prefsStore, dp)
+                eraserSizeOpen = false
+            },
+        )
+    }
 
     if (editMarkCircuit && selectedMark != null) {
         CircuitTagDialog(selectedMark.circuitTag, onDismiss = { editMarkCircuit = false }) { tag ->
@@ -1148,6 +1371,8 @@ internal fun DrawingEditor(
         session = session,
         project = project,
         drawing = drawing,
+        previewDrawing = draftDrawing,
+        calibrationDraft = calibrationDraft,
         page = page,
         pageCount = pageCount ?: 1,
         labels = labels.toMap(),
@@ -1166,14 +1391,36 @@ internal fun DrawingEditor(
             if (it.op == EditOp.Idle) routeFinished = false
             session = it
         },
+        onCalibrationDraftChange = { calibrationDraft = it },
+        onStartCalibrating = { switchMode(DrawingMode.Reference) },
+        onSubmitCalibrationDraft = { draft ->
+            val committed = applyDraftToDrawing(draft)
+            editDrawing { it.copy(calibration = committed.calibration, zones = committed.zones) }
+            DrawingsSettings.setShowCalibrationLayer(prefsStore, true)
+            val finalStatus = CalibrationDiagnostics.evaluate(committed.calibration, page).status.label
+            host.showMessage("Calibration applied · $finalStatus (${draft.size} dim(s))")
+            calibrationDraft = null
+            switchMode(DrawingMode.Adjust)
+        },
         editDrawing = { editDrawing(it) },
         addMark = { addMark(it) },
         replaceMark = { replaceMark(it) },
+        deleteMark = { deleteMark(it) },
         onPickSymbol = {
             symbol = it
             views.edit().putString("${drawing.id}/symbol", it.id).apply()
         },
         onOpenSettings = { settingsOpen = true },
+        onOpenMark = { mark ->
+            when (mark.kind) {
+                PlanMarkKind.PHOTO -> session = session.open(EditorDialog.ViewPhoto(mark.id))
+                PlanMarkKind.DETAIL_LINK -> {
+                    clearSelection()
+                    onJumpToSheet(mark.targetDrawingId ?: drawing.id, mark.targetPage ?: page, page)
+                }
+                else -> Unit
+            }
+        },
         publish = { m, q -> publish(m, q) },
         onSendRouteToRun = onSendRouteToRun,
     )
@@ -1224,6 +1471,8 @@ private fun EditorDialogs(
     session: EditorSession,
     project: Project,
     drawing: PlanDrawing,
+    previewDrawing: PlanDrawing,
+    calibrationDraft: List<StagedCalibrationRef>?,
     page: Int,
     pageCount: Int,
     labels: Map<Int, SheetLabel>,
@@ -1238,11 +1487,16 @@ private fun EditorDialogs(
     styleStore: MarkupStyleStore,
     onStyleUpdated: () -> Unit,
     onSession: (EditorSession) -> Unit,
+    onCalibrationDraftChange: (List<StagedCalibrationRef>) -> Unit,
+    onStartCalibrating: () -> Unit,
+    onSubmitCalibrationDraft: (List<StagedCalibrationRef>) -> Unit,
     editDrawing: ((PlanDrawing) -> PlanDrawing) -> Unit,
     addMark: (PlanMark) -> Unit,
     replaceMark: (PlanMark) -> Unit,
+    deleteMark: (PlanMark) -> Unit,
     onPickSymbol: (PlanSymbol) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenMark: (PlanMark) -> Unit,
     publish: (PlanMeasurement, Quantity) -> Unit,
     onSendRouteToRun: (runId: String?, newRunName: String?, segments: List<PathSegment>, route: TracedRoute) -> Unit,
 ) {
@@ -1261,18 +1515,59 @@ private fun EditorDialogs(
             )
         }
         is EditorDialog.Reference -> {
-            val target = drawing.zones.firstOrNull { it.id == dialog.zoneId }
+            val target = previewDrawing.zones.firstOrNull { it.id == dialog.zoneId }
             val title = target?.name ?: "Document calibration (page ${page + 1})"
-            val hasFit = target?.let { it.fit() != null } ?: (drawing.calibration.fit(page) != null)
+            val hasFit = target?.let { it.fit() != null } ?: (previewDrawing.calibration.fit(page) != null)
             ReferenceDialog(title, hasFit = hasFit, onDismiss = close) { length, check ->
                 val ref = PlanReference(dialog.first, dialog.second, length, check, page = page)
-                if (target != null) {
-                    editDrawing { d -> d.copy(zones = d.zones.map { if (it.id == target.id) it.copy(references = it.references + ref) else it }) }
-                } else {
-                    editDrawing { d -> d.copy(calibration = d.calibration.copy(references = d.calibration.references + ref)) }
+                val currentDraft = calibrationDraft ?: buildList {
+                    drawing.calibration.references.forEach { add(StagedCalibrationRef(zoneId = null, ref = it)) }
+                    drawing.zones.forEach { z -> z.references.forEach { add(StagedCalibrationRef(zoneId = z.id, ref = it)) } }
                 }
+                onCalibrationDraftChange(currentDraft + StagedCalibrationRef(zoneId = dialog.zoneId, ref = ref))
                 close()
             }
+        }
+        is EditorDialog.EditStagedReference -> {
+            val currentDraft = calibrationDraft.orEmpty()
+            val item = currentDraft.firstOrNull { it.id == dialog.stagedId }
+            if (item == null) close()
+            else {
+                val target = item.zoneId?.let { id -> drawing.zones.firstOrNull { it.id == id } }
+                val title = target?.name ?: "Document calibration (page ${item.ref.page + 1})"
+                val hasFit = currentDraft.any { it.id != item.id && it.zoneId == item.zoneId && !it.ref.check } ||
+                    (target?.preset != null || (item.zoneId == null && drawing.calibration.preset != null))
+                ReferenceDialog(
+                    targetName = title,
+                    hasFit = hasFit,
+                    initialLength = item.ref.length.toQuantity(),
+                    initialCheck = item.ref.check,
+                    title = "Edit calibration dimension",
+                    confirmLabel = "Update",
+                    onDelete = {
+                        onCalibrationDraftChange(currentDraft.filterNot { it.id == item.id })
+                        close()
+                    },
+                    onDismiss = close,
+                ) { length, check ->
+                    val updated = item.copy(ref = item.ref.copy(length = length, check = check))
+                    onCalibrationDraftChange(currentDraft.map { if (it.id == item.id) updated else it })
+                    close()
+                }
+            }
+        }
+        EditorDialog.StagedCalibrationList -> {
+            val currentDraft = calibrationDraft.orEmpty()
+            StagedCalibrationListDialog(
+                previewDrawing = previewDrawing,
+                draft = currentDraft,
+                page = page,
+                editable = editable,
+                onEdit = { id -> onSession(session.open(EditorDialog.EditStagedReference(id))) },
+                onDelete = { id -> onCalibrationDraftChange(currentDraft.filterNot { it.id == id }) },
+                onSubmit = { onSubmitCalibrationDraft(currentDraft) },
+                onDismiss = close,
+            )
         }
         is EditorDialog.PlaceText -> TextMarkupDialog(onDismiss = close) { text ->
             val raw = PlanMark(page = page, kind = PlanMarkKind.TEXT, points = listOf(dialog.point), text = text)
@@ -1286,14 +1581,13 @@ private fun EditorDialogs(
             onPickSymbol(symbol)
             close()
         }
-        is EditorDialog.PlaceCallout -> TextMarkupDialog(onDismiss = close, title = "Add leader note") { text ->
+        is EditorDialog.PlaceCallout -> TextMarkupDialog(onDismiss = close, title = "Arrow callout text") { text ->
             val raw = PlanMark(page = page, kind = PlanMarkKind.CALLOUT, points = listOf(dialog.first, dialog.second), text = text)
             addMark(styleStore.read(DrawingMode.Callout).applyTo(raw))
             close()
         }
-        is EditorDialog.PlaceCloudCallout -> TextMarkupDialog(onDismiss = close, title = "Revision cloud note") { text ->
-            val boxOrigin = PlanPoint(maxOf(dialog.first.x, dialog.second.x) + 18.0, minOf(dialog.first.y, dialog.second.y))
-            val raw = PlanMark(page = page, kind = PlanMarkKind.CLOUD_CALLOUT, points = listOf(dialog.first, dialog.second, boxOrigin), text = text)
+        is EditorDialog.PlaceCloudCallout -> TextMarkupDialog(onDismiss = close, title = "Cloud note (inside cloud)") { text ->
+            val raw = PlanMark(page = page, kind = PlanMarkKind.CLOUD_CALLOUT, points = listOf(dialog.first, dialog.second), text = text)
             addMark(styleStore.read(DrawingMode.CloudCallout).applyTo(raw))
             close()
         }
@@ -1311,6 +1605,7 @@ private fun EditorDialogs(
                 editable = editable,
                 onReplacePhoto = { newSha -> replaceMark(mark.copy(photoSha256 = newSha)) },
                 onUpdateCaption = { caption -> replaceMark(mark.copy(text = caption)) },
+                onDeletePhoto = if (editable) ({ deleteMark(mark); close() }) else null,
                 onDismiss = close,
             )
         }
@@ -1420,6 +1715,14 @@ private fun EditorDialogs(
             onCalibrationChange = { updated -> editDrawing { it.copy(calibration = updated) } },
             onZoneChange = { updateZone(it) },
             onZoneDelete = { deleteZone(it) },
+            onCalibrateFromLine = {
+                close()
+                onStartCalibrating()
+            },
+            onDrawScaleZone = {
+                close()
+                onSession(session.withMode(DrawingMode.Zone))
+            },
             onDismiss = close,
         )
         EditorDialog.PageItems -> PageItemsDialog(
@@ -1434,6 +1737,7 @@ private fun EditorDialogs(
             onMeasureEdit = { id -> onSession(session.open(EditorDialog.EditMeasurement(id))) },
             onMeasureDelete = { id -> editDrawing { it.copy(measurements = it.measurements.filterNot { m -> m.id == id }) } },
             onPathDelete = { id -> editDrawing { it.copy(paths = it.paths.filterNot { p -> p.id == id }) } },
+            onMarkOpen = onOpenMark,
             onMarkDelete = { id -> editDrawing { it.copy(marks = it.marks.filterNot { m -> m.id == id }) } },
             onDismiss = close,
         )

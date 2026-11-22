@@ -68,6 +68,7 @@ class CanvasGesturesTest {
         assertEquals(Offset.Zero, reset.scroll)
 
         assertTrue(isDoubleTap(1000L, Offset(100f, 100f), 1200L, Offset(115f, 108f), 48f))
+        assertTrue(isDoubleTap(1000L, Offset(100f, 100f), 1350L, Offset(110f, 105f), 48f))
         assertFalse(isDoubleTap(1000L, Offset(100f, 100f), 1450L, Offset(105f, 105f), 48f))
         assertFalse(isDoubleTap(1000L, Offset(100f, 100f), 1150L, Offset(250f, 100f), 48f))
         assertFalse(isDoubleTap(0L, Offset.Zero, 100L, Offset.Zero, 48f))
@@ -138,6 +139,8 @@ class CanvasGesturesTest {
         val first = smooth.append(PlanPoint(0.0, 0.0), rawPressure = 0.0f, isStylus = true, minSpacingPt = 2.0)
         assertNotNull(first)
         assertEquals(0.20f, first!!.pressure, 1e-4f)
+        val snapshotAfterFirst = smooth.points
+        assertEquals(1, snapshotAfterFirst.size)
 
         // Closer than minSpacingPt -> decimated
         assertNull(smooth.append(PlanPoint(1.0, 1.0), rawPressure = 1.0f, isStylus = true, minSpacingPt = 2.0))
@@ -146,6 +149,10 @@ class CanvasGesturesTest {
         val second = smooth.append(PlanPoint(5.0, 0.0), rawPressure = 1.0f, isStylus = true, minSpacingPt = 2.0)
         assertNotNull(second)
         assertEquals(0.48f, second!!.pressure, 1e-4f)
+        val snapshotAfterSecond = smooth.points
+        // Returned point lists must be independent snapshots so Compose redraws on every point appended.
+        assertEquals(1, snapshotAfterFirst.size)
+        assertEquals(2, snapshotAfterSecond.size)
 
         // Cap at maxPoints
         assertNotNull(smooth.append(PlanPoint(10.0, 0.0), 1f, true, 2.0))
@@ -164,5 +171,24 @@ class CanvasGesturesTest {
         val icons = DrawingMode.entries.map { it.iconRes() }
         assertEquals(DrawingMode.entries.size, icons.toSet().size)
         assertTrue(icons.all { it != 0 })
+    }
+
+    @Test fun prefsDefaultToPointAimingForPrecisionToolsAndDragForMarkup() {
+        val prefs = DrawingsPrefs()
+        assertEquals(16, prefs.eraserSizeDp)
+        assertEquals(SpanInputMode.POINTS_ON_RELEASE, prefs.spanInputModeFor(DrawingMode.Measure))
+        assertEquals(SpanInputMode.POINTS_ON_RELEASE, prefs.spanInputModeFor(DrawingMode.Dimension))
+        assertEquals(SpanInputMode.POINTS_ON_RELEASE, prefs.spanInputModeFor(DrawingMode.Reference))
+        assertEquals(SpanInputMode.DRAG_ACROSS, prefs.spanInputModeFor(DrawingMode.Arrow))
+        assertEquals(SpanInputMode.DRAG_ACROSS, prefs.spanInputModeFor(DrawingMode.Callout))
+        assertEquals(SpanInputMode.DRAG_ACROSS, prefs.spanInputModeFor(DrawingMode.CloudCallout))
+        val customized = prefs.copy(
+            spanInputModes = mapOf(
+                DrawingMode.Measure to SpanInputMode.DRAG_ACROSS,
+                DrawingMode.Rectangle to SpanInputMode.POINTS_ON_RELEASE,
+            ),
+        )
+        assertEquals(SpanInputMode.DRAG_ACROSS, customized.spanInputModeFor(DrawingMode.Measure))
+        assertEquals(SpanInputMode.POINTS_ON_RELEASE, customized.spanInputModeFor(DrawingMode.Rectangle))
     }
 }

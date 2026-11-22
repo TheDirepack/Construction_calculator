@@ -223,5 +223,10 @@ class EditorActionsTest {
 
         val detailDialog = EditorActions.tap(EditorSession(mode = DrawingMode.DetailLink), drawing, p(35.0, 45.0), 8.0).session.dialog
         assertEquals(EditorDialog.PlaceDetailLink(p(35.0, 45.0)), detailDialog)
+        assertEquals("Arrow callout", DrawingMode.Callout.title)
+
+        val stagedRef = StagedCalibrationRef(id = "s1", zoneId = null, ref = PlanReference(p(0.0, 0.0), p(100.0, 0.0), inches(100)))
+        val handle = EndpointHandle(EndpointTarget.StagedReference(stagedRef.id), 0, stagedRef.ref.first)
+        assertNull(EditorActions.moveEndpoint(EditorSession(mode = DrawingMode.Reference), drawing, handle, p(5.0, 0.0)).change)
     }
 }
