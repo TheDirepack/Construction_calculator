@@ -40,32 +40,70 @@ gives a broken venv (`No module named 'encodings'`).
 
 ## Moving data
 
-The link from the laptop to the remote is Wi-Fi and slow (about 0.2 MB/s
-measured), while the remote downloads from the internet at about 28 MB/s.
-Where a source is public, downloading it directly on the remote is far
-faster than copying it over.
+Copy from the laptop with scp over **Ethernet**; Wi-Fi measured about 0.2 MB/s.
+The remote downloads from the internet at about 28 MB/s, so public sources can
+also be fetched there directly. Run long jobs (copies, pool builds, training)
+as systemd user units (`systemd-run --user --unit=NAME --collect ...`):
+processes started from a T3 session die when the T3 server restarts.
 
 ## Running
 
 ```bash
 cd ~/Projects/blueprint-symbols/code
-remote/run_pipeline.sh            # import -> composite -> prepare -> verify
+remote/run_pipeline.sh            # pool -> layouts -> import -> composite -> prepare -> verify
 remote/run_pipeline.sh smoke      # + 2-epoch GPU run
-RUN=v1 BATCH=8 remote/run_pipeline.sh train   # full run; use tmux or nohup
+systemd-run --user --unit=bps-train --collect -E RUN=v1 \
+    -p WorkingDirectory=$HOME/Projects/blueprint-symbols/code remote/run_pipeline.sh train
 ```
 
-Each stage skips itself if its output exists; delete `work/<RUN>/<stage>` to redo it.
+Each stage skips itself if its output exists; delete `work/<RUN>/<stage>` to
+redo it. The page pool (`work/pool`) is shared and incremental: new files in
+`data/` are rendered on the next run.
 
-## Where the labels come from
+## Every source has a role
 
-| Source | Labels | Used for |
+`class_maps/page_roles.json` assigns each raw file (or each page of a scanned
+set) one role. The first matching rule wins:
+
+| Role | What happens | Sources |
 | --- | --- | --- |
-| FloorPlanCAD (Voxel51 export, 1000 pages) | doors, windows, stairs, elevators, plumbing fixtures (panoptic, so complete) | architectural classes and real backgrounds |
-| `scripts_composite_electrical.py` | procedurally drawn receptacles, switches, luminaires, J-boxes, data, fire alarm, panels with exact boxes | electrical classes (no downloaded set labels these) |
-| ArchCAD (gated on Hugging Face) | primitive-level CAD labels | not yet: needs an approved HF account token |
-| Rinker Hall electrical sheets, field photos | none | the real-world test set, after hand labeling |
+| `background` | electrical glyphs are composited onto it with exact boxes | architectural, structural, civil, mechanical and plumbing sheets (Rinker, NJATC scan sheets 1-22, 24-25), HABS/HAER, UW, Olmsted, LoC, Wikimedia, pattern books, innerscene and open-source CAD renders, rendered ResPlan/CubiCasa/HouseExpo layouts, FloorPlanCAD |
+| `label_queue` | real electrical symbols, no labels yet: model proposals + human review, then real training and test data | NJATC scan sheets 23 and 26-49, field album 1, Rinker `electrical/` and `fire_protection/`, USFS power/lighting DXFs, electrical pages of vector PDFs (found by text) |
+| `asset` | symbol libraries to harvest glyph shapes from | innerscene `*symbol*`, NECA, EdrawMax, SimpleDiagrams, Draftsperson |
+| `skip` | not plan symbols | panel photos (album 2), Google Open Buildings |
 
-The composited electrical symbols are a bootstrap. Validation numbers on them
-only show the loop works; real accuracy needs a hand-labeled set of real
-electrical sheets (Rinker Hall `electrical/` and the field photos), kept
-out of training.
+Unlabeled sheets that contain real electrical symbols never enter supervised
+training as-is: the detector would learn that receptacles are background.
+
+The model is **electrical-only** (receptacle, switch, luminaire, junction box,
+data outlet, fire alarm device, panelboard). Most backgrounds have unlabeled
+doors and windows, so architectural classes would get false negatives. Verified
+FloorPlanCAD door/window labels are dropped to background in composites. A
+separate door/window model can be trained from FloorPlanCAD and CubiCasa later.
+
+The innerscene `.dxf` files are mixed: real DXF, plus DWG R10-R12, PSD, ZIP,
+PDF and SVG under a `.dxf` name. The pool builder detects the real type from
+the file contents. DWG files wait for LibreDWG (`yay -S libredwg`) and are
+listed in `work/pool/dwg_unconverted.json`.
+
+ArchCAD (gated on Hugging Face) needs an approved account token before it can
+be downloaded.
+
+## First smoke run (2026-11-21, FloorPlanCAD only, before the page pool)
+
+`RUN=smoke COPIES=1 TILES=4 VARIANTS=2 remote/run_pipeline.sh smoke` completed end to end:
+
+- 1000 FloorPlanCAD pages → 188 drawing groups split 132 / 28 / 28 (train / val / test)
+- 18,000 composited electrical symbols; 12 classes (7 electrical, 5 architectural)
+- 2,656 training tiles; val 785 tiles (7,611 symbols), test 810 tiles
+- YOLO26n-P2, batch 8: 2.0 GB VRAM, about 40 s per epoch
+- after 2 epochs: receptacle recall 0.70, mAP50 0.30. Everything else was still near zero, as expected this early.
+
+Held-out tiling uses scales 1 and 2 (`EVAL_SCALES`). At scale 1 alone, the dense
+1000 px pages left about 4,400 symbols clipped in every tile, and the export's
+coverage gate refused to continue.
+
+Full-run defaults (2 composites per page, 16 tiles, 3 variants) give roughly
+65k training tiles, about 15 min per epoch (an estimate scaled from the smoke
+run). Early stopping (patience 40) can end it before 300 epochs; that has not
+been measured yet.

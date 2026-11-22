@@ -73,6 +73,7 @@ def download(slug):
 
 
 def main():
+    raise RuntimeError("Disabled: upstream returns multiple formats and the legacy downloader mislabels them as DXF. Use manifest.json until this downloader is updated to preserve verified formats.")
     slugs = drawing_slugs()
     print(f'{len(slugs)} drawings in library sitemap', flush=True)
     results = []

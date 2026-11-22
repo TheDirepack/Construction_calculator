@@ -1,0 +1,192 @@
+{
+  "_comment": [
+    "Role of every raw source page, first matching rule wins. Globs are relative to the data root.",
+    "background  = has NO electrical symbols: electrical glyphs are composited onto it, labels are exact.",
+    "label_queue = has REAL electrical symbols with no labels: model proposals + human review, never trained on as-is.",
+    "asset       = symbol library (shapes to composite), not a page.",
+    "auto_text   = vector PDF: pages whose text mentions electrical words go to label_queue, others to background.",
+    "skip        = not useful for plan symbols.",
+    "group: 'file' = each file is its own project; 'set:<name>' = all matches are one project (one split);",
+    "       'dir:N' = first N path parts (one project per folder); 'regex:<pat>' = group(1) of the file stem.",
+    "       'series' = files named <series>-<n>-<hash> share a project.",
+    "pages: per-page overrides for scanned PDFs (1-based, ranges allowed)."
+  ],
+  "electrical_words": [
+    "ELECTRICAL",
+    "POWER PLAN",
+    "LIGHTING",
+    "RECEPTACLE",
+    "OUTLET",
+    "PANELBOARD",
+    "PANEL SCHEDULE",
+    "SWITCH",
+    "LUMINAIRE",
+    "FIRE ALARM",
+    "ONE-LINE",
+    "ONE LINE",
+    "RISER",
+    "CIRCUIT",
+    "JUNCTION BOX",
+    "SYMBOL LEGEND",
+    "DUPLEX",
+    "GFCI",
+    "GFI",
+    "DISCONNECT"
+  ],
+  "rules": [
+    {
+      "glob": "1_blueprints/field_panels_album_2/**",
+      "role": "skip",
+      "why": "photos of panelboards, not plan symbols"
+    },
+    {
+      "glob": "1_blueprints/field_plans_album_1/**",
+      "role": "label_queue",
+      "group": "set:field_album_1",
+      "why": "RCP, lighting layouts and electrical redlines"
+    },
+    {
+      "glob": "1_blueprints/rinker_hall/electrical/**",
+      "role": "label_queue",
+      "group": "set:rinker_hall"
+    },
+    {
+      "glob": "1_blueprints/rinker_hall/fire_protection/**",
+      "role": "label_queue",
+      "group": "set:rinker_hall"
+    },
+    {
+      "glob": "1_blueprints/rinker_hall/**",
+      "role": "auto_text",
+      "group": "set:rinker_hall"
+    },
+    {
+      "glob": "1_blueprints/user_scans/njatc_manufacturing_plant.pdf",
+      "role": "background",
+      "group": "set:njatc_plant",
+      "pages": {
+        "23": "label_queue",
+        "26-49": "label_queue"
+      },
+      "why": "1 cover, 2-3 civil, 4-11 arch, 12 struct, 13-24 mech (23 = control diagrams), 25 plumbing, 26-49 electrical E1-E23"
+    },
+    {
+      "glob": "1_blueprints/user_scans/**",
+      "role": "label_queue",
+      "group": "file",
+      "why": "new scans default to review until their sheets are classified here"
+    },
+    {
+      "glob": "1_blueprints/freefarmhouse/**",
+      "role": "auto_text",
+      "group": "set:freefarmhouse"
+    },
+    {
+      "glob": "1_blueprints/wikimedia_us_drawings/**",
+      "role": "background",
+      "group": "set:wikimedia_us_drawings",
+      "why": "crops and sheet series of the same buildings"
+    },
+    {
+      "glob": "1_blueprints/library_of_congress/**",
+      "role": "background",
+      "group": "set:library_of_congress"
+    },
+    {
+      "glob": "1_blueprints/photocad_architecture/**",
+      "role": "background",
+      "group": "file"
+    },
+    {
+      "glob": "1_blueprints/**",
+      "role": "background",
+      "group": "file"
+    },
+    {
+      "glob": "2_component_libraries/innerscene_cad_library/*symbol*",
+      "role": "asset"
+    },
+    {
+      "glob": "2_component_libraries/innerscene_cad_library/*electrical*",
+      "role": "label_queue",
+      "group": "series"
+    },
+    {
+      "glob": "2_component_libraries/innerscene_cad_library/*pwr*",
+      "role": "label_queue",
+      "group": "series"
+    },
+    {
+      "glob": "2_component_libraries/innerscene_cad_library/*lghtng*",
+      "role": "label_queue",
+      "group": "series"
+    },
+    {
+      "glob": "2_component_libraries/innerscene_cad_library/*lighting*",
+      "role": "label_queue",
+      "group": "series"
+    },
+    {
+      "glob": "2_component_libraries/innerscene_cad_library/*wiring*",
+      "role": "label_queue",
+      "group": "series"
+    },
+    {
+      "glob": "2_component_libraries/innerscene_cad_library/*schematic*",
+      "role": "label_queue",
+      "group": "series"
+    },
+    {
+      "glob": "2_component_libraries/innerscene_cad_library/**",
+      "role": "background",
+      "group": "series"
+    },
+    {
+      "glob": "2_component_libraries/**",
+      "role": "asset"
+    },
+    {
+      "glob": "3_open_source_architecture/**",
+      "role": "background",
+      "group": "dir:2",
+      "why": "parts of one design (e.g. SKYLARK150 vs 200) stay in one split"
+    },
+    {
+      "glob": "4_archives/state_dot_samples/**",
+      "role": "auto_text",
+      "group": "file"
+    },
+    {
+      "glob": "4_archives/loc_habs_haer_hals/**",
+      "role": "background",
+      "group": "regex:^([a-z]{2}\\d{3})",
+      "why": "site ids like ak0631/ak0632 are neighbouring buildings of one survey"
+    },
+    {
+      "glob": "4_archives/uw_cities_and_buildings/**",
+      "role": "background",
+      "group": "regex:^\\d+_(.+)$",
+      "why": "numbered photos of the same building"
+    },
+    {
+      "glob": "4_archives/**",
+      "role": "background",
+      "group": "file"
+    },
+    {
+      "glob": "5_datasets/floorplancad_sample/**",
+      "role": "skip",
+      "why": "imported with its labels by adapters/import_floorplancad_fiftyone.py"
+    },
+    {
+      "glob": "5_datasets/google_open_buildings_sample/**",
+      "role": "skip",
+      "why": "satellite footprints, not drawings"
+    },
+    {
+      "glob": "5_datasets/**",
+      "role": "skip",
+      "why": "vector layouts are rendered by adapters/render_layouts.py"
+    }
+  ]
+}

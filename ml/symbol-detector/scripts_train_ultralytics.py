@@ -60,6 +60,8 @@ def main():
     parser.add_argument('--project', type=Path, help='Ultralytics output folder (default: ./runs/detect)')
     parser.add_argument('--name', help='run name inside --project')
     parser.add_argument('--exist-ok', action='store_true', help='reuse an existing run folder')
+    parser.add_argument('--weights', type=Path,
+                        help='Optional blueprint-only SSL backbone+neck checkpoint from scripts_pretrain_ssl.py')
     parser.add_argument('--run', action='store_true', help='Explicitly start training on your machine')
     args = parser.parse_args()
     config = plan(args.data_yaml, batch=args.batch, epochs=args.epochs,
@@ -79,6 +81,12 @@ def main():
     except ImportError:
         parser.error('Install Ultralytics on your own training machine')
     model = YOLO(config['architecture'])
+    if args.weights:
+        ckpt = torch.load(args.weights, map_location='cpu', weights_only=False)
+        sd = ckpt.get('backbone_neck_state_dict', ckpt)
+        missing, unexpected = model.model.load_state_dict(sd, strict=False)
+        print(f'Loaded blueprint SSL weights from {args.weights}: '
+              f'{len(sd)} tensors, {len(missing)} missing (Detect head), {len(unexpected)} unexpected')
     strides = [int(v) for v in model.model.stride]
     if 4 not in strides:
         parser.error(f'P2 stride-4 head is missing; found strides: {strides}')

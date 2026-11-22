@@ -43,7 +43,8 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
             train_variants: int = 3, seed: int = 2026, val_fraction: float = .15,
             test_fraction: float = .15, stress_val: bool = True,
             stress_test: bool = True, allow_unverified_completeness: bool = False,
-            locked_manifest: Path | None = None) -> dict:
+            locked_manifest: Path | None = None,
+            eval_scales: tuple[float, ...] = (1.0,), eval_overlap: int = 128) -> dict:
     if destination.exists() and any(destination.iterdir()):
         raise FileExistsError(f'refusing to overwrite existing directory: {destination}')
     paths = discover(patterns)
@@ -58,7 +59,8 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
     dataset = destination / 'yolo'
     export = run(mpath, dataset, samples=train_tiles_per_page, train_variants=train_variants,
                  stress_val=stress_val, stress_test=stress_test,
-                 allow_unverified_completeness=allow_unverified_completeness, seed=seed)
+                 allow_unverified_completeness=allow_unverified_completeness, seed=seed,
+                 scales=tuple(eval_scales), overlap=eval_overlap)
     audit = verify_export(dataset)
     result = {
         'kind': 'blueprint_training_data_preparation',
@@ -92,13 +94,20 @@ def main():
                    help='Freeze the original val/test groups and class IDs when expanding training data')
     p.add_argument('--allow-unverified-completeness', action='store_true',
                    help='EXPLORATORY ONLY: unannotated symbols may become false negatives')
+    p.add_argument('--eval-scales', default='1',
+                   help='comma-separated source scales for val/test tiling, e.g. 1,2 '
+                        '(2 = each 512px tile covers 1024 source px; use it when dense pages '
+                        'leave symbols clipped in every native-scale tile)')
+    p.add_argument('--eval-overlap', type=int, default=128)
     a = p.parse_args()
     result = prepare(a.annotations, a.output, train_tiles_per_page=a.train_tiles_per_page,
                      train_variants=a.train_variants, val_fraction=a.val_fraction,
                      test_fraction=a.test_fraction, seed=a.seed,
                      stress_val=a.stress_val, stress_test=a.stress_test,
                      allow_unverified_completeness=a.allow_unverified_completeness,
-                     locked_manifest=a.locked_manifest)
+                     locked_manifest=a.locked_manifest,
+                     eval_scales=tuple(float(v) for v in a.eval_scales.split(',')),
+                     eval_overlap=a.eval_overlap)
     print(json.dumps(result, indent=2))
 
 
