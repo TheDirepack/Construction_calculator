@@ -40,4 +40,20 @@ class CanvasEditingTest {
         assertEquals(true, label?.matches("power"))
         assertNull(titleBlockLabel("No title block"))
     }
+
+    @Test fun repeatedPdfPageLabelsDoNotHidePrintedSheetNumbers() {
+        val staleLabel = "A-601 - DOOR - WINDOW & FINISH SCHEDULE"
+        val title = titleBlockLabel("SHEET TITLE:\nPOWER\nPLAN\nSHEET NUMBER:\nEP101\n")
+        val repeatedLabels = setOf(staleLabel)
+
+        val ep101 = resolveSheetLabel(staleLabel, repeatedLabels, title)
+        assertEquals(SheetLabel("EP101", "POWER PLAN"), ep101)
+        assertEquals(true, ep101?.matches("EP101"))
+        assertEquals(true, ep101?.matches("POWER PLAN"))
+        assertNull(resolveSheetLabel(staleLabel, repeatedLabels, null))
+        assertEquals(
+            SheetLabel("A-102 - DIMENSION PLANS", "DIMENSION PLANS"),
+            resolveSheetLabel("A-102 - DIMENSION PLANS", repeatedLabels, SheetLabel("A-102", "DIMENSION PLANS")),
+        )
+    }
 }

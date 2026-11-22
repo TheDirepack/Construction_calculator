@@ -49,6 +49,12 @@ internal data class SheetLabel(val number: String, val title: String = "") {
 
 private val sheetNumber = Regex("""[A-Z]{1,4}[- .]?\d{1,3}(?:[.-]\d{1,2})?[A-Z]?""")
 
+internal fun resolveSheetLabel(explicit: String?, repeatedLabels: Set<String>, inferred: SheetLabel?): SheetLabel? {
+    // A PDF label range can repeat its prefix across pages until the next range starts.
+    val uniqueLabel = explicit?.takeIf { it.isNotBlank() && it !in repeatedLabels }
+    return uniqueLabel?.let { SheetLabel(it.take(80), inferred?.title.orEmpty()) } ?: inferred
+}
+
 internal fun titleBlockLabel(text: String): SheetLabel? {
     val lines = text.lineSequence().map(String::trim).filter(String::isNotEmpty).toList()
     val index = lines.indexOfLast(sheetNumber::matches)
@@ -71,6 +77,8 @@ internal suspend fun indexSheets(context: Context, file: File, update: (Int, She
         PDFBoxResourceLoader.init(context)
         PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly().setTempDir(context.cacheDir)).use { pdf ->
             val labels = pdf.documentCatalog.pageLabels?.labelsByPageIndices
+            val repeatedLabels = labels.orEmpty().asIterable().groupingBy { it }.eachCount()
+                .filterValues { it > 1 }.keys
             val stripper = object : PDFTextStripper() {
                 override fun processTextPosition(text: TextPosition) {
                     // Prefer text in the title block. Scans and sheets with a different layout
@@ -84,9 +92,9 @@ internal suspend fun indexSheets(context: Context, file: File, update: (Int, She
                 currentCoroutineContext().ensureActive()
                 stripper.startPage = index + 1
                 stripper.endPage = index + 1
-                val explicit = labels?.getOrNull(index)?.takeIf { it.isNotBlank() && it != (index + 1).toString() }
+                val explicit = labels?.getOrNull(index)?.takeUnless { it == (index + 1).toString() }
                 val inferred = titleBlockLabel(stripper.getText(pdf))
-                val label = if (explicit == null) inferred else SheetLabel(explicit.take(80), inferred?.title.orEmpty())
+                val label = resolveSheetLabel(explicit, repeatedLabels, inferred)
                 if (label != null) withContext(Dispatchers.Main) { update(index, label) }
             }
         }
