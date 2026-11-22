@@ -16,6 +16,7 @@ import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.EquipmentGroundingConductor
 import com.thedirepack.constructioncalc.core.electrical.InsulatedConductorArea
 import com.thedirepack.constructioncalc.core.electrical.InsulationType
+import com.thedirepack.constructioncalc.core.electrical.LightingOccupancy
 import com.thedirepack.constructioncalc.core.electrical.MotorFullLoadCurrent
 import com.thedirepack.constructioncalc.core.electrical.MotorProtection
 import com.thedirepack.constructioncalc.core.electrical.MotorProtectiveDevice
@@ -277,6 +278,74 @@ internal object CodeTables {
                         "Upsized phase conductors (for voltage drop, say): increase the grounding conductor in proportion to their circular mils (${CodeRule.EGC_INCREASED.cite}).",
                         "Several circuits in one raceway can share one grounding conductor sized for the largest device (${CodeRule.EGC_MULTIPLE_CIRCUITS.cite}).",
                         "Never larger than the circuit's ungrounded conductors need to be.",
+                    ),
+                ),
+            )
+        },
+        RefEntry(
+            "nec-load-demand", "Load calculation demand factors", RefSection.LOADS,
+            "Demand factors for feeder and service load calculations: lighting, receptacles, dryers and ranges.",
+            RefSource.CodeRef(listOf(CodeRule.LIGHTING_DEMAND, CodeRule.RECEPTACLE_DEMAND, CodeRule.DRYER_DEMAND, CodeRule.RANGE_DEMAND)),
+            tools = listOf(ToolIds.PANELS),
+            keywords = listOf("article 220", "demand factor", "load calculation", "service size", "feeder", "dryer", "range", "220.45", "220.47", "220.54", "220.55"),
+        ) {
+            val lc = Code.book.loadCalculation
+            fun va(v: Double) = "%,d VA".format(v.roundToInt())
+            fun tiers(list: List<com.thedirepack.constructioncalc.core.electrical.code.DemandTier>): List<List<String>> {
+                var from = 0.0
+                return list.map { t ->
+                    val label = when (val to = t.upToVa) {
+                        null -> "Remainder over ${va(from)}"
+                        else -> if (from == 0.0) "First ${va(to)}" else "${va(from)} to ${va(to)}"
+                    }
+                    from = t.upToVa ?: from
+                    listOf(label, codePercent(t.factor))
+                }
+            }
+            val lighting = LightingOccupancy.entries.flatMap { occ ->
+                val rows = lc.lightingDemand[occ] ?: return@flatMap listOf(listOf(occ.label, "Total", codePercent(1.0)))
+                tiers(rows).map { (portion, pct) -> listOf(occ.label, portion, pct) }
+            }
+            val dryers = lc.dryerDemand.map { r ->
+                val count = when {
+                    r.to == null -> "${r.from} and over"
+                    r.to == r.from -> "${r.from}"
+                    else -> "${r.from}–${r.to}"
+                }
+                val pct = if (r.minusPercentPerDryer > 0.0) {
+                    "${codePercentValue(r.percent)} less ${codePercentValue(r.minusPercentPerDryer)} per dryer over ${r.from - 1}"
+                } else {
+                    codePercentValue(r.percent)
+                }
+                listOf(count, pct)
+            }
+            val ranges = lc.rangeDemand.map { r ->
+                val count = when {
+                    r.to == null -> "${r.from} and over"
+                    r.to == r.from -> "${r.from}"
+                    else -> "${r.from}–${r.to}"
+                }
+                val c = if (r.columnCKwPerRange > 0.0) "${n(r.columnCKw, 1)} + ${n(r.columnCKwPerRange, 2)} per range" else n(r.columnCKw, 1)
+                listOf(count, codePercentValue(r.columnAPercent), codePercentValue(r.columnBPercent), c)
+            }
+            listOf(
+                Paragraph("General lighting (${CodeRule.LIGHTING_DEMAND.cite})"),
+                Table(listOf("Occupancy", "Portion of load", "Demand factor"), lighting),
+                Paragraph("Non-dwelling receptacles (${CodeRule.RECEPTACLE_DEMAND.cite})"),
+                Table(listOf("Portion of load", "Demand factor"), tiers(lc.receptacleDemand)),
+                Paragraph("Household clothes dryers (${CodeRule.DRYER_DEMAND.cite}), ${va(lc.dryerMinVa)} minimum each"),
+                Table(listOf("Dryers", "Demand factor"), dryers),
+                Paragraph("Household ranges and cooking appliances (${CodeRule.RANGE_DEMAND.cite})"),
+                Table(
+                    listOf("Appliances", "Col. A (under ${n(lc.rangeColumnAMaxKw, 2)} kW)", "Col. B (${n(lc.rangeColumnAMaxKw, 2)}–${n(lc.rangeColumnBMaxKw, 2)} kW)", "Col. C max kW (to ${n(lc.rangeColumnCMaxKw, 1)} kW)"),
+                    ranges,
+                    "Over ${n(lc.rangeColumnCMaxKw, 1)} kW up to ${n(lc.rangeNote1MaxKw, 1)} kW: increase Column C by ${codePercent(lc.rangeNote1IncreasePerKw)} for each kW, or major fraction, over ${n(lc.rangeColumnCMaxKw, 1)} kW.",
+                ),
+                Bullets(
+                    listOf(
+                        "Small-appliance and laundry circuits: ${va(lc.smallApplianceCircuitVa)} each (${CodeRule.SMALL_APPLIANCE_LAUNDRY.cite}).",
+                        "${lc.dwellingApplianceMinCount} or more fastened-in-place appliances in a dwelling: ${codePercent(lc.dwellingApplianceFactor)} of their total (${CodeRule.DWELLING_APPLIANCE_DEMAND.cite}).",
+                        "Add ${codePercent(lc.largestMotorAdder)} of the largest motor's full-load current to the feeder (${CodeRule.FEEDER_MOTOR_LOAD.cite}).",
                     ),
                 ),
             )

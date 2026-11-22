@@ -9,6 +9,7 @@ enum class RefSection(val label: String) {
     FORMULAS("Formula sheet"),
     CONDUCTORS("Conductors and ampacity"),
     PROTECTION("Overcurrent protection and grounding"),
+    LOADS("Load calculations"),
     RACEWAY("Conduit and raceway"),
     BENDING("Conduit bending"),
     MOTORS("Motors"),
