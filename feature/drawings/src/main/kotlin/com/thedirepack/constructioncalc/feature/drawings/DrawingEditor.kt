@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -127,9 +128,15 @@ internal fun DrawingEditor(
     var editMarkCircuit by remember(drawing.id) { mutableStateOf(false) }
     var settingsOpen by rememberSaveable(drawing.id) { mutableStateOf(false) }
     var sheetsOpen by rememberSaveable(drawing.id) { mutableStateOf(false) }
+    val sheetBrowserState = rememberSaveableStateHolder()
     var routeFinished by remember(drawing.id) { mutableStateOf(false) }
     var highlightsVisible by rememberSaveable(drawing.id) { mutableStateOf(true) }
     var editText by remember(drawing.id) { mutableStateOf(false) }
+    val sheetStore = remember(views, drawing.id, drawing.sha256) {
+        SheetNavigationStore(views, "${drawing.id}/${drawing.sha256}")
+    }
+    var visits by remember(sheetStore) { mutableStateOf(sheetStore.visits()) }
+    var customLabels by remember(sheetStore) { mutableStateOf(sheetStore.labels()) }
     val labels = remember(file) { mutableStateMapOf<Int, SheetLabel>() }
     var indexing by remember(file) { mutableStateOf(true) }
     LaunchedEffect(file) {
@@ -157,6 +164,13 @@ internal fun DrawingEditor(
     LaunchedEffect(drawing.id, page, rotation, pageCount) {
         if (pageCount?.let { page < it } == true) {
             views.edit().putInt("${drawing.id}/page", page).putInt("${drawing.id}/rotation", rotation).apply()
+        }
+    }
+
+    LaunchedEffect(sheetStore, page, pageCount) {
+        if (pageCount?.let { page in 0 until it } == true && visits.recent.firstOrNull() != page) {
+            visits = visits.visit(page)
+            sheetStore.saveRecent(visits)
         }
     }
 
@@ -382,7 +396,8 @@ internal fun DrawingEditor(
             sheetsOpen = false
         }
         EditorHeader(
-            sheet = labels[page]?.let { "${it.number} · ${page + 1}/$count" } ?: "${page + 1} / $count",
+            sheet = (customLabels[page] ?: labels[page])?.number?.takeIf(String::isNotBlank)
+                ?.let { "$it · ${page + 1}/$count" } ?: "${page + 1} / $count",
             onSheets = { sheetsOpen = true },
             canUndo = editable && history.canUndo,
             canRedo = editable && history.canRedo,
@@ -408,7 +423,29 @@ internal fun DrawingEditor(
             )
         }
         if (sheetsOpen) {
-            SheetBrowser(file, drawing.name, project.name, page, count, labels, indexing, { sheetsOpen = false }, ::goToPage)
+            sheetBrowserState.SaveableStateProvider("${drawing.id}/${drawing.sha256}") {
+                SheetBrowser(
+                    file = file,
+                    drawingName = drawing.name,
+                    projectName = project.name,
+                    page = page,
+                    count = count,
+                    labels = labels.toMap(),
+                    customLabels = customLabels,
+                    indexing = indexing,
+                    visits = visits,
+                    onFavorite = { target ->
+                        visits = visits.toggleFavorite(target)
+                        sheetStore.saveFavorites(visits)
+                    },
+                    onLabel = { target, label ->
+                        customLabels = if (label == null) customLabels - target else customLabels + (target to label)
+                        sheetStore.saveLabel(target, label)
+                    },
+                    onDismiss = { sheetsOpen = false },
+                    onPage = ::goToPage,
+                )
+            }
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val landscape = maxWidth > maxHeight && maxWidth >= 560.dp

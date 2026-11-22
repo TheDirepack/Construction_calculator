@@ -1,9 +1,10 @@
 package com.thedirepack.constructioncalc.feature.drawings
 
-import android.content.Context
+import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,91 +15,34 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
-import com.tom_roush.pdfbox.io.MemoryUsageSetting
-import com.tom_roush.pdfbox.pdmodel.PDDocument
-import com.tom_roush.pdfbox.text.PDFTextStripper
-import com.tom_roush.pdfbox.text.TextPosition
 import java.io.File
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import android.util.LruCache
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
-
-internal data class SheetLabel(val number: String, val title: String = "") {
-    fun matches(query: String) = "$number $title".contains(query, ignoreCase = true)
-}
-
-private val sheetNumber = Regex("""[A-Z]{1,4}[- .]?\d{1,3}(?:[.-]\d{1,2})?[A-Z]?""")
-
-internal fun resolveSheetLabel(explicit: String?, repeatedLabels: Set<String>, inferred: SheetLabel?): SheetLabel? {
-    // A PDF label range can repeat its prefix across pages until the next range starts.
-    val uniqueLabel = explicit?.takeIf { it.isNotBlank() && it !in repeatedLabels }
-    return uniqueLabel?.let { SheetLabel(it.take(80), inferred?.title.orEmpty()) } ?: inferred
-}
-
-internal fun titleBlockLabel(text: String): SheetLabel? {
-    val lines = text.lineSequence().map(String::trim).filter(String::isNotEmpty).toList()
-    val index = lines.indexOfLast(sheetNumber::matches)
-    if (index < 0) return null
-    val above = lines.take(index)
-    val titleStart = above.indexOfLast { it.startsWith("SHEET TITLE:", ignoreCase = true) }
-    val titleLines = if (titleStart >= 0) {
-        listOf(above[titleStart].substringAfter(':').trim()) + above.drop(titleStart + 1)
-    } else above.takeLast(4)
-    val title = titleLines.takeWhile { !it.startsWith("SHEET NUMBER:", ignoreCase = true) }
-        .filter { line ->
-            line.count(Char::isLetter) >= 3 && ':' !in line
-        }
-        .takeLast(3).joinToString(" ")
-    return SheetLabel(lines[index], title.take(120))
-}
-
-internal suspend fun indexSheets(context: Context, file: File, update: (Int, SheetLabel) -> Unit) =
-    withContext(Dispatchers.IO) {
-        PDFBoxResourceLoader.init(context)
-        PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly().setTempDir(context.cacheDir)).use { pdf ->
-            val labels = pdf.documentCatalog.pageLabels?.labelsByPageIndices
-            val repeatedLabels = labels.orEmpty().asIterable().groupingBy { it }.eachCount()
-                .filterValues { it > 1 }.keys
-            val stripper = object : PDFTextStripper() {
-                override fun processTextPosition(text: TextPosition) {
-                    // Prefer text in the title block. Scans and sheets with a different layout
-                    // can still be opened by thumbnail or page number.
-                    if (text.xDirAdj > text.pageWidth * .85f && text.yDirAdj > text.pageHeight * .80f) {
-                        super.processTextPosition(text)
-                    }
-                }
-            }.apply { sortByPosition = true }
-            for (index in 0 until pdf.numberOfPages) {
-                currentCoroutineContext().ensureActive()
-                stripper.startPage = index + 1
-                stripper.endPage = index + 1
-                val explicit = labels?.getOrNull(index)?.takeUnless { it == (index + 1).toString() }
-                val inferred = titleBlockLabel(stripper.getText(pdf))
-                val label = resolveSheetLabel(explicit, repeatedLabels, inferred)
-                if (label != null) withContext(Dispatchers.Main) { update(index, label) }
-            }
-        }
-    }
+import kotlinx.coroutines.delay
 
 @Composable
 internal fun SheetBrowser(
@@ -108,53 +52,197 @@ internal fun SheetBrowser(
     page: Int,
     count: Int,
     labels: Map<Int, SheetLabel>,
+    customLabels: Map<Int, SheetLabel>,
     indexing: Boolean,
+    visits: SheetVisits,
+    onFavorite: (Int) -> Unit,
+    onLabel: (Int, SheetLabel?) -> Unit,
     onDismiss: () -> Unit,
     onPage: (Int) -> Unit,
 ) {
-    var search by remember { mutableStateOf("") }
-    val query = search.trim()
-    val pages = (0 until count).filter {
-        query.isEmpty() || (it + 1).toString() == query || labels[it]?.matches(query) == true
+    var search by rememberSaveable { mutableStateOf("") }
+    var includePdfText by rememberSaveable { mutableStateOf(false) }
+    var scope by rememberSaveable { mutableStateOf(SheetScope.ALL) }
+    var discipline by rememberSaveable { mutableStateOf<SheetDiscipline?>(null) }
+    var disciplinesOpen by remember { mutableStateOf(false) }
+    var labelPage by rememberSaveable { mutableStateOf<Int?>(null) }
+    val query = normalizeSheetText(search)
+    val context = LocalContext.current
+    var textMatches by remember(file, query, includePdfText) { mutableStateOf<PdfTextMatches?>(null) }
+    LaunchedEffect(file, query, includePdfText) {
+        if (!includePdfText || query.isEmpty()) return@LaunchedEffect
+        delay(300)
+        textMatches = try {
+            searchPdfText(context.applicationContext, file, query)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            PdfTextMatches(status = "PDF text could not be read.")
+        }
+    }
+    val sheetLabels = remember(labels, customLabels) { labels + customLabels }
+    val disciplines = remember(sheetLabels) { sheetLabels.mapValues { sheetDiscipline(it.value) } }
+    val pages = remember(count, scope, visits, disciplines, discipline, query, sheetLabels, textMatches) {
+        visits.pages(count, scope).filter { index ->
+            (discipline == null || (disciplines[index] ?: SheetDiscipline.UNCLASSIFIED) == discipline) &&
+                (query.isEmpty() || (index + 1).toString() == query || sheetLabels[index]?.matches(query) == true ||
+                    textMatches?.pages?.contains(index) == true)
+        }.toList()
     }
     val listState = rememberLazyListState(page)
     val previews = remember(file) { LruCache<Int, ImageBitmap>(24) }
+    val searching = includePdfText && query.isNotEmpty() && textMatches == null
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Sheets") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(projectName, style = MaterialTheme.typography.labelMedium)
-                Text(drawingName, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(projectName, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(drawingName, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 OutlinedTextField(
                     value = search,
-                    onValueChange = { search = it; listState.requestScrollToItem(0) },
-                    label = { Text("Sheet number or title") },
+                    onValueChange = {
+                        search = it
+                        listState.requestScrollToItem(0)
+                    },
+                    label = { Text(if (includePdfText) "Sheets and PDF text" else "Sheet number or title") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (pages.isEmpty()) Text(if (indexing) "Looking for sheet labels…" else "No matching sheets")
-                LazyColumn(state = listState, modifier = Modifier.heightIn(max = 380.dp)) {
-                    items(pages, key = { it }) { index ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable { onPage(index) }.padding(vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            SheetThumbnail(file, index, previews)
-                            Column {
-                                Text(labels[index]?.number ?: "Page ${index + 1}", style = MaterialTheme.typography.titleSmall)
-                                labels[index]?.title?.takeIf(String::isNotBlank)?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                                if (labels[index] != null || index == page) {
-                                    Text("Page ${index + 1}" + if (index == page) " · Current" else "", style = MaterialTheme.typography.labelSmall)
-                                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    SheetScope.entries.forEach { option ->
+                        FilterChip(selected = scope == option, onClick = {
+                            scope = option
+                            listState.requestScrollToItem(0)
+                        }, label = { Text(option.label) })
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(Modifier.weight(1f, fill = false)) {
+                        FilterChip(selected = discipline != null, onClick = { disciplinesOpen = true }, label = {
+                            Text(discipline?.label ?: "Discipline", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        })
+                        DropdownMenu(expanded = disciplinesOpen, onDismissRequest = { disciplinesOpen = false }) {
+                            val available = SheetDiscipline.entries.filter {
+                                it in disciplines.values || it == discipline ||
+                                    it == SheetDiscipline.UNCLASSIFIED && disciplines.size < count
+                            }
+                            (listOf(null) + available).forEach { option ->
+                                DropdownMenuItem(text = { Text(option?.label ?: "All disciplines") }, onClick = {
+                                    discipline = option
+                                    disciplinesOpen = false
+                                    listState.requestScrollToItem(0)
+                                })
                             }
                         }
+                    }
+                    FilterChip(selected = includePdfText, onClick = {
+                        includePdfText = !includePdfText
+                        listState.requestScrollToItem(0)
+                    }, label = { Text("PDF text") })
+                }
+                if (searching) Text("Searching PDF text…", style = MaterialTheme.typography.labelSmall)
+                textMatches?.status?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+                if (pages.isEmpty() && !searching) {
+                    Text(when {
+                        indexing && (query.isNotEmpty() || discipline != null) -> "Looking for sheet labels…"
+                        scope == SheetScope.FAVORITES && visits.favorites.isEmpty() -> "Star sheets to find them here."
+                        else -> "No matching sheets"
+                    })
+                }
+                LazyColumn(state = listState, modifier = Modifier.heightIn(max = 380.dp)) {
+                    items(pages, key = { it }) { index ->
+                        SheetRow(
+                            file = file,
+                            index = index,
+                            label = sheetLabels[index],
+                            current = index == page,
+                            favorite = index in visits.favorites,
+                            previews = previews,
+                            onOpen = { onPage(index) },
+                            onFavorite = { onFavorite(index) },
+                        )
                     }
                 }
             }
         },
+        dismissButton = { TextButton(onClick = { labelPage = page }) { Text("Label current sheet") } },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+    labelPage?.let { index ->
+        SheetLabelDialog(index, sheetLabels[index], index in customLabels, onDismiss = { labelPage = null }) {
+            onLabel(index, it)
+            labelPage = null
+        }
+    }
+}
+
+@Composable
+private fun SheetRow(
+    file: File,
+    index: Int,
+    label: SheetLabel?,
+    current: Boolean,
+    favorite: Boolean,
+    previews: LruCache<Int, ImageBitmap>,
+    onOpen: () -> Unit,
+    onFavorite: () -> Unit,
+) {
+    val page = "Page ${index + 1}"
+    val sheetNumber = label?.number?.takeIf(String::isNotBlank)
+    val name = sheetNumber ?: page
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.weight(1f).clickable(onClick = onOpen).padding(vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SheetThumbnail(file, index, previews)
+            Column {
+                Text(name, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                label?.title?.takeIf(String::isNotBlank)?.let {
+                    Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                val detail = listOfNotNull(page.takeIf { sheetNumber != null }, "Current".takeIf { current })
+                if (detail.isNotEmpty()) {
+                    Text(detail.joinToString(" · "), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+        IconButton(onClick = onFavorite) {
+            Icon(
+                painterResource(if (favorite) R.drawable.ic_plan_star else R.drawable.ic_plan_star_outline),
+                contentDescription = if (favorite) "Remove $name from favorites" else "Favorite $name",
+            )
+        }
+    }
+}
+
+@Composable
+private fun SheetLabelDialog(
+    page: Int,
+    label: SheetLabel?,
+    hasOverride: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (SheetLabel?) -> Unit,
+) {
+    var number by rememberSaveable(page) { mutableStateOf(label?.number.orEmpty()) }
+    var title by rememberSaveable(page) { mutableStateOf(label?.title.orEmpty()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Label page ${page + 1}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(number, { number = it.take(80) }, label = { Text("Sheet number") }, singleLine = true)
+                OutlinedTextField(title, { title = it.take(120) }, label = { Text("Sheet title") }, singleLine = true)
+                if (hasOverride) TextButton(onClick = { onSave(null) }) { Text("Clear custom label") }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(SheetLabel(normalizeSheetText(number), normalizeSheetText(title))) },
+                enabled = number.isNotBlank() || title.isNotBlank()) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
@@ -171,7 +259,7 @@ private fun SheetThumbnail(file: File, page: Int, previews: LruCache<Int, ImageB
             null
         }
     }
-    androidx.compose.foundation.layout.Box(Modifier.size(width = 88.dp, height = 62.dp)) {
+    Box(Modifier.size(width = 88.dp, height = 62.dp)) {
         image?.let { Image(it, null, modifier = Modifier.matchParentSize()) }
     }
 }
