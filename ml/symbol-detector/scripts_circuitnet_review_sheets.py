@@ -41,6 +41,8 @@ import cv2
 import numpy as np
 import pymupdf
 
+from blueprint_symbols.review_gate import review_decision
+
 
 COORD_MAX = 1000.0
 
@@ -88,6 +90,9 @@ DEVICE_TAXONOMY_V7: dict[str, list[str]] = {
 }
 
 REFINEMENT_INSTRUCTIONS = (
+    "Nothing is approved merely because it appears in the batch. Set review_status to "
+    "accepted/rejected/uncertain, and keep=true ONLY after explicit visual review. "
+    "Unreviewed or uncertain detections are excluded from output. "
     "Each numbered cell (#01..#NN) shows a zoomed crop around one provisional detection "
     "(red box) on a 0..1000 coordinate grid (origin at top-left of the image area below the "
     "header bar; light grid lines at 250, 500, 750). For every item in `items`: "
@@ -393,7 +398,7 @@ Review the provisional bounding-box detections for **`{source_file}`** ({total_d
    - Set `"keep": false` for **anything that is not a real placed electrical device** on a floor/ceiling/power/lighting/fire-alarm plan:
      - Cover sheets, title blocks, PE stamps, logos, vicinity/location maps, sheet indexes, general notes, specifications, schedules, riser/one-line diagrams, and **symbol legend examples** (never keep a legend entry as a placed device!).
      - Ordinary text, room numbers, grid bubbles, dimension ticks, door/window tags, plumbing/civil/structural marks, or duplicate hits on the same symbol.
-   - Only set `"keep": true` for genuine placed electrical/low-voltage/fire-alarm devices.
+   - Only set `"review_status": "accepted"` and `"keep": true` after evaluating a real placed device. Set `"review_status": "rejected", "keep": false` for false positives; use `"review_status": "uncertain"` when identification is inconclusive. Missing status is never accepted.
 2. **Tight Bounding Box (`refined_bbox_cell`)**:
    - Update `"refined_bbox_cell": [x0, y0, x1, y1]` in `[0..1000]` tightly around the **actual device symbol graphic only** (exclude circuit home-run arrows, adjacent walls, and nearby text callouts unless the letter is part of the symbol itself, like `S`, `S3`, `SD`, `GFI`).
 3. **Exact Fine-Grained Classification (`refined_device_type`, `refined_subtype`, `attributes`)**:
@@ -416,6 +421,7 @@ Return the updated `*_batch_NNN.json` file(s) with the **exact same filenames an
 ```json
 {{
   "slot": 1,
+  "review_status": "accepted",
   "keep": true,
   "refined_device_type": "switch",
   "refined_subtype": "three_way_dimmer",
@@ -425,7 +431,7 @@ Return the updated `*_batch_NNN.json` file(s) with the **exact same filenames an
   "wall_contact_cell": [500.0, 552.0]
 }}
 ```
-For rejected candidates, simply set `"keep": false` (you may leave the remaining fields as-is).
+For rejected candidates, set `"review_status": "rejected"` and `"keep": false`. These outputs are provisional VLM decisions, NOT validated ground-truth labels.
 """
 
 
@@ -549,13 +555,14 @@ def cmd_render(args: argparse.Namespace) -> None:
                         'provisional_bbox_cell': bbox_cell,
                         'provisional_bbox_pdf_bl': bbox_bl,
                         # Fields for the refinement model to update (v7 taxonomy):
-                        'keep': True,
-                        'refined_device_type': dev.get('device_type'),
-                        'refined_subtype': dev.get('subtype', 'unspecified'),
+                        'review_status': 'unreviewed',
+                        'keep': None,
+                        'refined_device_type': None,
+                        'refined_subtype': None,
                         'attributes': {},
                         'refined_bbox_cell': bbox_cell,
                         'on_wall': None,
-                        'wall_contact_cell': [cx_cell, cy_cell],
+                        'wall_contact_cell': None,
                     })
 
                 sheet = compose_contact_sheet(tiles, cols=cols)
@@ -686,16 +693,21 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
     first = batch_payloads[0]
     kept_devices: list[dict[str, Any]] = []
     removed_count = 0
+    unreviewed_count = 0
     wall_count = 0
     center_count = 0
 
     for batch in sorted(batch_payloads, key=lambda b: int(b.get('batch_index', 0))):
         for item in batch.get('items', []):
-            if not item.get('keep', True):
+            decision = review_decision(item, DEVICE_TAXONOMY_V7, coord_max=COORD_MAX)
+            if decision == 'rejected':
                 removed_count += 1
                 continue
+            if decision == 'pending':
+                unreviewed_count += 1
+                continue
             crop_bl = item['crop_pdf_rect_bl']
-            box_cell = item.get('refined_bbox_cell') or item['provisional_bbox_cell']
+            box_cell = item['refined_bbox_cell']
             bbox_bl = cell_box_to_pdf_bl(box_cell, crop_bl)
             cx = round(0.5 * (bbox_bl[0] + bbox_bl[2]), 2)
             cy = round(0.5 * (bbox_bl[1] + bbox_bl[3]), 2)
@@ -724,7 +736,9 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
                 'on_wall': bool(on_wall) if on_wall is not None else False,
                 'wall_connection_point': wall_pt,
                 'target_vector_pts': vec_pts,
-                'status': 'refined_v7',
+                'status': 'vlm_reviewed_provisional',
+                'verified_ground_truth': False,
+                'geometry_verified': False,
             })
 
     return {
@@ -738,9 +752,12 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
             'reference': 'display_oriented_page_after_applying_pdf_rotation',
             'symbol_bbox_format': '[x_min,y_min,x_max,y_max]',
         },
+        'verified_ground_truth': False,
+        'exhaustive_families': [],
         'summary': {
             'kept_devices': len(kept_devices),
             'removed_false_positives': removed_count,
+            'skipped_unreviewed': unreviewed_count,
             'wall_mounted': wall_count,
             'free_space_center': center_count,
         },
