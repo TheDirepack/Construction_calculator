@@ -7,11 +7,13 @@ import os
 import json
 import ssl
 import urllib.request
+from pathlib import Path
 
-ROOT = '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/5_datasets'
+BLUEPRINTS_ROOT = Path(
+    os.environ.get('BLUEPRINTS_ROOT', Path(__file__).resolve().parent.parent / 'blueprints_and_libraries')
+)
+ROOT = str(BLUEPRINTS_ROOT / '5_datasets')
 ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
 H = {'User-Agent': 'Mozilla/5.0'}
 
 os.makedirs(os.path.join(ROOT, 'houseexpo_hf', 'data'), exist_ok=True)

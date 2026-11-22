@@ -92,13 +92,13 @@ fun rememberBackupExporter(onMessage: (String) -> Unit): BackupExporter {
     val services = LocalAppServices.current
     val tools = LocalTools.current
     val scope = rememberCoroutineScope()
-    var pending by remember { mutableStateOf<String?>(null) }
-    val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ProjectCodec.MIME_TYPE)) { uri ->
-        val text = pending
+    var pending by remember { mutableStateOf<BackupDocument?>(null) }
+    val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ProjectSharing.ZIP_MIME_TYPE)) { uri ->
+        val backup = pending
         pending = null
-        if (uri == null || text == null) return@rememberLauncherForActivityResult
+        if (uri == null || backup == null) return@rememberLauncherForActivityResult
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { ProjectSharing.writeText(context, uri, text) } }
+            runCatching { withContext(Dispatchers.IO) { ProjectSharing.writeBackup(context, uri, backup) } }
                 .onSuccess { onMessage("Saved") }
                 .onFailure { onMessage(it.message ?: "Couldn't save the file") }
         }
@@ -110,7 +110,7 @@ fun rememberBackupExporter(onMessage: (String) -> Unit): BackupExporter {
                     val intent = runCatching {
                         withContext(Dispatchers.IO) {
                             val backup = services.backup.create(sections)
-                            val name = AppFileCodec.backupFileName(services.clock(), label)
+                            val name = ProjectSharing.backupFileName(services.clock(), label)
                             ProjectSharing.shareBackupIntent(context, backup, name, tools::titleOf)
                         }
                     }.getOrElse {
@@ -128,8 +128,8 @@ fun rememberBackupExporter(onMessage: (String) -> Unit): BackupExporter {
                 scope.launch {
                     val prepared = runCatching {
                         withContext(Dispatchers.IO) {
-                            val name = AppFileCodec.backupFileName(services.clock(), label)
-                            name to AppFileCodec.encodeBackup(services.backup.create(sections))
+                            val name = ProjectSharing.backupFileName(services.clock(), label)
+                            name to services.backup.create(sections)
                         }
                     }.getOrElse {
                         onMessage(it.message ?: "Couldn't create the backup")

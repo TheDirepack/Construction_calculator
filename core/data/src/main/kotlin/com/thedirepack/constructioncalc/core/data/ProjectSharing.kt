@@ -20,6 +20,7 @@ import com.thedirepack.constructioncalc.core.model.ProjectText
 import java.io.File
 import java.io.IOException
 import java.io.PushbackInputStream
+import java.time.ZoneId
 import java.util.UUID
 
 /**
@@ -39,6 +40,9 @@ object ProjectSharing {
     fun fileName(project: Project): String =
         if (project.drawings.isEmpty()) ProjectCodec.fileName(project)
         else ProjectCodec.fileName(project).removeSuffix(".json") + ".zip"
+
+    fun backupFileName(now: Long, label: String = "Construction Calc backup", zone: ZoneId = ZoneId.systemDefault()): String =
+        AppFileCodec.backupZipFileName(now, label, zone)
 
     /** [header]: company lines for the text body (`AppSettings.company.headerLines()`). */
     fun shareIntent(
@@ -62,7 +66,7 @@ object ProjectSharing {
         ) { writeProject(context, it, project, now) }
     }
 
-    /** Shares a backup file (everything, or a subset such as all projects). */
+    /** Shares a backup archive (`.backup.zip`, including available drawing PDFs). */
     fun shareBackupIntent(context: Context, backup: BackupDocument, fileName: String, toolTitle: (String) -> String): Intent {
         val body = buildString {
             appendLine("Construction Calc backup")
@@ -70,11 +74,10 @@ object ProjectSharing {
             appendLine()
             append("Open the attached file in Construction Calc (Settings › Data › Import) to restore it.")
         }
-        return fileShareIntent(context, fileName, AppFileCodec.encodeBackup(backup), fileName.substringBefore('.'), body)
+        return shareFileIntent(context, fileName, ZIP_MIME_TYPE, fileName.substringBefore('.'), body) {
+            writeBackup(context, it, backup)
+        }
     }
-
-    private fun fileShareIntent(context: Context, fileName: String, content: String, subject: String, body: String): Intent =
-        shareFileIntent(context, fileName, ProjectCodec.MIME_TYPE, subject, body) { it.write(content.toByteArray()) }
 
     /**
      * Shares any generated file (PDF schedule, CSV…) with no permissions: [write] fills a cache
@@ -146,28 +149,54 @@ object ProjectSharing {
         else ProjectArchive.write(out, project, now, PlanFiles(context)::file)
     }
 
-    /** Reads a project or backup file from a picked or received file. */
+    /** Writes a full backup archive (`.backup.zip`) to a document picked with ACTION_CREATE_DOCUMENT. */
+    @Throws(IOException::class)
+    fun writeBackup(context: Context, uri: Uri, backup: BackupDocument) {
+        val out = context.contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Can't write to that file")
+        out.use { writeBackup(context, it, backup) }
+    }
+
+    private fun writeBackup(context: Context, out: java.io.OutputStream, backup: BackupDocument) {
+        BackupArchive.write(out, backup, PlanFiles(context)::file)
+    }
+
+    /** Reads a project or backup file (`.backup.zip`, `.project.zip`, `.backup.json`, `.project.json`, or compact text). */
     @Throws(IOException::class, ProjectFormatException::class)
     fun readAppFile(context: Context, uri: Uri): AppFile {
         val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Can't open that file")
-        return PushbackInputStream(input, 4).use { stream ->
-            val signature = ByteArray(4)
+        return PushbackInputStream(input, 64).use { stream ->
+            val header = ByteArray(64)
             var count = 0
-            while (count < signature.size) {
-                val chunk = stream.read(signature, count, signature.size - count)
+            while (count < header.size) {
+                val chunk = stream.read(header, count, header.size - count)
                 if (chunk < 0) break
                 count += chunk
             }
-            stream.unread(signature, 0, count)
-            if (signature.contentEquals(byteArrayOf(0x50, 0x4b, 3, 4))) {
+            stream.unread(header, 0, count)
+            val isZip = count >= 4 &&
+                header[0] == 0x50.toByte() && header[1] == 0x4b.toByte() &&
+                header[2] == 3.toByte() && header[3] == 4.toByte()
+            if (isZip) {
+                val firstEntryName = readFirstZipEntryName(header, count)
                 val files = PlanFiles(context)
                 val staged = mutableListOf<PlanFiles.StagedPdf>()
                 try {
-                    val project = ProjectArchive.read(stream) { pdf, hash ->
-                        staged += files.stage(pdf, expectedHash = hash, validatePdf = true)
+                    val result = when (firstEntryName) {
+                        BackupArchive.BACKUP -> {
+                            val backup = BackupArchive.read(stream) { pdf, hash ->
+                                staged += files.stage(pdf, expectedHash = hash, validatePdf = true)
+                            }
+                            AppFile.Backup(backup)
+                        }
+                        else -> {
+                            val project = ProjectArchive.read(stream) { pdf, hash ->
+                                staged += files.stage(pdf, expectedHash = hash, validatePdf = true)
+                            }
+                            AppFile.SingleProject(project)
+                        }
                     }
                     staged.forEach(files::commit)
-                    AppFile.SingleProject(project)
+                    result
                 } catch (error: Throwable) {
                     staged.forEach { it.temp.delete() }
                     throw error
@@ -176,6 +205,13 @@ object ProjectSharing {
                 AppFileCodec.decode(stream.readBounded(PlanFiles.MAX_JSON_BYTES).decodeToString())
             }
         }
+    }
+
+    private fun readFirstZipEntryName(header: ByteArray, count: Int): String? {
+        if (count < 30) return null
+        val nameLen = (header[26].toInt() and 0xff) or ((header[27].toInt() and 0xff) shl 8)
+        if (nameLen <= 0 || 30 + nameLen > count) return null
+        return header.copyOfRange(30, 30 + nameLen).decodeToString()
     }
 
     /** Reads a project from a picked or received file. */

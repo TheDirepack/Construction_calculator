@@ -23,9 +23,15 @@ class PlanFiles(private val context: Context) {
     private val directory = File(context.filesDir, "plan-pdfs")
 
     fun file(sha256: String): File {
-        require(sha256.length == 64 && sha256.all { it in '0'..'9' || it in 'a'..'f' })
+        require(isValidHash(sha256))
         return File(directory, "$sha256.pdf")
     }
+
+    /**
+     * Deletes stored drawing PDFs whose SHA-256 hash is not in [referencedHashes].
+     * Leaves in-flight `.tmp` files and non-hash entries untouched. Returns the number deleted.
+     */
+    fun garbageCollect(referencedHashes: Set<String>): Int = garbageCollect(directory, referencedHashes)
 
     suspend fun import(uri: Uri): PlanDrawing = withContext(Dispatchers.IO) {
         val name = displayName(context, uri, "Drawing.pdf")
@@ -99,6 +105,21 @@ class PlanFiles(private val context: Context) {
         internal const val MAX_JSON_BYTES = 20 * 1024 * 1024
         internal const val MAX_PDF_BYTES = 150L * 1024 * 1024
         internal const val MAX_PAGES = 1_000
+
+        internal fun isValidHash(value: String): Boolean =
+            value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }
+
+        internal fun garbageCollect(directory: File, referencedHashes: Set<String>): Int {
+            if (!directory.isDirectory) return 0
+            var deleted = 0
+            directory.listFiles().orEmpty().forEach { entry ->
+                if (!entry.isFile || !entry.name.endsWith(".pdf")) return@forEach
+                val hash = entry.name.removeSuffix(".pdf")
+                if (!isValidHash(hash)) return@forEach
+                if (hash !in referencedHashes && entry.delete()) deleted++
+            }
+            return deleted
+        }
     }
 }
 

@@ -13,14 +13,16 @@ import time
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 BASE = 'https://www.innerscene.com'
-DEST = '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/2_component_libraries/innerscene_cad_library'
+BLUEPRINTS_ROOT = Path(
+    os.environ.get('BLUEPRINTS_ROOT', Path(__file__).resolve().parent.parent / 'blueprints_and_libraries')
+)
+DEST = str(BLUEPRINTS_ROOT / '2_component_libraries/innerscene_cad_library')
 MANIFEST = os.path.join(DEST, 'manifest.json')
 
 ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
 

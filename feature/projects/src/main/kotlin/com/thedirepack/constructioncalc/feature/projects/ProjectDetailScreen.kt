@@ -10,6 +10,8 @@ import com.thedirepack.constructioncalc.core.ui.format
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -55,6 +57,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.data.ProjectSharing
+import com.thedirepack.constructioncalc.core.model.CompactShare
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import com.thedirepack.constructioncalc.core.model.ProjectItem
@@ -163,11 +166,14 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
                         add("Save to file…" to { exporter.launch(ProjectSharing.fileName(project)) })
                         if (project.drawings.isNotEmpty()) {
                             add("Save project JSON…" to { jsonExporter.launch(ProjectCodec.fileName(project)) })
+                        } else {
+                            add("Share compact text" to {
+                                host.shareText(project.name, CompactShare.shareMessage(project, exportedAt = services.clock()))
+                            })
                         }
                         add("Share as text" to { host.shareText(project.name, toText()) })
                         add("Copy as text" to {
-                            context.getSystemService(ClipboardManager::class.java)
-                                ?.setPrimaryClip(ClipData.newPlainText(project.name, toText()))
+                            copyToClipboard(context, host, project.name, toText())
                         })
                         if (!readOnly) {
                             add("Rename" to { prompt = Prompt.RenameProject })
@@ -197,11 +203,18 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
         },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 32.dp)) {
-            item(key = "drawings") {
-                OutlinedButton(
-                    onClick = { host.openTool(ToolIds.DRAWINGS, target = ToolTarget.OfProject(project.id)) },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                ) { Text("Drawings · ${project.drawings.size}") }
+            item(key = "quick-links") {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { host.openTool(ToolIds.DRAWINGS, target = ToolTarget.OfProject(project.id)) },
+                    ) { Text("Drawings · ${project.drawings.size}") }
+                    OutlinedButton(
+                        onClick = { host.openTool(ToolIds.PANELS, target = ToolTarget.OfProject(project.id)) },
+                    ) { Text("Panels · ${project.panels.size}") }
+                }
             }
             if (readOnly) {
                 item(key = "archived-banner") {
@@ -465,8 +478,7 @@ private fun ItemSheet(project: Project, run: Run, item: ProjectItem, host: ToolH
                     }, label = { Text(if (inPath) "Update run path" else "Add to run path") })
                 }
                 AssistChip(onClick = {
-                    context.getSystemService(ClipboardManager::class.java)
-                        ?.setPrimaryClip(ClipData.newPlainText(item.title, ProjectText.renderItem(item, tools::titleOf)))
+                    copyToClipboard(context, host, item.title, ProjectText.renderItem(item, tools::titleOf))
                 }, label = { Text("Copy") })
             }
             if (project.archived) {
@@ -509,5 +521,14 @@ private fun ItemSheet(project: Project, run: Run, item: ProjectItem, host: ToolH
             confirmDelete = false
             onDismiss()
         }, onDismiss = { confirmDelete = false })
+    }
+}
+
+private fun copyToClipboard(context: Context, host: ToolHost, label: String, text: String) {
+    context.getSystemService(ClipboardManager::class.java)
+        ?.setPrimaryClip(ClipData.newPlainText(label, text))
+    // Android 13+ (API 33) shows a system clipboard confirmation; on older versions show a snackbar.
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        host.showMessage("Copied")
     }
 }
