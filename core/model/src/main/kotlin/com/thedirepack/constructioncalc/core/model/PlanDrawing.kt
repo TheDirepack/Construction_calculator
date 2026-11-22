@@ -205,20 +205,8 @@ private class DistortedField(
         get() = l00.isFinite() && l01.isFinite() && l11.isFinite() && l00 > 0 && l11 > 0 &&
             params.size == PARAM_COUNT && params.all { it.isFinite() }
 
-    override fun distance(first: PlanPoint, second: PlanPoint): Double {
-        val dx = second.x - first.x
-        val dy = second.y - first.y
-        val bx = l00 * dx + l01 * dy
-        val by = l11 * dy
-        var total = 0.0
-        for (i in GL_NODES.indices) {
-            val t = GL_NODES[i]
-            val u = ((first.x + t * dx) - cx) * invRadius
-            val v = ((first.y + t * dy) - cy) * invRadius
-            total += GL_WEIGHTS[i] * speedAt(u, v, bx, by, params)
-        }
-        return total
-    }
+    override fun distance(first: PlanPoint, second: PlanPoint): Double =
+        segmentLength(first, second, cx, cy, invRadius, l00, l01, l11, params)
 
     companion object {
         const val PARAM_COUNT = 15
@@ -482,9 +470,32 @@ data class PlanMeasurement(
     val zoneId: String? = null,
     val first: PlanPoint,
     val second: PlanPoint,
+    /** Optional name shown with the length ("Feeder to RTU-1", "Corridor"). */
+    val label: String = "",
 ) {
     init {
-        require(page >= 0 && first != second)
+        require(page >= 0 && first != second && label.length <= 120)
+    }
+}
+
+/**
+ * A route traced on a sheet and sent to a project run, kept so the run can link back to it
+ * ("View on plan") and so a recalibration can show how far the plan length has moved from what
+ * the run holds. [points] are in page coordinates; legs are measured with the drawing's current
+ * calibration whenever they are shown.
+ */
+@Serializable
+data class PlanRunRoute(
+    val id: String = newId(),
+    val runId: String,
+    val page: Int,
+    val points: List<PlanPoint>,
+    /** The plan's horizontal length in inches when the route was sent, before vertical rises. */
+    val sentInches: Double = 0.0,
+) {
+    init {
+        require(page >= 0 && points.size in 2..RunPath.MAX_SEGMENTS && runId.isNotBlank())
+        require(sentInches.isFinite() && sentInches >= 0)
     }
 }
 
@@ -499,6 +510,8 @@ data class PlanDrawing(
     val zones: List<PlanZone> = emptyList(),
     val measurements: List<PlanMeasurement> = emptyList(),
     val marks: List<PlanMark> = emptyList(),
+    /** Routes sent to project runs, one per run (the latest send replaces the earlier one). */
+    val routes: List<PlanRunRoute> = emptyList(),
 ) {
     init {
         require(name.isNotBlank() && name.length <= 240)
@@ -539,3 +552,15 @@ data class PlanDrawing(
             ?.distance(measurement.first, measurement.second)
     }
 }
+
+/** The drawing and route a run was traced from, or null if it wasn't sent from a plan. */
+fun Project.planRouteFor(runId: String): Pair<PlanDrawing, PlanRunRoute>? {
+    for (drawing in drawings) {
+        drawing.routes.firstOrNull { it.runId == runId }?.let { return drawing to it }
+    }
+    return null
+}
+
+/** Records [route] as the plan source of its run, replacing any earlier route for that run. */
+fun PlanDrawing.withRunRoute(route: PlanRunRoute): PlanDrawing =
+    copy(routes = routes.filterNot { it.runId == route.runId } + route)

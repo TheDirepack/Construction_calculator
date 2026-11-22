@@ -170,4 +170,32 @@ class PlanDrawingTest {
         assertTrue("distorted near error $dNearErr should beat uniform $uNearErr", dNearErr < uNearErr * 0.25)
         assertTrue("distorted far error $dFarErr should beat uniform $uFarErr", dFarErr < uFarErr * 0.25)
     }
+
+    @Test fun runRoutesAndLabelsRoundTripAndLinkBackToTheirRun() {
+        val route = PlanRunRoute(runId = "run-1", page = 2, points = listOf(origin, PlanPoint(10.0, 0.0)), sentInches = 120.0)
+        val drawing = PlanDrawing(
+            name = "E2.pdf",
+            sha256 = "2".repeat(64),
+            measurements = listOf(PlanMeasurement(page = 0, first = origin, second = PlanPoint(1.0, 0.0), label = "Feeder")),
+        ).withRunRoute(route)
+        val project = Project.create("Job", now = 1L).copy(drawings = listOf(PlanDrawing(name = "A.pdf", sha256 = "3".repeat(64)), drawing))
+        val restored = ProjectCodec.decode(ProjectCodec.encode(project))
+        assertEquals("Feeder", restored.drawings[1].measurements.single().label)
+        val (source, linked) = restored.planRouteFor("run-1")!!
+        assertEquals(drawing.id, source.id)
+        assertEquals(route, linked)
+        assertNull(restored.planRouteFor("other"))
+
+        // Sending again to the same run replaces the earlier route.
+        val resent = drawing.withRunRoute(route.copy(id = "new", page = 0))
+        assertEquals(listOf("new"), resent.routes.map { it.id })
+    }
+
+    @Test fun drawingsWithoutRoutesOrLabelsStillDecode() {
+        val json = """{"id":"d","name":"Old.pdf","sha256":"${"4".repeat(64)}",
+            "measurements":[{"id":"m","page":0,"first":{"x":0.0,"y":0.0},"second":{"x":1.0,"y":0.0}}]}"""
+        val drawing = ProjectCodec.json.decodeFromString(PlanDrawing.serializer(), json)
+        assertTrue(drawing.routes.isEmpty())
+        assertEquals("", drawing.measurements.single().label)
+    }
 }
