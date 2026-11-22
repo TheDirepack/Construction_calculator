@@ -30,6 +30,11 @@ import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.ItemDraft
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
+import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
+import com.thedirepack.constructioncalc.core.ui.components.NamedCableActions
+import com.thedirepack.constructioncalc.core.model.ToolTarget
+import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.measure.Quantity
 
 @Composable
 fun ReelLengthScreen(host: ToolHost) {
@@ -40,6 +45,13 @@ fun ReelLengthScreen(host: ToolHost) {
     val output = remember(inputs, settings) { reelLengthOutput(inputs, settings) }
     val results = output.results
     val capacity = inputs.mode == ReelMode.CAPACITY
+    val projects = LocalAppServices.current.projects
+    // Opened from the Wire Pull Planner's "Check on reel" for a project run: the cable that run needs.
+    LaunchedEffect(host.target) {
+        (host.target as? ToolTarget.OfRun)?.let { t ->
+            vm.prefill(t) { projects.get(t.projectId)?.let { reelInputsForRun(vm.inputs, it, t.runId) } }
+        }
+    }
 
     LaunchedEffect(results) {
         if (results.isNotEmpty()) host.publish(results, context = output.summary)
@@ -121,6 +133,10 @@ fun ReelLengthScreen(host: ToolHost) {
                     { q -> vm.update { it.copy(cableDiameter = q?.stored()) } },
                 )
                 TextButton(onClick = { pickingWire = true }) { Text("From a wire size (NEC ${CodeRule.CONDUCTOR_DIMENSIONS.cite})…") }
+                NamedCableActions(
+                    onPick = { cable -> vm.update { it.copy(cableDiameter = Quantity.inches(Rational.of(cable.diameterIn)).stored()) } },
+                    current = namedCableFor(inputs),
+                )
                 if (pickingWire) {
                     WireDiameterDialog(
                         settings = settings,

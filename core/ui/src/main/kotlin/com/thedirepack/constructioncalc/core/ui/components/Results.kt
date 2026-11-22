@@ -29,8 +29,16 @@ import com.thedirepack.constructioncalc.core.ui.fractionText
 /** How serious a [Notice] is. */
 enum class NoticeLevel { INFO, WARNING, ERROR }
 
-/** A message shown with results: an assumption, a code limit exceeded, a missing input… */
-data class Notice(val text: String, val level: NoticeLevel = NoticeLevel.INFO)
+/**
+ * A message shown with results: an assumption, a code limit exceeded, a missing input…
+ * When [refId] is set and [ResultCard] is given `onOpenReference`, tapping the notice opens that
+ * Reference entry directly.
+ */
+data class Notice(
+    val text: String,
+    val level: NoticeLevel = NoticeLevel.INFO,
+    val refId: String? = null,
+)
 
 /**
  * Standard results block: the first result large, the rest as label/value rows, then notices.
@@ -42,6 +50,7 @@ fun ResultCard(
     modifier: Modifier = Modifier,
     notices: List<Notice> = emptyList(),
     emptyText: String = "Fill in the inputs to see results.",
+    onOpenReference: ((String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val copy: (ResultValue) -> Unit = { value ->
@@ -85,15 +94,42 @@ fun ResultCard(
                 }
             }
             notices.forEach { notice ->
-                Text(
-                    (if (notice.level == NoticeLevel.INFO) "" else "⚠ ") + notice.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = when (notice.level) {
-                        NoticeLevel.INFO -> MaterialTheme.colorScheme.onSurfaceVariant
-                        NoticeLevel.WARNING -> MaterialTheme.colorScheme.tertiary
-                        NoticeLevel.ERROR -> MaterialTheme.colorScheme.error
-                    },
-                )
+                val refId = notice.refId
+                val clickable = refId != null && onOpenReference != null
+                val color = when (notice.level) {
+                    NoticeLevel.INFO -> MaterialTheme.colorScheme.onSurfaceVariant
+                    NoticeLevel.WARNING -> MaterialTheme.colorScheme.tertiary
+                    NoticeLevel.ERROR -> MaterialTheme.colorScheme.error
+                }
+                val prefix = if (notice.level == NoticeLevel.INFO) "" else "⚠ "
+                if (clickable) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable(onClickLabel = "Open reference") { onOpenReference!!(refId!!) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            prefix + notice.text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = color,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            "Ref ›",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                } else {
+                    Text(
+                        prefix + notice.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = color,
+                    )
+                }
             }
         }
     }

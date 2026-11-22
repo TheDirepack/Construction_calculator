@@ -60,6 +60,12 @@ import com.thedirepack.constructioncalc.core.ui.tool.toolViewModel
 import com.thedirepack.constructioncalc.feature.pullplanner.domain.PullReport
 import com.thedirepack.constructioncalc.feature.pullplanner.domain.RunEdits
 import com.thedirepack.constructioncalc.feature.pullplanner.domain.STANDALONE_RACEWAY
+import com.thedirepack.constructioncalc.feature.pullplanner.domain.NamedCables
+import com.thedirepack.constructioncalc.feature.pullplanner.domain.PullRefs
+import com.thedirepack.constructioncalc.core.ui.components.NamedCableActions
+import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
+import com.thedirepack.constructioncalc.core.model.ResultValue
+import com.thedirepack.constructioncalc.core.math.Rational
 
 private data class RunChoice(val projectId: String, val runId: String, val label: String)
 private data class SegmentEdit(val index: Int, val kind: SegmentKind)
@@ -209,7 +215,7 @@ internal fun PullPlannerScreen(host: ToolHost) {
                 }
                 analysis.conductors.filter { it.fromCircuits }.forEach { Text(it.text) }
                 setup.cables.forEachIndexed { index, cable ->
-                    Text("${cable.count} × ${cable.size.label} ${cable.insulation.code} ${cable.material.shortLabel}")
+                    Text(NamedCables.describe(cable))
                     if (canEdit) {
                         FlowRow {
                             TextButton(onClick = { cableIndex = index }) { Text("Edit cable") }
@@ -219,7 +225,14 @@ internal fun PullPlannerScreen(host: ToolHost) {
                         }
                     }
                 }
-                if (canEdit && setup.cables.size < 200) TextButton(onClick = { cableIndex = setup.cables.size }) { Text("Add cable") }
+                if (canEdit && setup.cables.size < 200) {
+                    TextButton(onClick = { cableIndex = setup.cables.size }) { Text("Add cable") }
+                    NamedCableActions(
+                        onPick = { named -> update { it.copy(pull = NamedCables.apply(it.pull ?: setup, named)) } },
+                        pickLabel = "Add a named cable…",
+                        current = NamedCables.fromSetup(setup),
+                    )
+                }
             }
             if (canEdit) {
                 FormSection("Pull settings") {
@@ -235,9 +248,28 @@ internal fun PullPlannerScreen(host: ToolHost) {
             }
             ResultCard(
                 results,
-                notices = analysis.notes.map { Notice(it.text, if (it.isWarning) NoticeLevel.WARNING else NoticeLevel.INFO) },
+                notices = analysis.notes.map { Notice(it.text, if (it.isWarning) NoticeLevel.WARNING else NoticeLevel.INFO, PullRefs.forNote(it.text)) },
                 emptyText = "Add the path and cables to calculate the pull.",
+                onOpenReference = { host.openReference(it) },
             )
+            val needed = analysis.cableLengthIn
+            if (needed != null) {
+                TextButton(onClick = {
+                    // Offer the cable needed and the cable OD right away, then open Reel Length. A project
+                    // run is opened as the target, so Reel Length fills both in from the same run.
+                    val od = analysis.cableOdIn?.let { d ->
+                        val q = Quantity.inches(Rational.of(d))
+                        ResultValue.of(PullRefs.KEY_CABLE_OD, "Cable outside diameter", q, settings.format(q))
+                    }
+                    host.publish(results + listOfNotNull(od), summary, immediate = true)
+                    if (linkedRun != null && project != null) {
+                        host.openTool(ToolIds.REEL_LENGTH, target = ToolTarget.OfRun(project.id, linkedRun.id))
+                    } else {
+                        host.openTool(ToolIds.REEL_LENGTH)
+                        host.showMessage("Pick the cable needed and its diameter from the Wire Pull Planner's values.")
+                    }
+                }) { Text("Check on reel") }
+            }
             if (results.isNotEmpty()) TextButton(onClick = { host.shareText("Wire pull: ${run.name}", summary) }) { Text("Share pull report") }
         }
     }

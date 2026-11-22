@@ -7,6 +7,7 @@ import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
 import com.thedirepack.constructioncalc.core.electrical.ConduitTable
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
+import com.thedirepack.constructioncalc.core.electrical.NamedCable
 
 /** Screen state, kept across rotation. One instance per opened saved item (see the screen's key). */
 class ConduitFillViewModel : ToolInputsViewModel<ConduitFillInputs>(ConduitFillInputs(), ConduitFillInputs.serializer()) {
@@ -31,7 +32,13 @@ class ConduitFillViewModel : ToolInputsViewModel<ConduitFillInputs>(ConduitFillI
     fun setSize(index: Int, size: ConductorSize) = updateGroup(index) { it.copy(size = size.label) }
 
     fun addGroup() = update { i ->
-        if (i.groups.size >= MAX_GROUPS) i else i.copy(groups = i.groups + (i.groups.lastOrNull() ?: ConductorGroupInput()).copy(count = "1"))
+        val template = i.groups.lastOrNull { !it.isCable } ?: ConductorGroupInput()
+        if (i.groups.size >= MAX_GROUPS) i else i.copy(groups = i.groups + template.copy(count = "1"))
+    }
+
+    /** Adds a named cable as its own group (it keeps the cable's dimensions even if the cable is later deleted). */
+    fun addCable(cable: NamedCable) = update { i ->
+        if (i.groups.size >= MAX_GROUPS) i else i.copy(groups = i.groups + ConductorGroupInput.of(cable))
     }
 
     fun removeGroup(index: Int) = update { i ->

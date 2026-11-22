@@ -79,6 +79,17 @@ interface ElectricalCode {
     /** [CodeRule.EGC_SIZE], ascending by rating. */
     val equipmentGroundingConductors: List<EgcRow>
 
+    /** [CodeRule.GEC_SIZE] & [CodeRule.SUPPLY_SIDE_BONDING], smallest service conductor first. */
+    val groundingElectrodeConductors: List<GecRow>
+
+    // ---- Boxes ----
+
+    /** [CodeRule.BOX_VOLUME_ALLOWANCE], cubic inches per conductor, 18 AWG through 6 AWG. */
+    val boxVolumeAllowances: Map<ConductorSize, Double>
+
+    /** [CodeRule.METAL_BOX_VOLUMES], standard metal boxes ascending by trade size/volume. */
+    val metalBoxVolumes: List<StandardMetalBox>
+
     // ---- Raceways ----
 
     /** [CodeRule.CONDUIT_DIMENSIONS]: every [ConduitType], each ascending by trade size. */
@@ -89,6 +100,15 @@ interface ElectricalCode {
 
     /** The article for every [ConduitType]: its number, the bend-radius column it names, and its bend-limit section. */
     val raceways: Map<ConduitType, RacewayArticle>
+
+    /** [CodeRule.BURIAL_DEPTH]: minimum cover in inches by location and wiring method column. */
+    val burialDepths: List<BurialDepthRow>
+
+    /** [CodeRule.RACEWAY_SUPPORT]: securing and supporting intervals for each [ConduitType]. */
+    val racewaySupport: Map<ConduitType, RacewaySupportRule>
+
+    /** [CodeRule.PVC_EXPANSION]: length change in inches per 100 ft by temperature change in °F. */
+    val pvcThermalExpansion: List<PvcExpansionRow>
 
     // ---- Motors ----
 
@@ -140,6 +160,50 @@ data class SmallConductorLimitRow(
 
 /** One equipment grounding conductor row: OCPD rating or setting not exceeding [maxOcpdAmps]. */
 data class EgcRow(val maxOcpdAmps: Int, val copper: ConductorSize, val aluminum: ConductorSize)
+
+/**
+ * One grounding electrode conductor row ([CodeRule.GEC_SIZE] / [CodeRule.SUPPLY_SIDE_BONDING]).
+ * [maxCopperKcmil] and [maxAluminumKcmil] are the upper bounds of the service-entrance conductor
+ * area in circular mils (null on the final "over 1100 kcmil Cu / over 1750 kcmil Al" row).
+ */
+data class GecRow(
+    val copperRangeLabel: String,
+    val aluminumRangeLabel: String,
+    val maxCopperCmil: Long?,
+    val maxAluminumCmil: Long?,
+    val gecCopper: ConductorSize,
+    val gecAluminum: ConductorSize,
+)
+
+/** One standard metal box from [CodeRule.METAL_BOX_VOLUMES]. */
+data class StandardMetalBox(
+    val name: String,
+    val tradeSize: String,
+    val volumeCuIn: Double,
+)
+
+/** One row of [CodeRule.BURIAL_DEPTH]: minimum cover in inches for the 5 wiring-method columns. */
+data class BurialDepthRow(
+    val location: String,
+    val coverInches: List<Int>,
+    val note: String? = null,
+)
+
+/** One raceway's securing and supporting rules ([CodeRule.RACEWAY_SUPPORT]). */
+data class RacewaySupportRule(
+    val section: String,
+    val withinBoxFt: Double,
+    val defaultIntervalFt: Double,
+    /** Trade-size-specific intervals, if the code table varies by trade size (e.g. PVC Table 352.30). */
+    val byTradeSizeFt: Map<TradeSize, Double> = emptyMap(),
+    val note: String? = null,
+)
+
+/** One row of [CodeRule.PVC_EXPANSION]: [tempChangeF] (°F) → [changeInPer100Ft] (inches per 100 ft). */
+data class PvcExpansionRow(
+    val tempChangeF: Int,
+    val changeInPer100Ft: Double,
+)
 
 /** One DC-resistance row, Ω/1000 ft; the solid values exist only for the sizes the table lists solid. */
 data class ResistanceRow(
@@ -263,4 +327,33 @@ data class CodeValues(
     val workingSpaceMinHeightIn: Int,
     /** [workingSpaceMinHeightIn] as the code prints it in millimetres. */
     val workingSpaceMinHeightMm: Int,
+
+    /** [CodeRule.PULL_BOX_STRAIGHT]: straight-pull length multiplier of largest raceway trade size (8). */
+    val pullBoxStraightMultiplier: Int,
+    /** [CodeRule.PULL_BOX_ANGLE]: angle/U-pull multiplier of largest raceway trade size (6). */
+    val pullBoxAngleMultiplier: Int,
+    /** [CodeRule.SUPPLY_SIDE_BONDING]: percentage (as fraction, 0.125) for service conductors over the table max. */
+    val bondingJumperLargeAreaFraction: Double,
+    /** [CodeRule.PVC_EXPANSION]: expansion fitting required when length change reaches this value, inches (0.25). */
+    val pvcExpansionFittingThresholdIn: Double,
+    /** [CodeRule.PVC_EXPANSION]: PVC thermal expansion rate, inches per 100 ft per 100 °F (4.06). */
+    val pvcExpansionInPer100FtPer100F: Double,
+    /** [CodeRule.PVC_EXPANSION]: the expansion-fitting threshold in millimeters (6). */
+    val pvcExpansionFittingThresholdMm: Int,
+    /** [CodeRule.BOX_FILL]: an unbroken conductor looped at least this long counts twice, inches (12). */
+    val boxFillLoopLengthIn: Int,
+    /** [CodeRule.BOX_FILL]: the same loop length in millimeters (300). */
+    val boxFillLoopLengthMm: Int,
+    /** [CodeRule.BOX_FILL]: equipment grounding conductors that together count as one allowance (4). */
+    val boxFillEgcCountedAsOne: Int,
+    /** [CodeRule.BOX_FILL]: added allowance, as a fraction, per EGC beyond [boxFillEgcCountedAsOne] (0.25). */
+    val boxFillExtraEgcFraction: Double,
+    /** [CodeRule.BOX_FILL]: allowances per device yoke or strap, of the largest conductor connected to it (2). */
+    val boxFillDeviceYokeAllowances: Int,
+    /** [CodeRule.GEC_GROUND_ROD_MAX]: largest GEC required as the sole connection to rod, pipe or plate electrodes, copper. */
+    val gecRodMaxCopper: ConductorSize,
+    /** [CodeRule.GEC_GROUND_ROD_MAX]: the same limit for aluminum. */
+    val gecRodMaxAluminum: ConductorSize,
+    /** [CodeRule.GEC_CONCRETE_ENCASED_MAX]: largest copper GEC required as the sole connection to a concrete-encased electrode. */
+    val gecConcreteEncasedMaxCopper: ConductorSize,
 )

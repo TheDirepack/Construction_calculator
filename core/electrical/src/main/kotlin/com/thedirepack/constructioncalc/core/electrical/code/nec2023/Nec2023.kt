@@ -53,6 +53,20 @@ object Nec2023 : ElectricalCode {
         EGC_INCREASED to "250.122(B)",
         EGC_IDENTIFICATION to "250.119",
         EGC_MULTIPLE_CIRCUITS to "250.122(C)",
+        GEC_SIZE to "Table 250.66",
+        GEC_GROUND_ROD_MAX to "250.66(A)",
+        GEC_CONCRETE_ENCASED_MAX to "250.66(B)",
+        SUPPLY_SIDE_BONDING to "Table 250.102(C)(1)",
+
+        BOX_FILL to "314.16",
+        METAL_BOX_VOLUMES to "Table 314.16(A)",
+        BOX_VOLUME_ALLOWANCE to "Table 314.16(B)",
+        PULL_BOX_STRAIGHT to "314.28(A)(1)",
+        PULL_BOX_ANGLE to "314.28(A)(2)",
+
+        BURIAL_DEPTH to "Table 300.5(A)",
+        RACEWAY_SUPPORT to "300.11",
+        PVC_EXPANSION to "Table 352.44",
 
         MINIMUM_CONDUCTOR_SIZE to "310.3(A)",
         CONDUCTOR_INSULATION to "310.4",
@@ -115,10 +129,17 @@ object Nec2023 : ElectricalCode {
     override val fuseOnlyRatings = Nec2023Protection.fuseOnlyRatings
     override val smallConductorLimits = Nec2023Protection.smallConductorLimits
     override val equipmentGroundingConductors = Nec2023Protection.equipmentGroundingConductors
+    override val groundingElectrodeConductors = Nec2023Protection.groundingElectrodeConductors
+
+    override val boxVolumeAllowances = Nec2023Boxes.volumeAllowances
+    override val metalBoxVolumes = Nec2023Boxes.standardMetalBoxes
 
     override val conduitDimensions = Nec2023Raceways.conduitDimensions
     override val bendRadius = Nec2023Raceways.bendRadius
     override val raceways = Nec2023Raceways.raceways
+    override val burialDepths = Nec2023RacewayInstall.burialDepths
+    override val racewaySupport = Nec2023RacewayInstall.racewaySupport
+    override val pvcThermalExpansion = Nec2023RacewayInstall.pvcThermalExpansion
 
     override val motorFullLoadCurrent = Nec2023Motors.fullLoadCurrent
     override val motorFullLoadVoltages = Nec2023Motors.fullLoadVoltages

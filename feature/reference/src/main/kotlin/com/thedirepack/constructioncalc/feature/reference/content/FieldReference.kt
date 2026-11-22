@@ -6,6 +6,8 @@ import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Bullets
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Choice
+import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Equation
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Paragraph
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Table
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.ToolLink
@@ -179,6 +181,27 @@ internal object FieldReference {
                 ),
                 Paragraph("Wye: line-to-line = √3 × line-to-neutral. 120 × 1.732 = 208; 277 × 1.732 = 480."),
                 ToolLink("Wye and delta formulas", ToolIds.FORMULAS, "wye-delta"),
+            )
+        },
+        RefEntry(
+            "wire-length-from-resistance", "Wire length from resistance", RefSection.FIELD,
+            "Find how much wire is on a reel or in a run from a low-resistance ohmmeter reading.",
+            RefSource.CodeRef(CodeRule.CONDUCTOR_PROPERTIES),
+            tools = listOf(ToolIds.FORMULAS, ToolIds.REEL_LENGTH),
+            keywords = listOf("resistance", "ohms", "length", "reel", "how much wire", "micro-ohm", "ducter", "loop"),
+        ) {
+            val v = Code.book.values
+            listOf(
+                Equation("L = 1000 × R ÷ (r₇₅ × (1 + α (T − ${Decimals.trim(v.resistanceReferenceC, 0)} °C)))"),
+                Bullets(
+                    listOf(
+                        "R: measured DC resistance, Ω. r₇₅: the conductor's Ω per 1000 ft at ${Decimals.trim(v.resistanceReferenceC, 0)} °C (${CodeRule.CONDUCTOR_PROPERTIES.cite}). T: the wire's temperature.",
+                        "α: ${Decimals.trim(v.resistanceCoefficientCopper, 5)} per °C for copper, ${Decimals.trim(v.resistanceCoefficientAluminum, 5)} for aluminum.",
+                        "Measuring both ends of a loop (out on one conductor, back on another) reads twice the length: halve it.",
+                        "Let a reel reach the room's temperature first, and zero the meter's leads. Stranding and compact conductors change the result a little.",
+                    ),
+                ),
+                ToolLink("Find a wire's length", ToolIds.FORMULAS, topic = "resistance-length"),
             )
         },
         RefEntry(

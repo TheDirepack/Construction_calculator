@@ -5,6 +5,7 @@ import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize.*
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.code.EgcRow
+import com.thedirepack.constructioncalc.core.electrical.code.GecRow
 import com.thedirepack.constructioncalc.core.electrical.code.SmallConductorLimitRow
 
 /** NEC 2023 overcurrent protection (Article 240) and equipment grounding conductors (250.122). Data only. */
@@ -69,5 +70,22 @@ internal object Nec2023Protection {
         EgcRow(4000, KCMIL_500, KCMIL_750),
         EgcRow(5000, KCMIL_700, KCMIL_1250),
         EgcRow(6000, KCMIL_800, KCMIL_1250),
+    )
+
+    /**
+     * **Table 250.66** "Grounding Electrode Conductor for Alternating-Current Systems" and
+     * **Table 250.102(C)(1)** "Grounded Conductor, Main Bonding Jumper, System Bonding Jumper,
+     * and Supply-Side Bonding Jumper for Alternating-Current Systems" (NEC 2023).
+     * Sizes are keyed by circular mils of the largest ungrounded service-entrance conductor
+     * (or equivalent area for parallel conductors).
+     */
+    val groundingElectrodeConductors: List<GecRow> = listOf(
+        GecRow("2 AWG or smaller", "1/0 AWG or smaller", AWG_2.circularMils.toLong(), AWG_1_0.circularMils.toLong(), AWG_8, AWG_6),
+        GecRow("1 or 1/0 AWG", "2/0 or 3/0 AWG", AWG_1_0.circularMils.toLong(), AWG_3_0.circularMils.toLong(), AWG_6, AWG_4),
+        GecRow("2/0 or 3/0 AWG", "4/0 AWG or 250 kcmil", AWG_3_0.circularMils.toLong(), KCMIL_250.circularMils.toLong(), AWG_4, AWG_2),
+        GecRow("Over 3/0 through 350 kcmil", "Over 250 through 500 kcmil", KCMIL_350.circularMils.toLong(), KCMIL_500.circularMils.toLong(), AWG_2, AWG_1_0),
+        GecRow("Over 350 through 600 kcmil", "Over 500 through 900 kcmil", KCMIL_600.circularMils.toLong(), KCMIL_900.circularMils.toLong(), AWG_1_0, AWG_3_0),
+        GecRow("Over 600 through 1100 kcmil", "Over 900 through 1750 kcmil", 1_100_000L, KCMIL_1750.circularMils.toLong(), AWG_2_0, AWG_4_0),
+        GecRow("Over 1100 kcmil", "Over 1750 kcmil", null, null, AWG_3_0, KCMIL_250),
     )
 }

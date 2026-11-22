@@ -276,20 +276,20 @@ class ConduitFillTest {
 
     @Test fun jamRatioForThreeConductors() {
         val c = emt(TradeSize.S_1_1_4) // ID 1.380
-        // 1 AWG THHN is 0.446 in. across: 1.380 / 0.446 = 3.094, inside 2.8 to 3.2.
-        val risky = ConduitFill.jamCheck(c, groups(3 to thhn(ConductorSize.AWG_1)))!!
-        assertEquals(1.380 / 0.446, risky.ratio, 1e-9)
+        // 1/0 AWG THHN is 0.486 in. across: 1.05 * 1.380 / 0.486 = 2.981, inside 2.8 to 3.2.
+        val risky = ConduitFill.jamCheck(c, groups(3 to thhn(ConductorSize.AWG_1_0)))!!
+        assertEquals(PullFormulas.jamRatio(1.380, 0.486), risky.ratio, 1e-9)
         assertTrue(risky.inJamRange)
         assertFalse(risky.mixedSizes)
-        // 2 AWG THHN (0.384): 3.59, fine.
+        // 2 AWG THHN (0.384): 1.05 * 1.380 / 0.384 = 3.77, fine.
         assertFalse(ConduitFill.jamCheck(c, groups(3 to thhn(ConductorSize.AWG_2)))!!.inJamRange)
         // Three separate groups of one still count three; the largest governs a mixed set.
-        val mixed = ConduitFill.jamCheck(c, groups(2 to thhn(ConductorSize.AWG_1), 1 to thhn(ConductorSize.AWG_6)))!!
+        val mixed = ConduitFill.jamCheck(c, groups(2 to thhn(ConductorSize.AWG_1_0), 1 to thhn(ConductorSize.AWG_6)))!!
         assertTrue(mixed.mixedSizes)
-        assertEquals(1.380 / 0.446, mixed.ratio, 1e-9)
+        assertEquals(PullFormulas.jamRatio(1.380, 0.486), mixed.ratio, 1e-9)
         // Only exactly three conductors are checked.
-        assertNull(ConduitFill.jamCheck(c, groups(2 to thhn(ConductorSize.AWG_1))))
-        assertNull(ConduitFill.jamCheck(c, groups(4 to thhn(ConductorSize.AWG_1))))
+        assertNull(ConduitFill.jamCheck(c, groups(2 to thhn(ConductorSize.AWG_1_0))))
+        assertNull(ConduitFill.jamCheck(c, groups(4 to thhn(ConductorSize.AWG_1_0))))
     }
 
     @Test fun unlistedSpecsAreNotSilentlyCounted() {
