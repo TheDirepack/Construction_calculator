@@ -7,13 +7,20 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.net.Uri
-import android.util.AtomicFile
 import android.util.LruCache
 import android.util.Xml
 import androidx.core.graphics.PathParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
 import java.io.IOException
@@ -24,44 +31,119 @@ import kotlin.math.min
 data class PlanSymbol(val id: String, val name: String, val svg: String)
 
 /** Stores SVGs independently of projects. A placed symbol carries its own SVG. */
-class PlanSymbols(private val context: Context) {
-    private val directory = File(context.filesDir, "plan-symbols")
+class PlanSymbols internal constructor(
+    private val directory: File,
+    private val context: Context? = null,
+    private val validateSvg: (String) -> Unit = { parseSvg(it) },
+) {
+    constructor(context: Context) : this(File(context.filesDir, "plan-symbols"), context.applicationContext)
 
     fun list(): List<PlanSymbol> = directory.listFiles().orEmpty().mapNotNull { file ->
-        if (file.extension != "json") return@mapNotNull null
+        if (!file.isFile || file.extension != "json") return@mapNotNull null
+        val id = file.nameWithoutExtension
+        if (!isValidUuid(id)) return@mapNotNull null
         runCatching {
-            val data = JSONObject(AtomicFile(file).openRead().use { it.readBounded(MAX_SVG_BYTES * 2).decodeToString() })
-            PlanSymbol(file.nameWithoutExtension, data.getString("name"), data.getString("svg"))
+            val raw = file.inputStream().use { it.readBounded(MAX_SVG_BYTES * 2).decodeToString() }
+            val data = Json.parseToJsonElement(raw) as? JsonObject ?: return@mapNotNull null
+            val name = data["name"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val svg = data["svg"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            PlanSymbol(id, name, svg)
         }.getOrNull()
     }.sortedBy { it.name.lowercase() }
 
     suspend fun import(uri: Uri): PlanSymbol = withContext(Dispatchers.IO) {
-        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Couldn't open the SVG.")
+        val appContext = requireNotNull(context) { "Context is required to import from a Uri." }
+        val input = appContext.contentResolver.openInputStream(uri) ?: throw IOException("Couldn't open the SVG.")
         val svg = input.use { it.readBounded(MAX_SVG_BYTES).decodeToString().removePrefix("\uFEFF") }
-        val valid = runCatching { parseSvg(svg) }
+        val valid = runCatching { validateSvg(svg) }
         if (valid.isFailure) throw IOException(valid.exceptionOrNull()?.message ?: "Couldn't read this SVG.")
-        if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
-            throw IOException("Couldn't save the symbol.")
-        }
-        val symbol = PlanSymbol(UUID.randomUUID().toString(), displayName(context, uri, "Symbol.svg"), svg)
-        val data = JSONObject().put("name", symbol.name).put("svg", svg)
-        val file = AtomicFile(File(directory, "${symbol.id}.json"))
-        val output = file.startWrite()
-        try {
-            output.write(data.toString().encodeToByteArray())
-            file.finishWrite(output)
-        } catch (error: Exception) {
-            file.failWrite(output)
-            throw error
-        }
+        val symbol = PlanSymbol(UUID.randomUUID().toString(), displayName(appContext, uri, "Symbol.svg"), svg)
+        writeSymbol(symbol)
         symbol
     }
 
     fun remove(id: String) {
-        if (runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false)) {
-            AtomicFile(File(directory, "$id.json")).delete()
+        if (isValidUuid(id)) {
+            File(directory, "$id.json").delete()
         }
     }
+
+    /** Includes imported SVG symbols in full backups, validating every SVG on restore. */
+    val backup: ToolBackup = object : ToolBackup {
+        override fun export(): JsonElement? {
+            val symbols = list()
+            if (symbols.isEmpty()) return null
+            return buildJsonObject {
+                put("version", JsonPrimitive(1))
+                put("symbols", buildJsonArray {
+                    for (symbol in symbols) {
+                        add(buildJsonObject {
+                            put("id", JsonPrimitive(symbol.id))
+                            put("name", JsonPrimitive(symbol.name))
+                            put("svg", JsonPrimitive(symbol.svg))
+                        })
+                    }
+                })
+            }
+        }
+
+        override fun import(data: JsonElement, replace: Boolean) {
+            val array = when (data) {
+                is JsonObject -> data["symbols"] as? JsonArray
+                    ?: throw IllegalArgumentException("Missing symbols array in backup.")
+                is JsonArray -> data
+                else -> throw IllegalArgumentException("Unsupported symbols backup format.")
+            }
+            val validated = mutableListOf<PlanSymbol>()
+            for (item in array) {
+                val obj = item as? JsonObject ?: continue
+                val id = obj["id"]?.jsonPrimitive?.contentOrNull?.trim() ?: continue
+                if (!isValidUuid(id)) continue
+                val name = obj["name"]?.jsonPrimitive?.contentOrNull?.trim()?.take(240)?.ifBlank { null } ?: continue
+                val svg = obj["svg"]?.jsonPrimitive?.contentOrNull?.removePrefix("\uFEFF") ?: continue
+                if (svg.isBlank() || svg.encodeToByteArray().size > MAX_SVG_BYTES) continue
+                if (runCatching { validateSvg(svg) }.isFailure) continue
+                validated += PlanSymbol(id, name, svg)
+            }
+            if (replace) {
+                directory.listFiles().orEmpty()
+                    .filter { it.isFile && it.extension == "json" }
+                    .forEach { it.delete() }
+            }
+            for (symbol in validated) {
+                writeSymbol(symbol)
+            }
+        }
+    }
+
+    internal fun writeSymbol(symbol: PlanSymbol) {
+        require(isValidUuid(symbol.id)) { "Invalid symbol id." }
+        if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
+            throw IOException("Couldn't save the symbol.")
+        }
+        val target = File(directory, "${symbol.id}.json")
+        require(target.canonicalFile.parentFile == directory.canonicalFile) { "Invalid symbol path." }
+        val payload = buildJsonObject {
+            put("name", JsonPrimitive(symbol.name))
+            put("svg", JsonPrimitive(symbol.svg))
+        }.toString().encodeToByteArray()
+        val temp = File.createTempFile("sym-", ".tmp", directory)
+        try {
+            temp.outputStream().use { it.write(payload) }
+            if (!temp.renameTo(target)) {
+                target.delete()
+                if (!temp.renameTo(target)) {
+                    throw IOException("Couldn't save the symbol.")
+                }
+            }
+        } catch (error: Exception) {
+            temp.delete()
+            throw error
+        }
+    }
+
+    private fun isValidUuid(id: String): Boolean =
+        runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false)
 }
 
 private const val MAX_SVG_BYTES = 256 * 1024
