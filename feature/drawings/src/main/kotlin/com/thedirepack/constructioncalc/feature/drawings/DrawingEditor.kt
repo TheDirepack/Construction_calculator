@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -38,11 +39,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.thedirepack.constructioncalc.core.data.PlanExportCrop
 import com.thedirepack.constructioncalc.core.data.PlanExports
+import com.thedirepack.constructioncalc.core.data.PlanFiles
+import com.thedirepack.constructioncalc.core.data.ProjectSharing
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.PathSegment
+import com.thedirepack.constructioncalc.core.model.IssuedSheet
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
+import com.thedirepack.constructioncalc.core.model.PlanSheetSource
+import com.thedirepack.constructioncalc.core.model.issuedSheets
+import com.thedirepack.constructioncalc.core.model.sheetRevisionStatus
+import com.thedirepack.constructioncalc.core.model.sheetSource
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanMeasurement
@@ -91,7 +100,7 @@ internal fun DrawingEditor(
     focusRouteId: String?,
     onChange: ((PlanDrawing) -> PlanDrawing) -> Unit,
     onSendRouteToRun: (runId: String?, newRunName: String?, segments: List<PathSegment>, route: TracedRoute) -> Unit,
-    publish: (PlanMeasurement, Quantity) -> Unit,
+    onPublish: (PlanMeasurement, Quantity, PlanSheetSource) -> Unit,
     host: ToolHost,
     modifier: Modifier = Modifier,
 ) {
@@ -152,6 +161,19 @@ internal fun DrawingEditor(
     var history by remember(drawing.id) { mutableStateOf(DrawingHistory<PlanDrawing>()) }
     var pageSize by remember(drawing.id, session.page) { mutableStateOf<PageSize?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var revisionOpen by remember(drawing.id, session.page) { mutableStateOf(false) }
+    var comparison by remember(drawing.id, session.page) { mutableStateOf<IssuedSheet?>(null) }
+    var sheetExportOpen by remember(drawing.id, session.page) { mutableStateOf(false) }
+    var cropProvider by remember(drawing.id) { mutableStateOf<(() -> PlanExportCrop?)?>(null) }
+    var pendingExport by rememberSaveable(drawing.id, stateSaver = SheetExportSaver) {
+        mutableStateOf<SheetExportRequest?>(null)
+    }
+    val files = remember(context) { PlanFiles(context.applicationContext) }
+
+    fun publish(measurement: PlanMeasurement, quantity: Quantity) {
+        val source = drawing.sheetSource(measurement.page, labels[measurement.page]?.number ?: "Page ${measurement.page + 1}")
+        onPublish(measurement, quantity, source)
+    }
     val page = session.page
     val mode = if (editable) session.mode else DrawingMode.Navigate
     LaunchedEffect(drawing.id, page, rotation, pageCount) {
@@ -280,17 +302,17 @@ internal fun DrawingEditor(
         onChange(change)
     }
 
-    // Routes sent to runs aren't part of undo: they mirror runs, which undo doesn't touch.
+    // Markup undo preserves run links and sheet identity.
     fun undo() {
         val (restored, next) = history.undo(drawing) ?: return
         history = next
-        onChange { current -> restored.copy(routes = current.routes) }
+        onChange { current -> restored.copy(routes = current.routes, sheetRevisions = current.sheetRevisions) }
     }
 
     fun redo() {
         val (restored, next) = history.redo(drawing) ?: return
         history = next
-        onChange { current -> restored.copy(routes = current.routes) }
+        onChange { current -> restored.copy(routes = current.routes, sheetRevisions = current.sheetRevisions) }
     }
 
     fun apply(outcome: EditorOutcome) {
@@ -360,6 +382,43 @@ internal fun DrawingEditor(
     val json = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { writeExport(it, false) }
     val baseName = drawing.name.substringBeforeLast('.').ifBlank { "Drawing" }
 
+    fun exportSheet(request: SheetExportRequest, uri: Uri? = null, share: Boolean = false) {
+        busy = true
+        scope.launch {
+            try {
+                val chooser = PdfWork.render {
+                    val write: (java.io.OutputStream) -> Unit = { stream ->
+                        PlanExports.writeSheetPdf(context, drawing, request.source, request.crop, stream,
+                            { quantity -> settings.format(quantity) }) { runId ->
+                            project.runs.firstOrNull { it.id == runId }?.name ?: "Run"
+                        }
+                    }
+                    if (share) {
+                        ProjectSharing.shareFileIntent(context, request.fileName, "application/pdf",
+                            request.source.label, drawing.name, write)
+                    } else {
+                        context.contentResolver.openOutputStream(checkNotNull(uri), "wt")?.use(write)
+                            ?: error("Could not open the export destination.")
+                        null
+                    }
+                }
+                if (chooser != null) context.startActivity(chooser)
+                else host.showMessage("Annotated PDF saved.")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                host.showMessage(error.message ?: "Could not export this sheet.")
+            } finally {
+                busy = false
+            }
+        }
+    }
+    val saveSheet = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val request = pendingExport
+        pendingExport = null
+        if (uri != null && request != null) exportSheet(request, uri)
+    }
+
     Column(modifier.fillMaxSize()) {
         val count = pageCount
         if (count == null) {
@@ -381,8 +440,12 @@ internal fun DrawingEditor(
             session = session.goToPage(target.coerceIn(0, count - 1))
             sheetsOpen = false
         }
+        val fallbackId = labels[page]?.number ?: "Page ${page + 1}"
+        val source = drawing.sheetSource(page, fallbackId)
+        val identity = drawing.sheetRevisions[page]
+        val revisionStatus = remember(project.drawings, drawing, page) { project.sheetRevisionStatus(drawing, page) }
         EditorHeader(
-            sheet = labels[page]?.let { "${it.number} · ${page + 1}/$count" } ?: "${page + 1} / $count",
+            sheet = "${source.sheetId} · ${page + 1}/$count",
             onSheets = { sheetsOpen = true },
             canUndo = editable && history.canUndo,
             canRedo = editable && history.canRedo,
@@ -401,10 +464,59 @@ internal fun DrawingEditor(
                 onToggleCalibration = { DrawingsSettings.setShowCalibrationLayer(prefsStore, !prefs.showCalibrationLayer) },
                 onTakeoff = { session = session.open(EditorDialog.Takeoff) },
                 onPageItems = { session = session.open(EditorDialog.PageItems) },
+                onExportSheet = { sheetExportOpen = true },
                 onExportPdf = { pdf.launch("$baseName annotated.pdf") },
                 onExportJson = { json.launch("$baseName.drawing.json") },
                 highlightsVisible = highlightsVisible,
                 onToggleHighlights = { highlightsVisible = !highlightsVisible; clearSelection() },
+            )
+        }
+        TextButton(onClick = { revisionOpen = true }) {
+            Text(identity?.let { "Rev ${it.revision} · ${revisionStatus?.label.orEmpty()}" } ?: "Revision unassigned")
+        }
+        if (revisionOpen) {
+            SheetRevisionDialog(
+                fallbackId = fallbackId,
+                current = identity,
+                status = revisionStatus,
+                editable = editable,
+                candidates = { id -> project.issuedSheets(id).filter { it.drawing.id != drawing.id || it.page != page } },
+                onSave = { updated ->
+                    onChange { current -> current.copy(sheetRevisions = current.sheetRevisions + (page to updated)) }
+                    revisionOpen = false
+                },
+                onCompare = { selected -> revisionOpen = false; comparison = selected },
+                onDismiss = { revisionOpen = false },
+            )
+        }
+        comparison?.let { selected ->
+            RevisionOverlayDialog(file, page, source.label, selected, files, onDismiss = { comparison = null })
+        }
+        if (sheetExportOpen) {
+            val crop = remember { cropProvider?.invoke() }
+            fun request(region: PlanExportCrop?, share: Boolean) {
+                sheetExportOpen = false
+                val request = SheetExportRequest(source, region)
+                if (share) exportSheet(request, share = true)
+                else {
+                    pendingExport = request
+                    saveSheet.launch(request.fileName)
+                }
+            }
+            AlertDialog(
+                onDismissRequest = { sheetExportOpen = false },
+                title = { Text(source.label) },
+                text = {
+                    Column {
+                        TextButton(onClick = { request(null, false) }) { Text("Save annotated sheet") }
+                        TextButton(onClick = { request(null, true) }) { Text("Share annotated sheet") }
+                        if (crop != null) {
+                            TextButton(onClick = { request(crop, false) }) { Text("Save current crop") }
+                            TextButton(onClick = { request(crop, true) }) { Text("Share current crop") }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { sheetExportOpen = false }) { Text("Close") } },
             )
         }
         if (sheetsOpen) {
@@ -434,6 +546,7 @@ internal fun DrawingEditor(
                         snapEnabled = snapEnabled,
                         snapTarget = snapTarget,
                         onPageSize = { pageSize = it },
+                        onCropProvider = { cropProvider = it },
                         onPlace = ::place,
                         onLine = { first, second -> apply(EditorActions.span(session, drawing, first, second)) },
                         onInk = { points ->
@@ -604,7 +717,7 @@ internal fun DrawingEditor(
             views.edit().putString("${drawing.id}/symbol", it.id).apply()
         },
         onOpenSettings = { settingsOpen = true },
-        publish = publish,
+        publish = ::publish,
         onSendRouteToRun = onSendRouteToRun,
     )
 }

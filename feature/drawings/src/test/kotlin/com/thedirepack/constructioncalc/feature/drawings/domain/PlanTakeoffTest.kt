@@ -10,6 +10,8 @@ import com.thedirepack.constructioncalc.core.model.PlanMeasurement
 import com.thedirepack.constructioncalc.core.model.PlanPoint
 import com.thedirepack.constructioncalc.core.model.PlanRunRoute
 import com.thedirepack.constructioncalc.core.model.PlanZone
+import com.thedirepack.constructioncalc.core.model.SheetRevision
+import com.thedirepack.constructioncalc.core.model.sheetSource
 import com.thedirepack.constructioncalc.core.model.stored
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -49,6 +51,15 @@ class PlanTakeoffTest {
         assertEquals("Corridor", corridor.name)
         assertEquals(3, corridor.count)
         assertEquals(Rational.of(135), corridor.total.value)
+    }
+
+    @Test fun takeoffCarriesSourcesForBothMeasuredAndCountOnlySheets() {
+        val drawing = base.copy(
+            measurements = listOf(line(0, 25.0), line(0, 10.0)),
+            marks = listOf(PlanMark(page = 3, kind = PlanMarkKind.SYMBOL, points = listOf(p(1.0, 2.0)))),
+            sheetRevisions = mapOf(0 to SheetRevision("E101", "C", 3), 3 to SheetRevision("E501", "A", 1)),
+        )
+        assertEquals(listOf(drawing.sheetSource(0), drawing.sheetSource(3)), PlanTakeoff.summarize(drawing).sources)
     }
 
     @Test fun uncalibratedMeasurementsAreCountedButNotTotaled() {

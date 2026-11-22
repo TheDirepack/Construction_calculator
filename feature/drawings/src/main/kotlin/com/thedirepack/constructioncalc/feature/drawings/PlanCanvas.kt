@@ -57,6 +57,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.thedirepack.constructioncalc.core.data.PlanExportCrop
 import com.thedirepack.constructioncalc.core.data.drawPlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanPoint
@@ -148,7 +149,7 @@ private class PageViewport(quarterTurns: Int) {
     }
 
     /** Visible page-coordinate bounds with a small margin for smooth panning. */
-    fun visibleRegion(page: PageBitmap): RectF? {
+    fun visibleRegion(page: PageBitmap, margin: Float = 0.15f): RectF? {
         if (size.width <= 0 || size.height <= 0) return null
         val t = transform(page)
         val c0 = t.toPage(Offset.Zero)
@@ -159,8 +160,8 @@ private class PageViewport(quarterTurns: Int) {
         val maxX = maxOf(c0.x, c1.x, c2.x, c3.x).toFloat()
         val minY = minOf(c0.y, c1.y, c2.y, c3.y).toFloat()
         val maxY = maxOf(c0.y, c1.y, c2.y, c3.y).toFloat()
-        val padX = (maxX - minX) * 0.15f
-        val padY = (maxY - minY) * 0.15f
+        val padX = (maxX - minX) * margin
+        val padY = (maxY - minY) * margin
         val left = (minX - padX).coerceIn(0f, page.width)
         val top = (minY - padY).coerceIn(0f, page.height)
         val right = (maxX + padX).coerceIn(0f, page.width)
@@ -218,6 +219,7 @@ internal fun PlanCanvas(
     snapEnabled: Boolean,
     snapTarget: SnapTarget,
     onPageSize: (PageSize) -> Unit,
+    onCropProvider: ((() -> PlanExportCrop?)?) -> Unit,
     /** A tap at a page point; the second value is the touch radius in page points, for hit tests. */
     onPlace: (PlanPoint, Double) -> Unit,
     onLine: (PlanPoint, PlanPoint) -> Unit,
@@ -235,6 +237,7 @@ internal fun PlanCanvas(
     val context = LocalContext.current
     val views = remember(context) { context.getSharedPreferences("drawing-views", 0) }
     val viewKey = "$drawingId/$pageIndex"
+    val setCropProvider by rememberUpdatedState(onCropProvider)
     val selected by rememberUpdatedState(selectedMark)
     val moveMark by rememberUpdatedState(onMoveMark)
     val state by key(file, pageIndex) {
@@ -314,7 +317,13 @@ internal fun PlanCanvas(
                     }
                 }
                 DisposableEffect(viewport, viewKey) {
+                    setCropProvider {
+                        viewport.visibleRegion(page, margin = 0f)?.let {
+                            PlanExportCrop(it.left, it.top, it.right, it.bottom)
+                        }
+                    }
                     onDispose {
+                        setCropProvider(null)
                         views.edit().putInt("$viewKey/rotation", quarterTurns)
                             .putFloat("$viewKey/zoom", viewport.zoom)
                             .putFloat("$viewKey/x", viewport.scroll.x)

@@ -156,7 +156,7 @@ object ProjectText {
         appendLine("■ ${drawing.name} — $summary")
         measured.forEach { (m, q) ->
             val zoneName = m.zoneId?.let { id -> drawing.zones.firstOrNull { it.id == id }?.name }
-            val place = "Page ${m.page + 1}" + (zoneName?.let { " ($it)" } ?: "")
+            val place = drawing.sheetSource(m.page).label + (zoneName?.let { " ($it)" } ?: "")
             appendLine("  $place: ${q?.let(length) ?: "uncalibrated"}")
         }
     }
