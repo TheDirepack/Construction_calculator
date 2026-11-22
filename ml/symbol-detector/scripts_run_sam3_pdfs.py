@@ -37,6 +37,7 @@ from transformers import Sam3Model, Sam3Processor
 from transformers.models.sam3.modeling_sam3 import box_cxcywh_to_xyxy, inverse_sigmoid
 
 from blueprint_symbols.neca_svg_compositor import NecaGlyph, NecaSymbolBank
+from blueprint_symbols.proposal_fusion import merge_sam_proposals
 
 
 SKIP_NAME_PATTERNS = (
@@ -94,9 +95,6 @@ def should_scan_page(page: pymupdf.Page, p0: int, n_pages: int, *, min_page_pts:
     for kw in _COVER_OR_INDEX_KEYWORDS:
         if kw in low:
             return False, f'cover_or_index:{kw}'
-    if n_pages >= 4 and p0 == 0:
-        return False, 'cover_page_1'
-
     # If page has almost no extractable text (scanned raster or stroked CAD font), keep it
     if len(low) < 40:
         return True, 'no_text_keep'
@@ -271,29 +269,11 @@ def preencode_svg_prompts(
 
 
 def nms_detections(dets: list[dict[str, Any]], iou_thr: float = 0.50) -> list[dict[str, Any]]:
-    """Greedy score-descending NMS over page detections (in pixel coordinates)."""
-    if len(dets) <= 1:
-        return dets
-    dets = sorted(dets, key=lambda d: d['score'], reverse=True)
-    boxes = np.array([d['box_px'] for d in dets], dtype=np.float32)
-    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-    areas = np.maximum(1.0, (x2 - x1) * (y2 - y1))
-    order = np.arange(len(dets))
-    keep_idx: list[int] = []
-    while order.size > 0:
-        i = int(order[0])
-        keep_idx.append(i)
-        if order.size == 1:
-            break
-        rest = order[1:]
-        xx1 = np.maximum(x1[i], x1[rest])
-        yy1 = np.maximum(y1[i], y1[rest])
-        xx2 = np.minimum(x2[i], x2[rest])
-        yy2 = np.minimum(y2[i], y2[rest])
-        inter = np.maximum(0.0, xx2 - xx1) * np.maximum(0.0, yy2 - yy1)
-        iou = inter / np.maximum(1e-6, areas[i] + areas[rest] - inter)
-        order = rest[iou <= iou_thr]
-    return [dets[i] for i in keep_idx]
+    """Consolidate prompt hits while retaining alternative semantic labels.
+
+    NECA exemplar prompt scores are provisional, not calibrated class confidence.
+    """
+    return merge_sam_proposals(dets, iou_threshold=iou_thr)
 
 
 def detect_page_sam3(
@@ -443,6 +423,10 @@ def main() -> None:
     ap.add_argument('--tile-size', type=int, default=1008)
     ap.add_argument('--overlap', type=int, default=128)
     ap.add_argument('--svg-batch', type=int, default=12)
+    ap.add_argument('--prompt-allowlist', type=Path, default=None,
+                    help='Optional JSON list of reviewed standalone NECA symbol IDs to use as prompts')
+    ap.add_argument('--include-luminaire-modifiers', action='store_true',
+                    help='Include mounting/orientation/extended/emergency modifiers as standalone exemplars (off by default)')
     ap.add_argument('--score-thr', type=float, default=0.55)
     ap.add_argument('--svg-dedup-sim', type=float, default=0.90,
                     help='Cosine similarity threshold in SAM3 prompt space to deduplicate near-identical SVG variants (1.0 disables)')
@@ -462,6 +446,20 @@ def main() -> None:
 
     bank = NecaSymbolBank(args.neca_dir.resolve(), render_height=96)
     glyphs: list[NecaGlyph] = [g for cls in bank.active_classes for g in bank.by_class[cls]]
+    if not args.include_luminaire_modifiers:
+        glyphs = [g for g in glyphs if not (
+            g.section.startswith('Luminaires - ') and g.section.endswith('Modifiers')
+        )]
+    if args.prompt_allowlist:
+        ids = json.loads(args.prompt_allowlist.read_text())
+        if not isinstance(ids, list) or not ids or not all(isinstance(v, str) for v in ids):
+            ap.error('--prompt-allowlist must contain a nonempty JSON array of NECA symbol IDs')
+        absent = set(ids) - {g.symbol_id for g in glyphs}
+        if absent:
+            ap.error(f'allowlisted prompts were not loaded or excluded: {sorted(absent)[:12]}')
+        glyphs = [g for g in glyphs if g.symbol_id in set(ids)]
+    if not glyphs:
+        ap.error('no eligible NECA visual exemplars remain')
     print(f'Pre-encoding {len(glyphs)} NECA 100-2013 SVG visual prompts ({bank.summary()})...', flush=True)
     t_enc = time.time()
     geo_feats, geo_masks, blank_tf, blank_tm = preencode_svg_prompts(
@@ -564,6 +562,10 @@ def main() -> None:
                         'neca_code': d['neca_code'],
                         'neca_name': d['neca_name'],
                         'score': round(d['score'], 4),
+                        'alternative_labels': d.get('alternative_labels', []),
+                        'same_region_prompt_hits': d.get('same_region_prompt_hits', 1),
+                        'needs_class_review': d.get('needs_class_review', False),
+                        'verified_ground_truth': False,
                         'symbol_bbox': [bx0, by0, bx1, by1],
                         'symbol_center': [cx, cy],
                         'box_px_tl': [round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1)],
@@ -588,6 +590,9 @@ def main() -> None:
             'status': 'provisional_detections_for_refinement',
             'render_dpi': args.dpi,
             'score_threshold': args.score_thr,
+            'annotations_are_exhaustive': False,
+            'verified_ground_truth': False,
+            'prompt_selection': 'allowlisted' if args.prompt_allowlist else 'eligible_neca',
             'coordinate_system': {
                 'origin': 'bottom_left',
                 'units': 'PDF_points',
