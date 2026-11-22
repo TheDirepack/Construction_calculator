@@ -161,3 +161,39 @@ def test_review_gate_refuses_invalid_accepted_geometry_and_labels() -> None:
     ]:
         with pytest.raises(ValueError):
             review_decision({**item, **changes}, {'receptacle': ['duplex']})
+
+
+def test_neca_fine_subtypes_extend_review_taxonomy_and_roundtrip():
+    from scripts_circuitnet_review_sheets import merge_review_taxonomy
+    extended = merge_review_taxonomy({
+        'prompt_taxonomy': {'fire_alarm_detector': ['photoelectric_smoke_detector']},
+    })
+    assert 'duplex' in extended['receptacle']
+    assert extended['fire_alarm_detector'] == ['photoelectric_smoke_detector']
+    batch = {
+        'batch_index': 1, 'taxonomy': extended, 'items': [{
+            'device_index': 3, 'pdf_page': 1,
+            'review_status': 'accepted', 'keep': True,
+            'provisional_category': 'fire_alarm_detection',
+            'provisional_subcategory': 'photoelectric_smoke_detector',
+            'refined_device_type': 'fire_alarm_detector',
+            'refined_subtype': 'photoelectric_smoke_detector',
+            'refined_bbox_cell': [200, 300, 400, 500],
+            'crop_pdf_rect_bl': [10, 20, 30, 40],
+            'on_wall': False, 'attributes': {},
+        }],
+    }
+    output = apply_batch_updates_to_devices([batch])
+    assert output['summary']['kept_devices'] == 1
+    device = output['devices'][0]
+    assert device['device_type'] == 'fire_alarm_detector'
+    assert device['subtype'] == 'photoelectric_smoke_detector'
+    assert device['category'] == 'fire_alarm_detection'
+    assert device['verified_ground_truth'] is False
+
+
+def test_neca_taxonomy_rejects_arbitrary_class_names():
+    from scripts_circuitnet_review_sheets import merge_review_taxonomy
+    for value in ({'Unknown name': ['foo']}, {'known': ['not valid!']}, {'bad': 'string'}):
+        with pytest.raises(ValueError):
+            merge_review_taxonomy({'prompt_taxonomy': value})
