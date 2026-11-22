@@ -241,6 +241,7 @@ Ordered by priority and reasonableness of implementation — start at Tier 1 and
 
 ### Tier 3 — Core Electrical & Calculator Expansions *(medium effort, reuses existing engines)*
 - [ ] Foot-Inch full calculation history/tape, memory (`M+`, `M−`, `MR`, `Ans`), parentheses, metric entry, `√`/`x²` right-triangle helper, and spacing/layout marks
+- [ ] **Resistance → Wire Length**: enter a measured resistance (Ω / mΩ), conductor material (Cu / Al / CCA), wire size, and one-way or loop measurement to calculate wire length from NEC Table 8
 - [ ] Box fill (NEC 314.16) and pull/junction box sizing (NEC 314.28), paired with Pull Planner pull points
 - [ ] Named, reusable cable definitions feeding Conduit Fill, Wire Pull Planner, and Reel Length
 - [ ] GEC & bonding jumpers (Table 250.66), across-the-line motor circuits (Art. 430), burial depth (Table 300.5), support spacing, and PVC thermal expansion
