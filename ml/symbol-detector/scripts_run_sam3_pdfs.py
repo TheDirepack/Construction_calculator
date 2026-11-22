@@ -127,7 +127,7 @@ def deduplicate_svg_prompts(
     geo_masks: torch.Tensor,
     *,
     sim_threshold: float = 0.90,
-) -> tuple[list[NecaGlyph], torch.Tensor, torch.Tensor]:
+) -> tuple[list[SamNecaPrompt], torch.Tensor, torch.Tensor]:
     """Greedily keep distinct visual prototypes within each fine-grained (device_type, subtype)."""
     m = geo_masks.unsqueeze(-1).float()
     pooled = (geo_feats.float() * m).sum(dim=1) / m.sum(dim=1).clamp(min=1.0)
