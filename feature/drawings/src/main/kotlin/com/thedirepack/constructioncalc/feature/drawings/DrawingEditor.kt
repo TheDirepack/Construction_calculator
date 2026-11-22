@@ -47,9 +47,11 @@ import com.thedirepack.constructioncalc.core.model.PlanDrawing
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanMeasurement
+import com.thedirepack.constructioncalc.core.model.PlanPath
 import com.thedirepack.constructioncalc.core.model.PlanPoint
 import com.thedirepack.constructioncalc.core.model.PlanReference
 import com.thedirepack.constructioncalc.core.model.PlanZone
+import com.thedirepack.constructioncalc.core.model.measurePath
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.plans.LineMap
 import com.thedirepack.constructioncalc.core.plans.SnapTarget
@@ -114,6 +116,9 @@ internal fun DrawingEditor(
     val views = remember(context) { context.getSharedPreferences("drawing-views", 0) }
     var rotation by rememberSaveable(drawing.id) { mutableStateOf(views.getInt("${drawing.id}/rotation", 0)) }
     var selectedMarkId by remember(drawing.id) { mutableStateOf<String?>(null) }
+    var selectedPathId by remember(drawing.id) { mutableStateOf<String?>(null) }
+    var selectedVertex by remember(drawing.id) { mutableStateOf<Int?>(null) }
+    var selectedEdge by remember(drawing.id) { mutableStateOf<Int?>(null) }
     var selectedMeasurementId by remember(drawing.id) { mutableStateOf<String?>(null) }
     var symbol by remember(drawing.id) { mutableStateOf<PlanSymbol?>(null) }
     LaunchedEffect(drawing.id) {
@@ -176,6 +181,9 @@ internal fun DrawingEditor(
 
     fun clearSelection() {
         selectedMarkId = null
+        selectedPathId = null
+        selectedVertex = null
+        selectedEdge = null
         selectedMeasurementId = null
     }
 
@@ -189,10 +197,10 @@ internal fun DrawingEditor(
     }
 
     BackHandler(enabled = session.dialog == null && !settingsOpen && !sheetsOpen &&
-        (selectedMarkId != null || selectedMeasurementId != null || session.op != EditOp.Idle || mode != DrawingMode.Adjust && editable)
+        (selectedMarkId != null || selectedPathId != null || selectedMeasurementId != null || session.op != EditOp.Idle || mode != DrawingMode.Adjust && editable)
     ) {
         when {
-            selectedMarkId != null || selectedMeasurementId != null -> clearSelection()
+            selectedMarkId != null || selectedPathId != null || selectedMeasurementId != null -> clearSelection()
             session.op != EditOp.Idle -> {
                 session = session.copy(op = EditOp.Idle)
                 routeFinished = false
@@ -232,6 +240,12 @@ internal fun DrawingEditor(
     val visibleMarks = remember(marks, highlightsVisible) {
         if (highlightsVisible) marks else marks.filterNot { it.kind == PlanMarkKind.HIGHLIGHT }
     }
+    val pagePaths = remember(drawing.paths, drawing.calibration, pageZones, page, settings) {
+        drawing.paths.filter { it.page == page }.map { path ->
+            CanvasPath(path, drawing.measurePath(path).label { settings.format(it) })
+        }
+    }
+    val selectedPath = pagePaths.firstOrNull { it.path.id == selectedPathId }.takeIf { mode == DrawingMode.Adjust }
     val selectedMark = visibleMarks.firstOrNull { it.id == selectedMarkId }
     val docSummary = remember(drawing.calibration, page) { CalibrationDiagnostics.evaluate(drawing.calibration, page) }
     val fittedMeasurements = remember(drawing, page) {
@@ -268,8 +282,12 @@ internal fun DrawingEditor(
             )
         }
     }
-    val handles = remember(drawing, page, mode, prefs.showCalibrationLayer, selectedMeasurementId, selectedMark) {
-        if (mode == DrawingMode.Adjust && selectedMark == null) {
+    val handles = remember(drawing, page, mode, prefs.showCalibrationLayer, selectedMeasurementId, selectedMark, selectedPath) {
+        if (selectedPath != null) {
+            val path = selectedPath.path
+            val target = EndpointTarget.Path(path.id)
+            path.points.mapIndexed { i, point -> EndpointHandle(target, i, point) }
+        } else if (mode == DrawingMode.Adjust && selectedMark == null) {
             EditorActions.handles(drawing, page, includeReferences = prefs.showCalibrationLayer).filter {
                 when (val target = it.target) {
                     is EndpointTarget.Measurement -> target.id == selectedMeasurementId
@@ -322,13 +340,49 @@ internal fun DrawingEditor(
         clearSelection()
     }
 
+    fun saveTrace(closed: Boolean) {
+        val path = PlanPath.fromTrace(page, routePoints, closed)
+        if (path == null) {
+            host.showMessage(if (closed) "Trace a simple polygon with 3 to ${PlanPath.MAX_VERTICES} vertices."
+                else "Trace a path with 2 to ${PlanPath.MAX_VERTICES} vertices.")
+            return
+        }
+        editDrawing { it.copy(paths = it.paths + path) }
+        switchMode(DrawingMode.Adjust)
+        selectedPathId = path.id
+    }
+
+    fun replacePath(path: PlanPath, replacement: PlanPath?) {
+        if (replacement == null) {
+            host.showMessage("That edit would make the path invalid.")
+            return
+        }
+        editDrawing { d -> d.copy(paths = d.paths.map { if (it == path) replacement else it }) }
+    }
+
     fun place(point: PlanPoint, radius: Double) {
         when (mode) {
             DrawingMode.Adjust -> {
-                selectedMarkId = markAt(visibleMarks, point, radius * .55)?.id
-                selectedMeasurementId = if (selectedMarkId == null) {
-                    EditorActions.measurementAt(fittedMeasurements.map { it.first }, point, radius * .55)?.id
-                } else null
+                val tolerance = radius * .55
+                val currentPath = selectedPath?.path
+                val vertex = currentPath?.nearestVertex(point, tolerance)
+                if (vertex != null) {
+                    selectedVertex = vertex
+                    selectedEdge = null
+                    return
+                }
+                clearSelection()
+                selectedMarkId = markAt(visibleMarks, point, tolerance)?.id
+                if (selectedMarkId == null) {
+                    for (item in pagePaths.asReversed()) {
+                        val edge = item.path.nearestEdge(point, tolerance) ?: continue
+                        selectedPathId = item.path.id
+                        selectedVertex = item.path.nearestVertex(point, tolerance)
+                        selectedEdge = edge.takeIf { selectedVertex == null }
+                        return
+                    }
+                    selectedMeasurementId = EditorActions.measurementAt(fittedMeasurements.map { it.first }, point, tolerance)?.id
+                }
             }
             DrawingMode.Eraser -> {
                 val strokes = visibleMarks.filter { it.kind == PlanMarkKind.INK || it.kind == PlanMarkKind.HIGHLIGHT }
@@ -488,16 +542,26 @@ internal fun DrawingEditor(
                         routeLegLabels = routeLegLabels,
                         routeCornerLabels = routeCornerLabels,
                         savedRoutes = savedRoutes,
+                        savedPaths = pagePaths,
+                        selectedPathId = selectedPath?.path?.id,
+                        selectedPathVertex = selectedVertex,
+                        selectedPathEdge = selectedEdge,
                         handles = handles,
                         selectedMark = selectedMark,
                         onMoveMark = ::replaceMark,
-                        onMoveEndpoint = { handle, point -> apply(EditorActions.moveEndpoint(session, drawing, handle, point)) },
+                        onMoveEndpoint = { handle, point ->
+                            if (handle.target is EndpointTarget.Path) {
+                                selectedVertex = handle.end
+                                selectedEdge = null
+                            }
+                            apply(EditorActions.moveEndpoint(session, drawing, handle, point))
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                     val selectedMeasurement = fittedMeasurements.firstOrNull { it.first.id == selectedMeasurementId }
                     val latest = fittedMeasurements.lastOrNull().takeIf { mode == DrawingMode.Measure }
                     val result = selectedMeasurement ?: latest
-                    val hasActions = selectedMark != null || result != null || routePoints.isNotEmpty() || session.firstPoint != null
+                    val hasActions = selectedMark != null || selectedPath != null || result != null || routePoints.isNotEmpty() || session.firstPoint != null
                     if (hasActions || mode == DrawingMode.Route || mode == DrawingMode.Symbol && symbol != null) {
                         Surface(
                             tonalElevation = 4.dp,
@@ -524,6 +588,39 @@ internal fun DrawingEditor(
                                             selectedMarkId = duplicate.id
                                         }) { Text("Duplicate") }
                                         TextButton(onClick = { deleteMark(selectedMark) }) { Text("Delete") }
+                                    }
+                                    selectedPath != null -> {
+                                        val path = selectedPath.path
+                                        val edge = selectedEdge
+                                        val vertex = selectedVertex
+                                        Text(selectedPath.label, Modifier.padding(8.dp), style = MaterialTheme.typography.labelLarge)
+                                        Text("Tap an edge or vertex to edit. Drag a vertex to move it.",
+                                            Modifier.padding(horizontal = 8.dp), style = MaterialTheme.typography.labelSmall)
+                                        Row(Modifier.horizontalScroll(rememberScrollState())) {
+                                            TextButton(enabled = edge != null && path.points.size < PlanPath.MAX_VERTICES, onClick = {
+                                                if (edge != null) {
+                                                    val a = path.points[edge]
+                                                    val b = path.edgeEnd(edge)
+                                                    val next = path.insertVertex(edge, PlanPoint((a.x + b.x) / 2, (a.y + b.y) / 2))
+                                                    replacePath(path, next)
+                                                    if (next != null) {
+                                                        selectedVertex = edge + 1
+                                                        selectedEdge = null
+                                                    }
+                                                }
+                                            }) { Text("Add vertex") }
+                                            TextButton(enabled = vertex != null && path.points.size > (if (path.closed) 3 else 2), onClick = {
+                                                if (vertex != null) {
+                                                    val next = path.removeVertex(vertex)
+                                                    replacePath(path, next)
+                                                    if (next != null) selectedVertex = null
+                                                }
+                                            }) { Text("Remove vertex") }
+                                            TextButton(onClick = {
+                                                editDrawing { d -> d.copy(paths = d.paths.filterNot { it.id == path.id }) }
+                                                clearSelection()
+                                            }) { Text("Delete") }
+                                        }
                                     }
                                     mode == DrawingMode.Symbol && symbol != null -> {
                                         val active = checkNotNull(symbol)
@@ -557,6 +654,8 @@ internal fun DrawingEditor(
                                             routeFinished = false
                                             host.showMessage("Saved ${legs.size} leg(s) as measurements.")
                                         },
+                                        onSavePath = ::saveTrace,
+                                        vertexCount = routePoints.size,
                                         onSendRoute = { session = session.open(EditorDialog.SendRoute) },
                                     )
                                     session.firstPoint != null -> Text(
@@ -655,6 +754,8 @@ private fun RouteControls(
     onFinish: () -> Unit,
     onContinue: () -> Unit,
     onSaveLegs: (RouteSummary) -> Unit,
+    onSavePath: (closed: Boolean) -> Unit,
+    vertexCount: Int,
     onSendRoute: () -> Unit,
 ) {
     val settings = rememberAppSettings()
@@ -665,6 +766,12 @@ private fun RouteControls(
         modifier = Modifier.padding(start = 8.dp, top = 6.dp),
     )
     if (scale != null) Text(scale, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelSmall)
+    if (finished) {
+        Row(Modifier.horizontalScroll(rememberScrollState())) {
+            TextButton(onClick = { onSavePath(false) }) { Text("Save polyline") }
+            TextButton(onClick = { onSavePath(true) }, enabled = vertexCount >= 3) { Text("Save polygon") }
+        }
+    }
     Row {
         if (finished && routeSummary != null) {
             TextButton(onClick = onSendRoute) { Text("Send to run") }

@@ -103,6 +103,7 @@ internal data class EditorSession(
 /** Which end of which item an [EndpointHandle] moves. */
 internal sealed interface EndpointTarget {
     data class Measurement(val id: String) : EndpointTarget
+    data class Path(val id: String) : EndpointTarget
     data class DocumentReference(val index: Int) : EndpointTarget
     data class ZoneReference(val zoneId: String, val index: Int) : EndpointTarget
 }
@@ -252,6 +253,12 @@ internal object EditorActions {
         if (point == handle.point) return EditorOutcome(session)
         val page = session.page
         return when (val target = handle.target) {
+            is EndpointTarget.Path -> {
+                val path = drawing.paths.firstOrNull { it.id == target.id && it.page == page } ?: return EditorOutcome(session)
+                val moved = path.moveVertex(handle.end, point)
+                    ?: return EditorOutcome(session, message = "That move would make the path invalid.")
+                EditorOutcome(session, change = { d -> d.copy(paths = d.paths.map { if (it == path) moved else it }) })
+            }
             is EndpointTarget.Measurement -> {
                 val m = drawing.measurements.firstOrNull { it.id == target.id } ?: return EditorOutcome(session)
                 val first = if (handle.end == 0) point else m.first
