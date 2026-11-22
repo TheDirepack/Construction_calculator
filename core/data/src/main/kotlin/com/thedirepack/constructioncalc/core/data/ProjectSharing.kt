@@ -68,10 +68,17 @@ object ProjectSharing {
         ) { writeProject(context, it, project, now) }
     }
 
+    /** Drawing PDFs and photo pins this device cannot include in a backup or recover on restore. */
+    fun missingBackupMedia(context: Context, backup: BackupDocument): List<String> {
+        val pdfs = PlanFiles(context)
+        val photos = PlanPhotos(context)
+        return BackupArchive.missingMedia(backup, { pdfs.file(it).isFile }, { photos.file(it).isFile })
+    }
+
     /** Shares a backup archive (`.backup.zip`, including available drawing PDFs). */
     fun shareBackupIntent(context: Context, backup: BackupDocument, fileName: String, toolTitle: (String) -> String): Intent {
         val body = buildString {
-            appendLine("Construction Calc backup")
+            appendLine(if (backup.incompleteMedia) "Incomplete Construction Calc backup" else "Construction Calc backup")
             backup.describe(toolTitle).forEach { appendLine("• $it") }
             appendLine()
             append("Open the attached file in Construction Calc (Settings › Data › Import) to restore it.")

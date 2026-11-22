@@ -3,12 +3,17 @@ package com.thedirepack.constructioncalc.core.data
 import com.thedirepack.constructioncalc.core.model.AppFileCodec
 import com.thedirepack.constructioncalc.core.model.BackupDocument
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
+import com.thedirepack.constructioncalc.core.model.PlanMark
+import com.thedirepack.constructioncalc.core.model.PlanMarkKind
+import com.thedirepack.constructioncalc.core.model.PlanPoint
 import com.thedirepack.constructioncalc.core.model.Project
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -66,34 +71,62 @@ class BackupArchiveTest {
         val missing = (0 until 600).map { i -> PlanDrawing(name = "M$i.pdf", sha256 = i.toString().padStart(64, '0')) }
         val big = backup.copy(projects = listOf(project1, Project.create("Lots", 40L).copy(drawings = missing)))
         val out = ByteArrayOutputStream()
-        BackupArchive.write(out, big) { hash -> if (hash == hashA) fileA else File(temp.root, "nope.pdf") }
+        BackupArchive.write(out, big.copy(incompleteMedia = true)) { hash ->
+            if (hash == hashA) fileA else File(temp.root, "nope.pdf")
+        }
 
         val restoredPdfs = mutableListOf<String>()
         val restored = BackupArchive.read(out.toByteArray().inputStream()) { pdf, hash -> pdf.readBytes(); restoredPdfs += hash }
-        assertEquals(big, restored)
+        assertEquals(big.copy(incompleteMedia = true), restored)
         assertEquals(listOf(hashA), restoredPdfs)
     }
 
-    @Test fun skipsUnavailablePdfsGracefully() {
+    @Test fun identifiesMissingPdfsAndPhotoPinsBeforeWritingAndOnlyAllowsAnExplicitPartialBackup() {
         val fileA = temp.newFile("a2.pdf").apply { writeBytes("only-a".encodeToByteArray()) }
+        val pin = PlanMark(
+            page = 0, kind = PlanMarkKind.PHOTO, points = listOf(PlanPoint(0.0, 0.0)),
+            text = "Feeder photo", photoSha256 = hashB,
+        )
         val backupWithMissing = backup.copy(
             projects = listOf(
                 project1,
-                Project.create("Missing", 30L).copy(drawings = listOf(PlanDrawing(name = "Gone.pdf", sha256 = missingHash))),
+                Project.create("Missing", 30L).copy(
+                    drawings = listOf(PlanDrawing(name = "Gone.pdf", sha256 = missingHash, marks = listOf(pin))),
+                ),
             ),
         )
+        assertEquals(
+            listOf("Missing / Gone.pdf (original PDF)", "Missing / Gone.pdf (page 1, Feeder photo)"),
+            BackupArchive.missingMedia(backupWithMissing, hasPdf = { it == hashA }, hasPhoto = { false }),
+        )
+        val pdfs: (String) -> File = { if (it == hashA) fileA else File(temp.root, "does-not-exist.pdf") }
         val out = ByteArrayOutputStream()
-        BackupArchive.write(out, backupWithMissing) { hash ->
-            if (hash == hashA) fileA else File(temp.root, "does-not-exist.pdf")
-        }
+        assertThrows(IOException::class.java) { BackupArchive.write(out, backupWithMissing, pdfs) }
+        assertEquals(0, out.size())
 
+        BackupArchive.write(out, backupWithMissing.copy(incompleteMedia = true), pdfs)
         val restoredPdfs = mutableMapOf<String, ByteArray>()
         val restored = BackupArchive.read(out.toByteArray().inputStream()) { pdf, hash ->
             restoredPdfs[hash] = pdf.readBytes()
         }
 
-        assertEquals(backupWithMissing, restored)
+        assertEquals(backupWithMissing.copy(incompleteMedia = true), restored)
         assertEquals(setOf(hashA), restoredPdfs.keys)
+        assertTrue(restored.incompleteMedia)
+    }
+
+    @Test fun legacyArchiveWithUnmarkedMissingMediaCanStillBeRead() {
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip ->
+            zip.putNextEntry(ZipEntry("backup.json"))
+            zip.write(AppFileCodec.encodeBackup(backup).encodeToByteArray())
+            zip.closeEntry()
+        }
+
+        val restored = BackupArchive.read(out.toByteArray().inputStream()) { _, _ -> error("Unexpected PDF") }
+        assertEquals(backup, restored)
+        assertFalse(restored.incompleteMedia)
+        assertEquals(3, BackupArchive.missingMedia(restored, hasPdf = { false }, hasPhoto = { false }).size)
     }
 
     @Test fun rejectsZipSlipAndUnexpectedEntries() {

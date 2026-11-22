@@ -1,11 +1,28 @@
 package com.thedirepack.constructioncalc.core.data
 
+import com.thedirepack.constructioncalc.core.model.PlanDrawing
+import com.thedirepack.constructioncalc.core.model.PlanMark
+import com.thedirepack.constructioncalc.core.model.PlanMarkKind
+import com.thedirepack.constructioncalc.core.model.PlanMeasurement
+import com.thedirepack.constructioncalc.core.model.PlanPath
+import com.thedirepack.constructioncalc.core.model.PlanPoint
+import com.thedirepack.constructioncalc.core.model.PlanReference
+import com.thedirepack.constructioncalc.core.model.PlanRunRoute
+import com.thedirepack.constructioncalc.core.model.PlanScaleMode
+import com.thedirepack.constructioncalc.core.model.PlanZone
+import com.thedirepack.constructioncalc.core.model.SheetRevision
+import com.thedirepack.constructioncalc.core.model.stored
+import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.measure.Quantity
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.InputStream
+import java.io.IOException
 
 class PlanFilesImportTest {
     @Test fun acceptsAPdfHeaderAtTheStartOrAfterLeadingJunk() {
@@ -37,5 +54,35 @@ class PlanFilesImportTest {
         }
         assertArrayEquals(data.copyOf(1024), trickle.readNBytesCompat(1024))
         assertArrayEquals(byteArrayOf(1, 2), ByteArrayInputStream(byteArrayOf(1, 2)).readNBytesCompat(1024))
+    }
+
+    @Test fun drawingJsonRejectsMissingPagesInTheMatchingPdf() {
+        val drawing = PlanDrawing(name = "Plans", sha256 = "a".repeat(64))
+        val first = PlanPoint(0.0, 0.0)
+        val second = PlanPoint(1.0, 1.0)
+        val points = listOf(first, second)
+        val mark = PlanMark(page = 1, kind = PlanMarkKind.DETAIL_LINK, points = listOf(first), targetPage = 1)
+        val zone = PlanZone(name = "Detail", page = 1, first = first, second = second)
+        val reference = PlanReference(first, second, Quantity.inches(Rational.ONE).stored(), page = 2)
+        val valid = drawing.copy(marks = listOf(mark))
+        DrawingJson.validatePages(DrawingJson.decode(DrawingJson.encode(valid)), 2)
+        DrawingJson.validatePages(drawing.copy(marks = listOf(mark.copy(targetPage = 5, targetDrawingId = "another"))), 2)
+
+        val invalid = listOf(
+            drawing.copy(marks = listOf(mark.copy(page = 2))),
+            drawing.copy(marks = listOf(mark.copy(targetPage = 2, targetDrawingId = drawing.id))),
+            drawing.copy(measurements = listOf(PlanMeasurement(page = 2, first = first, second = second))),
+            drawing.copy(routes = listOf(PlanRunRoute(runId = "run", page = 2, points = points))),
+            drawing.copy(paths = listOf(PlanPath(page = 2, points = points))),
+            drawing.copy(zones = listOf(zone.copy(page = 2))),
+            drawing.copy(zones = listOf(zone.copy(references = listOf(reference)))),
+            drawing.copy(calibration = drawing.calibration.copy(references = listOf(reference))),
+            drawing.copy(calibration = drawing.calibration.copy(pageModes = mapOf(2 to PlanScaleMode.UNIFORM))),
+            drawing.copy(sheetRevisions = mapOf(2 to SheetRevision("A1", "1", 1))),
+        )
+        for (candidate in invalid) {
+            val error = assertThrows(IOException::class.java) { DrawingJson.validatePages(candidate, 2) }
+            assertTrue(error.message.orEmpty().endsWith("missing PDF page 3."))
+        }
     }
 }

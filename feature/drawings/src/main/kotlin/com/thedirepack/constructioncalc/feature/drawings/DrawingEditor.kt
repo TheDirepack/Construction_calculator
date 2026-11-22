@@ -94,6 +94,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
+import java.util.UUID
 import kotlin.math.roundToInt
 
 /** A route ready for a run: where it was traced and its plan length, for the run's link back. */
@@ -390,7 +392,7 @@ internal fun DrawingEditor(
     }
     val savedRoutes = remember(drawing.routes, project.runs, page, session.focusedRouteId) {
         drawing.routes.filter { it.page == page }.map { route ->
-            val runName = project.runs.firstOrNull { it.id == route.runId }?.name ?: "Run (deleted)"
+            val runName = project.drawingRunName(route.runId)
             CanvasRoute(
                 points = route.points,
                 label = if (route.circuitTag.isBlank()) runName else "$runName · ${route.circuitTag}",
@@ -563,34 +565,84 @@ internal fun DrawingEditor(
         }
     }
 
-    fun writeExport(uri: Uri?, pdf: Boolean) {
-        if (uri == null) return
-        busy = true
-        scope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    context.contentResolver.openOutputStream(uri, "wt")?.use { stream ->
-                        if (pdf) {
-                            PlanExports.writePdf(context, drawing, stream, { quantity -> settings.format(quantity) }) { runId ->
-                                project.runs.firstOrNull { it.id == runId }?.name ?: "Run"
+    val routeLabel = project::drawingRunName
+    var pendingPdf by rememberSaveable { mutableStateOf<String?>(null) }
+    val pdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val file = pendingPdf?.let { File(context.cacheDir, it) }
+        pendingPdf = null
+        if (file != null) {
+            busy = true
+            scope.launch {
+                try {
+                    if (uri != null) {
+                        withContext(Dispatchers.IO) {
+                            file.inputStream().use { input ->
+                                val output = context.contentResolver.openOutputStream(uri, "wt")
+                                    ?: throw IOException("Could not open the export destination.")
+                                output.use { input.copyTo(it) }
                             }
                         }
-                        else PlanExports.writeJson(drawing, stream)
-                    } ?: error("Could not open the export destination.")
+                        host.showMessage("Annotated PDF saved.")
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    host.showMessage(error.message ?: "Could not save the drawing.")
+                } finally {
+                    file.delete()
+                    busy = false
                 }
-                host.showMessage(if (pdf) "Annotated PDF saved." else "Drawing JSON saved.")
+            }
+        }
+    }
+    val baseName = drawing.name.substringBeforeLast('.').ifBlank { "Drawing" }
+
+    fun preparePdfExport() {
+        if (pendingPdf != null || busy) return
+        busy = true
+        val file = File(context.cacheDir, "plan-export-${UUID.randomUUID()}.pdf")
+        scope.launch {
+            try {
+                PdfWork.render {
+                    file.outputStream().use { stream ->
+                        PlanExports.writePdf(context, drawing, stream, { settings.format(it) }, routeLabel)
+                    }
+                }
+                pendingPdf = file.name
+                pdf.launch("$baseName annotated.pdf")
             } catch (cancelled: CancellationException) {
+                file.delete()
                 throw cancelled
             } catch (error: Exception) {
-                host.showMessage(error.message ?: "Could not save the drawing.")
+                pendingPdf = null
+                file.delete()
+                host.showMessage(error.message ?: "Could not export the drawing.")
             } finally {
                 busy = false
             }
         }
     }
-    val pdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { writeExport(it, true) }
-    val json = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { writeExport(it, false) }
-    val baseName = drawing.name.substringBeforeLast('.').ifBlank { "Drawing" }
+
+    val json = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            busy = true
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openOutputStream(uri, "wt")?.use { PlanExports.writeJson(drawing, it) }
+                            ?: throw IOException("Could not open the export destination.")
+                    }
+                    host.showMessage("Drawing JSON saved.")
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    host.showMessage(error.message ?: "Could not save the drawing.")
+                } finally {
+                    busy = false
+                }
+            }
+        }
+    }
 
     fun exportSheet(request: SheetExportRequest, uri: Uri? = null, share: Boolean = false) {
         busy = true
@@ -599,9 +651,7 @@ internal fun DrawingEditor(
                 val chooser = PdfWork.render {
                     val write: (java.io.OutputStream) -> Unit = { stream ->
                         PlanExports.writeSheetPdf(context, drawing, request.source, request.crop, stream,
-                            { quantity -> settings.format(quantity) }) { runId ->
-                            project.runs.firstOrNull { it.id == runId }?.name ?: "Run"
-                        }
+                            { quantity -> settings.format(quantity) }, routeLabel)
                     }
                     if (share) {
                         ProjectSharing.shareFileIntent(context, request.fileName, "application/pdf",
@@ -676,7 +726,7 @@ internal fun DrawingEditor(
                 onTakeoff = { session = session.open(EditorDialog.Takeoff) },
                 onPageItems = { session = session.open(EditorDialog.PageItems) },
                 onExportSheet = { sheetExportOpen = true },
-                onExportPdf = { pdf.launch("$baseName annotated.pdf") },
+                onExportPdf = ::preparePdfExport,
                 onExportJson = { json.launch("$baseName.drawing.json") },
                 highlightsVisible = highlightsVisible,
                 onToggleHighlights = { highlightsVisible = !highlightsVisible; clearSelection() },
@@ -1762,3 +1812,6 @@ private fun EditorDialogs(
 }
 
 private const val LINE_MAP_DELAY_MS = 400L
+
+
+internal fun Project.drawingRunName(runId: String): String = run(runId)?.name ?: "Run (deleted)"

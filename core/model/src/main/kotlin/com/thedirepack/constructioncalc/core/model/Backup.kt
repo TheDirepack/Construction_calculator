@@ -36,6 +36,7 @@ data class BackupDocument(
     val projects: List<Project> = emptyList(),
     @SerialName("tool_data") val toolData: Map<String, JsonElement> = emptyMap(),
     val recents: List<RecentResult> = emptyList(),
+    @SerialName("incomplete_media") val incompleteMedia: Boolean = false,
 ) {
     val hasSettings: Boolean get() = settings != null || toolSettings.isNotEmpty()
 

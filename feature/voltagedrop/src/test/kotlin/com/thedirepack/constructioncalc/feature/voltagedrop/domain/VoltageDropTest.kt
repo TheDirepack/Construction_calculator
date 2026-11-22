@@ -152,10 +152,4 @@ class VoltageDropTest {
         assertEquals(ConductorSize.AWG_14, VoltageDrop.supportedSizes(ConductorMaterial.COPPER, Method.AC_TABLE_9).first())
         assertEquals(ConductorSize.KCMIL_1000, VoltageDrop.supportedSizes(ConductorMaterial.ALUMINUM, Method.AC_TABLE_9).last())
     }
-
-    @Test fun maxLengthRoundsDownToSixtyFourths() {
-        assertEquals(64L, VoltageDrop.floorToSixtyFourths(1.0))
-        assertEquals(64L, VoltageDrop.floorToSixtyFourths(1.0 + 0.9 / 64))
-        assertEquals(699L, VoltageDrop.floorToSixtyFourths(699.9 / 64))
-    }
 }

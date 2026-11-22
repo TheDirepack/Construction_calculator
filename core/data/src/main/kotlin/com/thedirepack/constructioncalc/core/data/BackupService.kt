@@ -1,7 +1,6 @@
 package com.thedirepack.constructioncalc.core.data
 
 import com.thedirepack.constructioncalc.core.model.BackupDocument
-import com.thedirepack.constructioncalc.core.model.ProjectMerge
 import com.thedirepack.constructioncalc.core.model.ProjectMergeMode
 import com.thedirepack.constructioncalc.core.model.RecentResult
 import kotlinx.serialization.json.JsonObject
@@ -93,19 +92,14 @@ class BackupService internal constructor(
     }
 
     /** Applies the chosen [sections] of [backup]. Projects merge or replace per [mode]. */
-    fun restore(backup: BackupDocument, sections: BackupSections, mode: ProjectMergeMode): Report {
+    suspend fun restore(backup: BackupDocument, sections: BackupSections, mode: ProjectMergeMode): Report {
         if (sections.settings) SettingsRepository.validateBackup(backup.settings, backup.toolSettings)
         val lines = mutableListOf<String>()
         if (sections.projects && backup.projects.isNotEmpty()) {
+            val plan = projects.restore(backup.projects, mode)
             when (mode) {
-                ProjectMergeMode.REPLACE -> {
-                    projects.deleteAll()
-                    projects.putAll(backup.projects)
-                    lines += "${backup.projects.size} projects restored"
-                }
+                ProjectMergeMode.REPLACE -> lines += "${backup.projects.size} projects restored"
                 ProjectMergeMode.MERGE -> {
-                    val plan = ProjectMerge.plan(projects.projects.value, backup.projects)
-                    projects.putAll(plan.toWrite)
                     lines += buildList {
                         if (plan.added > 0) add("${plan.added} added")
                         if (plan.updated > 0) add("${plan.updated} updated")

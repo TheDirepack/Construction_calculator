@@ -1,10 +1,12 @@
 package com.thedirepack.constructioncalc.core.data
 
 import com.thedirepack.constructioncalc.core.model.Project
+import com.thedirepack.constructioncalc.core.model.ProjectMergeMode
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -36,6 +38,10 @@ class ProjectRepositoryWriteOrderTest {
         override fun loadAll() = saved.values.toList()
         override fun save(project: Project) { saved[project.id] = project }
         override fun delete(projectId: String) { saved.remove(projectId) }
+        override fun writeBatch(upserts: List<Project>, removals: Set<String>) {
+            removals.forEach(::delete)
+            upserts.forEach(::save)
+        }
     }
 
     private var now = 1_000L
@@ -63,9 +69,12 @@ class ProjectRepositoryWriteOrderTest {
             val store = MemoryStore(mine)
             val repo = repo(store, io)
             val backup = mine.map { it.renamed(it.name + " (backup)", 5_000) }
-            repo.deleteAll()
-            repo.putAll(backup)
+            repo.edit(mine.first().id) { p, t -> p.renamed("Pending edit", t) }
+            val restore = CoroutineScope(Dispatchers.Unconfined).launch {
+                repo.restore(backup, ProjectMergeMode.REPLACE)
+            }
             io.drain()
+            assertTrue(restore.isCompleted)
             assertEquals("seed $seed", 10, store.saved.size)
             assertTrue(store.saved.values.all { it.name.endsWith("(backup)") })
         }

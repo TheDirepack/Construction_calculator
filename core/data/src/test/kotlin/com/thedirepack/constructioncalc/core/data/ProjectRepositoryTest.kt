@@ -17,6 +17,10 @@ class ProjectRepositoryTest {
         override fun loadAll() = saved.values.toList()
         override fun save(project: Project) { saved[project.id] = project }
         override fun delete(projectId: String) { saved.remove(projectId) }
+        override fun writeBatch(upserts: List<Project>, removals: Set<String>) {
+            removals.forEach(::delete)
+            upserts.forEach(::save)
+        }
     }
 
     private var now = 1_000L

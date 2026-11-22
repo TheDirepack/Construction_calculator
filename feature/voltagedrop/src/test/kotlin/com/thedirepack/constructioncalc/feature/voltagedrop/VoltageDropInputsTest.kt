@@ -6,6 +6,9 @@ import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.Stranding
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.measure.MetricDisplay
+import com.thedirepack.constructioncalc.core.measure.MetricResolution
+import com.thedirepack.constructioncalc.core.measure.Precision
 import com.thedirepack.constructioncalc.core.model.ToolInputs
 import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.model.stored
@@ -82,6 +85,19 @@ class VoltageDropInputsTest {
         assertTrue(output.notices.any { it.text.contains("75 °C") })
         assertTrue(output.notices.any { it.text.contains("Table 8") })
         assertTrue(output.summary.contains("12 AWG Cu"))
+    }
+
+    @Test fun maximumLengthIsFlooredAtDisplayPrecisionInBothSystems() {
+        fun maximum(settings: AppSettings) = voltageDropOutput(filled, settings).results.first { it.key == "max_length" }
+
+        val fractional = maximum(AppSettings())
+        assertEquals("58' 3 7/16\"", fractional.text)
+        assertEquals(Rational.of(22383, 32), fractional.rational)
+        assertEquals("58' 3\"", maximum(AppSettings(precision = Precision.HALF)).text)
+
+        val metric = AppSettings(unitSystem = UnitSystem.METRIC, metricDisplay = MetricDisplay.MILLIMETERS)
+        assertEquals("17766 mm", maximum(metric).text)
+        assertEquals("17766.8 mm", maximum(metric.copy(metricResolution = MetricResolution.TENTH_MILLIMETER)).text)
     }
 
     @Test fun parallelSetsShowInMinimumSize() {
