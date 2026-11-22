@@ -535,6 +535,8 @@ def main() -> None:
     ap.add_argument('--svg-batch', type=int, default=12)
     ap.add_argument('--prompt-allowlist', type=Path, default=None,
                     help='Optional JSON list of reviewed standalone NECA symbol IDs to use as prompts')
+    ap.add_argument('--prompt-denylist', type=Path, default=None,
+                    help='Optional local JSON list of known noisy / false-positive NECA reference IDs')
     ap.add_argument('--prompts-per-subcategory', type=int, default=0)
     ap.add_argument('--prompts-per-category', type=int, default=0)
     ap.add_argument('--max-prompts', type=int, default=0,
@@ -554,7 +556,7 @@ def main() -> None:
     ap.add_argument('--scan-mode', choices=['hierarchical', 'flat'], default='hierarchical',
                     help='Hierarchical shares each tile embedding across coarse-family and gated-subtype passes')
     ap.add_argument('--coarse-per-family', type=int, default=2)
-    ap.add_argument('--fine-per-family', type=int, default=0,
+    ap.add_argument('--fine-per-family', type=int, default=12,
                     help='Subtype prompts per active family; 0 = all in catalog')
     ap.add_argument('--coarse-score-thr', type=float, default=0.50,
                     help='Lower proposal threshold for high-recall family gating (not calibrated)')
@@ -582,6 +584,16 @@ def main() -> None:
 
     specs, catalog_report = list_neca_prompt_specs(
         args.neca_dir.resolve(), allow_raster_traces=not args.native_only)
+    if args.prompt_denylist:
+        denied = json.loads(args.prompt_denylist.read_text())
+        if not isinstance(denied, list) or not all(isinstance(i, str) for i in denied):
+            ap.error('--prompt-denylist must be a JSON list of NECA symbol IDs')
+        denied_ids = set(denied)
+        unknown_ids = denied_ids - {g.symbol_id for g in specs}
+        if unknown_ids:
+            ap.error(f'unknown denied NECA symbols: {sorted(unknown_ids)[:12]}')
+        specs = [g for g in specs if g.symbol_id not in denied_ids]
+        catalog_report['manually_excluded_noisy_references'] = sorted(denied_ids)
     allowlist = None
     if args.prompt_allowlist:
         ids = json.loads(args.prompt_allowlist.read_text())
