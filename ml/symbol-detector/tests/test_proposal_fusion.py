@@ -40,3 +40,22 @@ def test_reject_nonfinite_or_inverted_boxes():
             merge_sam_proposals([d])
     with pytest.raises(ValueError):
         merge_sam_proposals([], iou_threshold=0)
+
+
+
+def test_nested_different_size_boxes_are_one_device():
+    # A small tight symbol box and a 26x26 box have IoU < 0.50
+    # despite enclosing the same symbol center.
+    first = det(100, 'switch', .91, 's1')
+    first['box_px'] = [100, 100, 118, 118]
+    second = det(96, 'switch', .87, 's2')
+    second['box_px'] = [96, 96, 122, 122]
+    assert len(merge_sam_proposals([first, second])) == 1
+
+
+def test_adjacent_real_symbols_are_not_merged_by_containment_gate():
+    left = det(100, 'receptacle', .90, 'r1')
+    left['box_px'] = [100, 100, 118, 118]
+    right = det(120, 'receptacle', .89, 'r2')
+    right['box_px'] = [120, 100, 138, 118]
+    assert len(merge_sam_proposals([left, right])) == 2
