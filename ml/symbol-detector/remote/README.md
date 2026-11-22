@@ -107,3 +107,63 @@ Full-run defaults (2 composites per page, 16 tiles, 3 variants) give roughly
 65k training tiles, about 15 min per epoch (an estimate scaled from the smoke
 run). Early stopping (patience 40) can end it before 300 epochs; that has not
 been measured yet.
+
+
+## SAM 3.1 NECA proposal generation (2026-11-22)
+
+Use `scripts_run_sam3_pdfs.py` to generate **proposals**, not exhaustive or
+ground-truth labels. The NECA ZIP has 466 entries: the curated SAM catalog
+retains 284 candidate standalone/localized shapes across 16 categories and
+254 category/subcategory pairs. It omits modifier-only sections, line-based
+routing/assemblies, parent rows with separately extracted alternatives and
+generic basic silhouettes. All provenance is retained by NECA ID.
+
+```bash
+# CPU metadata/prompt audit; no model weights or CUDA device required:
+python scripts_run_sam3_pdfs.py --catalog-only \
+    --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
+    --data-root ../data/blueprints_and_libraries --out ../work/sam3_proposals
+
+# Default fast pass: 96 representative, category-balanced exemplars per tile.
+python scripts_run_sam3_pdfs.py \
+    --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
+    --data-root ../data/blueprints_and_libraries --out ../work/sam3_proposals
+
+# More recall candidates, more GPU time:
+# --max-prompts 192 --prompts-per-category 16
+# Full catalog: --max-prompts 0 --prompts-per-category 0 --prompts-per-subcategory 0
+# Audit a hand-selected subset: --prompt-allowlist verified_symbol_ids.json
+# Restrict to native vector originals: --native-only
+```
+
+Only selected SVGs are rasterized/pre-encoded. Fast selection prioritizes common
+forms (duplex receptacles, switches, lighting, smoke detectors, etc.) while
+preserving all 16 system categories. It is **not** guaranteed to preserve recall
+for rare types; compare fast, balanced and exhaustive modes on the same fixed,
+real annotated test documents before choosing a production preset. Speedups
+are predictions from fewer expensive exemplar queries, not measured GPU
+benchmarks. SAM's text/example API and the custom cached-geometry path also
+require version-specific validation against the installed SAM 3.1 release.
+
+Each output embeds a full allowed NECA category/subcategory and device/subtype
+vocabulary, while recording exactly which exemplars were queried. Output names
+include model/prompt/config and source fingerprints, preventing stale
+resume results from silently masking a changed detector configuration.
+
+Proposals flow through `scripts_circuitnet_review_sheets.py render` into
+VLM-editable contact sheets. A model must explicitly set `review_status`
+to `accepted` or `rejected` or leave it `uncertain`. `apply`
+excludes unreviewed/uncertain candidates, validates allowed subtypes and
+coordinates, and marks retained results as **provisional**.
+No VLM-approved page is considered completely annotated by default.
+
+### Partially annotated real drawings
+
+Import real device annotations as `annotation_completeness=partial` with
+`exhaustive_families=[]`. Individually verified positive boxes are useful,
+but missing objects must not become negative targets. The existing strict YOLO
+export will intentionally refuse incomplete pages unless its exploratory
+override is enabled. Do **not** use that override for final training:
+prepare manually verified complete crops/regions, or implement a masked-loss
+objective that ignores unverified pixels. Whole-page evaluation still needs
+a smaller *fully reviewed* held-out set.
