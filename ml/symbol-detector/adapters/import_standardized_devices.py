@@ -154,6 +154,9 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
             rinker_sheets[code] = pdf
 
     for jpath in sorted(data_root.rglob('*DEVICES.json')):
+        if 'evaluation' in jpath.parts:
+            counts['evaluation_holdout_skipped'] += 1
+            continue
         data = json.loads(jpath.read_text())
         devs = data.get('devices', [])
         if not devs:

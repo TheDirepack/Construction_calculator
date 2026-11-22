@@ -73,7 +73,184 @@ class NecaGlyph:
     name: str
     section: str
     canonical_class: str
+    device_type: str  # v7 taxonomy device_type (e.g. receptacle, switch, light_fixture, fire_alarm, data_outlet, ...)
+    subtype: str      # v7 taxonomy subtype (e.g. duplex, quad, gfci_duplex, three_way, dimmer, three_way_dimmer, ...)
     alpha: np.ndarray  # uint8 (H, W) cropped tight ink alpha mask
+
+
+def map_neca_to_v7(section: str, name: str) -> tuple[str, str]:
+    """Map a NECA 100-2013 symbol (section, name) to exact v7 (device_type, subtype)."""
+    s = (section or '').lower()
+    n = (name or '').lower()
+
+    # Receptacles / outlets
+    if 'outlet' in s or 'receptacle' in s or 'receptacle' in n:
+        is_gfci = any(k in n for k in ('gfci', 'gfi', 'ground fault'))
+        is_sw = 'switch' in n
+        if 'quad' in n or 'quadruplex' in n or 'four' in n:
+            if is_gfci and is_sw:
+                return 'receptacle', 'gfci_switched_quad'
+            if is_gfci:
+                return 'receptacle', 'gfci_quad'
+            if is_sw:
+                return 'receptacle', 'switched_quad'
+            return 'receptacle', 'quad'
+        if 'duplex' in n:
+            if is_gfci and is_sw:
+                return 'receptacle', 'gfci_switched_duplex'
+            if is_gfci:
+                return 'receptacle', 'gfci_duplex'
+            if is_sw:
+                return 'receptacle', 'switched_duplex'
+            return 'receptacle', 'duplex'
+        if 'single' in n or 'simplex' in n:
+            if is_gfci:
+                return 'receptacle', 'gfci_single'
+            if is_sw:
+                return 'receptacle', 'switched_single'
+            return 'receptacle', 'single'
+        if any(k in n for k in ('special', 'range', 'dryer', '250v', '208v', 'twist', 'locking', 'clock', 'floor')):
+            return 'receptacle', 'special_purpose'
+        return 'receptacle', 'unspecified'
+
+    # Switches & sensors
+    if 'switch' in s or 'sensor' in s:
+        if 'thermostat' in n:
+            return 'thermostat', 'thermostat'
+        if 'temperature' in n:
+            return 'temperature_sensor', 'temperature_sensor'
+        if 'occupancy' in n:
+            return ('switch', 'occupancy_sensor_switch') if 'switch' in n else ('occupancy_sensor', 'occupancy_sensor')
+        if 'vacancy' in n:
+            return ('switch', 'vacancy_sensor_switch') if 'switch' in n else ('occupancy_sensor', 'vacancy_sensor')
+        is_dim = 'dimmer' in n
+        if 'four-way' in n or 'four way' in n or '4-way' in n or '4 way' in n:
+            return 'switch', ('four_way_dimmer' if is_dim else 'four_way')
+        if 'three-way' in n or 'three way' in n or '3-way' in n or '3 way' in n:
+            return 'switch', ('three_way_dimmer' if is_dim else 'three_way')
+        if is_dim:
+            return 'switch', 'dimmer'
+        if 'double-pole' in n or 'double pole' in n or '2-pole' in n:
+            return 'switch', 'double_pole'
+        if 'single-pole' in n or 'single pole' in n or '1-pole' in n:
+            return 'switch', 'single_pole'
+        if 'key' in n:
+            return 'switch', 'key_operated'
+        if 'timer' in n or 'time' in n:
+            return 'switch', 'timer'
+        if 'pilot' in n:
+            return 'switch', 'pilot_light'
+        if 'low voltage' in n or 'low-voltage' in n:
+            return 'switch', 'low_voltage_control'
+        if 'momentary' in n or 'pushbutton' in n:
+            return 'switch', 'momentary'
+        if 'scene' in n:
+            return 'switch', 'scene_control'
+        if 'motor' in n:
+            return 'switch', 'motor_starter_switch'
+        if 'sensor' in n:
+            return 'switch', 'sensor_switch'
+        return 'switch', 'unspecified'
+
+    # Luminaires / light fixtures
+    if 'luminaire' in s:
+        if 'exit' in n:
+            return 'light_fixture', 'exit_sign'
+        if '2x2' in n or '2 x 2' in n:
+            return 'light_fixture', '2x2'
+        if '2x4' in n or '2 x 4' in n:
+            return 'light_fixture', '2x4'
+        if 'wall' in n or 'sconce' in n or 'bracket' in n:
+            return 'light_fixture', 'wall_light'
+        if 'strip' in n or 'continuous' in n:
+            return 'light_fixture', 'strip'
+        if 'linear' in n or 'fluorescent' in n or 'rectangular' in n:
+            return 'light_fixture', 'linear'
+        if 'recessed' in n or 'downlight' in n or 'incandescent' in n or 'pendant' in n or 'ceiling' in n:
+            return 'light_fixture', 'downlight'
+        return 'light_fixture', 'other'
+
+    # Fire alarm
+    if 'fire alarm' in s or 'fire safety' in s:
+        if 'duct' in n and 'smoke' in n:
+            return 'fire_alarm', 'duct_smoke_detector'
+        if 'beam' in n and 'smoke' in n:
+            return 'fire_alarm', 'beam_smoke_detector'
+        if 'smoke' in n and ('co' in n or 'carbon' in n):
+            return 'fire_alarm', 'smoke_co_detector'
+        if 'smoke' in n:
+            return 'fire_alarm', 'smoke_detector'
+        if 'heat' in n or 'thermal' in n:
+            return 'fire_alarm', 'heat_detector'
+        if 'pull' in n or 'manual' in n or 'master box' in n:
+            return 'fire_alarm', 'pull_station'
+        if 'horn' in n and ('strobe' in n or 'visual' in n):
+            return 'fire_alarm', 'horn_strobe'
+        if 'speaker' in n and ('strobe' in n or 'visual' in n):
+            return 'fire_alarm', 'speaker_strobe'
+        if 'strobe' in n or 'visual' in n or 'beacon' in n:
+            return 'fire_alarm', 'strobe'
+        if 'horn' in n or 'siren' in n or 'klaxon' in n:
+            return 'fire_alarm', 'horn'
+        if 'speaker' in n:
+            return 'fire_alarm', 'speaker'
+        if 'bell' in n:
+            return 'fire_alarm', 'sprinkler_bell'
+        if 'annunciator' in n:
+            return 'fire_alarm', 'annunciator'
+        if 'panel' in n or 'facp' in n:
+            return 'fire_alarm', 'control_panel'
+        if 'relay' in n:
+            return 'fire_alarm', 'relay_module'
+        if 'test' in n:
+            return 'fire_alarm', 'remote_test_station'
+        return 'fire_alarm', 'module'
+
+    # Junction boxes
+    if 'box' in s:
+        return 'junction_box', 'junction_box'
+
+    # Communications / teledata / AV
+    if 'teledata' in s or 'communications' in s:
+        if 'speaker' in n:
+            return 'speaker', 'speaker'
+        if 'telephone' in n and ('data' in n or 'combo' in n or 'combination' in n):
+            return 'data_outlet', 'data_telephone'
+        if 'telephone' in n or 'phone' in n:
+            return 'data_outlet', 'telephone'
+        return 'data_outlet', 'data'
+
+    # Security
+    if 'security' in s:
+        if 'camera' in n or 'cctv' in n:
+            return 'security_device', 'security_camera'
+        if 'card' in n or 'reader' in n:
+            return 'security_device', 'access_card_reader'
+        if 'contact' in n or 'magnetic' in n:
+            return 'security_device', 'magnetic_door_contact'
+        if 'exit' in n or 'rex' in n:
+            return 'security_device', 'request_to_exit'
+        if 'panic' in n or 'duress' in n:
+            return 'security_device', 'panic_button'
+        if 'lock' in n or 'strike' in n:
+            return 'security_device', 'door_lock'
+        if 'panel' in n:
+            return 'security_device', 'access_control_panel'
+        return 'security_device', 'door_controller'
+
+    # HVAC / Motorized / Power
+    if 'hvac' in s or 'motorized' in s:
+        if 'exhaust' in n and 'fan' in n:
+            return 'exhaust_fan', 'exhaust_fan'
+        if 'ceiling' in n and 'fan' in n:
+            return 'ceiling_fan', 'ceiling_fan'
+        if 'pump' in n:
+            return 'pump', 'circulator_pump'
+        if 'thermostat' in n:
+            return 'thermostat', 'thermostat'
+        return 'hvac_device', 'equipment_other'
+
+    return 'other_device', 'unspecified'
 
 
 def _rasterize_svg_alpha(svg_path: Path, render_height: int = 128) -> np.ndarray | None:
@@ -132,12 +309,15 @@ class NecaSymbolBank:
             alpha = _rasterize_svg_alpha(svg_path, render_height=render_height)
             if alpha is None:
                 continue
+            dev_type, subtype = map_neca_to_v7(sec, entry.get('name', ''))
             self.by_class[cls].append(NecaGlyph(
                 symbol_id=entry['id'],
                 code=entry.get('code', ''),
                 name=entry.get('name', ''),
                 section=sec,
                 canonical_class=cls,
+                device_type=dev_type,
+                subtype=subtype,
                 alpha=alpha,
             ))
 
@@ -396,6 +576,8 @@ def composite_neca_page(
         placed.append({
             'instance_id': f'neca_{tag}_{len(placed):03d}',
             'symbol_family': glyph.canonical_class,
+            'device_type': glyph.device_type,
+            'subtype': glyph.subtype,
             'symbol_variant': glyph.symbol_id,
             'neca_code': glyph.code,
             'neca_name': glyph.name,

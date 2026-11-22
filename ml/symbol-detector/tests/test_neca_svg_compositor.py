@@ -23,6 +23,8 @@ class _StubNecaBank:
                 name='Duplex Receptacle',
                 section='Outlets and Receptacles',
                 canonical_class='receptacle',
+                device_type='receptacle',
+                subtype='duplex',
                 alpha=alpha,
             ),
             NecaGlyph(
@@ -31,6 +33,8 @@ class _StubNecaBank:
                 name='Ceiling Luminaire',
                 section='Luminaires',
                 canonical_class='luminaire',
+                device_type='light_fixture',
+                subtype='downlight',
                 alpha=alpha,
             ),
         ]

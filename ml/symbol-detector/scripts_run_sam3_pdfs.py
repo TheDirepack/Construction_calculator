@@ -47,6 +47,110 @@ SKIP_NAME_PATTERNS = (
     'difference in room annotation',
 )
 
+# Fast text-based page pre-filter patterns (checked via PyMuPDF page.get_text() in ~2ms)
+_ELEC_SHEET_RE = re.compile(
+    r'\b(?:E|EL|EP|FA|FP|T|ES|ED)[-_.]?\d{1,3}(?:\.\d+)?[A-Z]?\b',
+    re.IGNORECASE,
+)
+_ELEC_KEYWORDS = (
+    'electrical', 'lighting', 'power plan', 'receptacle', 'fire alarm',
+    'panelboard', 'branch circuit', 'luminaire', 'switch', 'duplex',
+    'emergency lighting', 'exit sign', 'telecommunications', 'low voltage',
+    'power and systems', 'lighting and power', 'electrical floor',
+)
+_SKIP_PAGE_KEYWORDS = (
+    'cover sheet', 'title sheet', 'sheet index', 'drawing index', 'index of drawings',
+    'table of contents', 'vicinity map', 'location map', 'general notes',
+    'panel schedule', 'lighting fixture schedule', 'luminaire schedule',
+    'riser diagram', 'one-line diagram', 'one line diagram', 'single line diagram',
+    'single-line diagram', 'door schedule', 'finish schedule', 'room finish',
+    'equipment schedule', 'mechanical schedule', 'plumbing schedule',
+    'specifications', 'code summary', 'life safety code', 'accessibility details',
+    'building elevations', 'exterior elevations', 'interior elevations',
+    'building sections', 'wall sections', 'typical wall', 'foundation plan',
+    'roof framing', 'structural notes', 'grading plan', 'drainage plan',
+    'erosion control', 'landscape plan', 'irrigation plan', 'plumbing plan',
+    'hvac plan', 'mechanical plan', 'ductwork', 'civil notes', 'survey',
+)
+
+
+_COVER_OR_INDEX_KEYWORDS = (
+    'cover sheet', 'title sheet', 'sheet index', 'drawing index', 'index of drawings',
+    'table of contents', 'vicinity map', 'location map',
+)
+
+
+def should_scan_page(page: pymupdf.Page, p0: int, n_pages: int, *, min_page_pts: float = 900.0) -> tuple[bool, str]:
+    """Fast (~2ms) pre-filter to drop cover sheets, schedules, specs, and non-electrical disciplines."""
+    pw, ph = float(page.rect.width), float(page.rect.height)
+    if n_pages > 10 and max(pw, ph) < min_page_pts:
+        return False, 'small_page'
+
+    raw_text = page.get_text('text') or ''
+    low = ' '.join(raw_text.lower().split())
+
+    # Always skip cover / title / drawing-index / vicinity-map sheets BEFORE checking electrical keywords
+    # (otherwise an Index of Drawings listing "E2.1 LIGHTING AND POWER PLAN" slips through!)
+    for kw in _COVER_OR_INDEX_KEYWORDS:
+        if kw in low:
+            return False, f'cover_or_index:{kw}'
+    if n_pages >= 4 and p0 == 0:
+        return False, 'cover_page_1'
+
+    # If page has almost no extractable text (scanned raster or stroked CAD font), keep it
+    if len(low) < 40:
+        return True, 'no_text_keep'
+
+    # Drop obvious schedule / diagram / spec / non-electrical sheets
+    has_elec_plan = any(k in low for k in (
+        'electrical plan', 'lighting plan', 'power plan', 'fire alarm plan',
+        'power and lighting', 'lighting and power', 'electrical floor plan',
+        'power & lighting', 'lighting & power', 'branch circuit', 'receptacle',
+    ))
+    if not has_elec_plan:
+        for kw in _SKIP_PAGE_KEYWORDS:
+            if kw in low:
+                return False, f'skip_kw:{kw}'
+
+    # Strong positive electrical signal
+    if has_elec_plan or any(k in low for k in _ELEC_KEYWORDS) or _ELEC_SHEET_RE.search(raw_text):
+        return True, 'elec_match'
+
+    # For large multi-discipline bid books (>8 pages), skip pages with zero electrical signal
+    if n_pages > 8:
+        return False, 'no_elec_signal'
+    return True, 'small_doc_keep'
+
+
+def deduplicate_svg_prompts(
+    glyphs: list[NecaGlyph],
+    geo_feats: torch.Tensor,
+    geo_masks: torch.Tensor,
+    *,
+    sim_threshold: float = 0.90,
+) -> tuple[list[NecaGlyph], torch.Tensor, torch.Tensor]:
+    """Greedily keep distinct visual prototypes within each fine-grained (device_type, subtype)."""
+    m = geo_masks.unsqueeze(-1).float()
+    pooled = (geo_feats.float() * m).sum(dim=1) / m.sum(dim=1).clamp(min=1.0)
+    pooled = torch.nn.functional.normalize(pooled, dim=-1)
+
+    keep_indices: list[int] = []
+    kept_by_key: dict[tuple[str, str], list[torch.Tensor]] = {}
+    for idx, g in enumerate(glyphs):
+        v = pooled[idx]
+        key = (g.device_type, g.subtype)
+        prev = kept_by_key.get(key, [])
+        if prev:
+            sims = torch.stack(prev, dim=0) @ v
+            if float(sims.max()) >= sim_threshold:
+                continue
+        keep_indices.append(idx)
+        kept_by_key.setdefault(key, []).append(v)
+
+    idx_t = torch.tensor(keep_indices, dtype=torch.long, device=geo_feats.device)
+    kept_glyphs = [glyphs[i] for i in keep_indices]
+    return kept_glyphs, geo_feats.index_select(0, idx_t), geo_masks.index_select(0, idx_t)
+
 
 def is_candidate_blueprint_pdf(path: Path) -> bool:
     low = path.name.lower()
@@ -306,7 +410,9 @@ def detect_page_sam3(
                         raw_dets.append({
                             'box_px': [gx0, gy0, gx1, gy1],
                             'score': float(scores_cpu[b_i, q_i]),
-                            'device_type': g.canonical_class,
+                            'device_type': g.device_type,
+                            'subtype': g.subtype,
+                            'broad_family': g.canonical_class,
                             'symbol_id': g.symbol_id,
                             'neca_code': g.code,
                             'neca_name': g.name,
@@ -336,8 +442,10 @@ def main() -> None:
     ap.add_argument('--max-pixels', type=int, default=20_000_000)
     ap.add_argument('--tile-size', type=int, default=1008)
     ap.add_argument('--overlap', type=int, default=128)
-    ap.add_argument('--svg-batch', type=int, default=8)
-    ap.add_argument('--score-thr', type=float, default=0.45)
+    ap.add_argument('--svg-batch', type=int, default=12)
+    ap.add_argument('--score-thr', type=float, default=0.55)
+    ap.add_argument('--svg-dedup-sim', type=float, default=0.90,
+                    help='Cosine similarity threshold in SAM3 prompt space to deduplicate near-identical SVG variants (1.0 disables)')
     ap.add_argument('--min-page-pts', type=float, default=900.0)
     ap.add_argument('--limit-pdfs', type=int, default=0)
     args = ap.parse_args()
@@ -359,7 +467,18 @@ def main() -> None:
     geo_feats, geo_masks, blank_tf, blank_tm = preencode_svg_prompts(
         model, processor, glyphs, device='cuda', dtype=dtype, target_px=44,
     )
-    print(f'Pre-encoded {len(glyphs)} SVGs in {time.time() - t_enc:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
+    if args.svg_dedup_sim < 1.0:
+        orig_n = len(glyphs)
+        glyphs, geo_feats, geo_masks = deduplicate_svg_prompts(
+            glyphs, geo_feats, geo_masks, sim_threshold=args.svg_dedup_sim,
+        )
+        dedup_counts = dict(Counter(g.canonical_class for g in glyphs))
+        print(
+            f'Deduplicated SVGs in SAM3 prompt space (sim>={args.svg_dedup_sim}): '
+            f'{orig_n} -> {len(glyphs)} distinct prototypes ({dedup_counts})',
+            flush=True,
+        )
+    print(f'Pre-encoded {len(glyphs)} active SVG prompts in {time.time() - t_enc:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
 
     data_root = args.data_root.resolve()
     out_dir = args.out.resolve()
@@ -396,12 +515,15 @@ def main() -> None:
         cls_counts: Counter = Counter()
         scanned_here = 0
 
+        skipped_reasons: Counter = Counter()
         try:
             for p0 in range(n_pages):
                 page = doc.load_page(p0)
-                pw, ph = float(page.rect.width), float(page.rect.height)
-                if n_pages > 10 and max(pw, ph) < args.min_page_pts:
+                keep_pg, reason = should_scan_page(page, p0, n_pages, min_page_pts=args.min_page_pts)
+                if not keep_pg:
+                    skipped_reasons[reason] += 1
                     continue
+                t_pg = time.time()
                 rgb, pw, ph = render_page_rgb(page, dpi=args.dpi, max_pixels=args.max_pixels)
                 rh, rw = rgb.shape[:2]
                 dets = detect_page_sam3(
@@ -413,6 +535,11 @@ def main() -> None:
                 )
                 scanned_here += 1
                 total_pages += 1
+                print(
+                    f'  [{idx}/{len(pdfs)}] {pdf_path.name[:34]:34s} p{p0 + 1:3d}/{n_pages:<3d} '
+                    f'({reason}) -> {len(dets):4d} devs ({time.time() - t_pg:4.1f}s)',
+                    flush=True,
+                )
 
                 sx_pt = pw / rw
                 sy_pt = ph / rh
@@ -425,12 +552,14 @@ def main() -> None:
                     by1 = round(ph - y0 * sy_pt, 2)
                     cx = round(0.5 * (bx0 + bx1), 2)
                     cy = round(0.5 * (by0 + by1), 2)
-                    cname = d['device_type']
+                    cname = f'{d["device_type"]}/{d["subtype"]}'
                     cls_counts[cname] += 1
                     page_dev_count += 1
                     pdf_devices.append({
                         'pdf_page': p0 + 1,
-                        'device_type': cname,
+                        'device_type': d['device_type'],
+                        'subtype': d['subtype'],
+                        'broad_family': d['broad_family'],
                         'neca_symbol_id': d['symbol_id'],
                         'neca_code': d['neca_code'],
                         'neca_name': d['neca_name'],

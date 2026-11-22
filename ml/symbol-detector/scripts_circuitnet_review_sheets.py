@@ -31,6 +31,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
+import shutil
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -41,13 +44,61 @@ import pymupdf
 
 COORD_MAX = 1000.0
 
+DEVICE_TAXONOMY_V7: dict[str, list[str]] = {
+    'receptacle': [
+        'unspecified', 'single', 'duplex', 'quad',
+        'gfci_single', 'gfci_duplex', 'gfci_quad',
+        'switched_single', 'switched_duplex', 'switched_quad',
+        'gfci_switched_duplex', 'gfci_switched_quad', 'special_purpose',
+    ],
+    'switch': [
+        'unspecified', 'single_pole', 'double_pole', 'three_way', 'four_way',
+        'dimmer', 'three_way_dimmer', 'four_way_dimmer', 'key_operated',
+        'occupancy_sensor_switch', 'vacancy_sensor_switch', 'sensor_switch',
+        'timer', 'pilot_light', 'low_voltage_control', 'momentary',
+        'scene_control', 'motor_starter_switch',
+    ],
+    'light_fixture': [
+        '2x2', '2x4', 'downlight', 'linear', 'strip', 'wall_light', 'exit_sign', 'other',
+    ],
+    'fire_alarm': [
+        'smoke_detector', 'duct_smoke_detector', 'heat_detector', 'smoke_co_detector',
+        'beam_smoke_detector', 'pull_station', 'horn', 'strobe', 'horn_strobe',
+        'speaker', 'speaker_strobe', 'control_panel', 'annunciator',
+        'module', 'relay_module', 'sprinkler_bell', 'remote_test_station',
+    ],
+    'data_outlet': ['data', 'data_telephone', 'telephone'],
+    'junction_box': ['junction_box'],
+    'occupancy_sensor': ['occupancy_sensor', 'vacancy_sensor'],
+    'thermostat': ['thermostat'],
+    'temperature_sensor': ['temperature_sensor'],
+    'speaker': ['speaker'],
+    'exhaust_fan': ['exhaust_fan'],
+    'ceiling_fan': ['ceiling_fan'],
+    'security_device': [
+        'access_card_reader', 'magnetic_door_contact', 'request_to_exit', 'panic_button',
+        'door_controller', 'access_control_panel', 'security_camera', 'door_lock', 'network_switch',
+    ],
+    'hvac_device': [
+        'air_handling_unit', 'vav', 'damper', 'diffuser', 'grille', 'exhaust_fan', 'heat_pump', 'equipment_other',
+    ],
+    'boiler': ['boiler'],
+    'pump': ['circulator_pump', 'hot_water_pump'],
+    'plumbing_fixture': ['sink', 'water_closet', 'floor_drain', 'floor_cleanout', 'valve', 'fixture_other'],
+}
+
 REFINEMENT_INSTRUCTIONS = (
-    "Each numbered cell (#01..#NN) shows a zoomed crop around one provisional CircuitNet "
-    "detection (red box) on a 0..1000 coordinate grid (origin at top-left of the image area "
-    "below the header bar; light grid lines at 250, 500, 750). For every item in `items`: "
+    "Each numbered cell (#01..#NN) shows a zoomed crop around one provisional detection "
+    "(red box) on a 0..1000 coordinate grid (origin at top-left of the image area below the "
+    "header bar; light grid lines at 250, 500, 750). For every item in `items`: "
     "(1) Set `keep` to false if it is a false positive / not a real electrical device; "
     "(2) Refine `refined_bbox_cell` = [x0, y0, x1, y1] tightly around the true symbol in 0..1000; "
-    "(3) Set `refined_device_type` if the provisional class is wrong; "
+    "(3) Set BOTH `refined_device_type` AND specific `refined_subtype` using `taxonomy` "
+    "(e.g. receptacle -> duplex/quad/gfci_duplex/gfci_quad/switched_duplex; "
+    "switch -> single_pole/three_way/four_way/dimmer/three_way_dimmer/four_way_dimmer/occupancy_sensor_switch; "
+    "light_fixture -> 2x2/2x4/downlight/linear/strip/wall_light/exit_sign; "
+    "fire_alarm -> smoke_detector/horn_strobe/pull_station/etc.) plus optional `attributes` "
+    "(e.g. weatherproof, floor_mount, dedicated, exit_sign face/arrows); "
     "(4) Set `on_wall` to true if the device mounts on/touches a wall and put `wall_contact_cell` "
     "= [wx, wy] at the exact outside wall contact point, OR set `on_wall` to false and put "
     "`wall_contact_cell` at the refined box center."
@@ -186,6 +237,7 @@ def draw_annotated_cell(
     slot: int,
     pdf_page: int,
     device_type: str,
+    subtype: str = '',
     score: float,
     header_h: int = 26,
     draw_grid: bool = True,
@@ -208,7 +260,7 @@ def draw_annotated_cell(
             cv2.putText(img, str(tick), (max(2, p - 10), 10), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (120, 120, 120), 1, cv2.LINE_AA)
             cv2.putText(img, str(tick), (2, min(cell_size - 3, p + 3)), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (120, 120, 120), 1, cv2.LINE_AA)
 
-    # Draw provisional CircuitNet bounding box in vivid red + center dot
+    # Draw provisional bounding box in vivid red + center dot
     u0, v0, u1, v1 = bbox_cell
     px0 = int(round((u0 / COORD_MAX) * cell_size))
     py0 = int(round((v0 / COORD_MAX) * cell_size))
@@ -223,14 +275,15 @@ def draw_annotated_cell(
     tile[:header_h, :] = (242, 244, 248)
     tile[header_h:, :] = img
 
-    short_cls = device_type[:15]
+    cls_str = f'{device_type}/{subtype}' if subtype and subtype != device_type else device_type
+    short_cls = cls_str[:22]
     label = f'#{slot:02d} p{pdf_page} {short_cls} {score:.2f}'
     cv2.putText(
         tile,
         label,
-        (5, header_h - 8),
+        (4, header_h - 8),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.42,
+        0.37,
         (20, 20, 20),
         1,
         cv2.LINE_AA,
@@ -262,7 +315,26 @@ def compose_contact_sheet(tiles: list[np.ndarray], *, cols: int, pad: int = 4) -
     return sheet
 
 
-def resolve_pdf_path(payload: dict[str, Any], data_root: Path | None) -> Path | None:
+def _sanitize_pdf_stem(name: str) -> str:
+    return re.sub(r'[^a-zA-Z0-9._-]+', '_', Path(name).stem).strip('_').lower()
+
+
+def build_pdf_index(data_root: Path | None) -> dict[str, Path]:
+    """Index all PDFs under data_root by exact lowercase name and sanitized stem."""
+    idx: dict[str, Path] = {}
+    if data_root is None or not data_root.is_dir():
+        return idx
+    for p in sorted(data_root.rglob('*.pdf')):
+        idx.setdefault(p.name.lower(), p)
+        idx.setdefault(_sanitize_pdf_stem(p.name), p)
+    return idx
+
+
+def resolve_pdf_path(
+    payload: dict[str, Any],
+    data_root: Path | None,
+    pdf_index: dict[str, Path] | None = None,
+) -> Path | None:
     rel = payload.get('source_pdf_relative')
     if data_root is not None and rel:
         cand = (data_root / rel).resolve()
@@ -273,7 +345,88 @@ def resolve_pdf_path(payload: dict[str, Any], data_root: Path | None) -> Path | 
         cand = Path(abs_p)
         if cand.is_file():
             return cand
+    src_file = payload.get('source_file') or (Path(rel).name if rel else '')
+    if src_file and pdf_index:
+        for key in (src_file.lower(), _sanitize_pdf_stem(src_file)):
+            if key in pdf_index and pdf_index[key].is_file():
+                return pdf_index[key]
     return None
+
+
+def build_agents_md(
+    *,
+    source_file: str,
+    total_devices: int,
+    total_batches: int,
+    pdf_included: bool,
+) -> str:
+    taxonomy_lines = '\n'.join(
+        f'- **`{dtype}`**: `{"`, `".join(subs)}`'
+        for dtype, subs in DEVICE_TAXONOMY_V7.items()
+    )
+    pdf_note = (
+        f'- **`{source_file}`**: The original source PDF is included in this archive for legend verification, '
+        'full-sheet context, vector geometry inspection, and exact wall-contact snapping.'
+        if pdf_included
+        else f'- **Source PDF**: `{source_file}` (not bundled in this archive; request it if legend/vector verification is needed).'
+    )
+    return f"""# Blueprint Device Refinement Instructions (`AGENTS.md`)
+
+## Goal
+Review the provisional bounding-box detections for **`{source_file}`** ({total_devices} candidates across {total_batches} batch sheet(s)), reject all false positives, tighten every true electrical device bounding box, assign the exact fine-grained **`v7` `device_type` + `subtype`**, and place the exact **wall-contact / center vector** for every kept device.
+
+## Archive Contents
+- `manifest.json`: Index of all batch PNGs and batch JSONs for this PDF.
+- `*_batch_NNN.png`: 50-up high-DPI contact sheets (10 columns × up to 5 rows; partial final rows are white-padded). Each cell has a header bar (`#NN p<page> <provisional_type> <score>`) above a square crop with a red provisional box and a faint `250 / 500 / 750` coordinate grid.
+- `*_batch_NNN.json`: Companion editable JSON for each sheet, containing one entry per numbered slot (`slot: 1..N`).
+{pdf_note}
+
+## Coordinate System (Cell-Local `0..1000`)
+- Every cell's image area (strictly **below** the gray header bar) uses normalized **`[0, 1000]`** coordinates:
+  - Origin `(0, 0)` is the **top-left** corner of the blueprint crop area.
+  - `(1000, 1000)` is the **bottom-right** corner of the blueprint crop area.
+  - Faint light-blue grid lines mark `250`, `500`, and `750` on both axes so you can read coordinates accurately.
+- **Do NOT alter `crop_pdf_rect_bl`** — our post-processing script uses it to convert your `[0..1000]` updates back into exact bottom-left PDF points with sub-0.05 pt precision.
+
+## Required Rules for Every Item in `items`
+1. **Triage / False-Positive Removal (`keep`)**:
+   - Set `"keep": false` for **anything that is not a real placed electrical device** on a floor/ceiling/power/lighting/fire-alarm plan:
+     - Cover sheets, title blocks, PE stamps, logos, vicinity/location maps, sheet indexes, general notes, specifications, schedules, riser/one-line diagrams, and **symbol legend examples** (never keep a legend entry as a placed device!).
+     - Ordinary text, room numbers, grid bubbles, dimension ticks, door/window tags, plumbing/civil/structural marks, or duplicate hits on the same symbol.
+   - Only set `"keep": true` for genuine placed electrical/low-voltage/fire-alarm devices.
+2. **Tight Bounding Box (`refined_bbox_cell`)**:
+   - Update `"refined_bbox_cell": [x0, y0, x1, y1]` in `[0..1000]` tightly around the **actual device symbol graphic only** (exclude circuit home-run arrows, adjacent walls, and nearby text callouts unless the letter is part of the symbol itself, like `S`, `S3`, `SD`, `GFI`).
+3. **Exact Fine-Grained Classification (`refined_device_type`, `refined_subtype`, `attributes`)**:
+   - Do **not** collapse devices into broad buckets like `other_device` or generic `receptacle`/`switch` when the symbol or legend specifies the exact type (e.g. `duplex` vs `quad` vs `gfci_duplex`, `single_pole` vs `three_way` vs `four_way` vs `dimmer` vs `three_way_dimmer` vs `four_way_dimmer`, `2x2` vs `2x4` vs `downlight` vs `linear` vs `wall_light` vs `exit_sign`).
+   - Use **`"unspecified"`** only when the drawing/legend genuinely does not distinguish the subtype.
+   - Put modifiers like `{{"weatherproof": true}}`, `{{"floor_mount": true}}`, `{{"dedicated": true}}`, or `exit_sign` face/arrow info inside `"attributes"`.
+4. **Wall Contact / Extra Vector (`on_wall`, `wall_contact_cell`)**:
+   - **If the device is mounted on / touching a wall**:
+     - Set `"on_wall": true`.
+     - Set `"wall_contact_cell": [wx, wy]` in `[0..1000]` to the **exact point on the outside surface of the wall** where the device symbol connects/mounts (the vector points from the refined box center to `[wx, wy]`).
+   - **If the device is NOT touching a wall** (e.g. ceiling luminaire, ceiling smoke detector, floor box, open-space device):
+     - Set `"on_wall": false`.
+     - Set `"wall_contact_cell": [cx, cy]` to the **exact center** of `refined_bbox_cell` (`[(x0+x1)/2, (y0+y1)/2]`).
+
+## Allowed `v7` Device Taxonomy (`refined_device_type` → `refined_subtype`)
+{taxonomy_lines}
+
+## Expected Output Format
+Return the updated `*_batch_NNN.json` file(s) with the **exact same filenames and structure**, keeping all `slot`, `device_index`, `pdf_page`, and `crop_pdf_rect_bl` fields intact, with these fields updated on every item:
+```json
+{{
+  "slot": 1,
+  "keep": true,
+  "refined_device_type": "switch",
+  "refined_subtype": "three_way_dimmer",
+  "attributes": {{}},
+  "refined_bbox_cell": [432.0, 448.0, 568.0, 552.0],
+  "on_wall": true,
+  "wall_contact_cell": [500.0, 552.0]
+}}
+```
+For rejected candidates, simply set `"keep": false` (you may leave the remaining fields as-is).
+"""
 
 
 def cmd_render(args: argparse.Namespace) -> None:
@@ -300,6 +453,7 @@ def cmd_render(args: argparse.Namespace) -> None:
     total_pdfs = 0
     total_sheets = 0
     total_crops = 0
+    pdf_index_map = build_pdf_index(data_root)
     pdf_index: list[dict[str, Any]] = []
 
     for jpath in json_files:
@@ -314,7 +468,7 @@ def cmd_render(args: argparse.Namespace) -> None:
             print(f'SKIP {jpath.name}: 0 devices (min_score={args.min_score})', flush=True)
             continue
 
-        pdf_path = resolve_pdf_path(payload, data_root)
+        pdf_path = resolve_pdf_path(payload, data_root, pdf_index_map)
         if pdf_path is None:
             print(f'SKIP {jpath.name}: source PDF not found ({payload.get("source_pdf_relative")})', flush=True)
             continue
@@ -359,6 +513,7 @@ def cmd_render(args: argparse.Namespace) -> None:
                         slot=slot,
                         pdf_page=pnum,
                         device_type=str(dev.get('device_type', 'unknown')),
+                        subtype=str(dev.get('subtype', '')),
                         score=float(dev.get('score', 0.0)),
                         draw_grid=not args.no_grid,
                     )
@@ -372,13 +527,17 @@ def cmd_render(args: argparse.Namespace) -> None:
                         'device_index': dev_idx,
                         'pdf_page': pnum,
                         'provisional_device_type': dev.get('device_type'),
+                        'provisional_subtype': dev.get('subtype', 'unspecified'),
+                        'neca_name': dev.get('neca_name'),
                         'score': dev.get('score'),
                         'crop_pdf_rect_bl': list(crop_bl),
                         'provisional_bbox_cell': bbox_cell,
                         'provisional_bbox_pdf_bl': bbox_bl,
-                        # Fields for the refinement model to update:
+                        # Fields for the refinement model to update (v7 taxonomy):
                         'keep': True,
                         'refined_device_type': dev.get('device_type'),
+                        'refined_subtype': dev.get('subtype', 'unspecified'),
+                        'attributes': {},
                         'refined_bbox_cell': bbox_cell,
                         'on_wall': None,
                         'wall_contact_cell': [cx_cell, cy_cell],
@@ -393,7 +552,9 @@ def cmd_render(args: argparse.Namespace) -> None:
                     raise OSError(f'Failed writing {img_path}')
 
                 batch_payload = {
-                    'schema': 'circuitnet_refinement_batch_v1',
+                    'schema': 'blueprint_device_refinement_batch_v2',
+                    'taxonomy_version': '7.0',
+                    'taxonomy': DEVICE_TAXONOMY_V7,
                     'source_file': payload.get('source_file'),
                     'source_pdf_relative': payload.get('source_pdf_relative'),
                     'source_pdf_absolute': payload.get('source_pdf_absolute'),
@@ -428,19 +589,49 @@ def cmd_render(args: argparse.Namespace) -> None:
         finally:
             doc.close()
 
+        pdf_included = False
+        if args.include_pdf:
+            dst_pdf = pdf_out_dir / pdf_path.name
+            if not dst_pdf.exists():
+                shutil.copy2(pdf_path, dst_pdf)
+            pdf_included = True
+
+        agents_md = build_agents_md(
+            source_file=pdf_path.name,
+            total_devices=len(indexed_devices),
+            total_batches=sheets_for_pdf,
+            pdf_included=pdf_included,
+        )
+        (pdf_out_dir / 'AGENTS.md').write_text(agents_md)
+        (pdf_out_dir / 'README.md').write_text(agents_md)
+
         manifest = {
             'pdf_folder': pdf_stem,
-            'source_file': payload.get('source_file'),
+            'source_file': pdf_path.name,
             'source_pdf_relative': payload.get('source_pdf_relative'),
             'source_circuitnet_json': str(jpath),
+            'pdf_included': pdf_included,
+            'instructions_file': 'AGENTS.md',
             'total_devices': len(indexed_devices),
             'total_batches': sheets_for_pdf,
             'batches': pdf_batches_meta,
         }
         (pdf_out_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2))
+
+        zip_file_name = None
+        if args.zip:
+            zip_path = out_root / f'{pdf_stem}.zip'
+            with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+                for f in sorted(pdf_out_dir.iterdir()):
+                    if f.is_file():
+                        zf.write(f, arcname=f'{pdf_stem}/{f.name}')
+            zip_file_name = zip_path.name
+
         pdf_index.append({
             'folder': pdf_stem,
-            'source_file': payload.get('source_file'),
+            'zip_file': zip_file_name,
+            'source_file': pdf_path.name,
+            'pdf_included': pdf_included,
             'total_devices': len(indexed_devices),
             'total_batches': sheets_for_pdf,
         })
@@ -448,7 +639,7 @@ def cmd_render(args: argparse.Namespace) -> None:
         total_pdfs += 1
         print(
             f'[{total_pdfs}] {pdf_stem}: {len(indexed_devices)} detections -> '
-            f'{sheets_for_pdf} sheet(s) in {pdf_out_dir}',
+            f'{sheets_for_pdf} sheet(s)' + (f' + {zip_file_name}' if zip_file_name else ''),
             flush=True,
         )
 
@@ -506,14 +697,17 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
                 'device_index': item.get('device_index'),
                 'pdf_page': int(item['pdf_page']),
                 'device_type': item.get('refined_device_type') or item.get('provisional_device_type'),
+                'subtype': item.get('refined_subtype') or item.get('provisional_subtype', 'unspecified'),
+                'attributes': item.get('attributes') or {},
                 'provisional_device_type': item.get('provisional_device_type'),
+                'provisional_subtype': item.get('provisional_subtype'),
                 'score': item.get('score'),
                 'symbol_bbox': bbox_bl,
                 'symbol_center': [cx, cy],
                 'on_wall': bool(on_wall) if on_wall is not None else False,
                 'wall_connection_point': wall_pt,
                 'target_vector_pts': vec_pts,
-                'status': 'refined_from_circuitnet',
+                'status': 'refined_v7',
             })
 
     return {
@@ -584,6 +778,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument('--pdf-filter', type=str, default='', help='Optional substring filter on *_CIRCUITNET.json name')
     r.add_argument('--limit-pdfs', type=int, default=0, help='Optional cap on number of PDFs (0 = all)')
     r.add_argument('--no-grid', action='store_true', help='Disable the 0..1000 coordinate helper grid overlay')
+    r.add_argument('--include-pdf', action='store_true', help='Bundle the original source PDF inside each folder/zip')
+    r.add_argument('--zip', action='store_true', help='Create one <pdf_stem>.zip archive per document in --out')
     r.set_defaults(func=cmd_render)
 
     a = sub.add_parser('apply', help='Convert model-refined batch JSONs back into PDF-point device JSONs')

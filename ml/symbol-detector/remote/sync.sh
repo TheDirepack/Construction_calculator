@@ -17,7 +17,7 @@ REPO="$(cd "$HERE/../.." && pwd)"
 ssh "$REMOTE" "mkdir -p $REMOTE_DIR/code $REMOTE_DIR/data $REMOTE_DIR/work"
 
 rsync -a --delete \
-  --exclude '__pycache__' --exclude '.pytest_cache' \
+  --exclude '__pycache__' --exclude '.pytest_cache' --exclude 'work/' \
   "$HERE/" "$REMOTE:$REMOTE_DIR/code/"
 echo "code -> $REMOTE:$REMOTE_DIR/code"
 
