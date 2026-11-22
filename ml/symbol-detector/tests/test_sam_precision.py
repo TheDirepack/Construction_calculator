@@ -13,7 +13,7 @@ def _dark_symbol_image(h=1100, w=1800):
     img = np.full((h, w, 3), 255, dtype=np.uint8)
     img[200:220, 210:230] = 45
     img[200:220, 500:520] = 45
-    img[200:220, 900:920] = 45
+    img[200:220, 950:970] = 45
     img[100:105, 30:300] = 0
     return img
 
@@ -43,7 +43,7 @@ def test_filter_drops_overlap_duplicates_blank_and_excess_family_hits():
     dets = [
         {'device_type': 'switch', 'score': .9, 'box_px': [205, 195, 235, 225]},
         {'device_type': 'switch', 'score': .85, 'box_px': [495, 195, 525, 225]},
-        {'device_type': 'switch', 'score': .84, 'box_px': [900, 195, 925, 225]},
+        {'device_type': 'switch', 'score': .84, 'box_px': [945, 195, 975, 225]},
         {'device_type': 'switch', 'score': .8, 'box_px': [700, 700, 740, 740]},
     ]
     stats = Counter()
