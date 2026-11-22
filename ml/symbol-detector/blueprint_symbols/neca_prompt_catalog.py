@@ -7,6 +7,7 @@ Categories describe the electrical discipline; training categories are separate.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
@@ -258,12 +259,63 @@ def choose_neca_prompts(specs: list[SamNecaPrompt], *, per_subcategory: int = 2,
     return chosen
 
 
-def load_neca_sam_prompts(specs: list[SamNecaPrompt], root: Path,
-                          *, render_height: int = 96) -> list[SamNecaPrompt]:
-    """Rasterize only actually selected exemplars (not every source SVG)."""
+def load_neca_sam_prompts(
+    specs: list[SamNecaPrompt], root: Path, *,
+    render_height: int = 96,
+    cache_dir: Path | None = None,
+    check_quality: bool = True,
+    reference_stats: Counter | None = None,
+) -> list[SamNecaPrompt]:
+    """Rasterize selected exemplars with content-addressed local PNG caching.
+
+    Quality checks are applied after loading the cache, so tuning the gate
+    doesn't require rerasterizing every vector source. An immutable SVG
+    content digest protects against changed underlying NECA glyphs.
+    """
+    import cv2
     from blueprint_symbols.neca_svg_compositor import _rasterize_svg_alpha
+    from blueprint_symbols.reference_quality import reference_quality_reason
+
+    root = Path(root)
+    if cache_dir is not None:
+        cache_dir = Path(cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
     result = []
     for p in specs:
-        alpha = _rasterize_svg_alpha(Path(root) / p.file, render_height=render_height)
-        if alpha is not None: result.append(replace(p, alpha=alpha))
+        svg_path = root / p.file
+        if not svg_path.is_file():
+            if reference_stats is not None:
+                reference_stats['missing_source'] += 1
+            continue
+        cached = None
+        if cache_dir is not None:
+            digest = hashlib.sha256(
+                b'neca-alpha-v1/' + str(render_height).encode() + b'/' +
+                svg_path.read_bytes()
+            ).hexdigest()
+            cached = cache_dir / (digest + '.png')
+        alpha = None
+        if cached is not None and cached.is_file():
+            alpha = cv2.imread(str(cached), cv2.IMREAD_GRAYSCALE)
+            if alpha is not None and reference_stats is not None:
+                reference_stats['raster_cache_hits'] += 1
+        if alpha is None:
+            alpha = _rasterize_svg_alpha(svg_path, render_height=render_height)
+            if alpha is not None and cached is not None:
+                temp = cached.with_suffix('.tmp.png')
+                if cv2.imwrite(str(temp), alpha):
+                    temp.replace(cached)
+            if reference_stats is not None:
+                reference_stats['rasterized'] += 1
+        if alpha is None:
+            if reference_stats is not None:
+                reference_stats['unrenderable'] += 1
+            continue
+        if check_quality:
+            reason = reference_quality_reason(alpha)
+            if reason is not None:
+                if reference_stats is not None:
+                    reference_stats['reference_rejected_' + reason] += 1
+                continue
+        result.append(replace(p, alpha=alpha))
     return result
