@@ -447,10 +447,12 @@ def detect_page_sam3(
                             })
                     return found
 
-                def gate(detections: list[dict[str, Any]], family_limit: int):
+                def gate(detections: list[dict[str, Any]], family_limit: int,
+                         *, enforce_tile_owner: bool = True):
                     return filter_sam_detections(
                         detections, page_rgb, tile_x=x0, tile_y=y0,
                         tile_size=tile_size, overlap=overlap,
+                        use_owner=enforce_tile_owner,
                         max_aspect_ratio=max_box_aspect,
                         min_ink_fraction=min_ink_fraction,
                         max_ink_fraction=max_ink_fraction,
@@ -467,7 +469,7 @@ def detect_page_sam3(
                 else:
                     coarse = gate(
                         query_indices(prompt_plan['coarse_indices'], 'coarse', coarse_score_thr),
-                        coarse_family_limit,
+                        coarse_family_limit, enforce_tile_owner=False,
                     )
                     active_types = {d['device_type'] for d in coarse}
                     fallback = bool(fallback_every_tiles and tile_no % fallback_every_tiles == 0)
@@ -679,8 +681,19 @@ def main() -> None:
 
     # Prompt/model changes must invalidate resume cache; otherwise revised
     # detectors silently read old labels and appear to run impossibly fast.
+    # Only inference-affecting inputs belong in this fingerprint.
+    # Cache statistics differ between first run and warm runs.
+    reference_digest = hashlib.sha256()
+    for ref in glyphs:
+        reference_digest.update(ref.symbol_id.encode('utf-8'))
+        reference_digest.update(hashlib.sha256(ref.alpha.tobytes()).digest())
     run_config = {
         'model_id': args.model_id,
+        'model_resolved_revision': getattr(model.config, '_commit_hash', None),
+        'model_config_hash': hashlib.sha256(
+            model.config.to_json_string().encode('utf-8')
+        ).hexdigest(),
+        'reference_ink_sha256': reference_digest.hexdigest(),
         'prompt_ids': [g.symbol_id for g in glyphs],
         'render_dpi': args.dpi,
         'max_pixels': args.max_pixels,
@@ -694,7 +707,6 @@ def main() -> None:
         'native_only': args.native_only,
         'reference_render_height': args.reference_render_height,
         'reference_quality': not args.no_reference_quality,
-        'reference_quality_stats': dict(reference_stats),
         'prompt_feature_cache_schema': 2,
         'scan_mode': args.scan_mode,
         'coarse_per_family': args.coarse_per_family,
