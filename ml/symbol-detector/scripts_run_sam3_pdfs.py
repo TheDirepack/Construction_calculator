@@ -505,6 +505,24 @@ def main() -> None:
         )
     print(f'Pre-encoded {len(glyphs)} active SVG prompts in {time.time() - t_enc:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
 
+    # Prompt/model changes must invalidate resume cache; otherwise revised
+    # detectors silently read old labels and appear to run impossibly fast.
+    run_config = {
+        'model_id': args.model_id,
+        'prompt_ids': [g.symbol_id for g in glyphs],
+        'render_dpi': args.dpi,
+        'max_pixels': args.max_pixels,
+        'tile_size': args.tile_size,
+        'tile_overlap': args.overlap,
+        'score_threshold': args.score_thr,
+        'prompt_dedup_similarity': args.svg_dedup_sim,
+        'min_page_pts': args.min_page_pts,
+        'prompt_budgets': catalog_summary['prompt_budgets'],
+        'native_only': args.native_only,
+    }
+    run_config_hash = hashlib.sha256(
+        json.dumps(run_config, sort_keys=True).encode('utf-8')
+    ).hexdigest()[:12]
     data_root = args.data_root.resolve()
     out_dir = args.out.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -521,9 +539,11 @@ def main() -> None:
 
     for idx, pdf_path in enumerate(pdfs, start=1):
         rel = str(pdf_path.relative_to(data_root))
-        short_hash = hashlib.sha256(rel.encode()).hexdigest()[:8]
+        source_stat = pdf_path.stat()
+        source_fingerprint = f'{rel}/{source_stat.st_size}/{source_stat.st_mtime_ns}'
+        short_hash = hashlib.sha256(source_fingerprint.encode('utf-8')).hexdigest()[:8]
         safe_stem = re.sub(r'[^a-zA-Z0-9._-]+', '_', pdf_path.stem)[:80]
-        out_json = out_dir / f'{safe_stem}_{short_hash}_SAM3.json'
+        out_json = out_dir / f'{safe_stem}_{short_hash}_{run_config_hash}_SAM3.json'
         if out_json.is_file():
             continue
 
@@ -623,6 +643,8 @@ def main() -> None:
             'verified_ground_truth': False,
             'prompt_selection': 'allowlisted' if args.prompt_allowlist else 'hierarchical_neca',
             'prompt_catalog': {**catalog_summary, 'active_after_render_and_dedup': len(glyphs)},
+            'run_config': run_config,
+            'run_config_hash': run_config_hash,
             'prompt_taxonomy': {
                 dtype: sorted({g.subtype for g in specs if g.device_type == dtype})
                 for dtype in sorted({g.device_type for g in specs})
