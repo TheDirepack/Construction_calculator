@@ -252,7 +252,8 @@ Ordered by priority and reasonableness of implementation — start at Tier 1 and
 - [x] Undo/redo stack for drawing markups and measurements
 - [x] Loupe / magnifier overlay while snapping endpoints on plans
 - [x] Multi-segment / polyline measurement on plans (summing chained legs + bend count straight into a Project Run)
-- [ ] "View on plan" link back from a run to the route it came from
+- [x] "View on plan" link back from a run to the route it came from (the drawing keeps each sent route; Takeoff totals flag routes whose plan length moved after recalibration)
+- [x] Phone-width drawing toolbar (fixed page/undo/redo row, tool picker, overflow menu), typed editor state, Adjust tool (drag measurement and dimension ends, label measurements), full architectural/engineering/metric presets, line-end snapping, takeoff totals by page/label with symbol counts, sturdier PDF import
 
 ### Tier 5 — Optional Hardware, Vision & Context Integrations *(larger effort / optional permissions, off by default)*
 - [ ] Optional on-app-open nearby-project suggestion using Android's native `LocationManager` and coarse location only (`ACCESS_COARSE_LOCATION`, no precise GPS, no background geofencing, no Play Services)

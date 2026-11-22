@@ -3,6 +3,8 @@ package com.thedirepack.constructioncalc.feature.drawings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -45,7 +47,6 @@ import com.thedirepack.constructioncalc.core.model.PlanScaleMode
 import com.thedirepack.constructioncalc.core.model.PlanZone
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.RunPath
-import com.thedirepack.constructioncalc.core.model.SheetSize
 import com.thedirepack.constructioncalc.core.model.StoredQuantity
 import com.thedirepack.constructioncalc.core.model.stored
 import com.thedirepack.constructioncalc.core.ui.components.MeasureField
@@ -56,6 +57,9 @@ import com.thedirepack.constructioncalc.feature.drawings.domain.CalibrationDiagn
 import com.thedirepack.constructioncalc.feature.drawings.domain.CalibrationStatus
 import com.thedirepack.constructioncalc.feature.drawings.domain.PlanRoute
 import com.thedirepack.constructioncalc.feature.drawings.domain.RouteSummary
+import com.thedirepack.constructioncalc.feature.drawings.domain.ScaleFamily
+import com.thedirepack.constructioncalc.feature.drawings.domain.ScalePreset
+import com.thedirepack.constructioncalc.feature.drawings.domain.ScalePresets
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -64,17 +68,6 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-private val scalePresets = listOf(
-    "¼″ = 1′" to 48L,
-    "⅛″ = 1′" to 96L,
-    "½″ = 1′" to 24L,
-    "1″ = 10′" to 120L,
-    "1:20" to 20L,
-    "1:50" to 50L,
-    "1:100" to 100L,
-    "1:200" to 200L,
-)
-
 private val scaleModeLabels = mapOf(
     PlanScaleMode.UNIFORM to "Uniform",
     PlanScaleMode.AXES to "X/Y",
@@ -82,13 +75,49 @@ private val scaleModeLabels = mapOf(
     PlanScaleMode.DISTORTED to "2D Warp",
 )
 
-private fun presetWarning(pageSize: PageSize?): String? {
-    val size = pageSize ?: return null
-    val sheet = SheetSize.of(size.width.toDouble(), size.height.toDouble())
-    return if (sheet == null) {
-        "Page size doesn't match a standard drawing sheet — a preset scale may be inaccurate on a scanned or resized page. Measure a known dimension to check."
-    } else {
-        "Sheet matches ${sheet.label}. Verify with a known dimension if this set was printed at reduced size."
+private fun presetWarning(pageSize: PageSize?): String? =
+    ScalePresets.warning(pageSize?.width?.toDouble(), pageSize?.height?.toDouble())
+
+/**
+ * Preset scales, one family at a time so the list fits a phone: Architectural, Engineering or
+ * Metric chips, then that family's scales. [selected] is the exact stored inches per point.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun PresetPicker(
+    selected: Rational?,
+    enabled: Boolean,
+    noneLabel: String,
+    onSelect: (ScalePreset?) -> Unit,
+) {
+    val current = ScalePresets.matching(selected)
+    var family by rememberSaveable { mutableStateOf(current?.family ?: ScaleFamily.ARCHITECTURAL) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(selected = selected == null, onClick = { onSelect(null) }, enabled = enabled, label = { Text(noneLabel) })
+            if (selected != null && current == null) {
+                FilterChip(selected = true, onClick = {}, enabled = enabled, label = { Text("Custom") })
+            }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (option in ScaleFamily.entries) {
+                FilterChip(
+                    selected = family == option,
+                    onClick = { family = option },
+                    label = { Text(option.label) },
+                )
+            }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (preset in ScalePresets.all.filter { it.family == family }) {
+                FilterChip(
+                    selected = current == preset,
+                    onClick = { onSelect(preset) },
+                    enabled = enabled,
+                    label = { Text(preset.label) },
+                )
+            }
+        }
     }
 }
 
@@ -158,7 +187,7 @@ internal fun ZoneDialog(
     onConfirm: (String, StoredQuantity?) -> Unit,
 ) {
     var name by rememberSaveable { mutableStateOf(defaultName) }
-    var preset by rememberSaveable { mutableStateOf<Long?>(null) }
+    var preset by remember { mutableStateOf<ScalePreset?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("New override scale zone") },
@@ -175,10 +204,12 @@ internal fun ZoneDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                FilterChip(preset == null, onClick = { preset = null }, label = { Text("Calibrate from known dimensions") })
-                for ((label, ratio) in scalePresets) {
-                    FilterChip(preset == ratio, onClick = { preset = ratio }, label = { Text(label) })
-                }
+                PresetPicker(
+                    selected = preset?.inchesPerPoint,
+                    enabled = true,
+                    noneLabel = "Calibrate from known dimensions",
+                    onSelect = { preset = it },
+                )
                 if (preset != null) {
                     presetWarning(pageSize)?.let { warning ->
                         Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
@@ -189,7 +220,7 @@ internal fun ZoneDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    onConfirm(name.trim(), preset?.let { Quantity.inches(Rational.of(it, 72)).stored() })
+                    onConfirm(name.trim(), preset?.stored())
                 },
                 enabled = name.isNotBlank(),
             ) { Text("Add zone") }
@@ -258,11 +289,6 @@ internal fun CalibrationDialog(
     val summary = remember(calibration, page) { CalibrationDiagnostics.evaluate(calibration, page) }
     val activePageMode = calibration.modeFor(page)
     val hasPageOverride = calibration.pageModes.containsKey(page)
-    val selectedPresetRatio = remember(calibration.preset) {
-        calibration.preset?.toQuantity()?.value?.let { v ->
-            scalePresets.firstOrNull { (_, ratio) -> v == Rational.of(ratio, 72) }?.second
-        }
-    }
     var renamingZone by remember { mutableStateOf<PlanZone?>(null) }
     var deletingZone by remember { mutableStateOf<PlanZone?>(null) }
 
@@ -292,25 +318,12 @@ internal fun CalibrationDialog(
                     color = if (summary.status == CalibrationStatus.NEEDS_REVIEW) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text("Document preset", style = MaterialTheme.typography.labelLarge)
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    FilterChip(
-                        selected = calibration.preset == null,
-                        onClick = { onCalibrationChange(calibration.copy(preset = null)) },
-                        enabled = editable,
-                        label = { Text("None") },
-                    )
-                    for ((label, ratio) in scalePresets) {
-                        FilterChip(
-                            selected = selectedPresetRatio == ratio,
-                            onClick = { onCalibrationChange(calibration.copy(preset = Quantity.inches(Rational.of(ratio, 72)).stored())) },
-                            enabled = editable,
-                            label = { Text(label) },
-                        )
-                    }
-                }
+                PresetPicker(
+                    selected = calibration.preset?.toQuantity()?.value,
+                    enabled = editable,
+                    noneLabel = "None",
+                    onSelect = { onCalibrationChange(calibration.copy(preset = it?.stored())) },
+                )
                 if (calibration.preset != null) {
                     presetWarning(pageSize)?.let { warning ->
                         Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
@@ -489,6 +502,7 @@ internal fun PageItemsDialog(
     publish: (PlanMeasurement, Quantity) -> Unit,
     onZoneChange: (PlanZone) -> Unit,
     onZoneDelete: (String) -> Unit,
+    onMeasureEdit: (String) -> Unit,
     onMeasureDelete: (String) -> Unit,
     onMarkDelete: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -559,9 +573,13 @@ internal fun PageItemsDialog(
                             enabled = quantity != null,
                             modifier = Modifier.weight(1f),
                         ) {
-                            Text(quantity?.let { "≈ ${settings.format(it)} · Use" } ?: "Uncalibrated")
+                            val value = quantity?.let { "≈ ${settings.format(it)} · Use" } ?: "Uncalibrated"
+                            Text(if (measurement.label.isBlank()) value else "${measurement.label}: $value")
                         }
-                        if (editable) TextButton(onClick = { onMeasureDelete(measurement.id) }) { Text("Delete") }
+                        if (editable) {
+                            TextButton(onClick = { onMeasureEdit(measurement.id) }) { Text("Edit") }
+                            TextButton(onClick = { onMeasureDelete(measurement.id) }) { Text("Delete") }
+                        }
                     }
                 }
                 HorizontalDivider()
@@ -736,7 +754,7 @@ internal fun SendRouteToRunDialog(
 }
 
 @Composable
-private fun ItemRow(
+internal fun ItemRow(
     title: String,
     detail: String?,
     detailIsError: Boolean = false,

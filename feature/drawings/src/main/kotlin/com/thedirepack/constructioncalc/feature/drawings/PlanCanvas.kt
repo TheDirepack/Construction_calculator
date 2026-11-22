@@ -18,10 +18,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -48,6 +49,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -69,29 +71,6 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-
-internal enum class DrawingMode(val title: String, val hint: String) {
-    Navigate("Pan", "Drag to pan. Pinch to zoom."),
-    Reference("Calibrate", "Tap or drag between the ends of a known dimension."),
-    Measure("Measure", "Tap or drag between the ends of a line to measure."),
-    Route("Route", "Tap connected points along a conduit route to measure legs and bends."),
-    Zone("Zone", "Draw an override zone for a detail with a different scale."),
-    Pen("Pen", "Draw with a finger or stylus. Pinch with two fingers to zoom."),
-    Highlight("Highlight", "Drag a finger or stylus over the area to highlight."),
-    Arrow("Arrow", "Tap or drag from the tail to the tip."),
-    Line("Line", "Tap or drag between the line endpoints."),
-    Rectangle("Rectangle", "Tap or drag between two opposite corners."),
-    Text("Text", "Tap where the text should begin."),
-    Symbol("Symbol", "Tap where the SVG symbol should appear."),
-
-    ;
-
-    val usesSpan: Boolean
-        get() = this == Zone || this == Reference || this == Measure || this == Arrow || this == Line || this == Rectangle
-
-    val usesLoupe: Boolean
-        get() = this == Reference || this == Measure || this == Route
-}
 
 internal data class InkPoint(val point: PlanPoint, val pressure: Float)
 
@@ -224,6 +203,12 @@ internal data class CanvasLine(
     val isReference: Boolean = false,
 )
 
+/** A route already sent to a run, drawn under the live trace. */
+internal data class CanvasRoute(val points: List<PlanPoint>, val label: String, val focused: Boolean)
+
+/** An endpoint being dragged in the Adjust tool, and the fixed end it's paired with. */
+private data class EndpointDrag(val handle: EndpointHandle, val anchor: PlanPoint?, val point: PlanPoint)
+
 @Composable
 internal fun PlanCanvas(
     file: File,
@@ -238,13 +223,17 @@ internal fun PlanCanvas(
     snapEnabled: Boolean,
     snapTarget: SnapTarget,
     onPageSize: (PageSize) -> Unit,
-    onPlace: (PlanPoint) -> Unit,
+    /** A tap at a page point; the second value is the touch radius in page points, for hit tests. */
+    onPlace: (PlanPoint, Double) -> Unit,
     onLine: (PlanPoint, PlanPoint) -> Unit,
     onInk: (List<InkPoint>) -> Unit,
     modifier: Modifier = Modifier,
     routePoints: List<PlanPoint> = emptyList(),
     routeLegLabels: List<String> = emptyList(),
     routeCornerLabels: List<Pair<PlanPoint, String>> = emptyList(),
+    savedRoutes: List<CanvasRoute> = emptyList(),
+    handles: List<EndpointHandle> = emptyList(),
+    onMoveEndpoint: (EndpointHandle, PlanPoint) -> Unit = { _, _ -> },
 ) {
     val state by produceState<PageState>(PageState.Loading, file, pageIndex) {
         value = PageState.Loading
@@ -263,6 +252,8 @@ internal fun PlanCanvas(
     val place by rememberUpdatedState(onPlace)
     val line by rememberUpdatedState(onLine)
     val ink by rememberUpdatedState(onInk)
+    val moveEndpoint by rememberUpdatedState(onMoveEndpoint)
+    val currentHandles by rememberUpdatedState(handles)
     val currentLineMap by rememberUpdatedState(lineMap)
     val currentSnapEnabled by rememberUpdatedState(snapEnabled)
     val currentSnapTarget by rememberUpdatedState(snapTarget)
@@ -311,6 +302,7 @@ internal fun PlanCanvas(
                 var preview by remember(page, mode) { mutableStateOf(emptyList<InkPoint>()) }
                 var activeSnap by remember(page, mode) { mutableStateOf<SnappedPoint?>(null) }
                 var loupe by remember(page, mode) { mutableStateOf<LoupeState?>(null) }
+                var endpointDrag by remember(page, mode) { mutableStateOf<EndpointDrag?>(null) }
                 var regionTile by remember(page) { mutableStateOf<RegionTile?>(null) }
 
                 // Recycle high-zoom region tiles cleanly whenever replaced or disposed.
@@ -378,18 +370,28 @@ internal fun PlanCanvas(
                                 val down = awaitFirstDown(requireUnconsumed = false)
                                 val downTransform = viewport.transform(page)
                                 val (first, firstSnap) = resolvePoint(down.position, downTransform)
-                                val drawing = mode == DrawingMode.Pen || mode == DrawingMode.Highlight
+                                val drawing = mode.isFreehand
+                                val touchRadiusPt = (snapRadiusPx / downTransform.scale).toDouble()
+                                val grabbed = if (mode == DrawingMode.Adjust) {
+                                    EditorActions.handleAt(currentHandles, downTransform.toPage(down.position), touchRadiusPt)
+                                } else null
+                                val anchor = grabbed?.let { g ->
+                                    currentHandles.firstOrNull { it.target == g.target && it.end != g.end }?.point
+                                }
+                                // In Adjust, a drag that doesn't start on a handle pans the sheet.
+                                val pans = mode == DrawingMode.Navigate || (mode == DrawingMode.Adjust && grabbed == null)
                                 val points = mutableListOf<InkPoint>()
                                 if (page.hit(first) && drawing) {
                                     points += InkPoint(first, down.pressureForInk())
                                     preview = points.toList()
                                 }
-                                if (page.hit(first) && !drawing) {
+                                if (page.hit(first) && !drawing && !pans) {
                                     activeSnap = firstSnap
                                     if (mode.usesLoupe) {
                                         loupe = LoupeState(down.position, first, firstSnap)
                                     }
                                 }
+                                if (grabbed != null) endpointDrag = EndpointDrag(grabbed, anchor, grabbed.point)
                                 var last = first
                                 var lastPosition = down.position
                                 var moved = false
@@ -403,6 +405,7 @@ internal fun PlanCanvas(
                                             preview = emptyList()
                                             activeSnap = null
                                             loupe = null
+                                            endpointDrag = null
                                             val center = event.calculateCentroid(useCurrent = false)
                                             if (center != Offset.Unspecified) {
                                                 viewport.move(page, center, event.calculatePan(), event.calculateZoom())
@@ -413,8 +416,8 @@ internal fun PlanCanvas(
                                             if (change != null) {
                                                 val delta = change.position - lastPosition
                                                 moved = moved || (change.position - down.position).getDistance() > viewConfiguration.touchSlop
-                                                if (mode == DrawingMode.Navigate && moved) {
-                                                    viewport.move(page, lastPosition, delta)
+                                                if (pans) {
+                                                    if (moved) viewport.move(page, lastPosition, delta)
                                                 } else {
                                                     val t = viewport.transform(page)
                                                     val (point, snapped) = if (drawing) t.toPage(change.position) to null else resolvePoint(change.position, t)
@@ -429,6 +432,7 @@ internal fun PlanCanvas(
                                                             points += InkPoint(point, change.pressureForInk())
                                                         }
                                                         if (drawing) preview = points.toList()
+                                                        endpointDrag = endpointDrag?.copy(point = point)
                                                         if (moved && page.hit(first) && mode.usesSpan) {
                                                             preview = listOf(InkPoint(first, 1f), InkPoint(last, 1f))
                                                         }
@@ -441,9 +445,11 @@ internal fun PlanCanvas(
                                     } while (event.changes.any { it.pressed })
                                     if (!multi && page.hit(first) && mode != DrawingMode.Navigate) {
                                         when {
+                                            grabbed != null -> if (moved && onPage) moveEndpoint(grabbed, last)
                                             drawing && points.isNotEmpty() -> ink(points.toList())
-                                            mode == DrawingMode.Route && onPage -> place(last)
-                                            !moved && onPage -> place(last)
+                                            pans -> if (!moved) place(first, touchRadiusPt)
+                                            mode == DrawingMode.Route && onPage -> place(last, touchRadiusPt)
+                                            !moved && onPage -> place(last, touchRadiusPt)
                                             moved && onPage && mode.usesSpan -> line(first, last)
                                         }
                                     }
@@ -451,6 +457,7 @@ internal fun PlanCanvas(
                                     preview = emptyList()
                                     activeSnap = null
                                     loupe = null
+                                    endpointDrag = null
                                 }
                             }
                         },
@@ -487,6 +494,16 @@ internal fun PlanCanvas(
                             drawCircle(color, 2.5f / transform.scale, saved.second.offset())
                             drawPlanText(saved.label, (saved.first.offset() + saved.second.offset()) / 2f, 12f / transform.scale, color, textPaint)
                         }
+                        for (saved in savedRoutes) {
+                            val color = if (saved.focused) Color(0xFFD81B60) else Color(0x997B1FA2)
+                            val width = outline * if (saved.focused) 2.4f else 1.2f
+                            for (i in 0 until saved.points.lastIndex) {
+                                drawLine(color, saved.points[i].offset(), saved.points[i + 1].offset(), width, cap = StrokeCap.Round)
+                            }
+                            saved.points.firstOrNull()?.let { start ->
+                                drawPlanText(saved.label, start.offset() + Offset(4f / transform.scale, 0f), 11f / transform.scale, color, textPaint)
+                            }
+                        }
                         // Draw active polyline route
                         if (routePoints.isNotEmpty()) {
                             val routeColor = Color(0xFF7B1FA2)
@@ -509,6 +526,18 @@ internal fun PlanCanvas(
                             }
                         }
                         for (mark in marks) drawMark(mark)
+                        if (mode == DrawingMode.Adjust) {
+                            val r = 4f / transform.scale
+                            for (handle in handles) {
+                                val p = handle.point.offset()
+                                drawRect(Color.White, Offset(p.x - r, p.y - r), Size(r * 2, r * 2))
+                                drawRect(Color(0xFF126FB4), Offset(p.x - r, p.y - r), Size(r * 2, r * 2), style = Stroke(outline))
+                            }
+                            endpointDrag?.let { drag ->
+                                drag.anchor?.let { drawLine(Color(0xFF00897B), it.offset(), drag.point.offset(), outline * 1.5f) }
+                                drawCircle(Color(0xFF00897B), 3.5f / transform.scale, drag.point.offset())
+                            }
+                        }
                         pending?.let {
                             val point = it.offset()
                             drawCircle(Color.White, 5f / transform.scale, point)
@@ -518,7 +547,7 @@ internal fun PlanCanvas(
                             val p = snapped.point.offset()
                             val r = 7f / transform.scale
                             val snapColor = Color(0xFF00897B)
-                            if (snapped.kind == SnapKind.CORNER) {
+                            if (snapped.kind != SnapKind.LINE) {
                                 drawRect(snapColor, Offset(p.x - r, p.y - r), Size(r * 2, r * 2), style = Stroke(outline))
                             } else {
                                 drawCircle(snapColor, r, p, style = Stroke(outline))
@@ -565,13 +594,15 @@ internal fun PlanCanvas(
                     modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
                 ) {
                     Row {
-                        TextButton(onClick = { viewport.zoomFromCenter(page, 1f / 1.5f) }, enabled = viewport.zoom > 1f) {
-                            Text("Zoom −")
+                        IconButton(onClick = { viewport.zoomFromCenter(page, 1f / 1.5f) }, enabled = viewport.zoom > 1f) {
+                            Icon(painterResource(R.drawable.ic_plan_zoom_out), contentDescription = "Zoom out")
                         }
-                        TextButton(onClick = { viewport.zoomFromCenter(page, 1.5f) }, enabled = viewport.zoom < 16f) {
-                            Text("Zoom +")
+                        IconButton(onClick = { viewport.zoomFromCenter(page, 1.5f) }, enabled = viewport.zoom < 16f) {
+                            Icon(painterResource(R.drawable.ic_plan_zoom_in), contentDescription = "Zoom in")
                         }
-                        TextButton(onClick = { viewport.rotate() }) { Text("Rotate") }
+                        IconButton(onClick = { viewport.rotate() }) {
+                            Icon(painterResource(R.drawable.ic_plan_rotate), contentDescription = "Rotate view")
+                        }
                     }
                 }
             }
@@ -656,7 +687,7 @@ private fun DrawScope.drawSnappingLoupe(
     drawLine(accent, Offset(cx, cy - cross), Offset(cx, cy + cross), 1.5f)
     if (snapped != null) {
         val r = radius * 0.16f
-        if (snapped.kind == SnapKind.CORNER) {
+        if (snapped.kind != SnapKind.LINE) {
             drawRect(accent, Offset(cx - r, cy - r), Size(r * 2f, r * 2f), style = Stroke(2f))
         } else {
             drawCircle(accent, r, center, style = Stroke(2f))
@@ -671,6 +702,7 @@ private fun DrawScope.drawSnappingLoupe(
         val badgeText = when (snapped.kind) {
             SnapKind.CORNER -> "Corner"
             SnapKind.LINE -> "Line"
+            SnapKind.END -> "End"
         }
         drawIntoCanvas { canvas ->
             labelPaint.textSize = labelTextSize

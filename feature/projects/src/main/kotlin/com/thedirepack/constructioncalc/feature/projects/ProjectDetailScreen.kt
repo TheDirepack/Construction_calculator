@@ -6,6 +6,7 @@ import com.thedirepack.constructioncalc.core.model.withRaceway
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import com.thedirepack.constructioncalc.core.model.design.PanelLayout
 import com.thedirepack.constructioncalc.core.model.ToolTarget
+import com.thedirepack.constructioncalc.core.model.planRouteFor
 import com.thedirepack.constructioncalc.core.ui.format
 
 import android.content.ClipData
@@ -267,6 +268,7 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
                         },
                         circuits = runDesigns[run.id]?.circuits.orEmpty().map { (panel, c) -> "${panel.name} ${PanelLayout.label(c)}" },
                         onOpenTool = { toolId -> host.openTool(toolId, target = ToolTarget.OfRun(project.id, run.id)) },
+                        hasPlanRoute = project.planRouteFor(run.id) != null,
                     )
                 }
                 if (run.items.isEmpty()) {
@@ -371,6 +373,7 @@ private fun RunHeader(
     onShare: () -> Unit,
     circuits: List<String>,
     onOpenTool: (String) -> Unit,
+    hasPlanRoute: Boolean = false,
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(
@@ -401,6 +404,7 @@ private fun RunHeader(
                 if (!isTarget && !readOnly) DropdownMenuItem(text = { Text("Save new results here") }, onClick = { menu = false; onMakeTarget() })
                 DropdownMenuItem(text = { Text("Share run as text") }, onClick = { menu = false; onShare() })
                 DropdownMenuItem(text = { Text("Open in Panels & Circuits") }, onClick = { menu = false; onOpenTool(ToolIds.PANELS) })
+                if (hasPlanRoute) DropdownMenuItem(text = { Text("View on plan") }, onClick = { menu = false; onOpenTool(ToolIds.DRAWINGS) })
                 if (conduitSummary != null) {
                     DropdownMenuItem(text = { Text("Check fill in Conduit Fill") }, onClick = { menu = false; onOpenTool(ToolIds.CONDUIT_FILL) })
                     DropdownMenuItem(text = { Text("Bend this conduit") }, onClick = { menu = false; onOpenTool(ToolIds.CONDUIT_BENDING) })
