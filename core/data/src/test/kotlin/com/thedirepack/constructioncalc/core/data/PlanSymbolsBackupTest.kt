@@ -104,4 +104,44 @@ class PlanSymbolsBackupTest {
         }
         assertEquals(1, symbols.list().size)
     }
+
+    @Test fun roundTripsNamedSetsFavoritesAndRecentsAndLegacyV1Compat() {
+        val source = store("meta-src")
+        val id1 = UUID.randomUUID().toString()
+        source.writeSymbol(PlanSymbol(id1, "GFCI", """<svg viewBox="0 0 10 10"><rect width="8" height="8"/></svg>"""))
+        source.writeMeta(
+            SymbolLibraryMeta(
+                sets = mapOf("Rough-in" to listOf(id1, "built-in:Switch"), "../bad" to listOf("x")),
+                favorites = setOf(id1, "built-in:Duplex receptacle"),
+                recents = listOf("built-in:Duplex receptacle", id1),
+            ),
+        )
+        assertEquals(1, source.list().size) // library-meta.json is not treated as a symbol
+
+        val exported = source.backup.export()!!
+        val mergedDest = store("meta-merge")
+        mergedDest.writeMeta(
+            SymbolLibraryMeta(
+                sets = mapOf("Rough-in" to listOf("built-in:Junction box"), "Lighting" to listOf("built-in:Light fixture")),
+                favorites = setOf("built-in:Junction box"),
+                recents = listOf("built-in:Light fixture"),
+            ),
+        )
+        mergedDest.backup.import(exported, replace = false)
+        val merged = mergedDest.readMeta()
+        assertEquals(listOf("built-in:Junction box", id1, "built-in:Switch"), merged.sets["Rough-in"])
+        assertEquals(listOf("built-in:Light fixture"), merged.sets["Lighting"])
+        assertFalse("../bad" in merged.sets)
+        assertEquals(setOf("built-in:Junction box", id1, "built-in:Duplex receptacle"), merged.favorites)
+        assertEquals(listOf("built-in:Duplex receptacle", id1, "built-in:Light fixture"), merged.recents)
+
+        // Removing a symbol cleans up its metadata references.
+        mergedDest.remove(id1)
+        assertFalse(id1 in mergedDest.readMeta().favorites)
+
+        // Legacy v1 JSON without "meta" replaces cleanly when replace=true.
+        val legacy = Json.parseToJsonElement("""{"version": 1, "symbols": []}""")
+        mergedDest.backup.import(legacy, replace = true)
+        assertEquals(SymbolLibraryMeta(), mergedDest.readMeta())
+    }
 }

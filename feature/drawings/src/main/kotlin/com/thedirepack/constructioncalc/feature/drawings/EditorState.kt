@@ -1,6 +1,7 @@
 package com.thedirepack.constructioncalc.feature.drawings
 
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.model.PlanArrowStyle
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
@@ -27,22 +28,40 @@ internal enum class DrawingMode(val title: String, val hint: String, val group: 
     Text("Text", "Tap where the text should begin.", ToolGroup.MARKUP),
     Symbol("Count", "Tap each device to place the chosen symbol.", ToolGroup.MARKUP),
     Callout("Callout", "Place the leader tip, then the note.", ToolGroup.MARKUP),
-    Eraser("Eraser", "Tap an ink stroke or highlight to erase it.", ToolGroup.MARKUP),
+    Dimension("Dimension", "Tap or drag between two points to stamp a calibrated dimension.", ToolGroup.MARKUP),
+    Cloud("Cloud", "Tap or drag opposite corners to draw a revision cloud.", ToolGroup.MARKUP),
+    CloudCallout("Cloud + Note", "Draw a revision cloud, then attach a note.", ToolGroup.MARKUP),
+    Photo("Photo", "Tap where you want to pin a field photo.", ToolGroup.MARKUP),
+    DetailLink("Detail link", "Tap to link a callout directly to another sheet or detail.", ToolGroup.MARKUP),
+    Eraser("Eraser", "Drag to trim strokes or switch to Whole stroke in the bar.", ToolGroup.MARKUP),
     ;
 
     /** Two points, tapped one after the other or dragged. */
     val usesSpan: Boolean
-        get() = this == Zone || this == Reference || this == Measure || this == Arrow || this == Line || this == Rectangle || this == Callout
+        get() = this == Zone || this == Reference || this == Measure || this == Arrow ||
+            this == Line || this == Rectangle || this == Callout ||
+            this == Dimension || this == Cloud || this == CloudCallout
 
     val usesLoupe: Boolean
-        get() = this == Reference || this == Measure || this == Route || this == Adjust
+        get() = this == Reference || this == Measure || this == Route || this == Adjust || this == Dimension
 
     /** Placed points snap to the line map (with the measuring or the calibrating setting). */
     val snaps: Boolean
-        get() = this == Reference || this == Measure || this == Route || this == Adjust
+        get() = this == Reference || this == Measure || this == Route || this == Adjust || this == Dimension
 
     val isFreehand: Boolean
         get() = this == Pen || this == Highlight
+}
+
+internal enum class EraserMode(val label: String) {
+    PARTIAL("Partial"),
+    WHOLE("Whole stroke"),
+}
+
+internal enum class CountGrouping(val label: String) {
+    DEVICE("Device"),
+    CIRCUIT("Circuit"),
+    AREA("Area"),
 }
 
 /** The operation in progress on the canvas. Only one exists at a time. */
@@ -63,6 +82,12 @@ internal sealed interface EditorDialog {
     data class PlaceText(val point: PlanPoint) : EditorDialog
     data object PickSymbol : EditorDialog
     data class PlaceCallout(val first: PlanPoint, val second: PlanPoint) : EditorDialog
+    data class PlaceCloudCallout(val first: PlanPoint, val second: PlanPoint) : EditorDialog
+    data class PlacePhoto(val point: PlanPoint) : EditorDialog
+    data class ViewPhoto(val markId: String) : EditorDialog
+    data class PlaceDetailLink(val point: PlanPoint) : EditorDialog
+    data class EditDetailLink(val markId: String) : EditorDialog
+    data class EditMarkStyle(val markId: String?) : EditorDialog
     data class EditMeasurement(val id: String) : EditorDialog
     data object Calibration : EditorDialog
     data object PageItems : EditorDialog
@@ -125,18 +150,26 @@ internal data class EditorOutcome(
 /** Pure editor rules, kept out of the composables so they can be tested on the JVM. */
 internal object EditorActions {
     /** A single tap (or the end of a drag in the route tool) at [point]. */
-    fun tap(session: EditorSession, drawing: PlanDrawing, point: PlanPoint, hitRadius: Double): EditorOutcome =
+    fun tap(
+        session: EditorSession,
+        drawing: PlanDrawing,
+        point: PlanPoint,
+        hitRadius: Double,
+        style: MarkupToolStyle? = null,
+    ): EditorOutcome =
         when (session.mode) {
             DrawingMode.Navigate -> EditorOutcome(session)
             DrawingMode.Text -> EditorOutcome(session.open(EditorDialog.PlaceText(point)))
             DrawingMode.Symbol -> EditorOutcome(session.open(EditorDialog.PickSymbol))
+            DrawingMode.Photo -> EditorOutcome(session.open(EditorDialog.PlacePhoto(point)))
+            DrawingMode.DetailLink -> EditorOutcome(session.open(EditorDialog.PlaceDetailLink(point)))
             DrawingMode.Adjust, DrawingMode.Eraser -> EditorOutcome(session)
             DrawingMode.Route -> addRoutePoint(session, drawing, point)
             DrawingMode.Pen, DrawingMode.Highlight -> EditorOutcome(session)
             else -> {
                 val first = session.firstPoint
                 if (first == null) EditorOutcome(session.copy(op = EditOp.FirstPoint(point)))
-                else span(session, drawing, first, point)
+                else span(session, drawing, first, point, style)
             }
         }
 
@@ -160,12 +193,25 @@ internal object EditorActions {
     }
 
     /** Two points of a span tool, tapped or dragged. */
-    fun span(session: EditorSession, drawing: PlanDrawing, first: PlanPoint, second: PlanPoint): EditorOutcome {
+    fun span(
+        session: EditorSession,
+        drawing: PlanDrawing,
+        first: PlanPoint,
+        second: PlanPoint,
+        style: MarkupToolStyle? = null,
+    ): EditorOutcome {
         val cleared = session.copy(op = EditOp.Idle)
         if (first == second) return EditorOutcome(cleared)
         val page = session.page
         return when (session.mode) {
             DrawingMode.Callout -> EditorOutcome(cleared.open(EditorDialog.PlaceCallout(first, second)))
+            DrawingMode.CloudCallout -> {
+                if (first.x == second.x || first.y == second.y) {
+                    EditorOutcome(cleared, message = "A revision cloud needs a width and height.")
+                } else {
+                    EditorOutcome(cleared.open(EditorDialog.PlaceCloudCallout(first, second)))
+                }
+            }
             DrawingMode.Zone -> {
                 if (first.x == second.x || first.y == second.y) {
                     return EditorOutcome(cleared, message = "An override zone needs a width and height.")
@@ -205,6 +251,28 @@ internal object EditorActions {
                     published = saved to fit.distance(first, second),
                 )
             }
+            DrawingMode.Dimension -> {
+                if (drawing.crossesZoneBoundary(page, first, second)) {
+                    return EditorOutcome(cleared, message = "Split dimensions at override zone boundaries.")
+                }
+                val raw = PlanMark(page = page, kind = PlanMarkKind.DIMENSION, points = listOf(first, second), arrowStyle = PlanArrowStyle.BOTH)
+                val mark = style?.applyTo(raw) ?: raw
+                val hasFit = drawing.dimensionLength(mark) != null
+                EditorOutcome(
+                    cleared,
+                    change = { it.copy(marks = it.marks + mark) },
+                    message = if (hasFit) null else "Placed dimension. Calibrate the sheet to show real lengths.",
+                )
+            }
+            DrawingMode.Cloud -> {
+                if (first.x == second.x || first.y == second.y) {
+                    EditorOutcome(cleared)
+                } else {
+                    val raw = PlanMark(page = page, kind = PlanMarkKind.CLOUD, points = listOf(first, second))
+                    val mark = style?.applyTo(raw) ?: raw
+                    EditorOutcome(cleared, change = { it.copy(marks = it.marks + mark) })
+                }
+            }
             DrawingMode.Arrow, DrawingMode.Line, DrawingMode.Rectangle -> {
                 val kind = when (session.mode) {
                     DrawingMode.Arrow -> PlanMarkKind.ARROW
@@ -214,7 +282,8 @@ internal object EditorActions {
                 if (kind == PlanMarkKind.RECTANGLE && (first.x == second.x || first.y == second.y)) {
                     EditorOutcome(cleared)
                 } else {
-                    val mark = PlanMark(page = page, kind = kind, points = listOf(first, second))
+                    val raw = PlanMark(page = page, kind = kind, points = listOf(first, second))
+                    val mark = style?.applyTo(raw) ?: raw
                     EditorOutcome(cleared, change = { it.copy(marks = it.marks + mark) })
                 }
             }

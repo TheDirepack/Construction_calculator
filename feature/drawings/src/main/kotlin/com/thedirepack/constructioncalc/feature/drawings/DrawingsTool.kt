@@ -33,8 +33,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.saveable.listSaver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thedirepack.constructioncalc.core.data.PlanFiles
+import com.thedirepack.constructioncalc.core.data.PlanPhotos
 import com.thedirepack.constructioncalc.core.data.PlanSymbols
 import com.thedirepack.constructioncalc.core.data.ToolBackup
 import com.thedirepack.constructioncalc.core.data.activeTarget
@@ -82,10 +84,18 @@ object DrawingsTool : ToolModule {
     override fun SettingsContent() = DrawingsSettingsScreen()
 }
 
+private data class DetailJumpTarget(val drawingId: String, val page: Int)
+
+private val DetailJumpSaver = listSaver<DetailJumpTarget?, Any>(
+    save = { target -> if (target == null) emptyList() else listOf(target.drawingId, target.page) },
+    restore = { saved -> if (saved.size == 2) DetailJumpTarget(saved[0] as String, saved[1] as Int) else null },
+)
+
 @Composable
 private fun DrawingsScreen(host: ToolHost) {
     val context = LocalContext.current
     val files = remember(context) { PlanFiles(context.applicationContext) }
+    val photos = remember(context) { PlanPhotos(context.applicationContext) }
     val services = LocalAppServices.current
     val projects by services.projects.projects.collectAsStateWithLifecycle()
     val appSettings = rememberAppSettings()
@@ -97,6 +107,9 @@ private fun DrawingsScreen(host: ToolHost) {
         runTarget?.let { target -> project?.takeIf { it.id == target.projectId }?.planRouteFor(target.runId) }
     }
     var activeDrawingId by rememberSaveable(project?.id) { mutableStateOf(runRoute?.first?.id) }
+    var returnTarget by rememberSaveable(project?.id, stateSaver = DetailJumpSaver) { mutableStateOf<DetailJumpTarget?>(null) }
+    var pendingJumpPage by rememberSaveable(project?.id) { mutableStateOf<Int?>(null) }
+    var jumpSerial by rememberSaveable(project?.id) { mutableStateOf(0) }
     val drawing = project?.drawings?.firstOrNull { it.id == activeDrawingId }
     val focusRouteId = runRoute?.takeIf { it.first.id == drawing?.id }?.second?.id
     val file = drawing?.let { files.file(it.sha256) }
@@ -165,15 +178,21 @@ private fun DrawingsScreen(host: ToolHost) {
             host.showMessage("The project is unavailable for editing.")
             return
         }
-        if (activeDrawingId == target.id) activeDrawingId = null
-        // Garbage-collect the underlying PDF if no project still references its sha256.
-        val stillReferenced = services.projects.projects.value.any { p ->
+        if (activeDrawingId == target.id) {
+            activeDrawingId = null
+            returnTarget = null
+        }
+        // Garbage-collect unreferenced PDFs and field photos across all projects.
+        val remainingProjects = services.projects.projects.value
+        val stillReferenced = remainingProjects.any { p ->
             p.drawings.any { it.sha256 == target.sha256 }
         }
-        if (!stillReferenced) {
-            scope.launch(Dispatchers.IO) {
-                runCatching { files.file(target.sha256).delete() }
-            }
+        val referencedPhotos = remainingProjects.flatMap { p ->
+            p.drawings.flatMap { it.referencedPhotoHashes() }
+        }.toSet()
+        scope.launch(Dispatchers.IO) {
+            if (!stillReferenced) runCatching { files.file(target.sha256).delete() }
+            runCatching { photos.garbageCollect(referencedPhotos) }
         }
         host.showMessage("Deleted “${target.name}”.")
     }
@@ -220,7 +239,13 @@ private fun DrawingsScreen(host: ToolHost) {
     }
 
     if (project != null && drawing != null && file != null) {
+        val returnLabel = returnTarget?.let { back ->
+            val srcDrawing = project.drawings.firstOrNull { it.id == back.drawingId }
+            val sheetName = srcDrawing?.sheetRevisions?.get(back.page)?.sheetId ?: "Page ${back.page + 1}"
+            if (back.drawingId == drawing.id || srcDrawing == null) sheetName else "${srcDrawing.name} · $sheetName"
+        }
         BackHandler {
+            returnTarget = null
             if (focusRouteId != null) host.back() else activeDrawingId = null
         }
         DrawingEditor(
@@ -229,6 +254,22 @@ private fun DrawingsScreen(host: ToolHost) {
             file = file,
             editable = !project.archived,
             focusRouteId = focusRouteId,
+            jumpPageRequest = pendingJumpPage?.let { it to jumpSerial },
+            returnLabel = returnLabel,
+            onReturnToSheet = returnTarget?.let { back ->
+                {
+                    returnTarget = null
+                    activeDrawingId = back.drawingId
+                    pendingJumpPage = back.page
+                    jumpSerial++
+                }
+            },
+            onJumpToSheet = { targetDrawingId, targetPage, fromPage ->
+                returnTarget = DetailJumpTarget(drawing.id, fromPage)
+                activeDrawingId = targetDrawingId
+                pendingJumpPage = targetPage
+                jumpSerial++
+            },
             onChange = ::updateDrawing,
             onSendRouteToRun = ::sendRouteToRun,
             onPublish = ::publish,

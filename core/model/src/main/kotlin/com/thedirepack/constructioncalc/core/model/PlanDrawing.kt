@@ -484,7 +484,16 @@ private fun solveLinear(system: Array<DoubleArray>, size: Int): DoubleArray? {
 }
 
 @Serializable
-enum class PlanMarkKind { INK, HIGHLIGHT, ARROW, LINE, RECTANGLE, TEXT, SYMBOL, CALLOUT }
+enum class PlanMarkKind {
+    INK, HIGHLIGHT, ARROW, LINE, RECTANGLE, TEXT, SYMBOL, CALLOUT,
+    DIMENSION, CLOUD, CLOUD_CALLOUT, PHOTO, DETAIL_LINK,
+}
+
+@Serializable
+enum class PlanDashStyle { SOLID, DASHED, DOTTED }
+
+@Serializable
+enum class PlanArrowStyle { NONE, END, BOTH, FILLED_END, FILLED_BOTH }
 
 @Serializable
 data class PlanMark(
@@ -498,14 +507,30 @@ data class PlanMark(
     val width: Double = 2.0,
     val color: Long? = null,
     val circuitTag: String = "",
+    val opacity: Float = 1f,
+    val dash: PlanDashStyle = PlanDashStyle.SOLID,
+    val arrowStyle: PlanArrowStyle? = null,
+    val fillColor: Long? = null,
+    val fillOpacity: Float = 0f,
+    val areaTag: String = "",
+    val photoSha256: String? = null,
+    val targetPage: Int? = null,
+    val targetDrawingId: String? = null,
 ) {
     init {
         require(page >= 0 && points.size in 1..20_000 && text.length <= 2_000)
         require(circuitTag.length <= 80)
+        require(areaTag.length <= 80)
         require(svg == null || svg.length <= 256 * 1024)
         require(pressures.isEmpty() || pressures.size == points.size && pressures.all { it.isFinite() && it >= 0f })
         require(width.isFinite() && width > 0 && width <= 1_000)
         require(color == null || color in 0..0xffff_ffffL)
+        require(opacity.isFinite() && opacity in 0.05f..1f)
+        require(fillColor == null || fillColor in 0..0xffff_ffffL)
+        require(fillOpacity.isFinite() && fillOpacity in 0f..1f)
+        require(photoSha256 == null || photoSha256.length == 64 && photoSha256.all { it in '0'..'9' || it in 'a'..'f' })
+        require(targetPage == null || targetPage >= 0)
+        require(targetDrawingId == null || targetDrawingId.isNotBlank() && targetDrawingId.length <= 120)
     }
 }
 
@@ -603,6 +628,16 @@ data class PlanDrawing(
         return calibrationFor(measurement.page, measurement.first, measurement.second)
             ?.distance(measurement.first, measurement.second)
     }
+
+    fun dimensionLength(mark: PlanMark): Quantity? {
+        if (mark.kind != PlanMarkKind.DIMENSION || mark.points.size < 2) return null
+        val first = mark.points.first()
+        val second = mark.points.last()
+        if (first == second) return null
+        return calibrationFor(mark.page, first, second)?.distance(first, second)
+    }
+
+    fun referencedPhotoHashes(): Set<String> = marks.mapNotNullTo(mutableSetOf()) { it.photoSha256 }
 }
 
 /** The drawing and route a run was traced from, or null if it wasn't sent from a plan. */

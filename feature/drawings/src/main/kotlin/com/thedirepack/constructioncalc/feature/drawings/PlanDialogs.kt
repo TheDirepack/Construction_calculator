@@ -35,8 +35,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.res.painterResource
 import com.thedirepack.constructioncalc.core.data.PlanSymbol
 import com.thedirepack.constructioncalc.core.data.PlanSymbols
+import com.thedirepack.constructioncalc.core.data.SymbolLibraryMeta
+import com.thedirepack.constructioncalc.core.model.PlanPath
+import kotlinx.coroutines.delay
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.PathSegment
@@ -490,6 +497,8 @@ internal fun TextMarkupDialog(
     onDismiss: () -> Unit,
     initial: String = "",
     title: String = if (initial.isBlank()) "Place text" else "Edit text",
+    label: String = "Text",
+    allowEmpty: Boolean = false,
     onConfirm: (String) -> Unit,
 ) {
     var value by rememberSaveable(initial) { mutableStateOf(initial) }
@@ -500,13 +509,13 @@ internal fun TextMarkupDialog(
             OutlinedTextField(
                 value = value,
                 onValueChange = { value = it.take(2_000) },
-                label = { Text("Text") },
+                label = { Text(label) },
                 maxLines = 6,
                 modifier = Modifier.fillMaxWidth(),
             )
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(value.trim()) }, enabled = value.isNotBlank()) { Text("Save") }
+            TextButton(onClick = { onConfirm(value.trim()) }, enabled = allowEmpty || value.isNotBlank()) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
@@ -516,6 +525,7 @@ internal fun TextMarkupDialog(
 internal fun PageItemsDialog(
     zone: PlanZone?,
     measurements: List<Pair<PlanMeasurement, Quantity?>>,
+    paths: List<CanvasPath> = emptyList(),
     marks: List<PlanMark>,
     editable: Boolean,
     publish: (PlanMeasurement, Quantity) -> Unit,
@@ -523,6 +533,7 @@ internal fun PageItemsDialog(
     onZoneDelete: (String) -> Unit,
     onMeasureEdit: (String) -> Unit,
     onMeasureDelete: (String) -> Unit,
+    onPathDelete: (String) -> Unit = {},
     onMarkDelete: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -601,12 +612,24 @@ internal fun PageItemsDialog(
                         }
                     }
                 }
+                if (paths.isNotEmpty()) {
+                    HorizontalDivider()
+                    Text("Saved paths & areas", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                    paths.forEach { item ->
+                        ItemRow(
+                            title = if (item.path.closed) "Area (${item.path.points.size} pts)" else "Polyline (${item.path.points.size} pts)",
+                            detail = item.label,
+                            onDelete = if (editable) ({ onPathDelete(item.path.id) }) else null,
+                        )
+                    }
+                }
                 HorizontalDivider()
                 Text("Markups", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
                 if (marks.isEmpty()) Text("No markups on this page.")
                 marks.forEach { mark ->
+                    val name = mark.kind.name.lowercase().replace('_', ' ').replaceFirstChar { it.titlecase() }
                     ItemRow(
-                        title = mark.kind.name.lowercase().replaceFirstChar { it.titlecase() },
+                        title = name,
                         detail = mark.text.takeIf { it.isNotBlank() },
                         onDelete = if (editable) ({ onMarkDelete(mark.id) }) else null,
                     )
@@ -842,6 +865,7 @@ internal fun SymbolSettings() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun SymbolDialog(
     onDismiss: () -> Unit,
@@ -849,23 +873,167 @@ internal fun SymbolDialog(
     onSelect: (PlanSymbol) -> Unit,
 ) {
     val context = LocalContext.current
-    val entries by produceState<List<PlanSymbol>>(emptyList(), context) {
-        value = starterSymbols + withContext(Dispatchers.IO) { PlanSymbols(context.applicationContext).list() }
+    val library = remember(context) { PlanSymbols(context.applicationContext) }
+    val scope = rememberCoroutineScope()
+    var reloadKey by remember { mutableStateOf(0) }
+    val loaded by produceState(starterSymbols to SymbolLibraryMeta(), context, reloadKey) {
+        val (imported, meta) = withContext(Dispatchers.IO) { library.list() to library.readMeta() }
+        value = (starterSymbols + imported) to meta
     }
+    val allSymbols = loaded.first
+    var meta by remember(loaded) { mutableStateOf(loaded.second) }
+    var filter by rememberSaveable { mutableStateOf("All") }
+    var creatingSet by remember { mutableStateOf(false) }
+    var assigningSymbol by remember { mutableStateOf<PlanSymbol?>(null) }
+
+    fun saveMeta(updated: SymbolLibraryMeta) {
+        meta = updated
+        scope.launch(Dispatchers.IO) {
+            runCatching { library.writeMeta(updated) }
+        }
+    }
+
+    val byId = remember(allSymbols) { allSymbols.associateBy { it.id } }
+    val visibleSymbols = remember(allSymbols, meta, filter) {
+        when (filter) {
+            "All" -> allSymbols
+            "Favorites" -> allSymbols.filter { it.id in meta.favorites }
+            "Recent" -> meta.recents.mapNotNull(byId::get)
+            else -> {
+                val ids = (builtInSymbolSets[filter].orEmpty() + meta.sets[filter].orEmpty()).toSet()
+                allSymbols.filter { it.id in ids }
+            }
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Choose a count symbol") },
         text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
-                entries.forEach { symbol ->
-                    TextButton(onClick = { onSelect(symbol) }, modifier = Modifier.fillMaxWidth()) {
-                        SymbolPreview(symbol)
-                        Text(symbol.name, Modifier.weight(1f).padding(start = 8.dp))
+            Column(Modifier.fillMaxWidth().heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val filters = buildList {
+                        add("All")
+                        add("Favorites")
+                        add("Recent")
+                        addAll(builtInSymbolSets.keys)
+                        meta.sets.keys.sorted().forEach { if (it !in this) add(it) }
+                    }
+                    for (option in filters) {
+                        FilterChip(
+                            selected = filter == option,
+                            onClick = { filter = option },
+                            label = { Text(option) },
+                        )
+                    }
+                    TextButton(onClick = { creatingSet = true }) { Text("+ Set") }
+                }
+                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                    if (visibleSymbols.isEmpty()) {
+                        Text(
+                            when (filter) {
+                                "Favorites" -> "Star symbols to add them to Favorites."
+                                "Recent" -> "Picked symbols will appear here."
+                                else -> "No symbols in this set yet."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(8.dp),
+                        )
+                    }
+                    visibleSymbols.forEach { symbol ->
+                        val fav = symbol.id in meta.favorites
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
+                                onClick = {
+                                    val updatedRecents = (listOf(symbol.id) + meta.recents.filterNot { it == symbol.id }).take(24)
+                                    saveMeta(meta.copy(recents = updatedRecents))
+                                    onSelect(symbol)
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                SymbolPreview(symbol)
+                                Text(symbol.name, Modifier.weight(1f).padding(start = 8.dp))
+                            }
+                            if (meta.sets.isNotEmpty() || assigningSymbol != null) {
+                                TextButton(onClick = { assigningSymbol = symbol }) { Text("Set") }
+                            }
+                            IconButton(onClick = {
+                                val nextFavs = if (fav) meta.favorites - symbol.id else meta.favorites + symbol.id
+                                saveMeta(meta.copy(favorites = nextFavs))
+                            }) {
+                                Icon(
+                                    painterResource(if (fav) R.drawable.ic_plan_star else R.drawable.ic_plan_star_outline),
+                                    contentDescription = if (fav) "Remove ${symbol.name} from favorites" else "Favorite ${symbol.name}",
+                                )
+                            }
+                        }
                     }
                 }
             }
         },
-        confirmButton = { TextButton(onClick = openSettings) { Text("Symbol settings") } },
+        confirmButton = {
+            Row {
+                if (meta.sets.isEmpty()) {
+                    TextButton(onClick = { creatingSet = true }) { Text("New set") }
+                }
+                TextButton(onClick = { openSettings(); reloadKey++ }) { Text("Import SVG") }
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+
+    if (creatingSet) {
+        RenameDialog(
+            title = "New symbol set",
+            label = "Set name",
+            initialName = "",
+            maxLength = 80,
+            onDismiss = { creatingSet = false },
+            onConfirm = { name ->
+                val clean = name.trim()
+                if (clean.isNotBlank() && clean !in listOf("All", "Favorites", "Recent")) {
+                    saveMeta(meta.copy(sets = meta.sets + (clean to meta.sets[clean].orEmpty())))
+                    filter = clean
+                }
+                creatingSet = false
+            },
+        )
+    }
+
+    assigningSymbol?.let { target ->
+        AlertDialog(
+            onDismissRequest = { assigningSymbol = null },
+            title = { Text("Sets for “${target.name}”") },
+            text = {
+                Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                    if (meta.sets.isEmpty()) {
+                        Text("Create a custom set first.")
+                    } else {
+                        meta.sets.keys.sorted().forEach { setName ->
+                            val member = target.id in meta.sets[setName].orEmpty()
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(
+                                    checked = member,
+                                    onCheckedChange = { checked ->
+                                        val existing = meta.sets[setName].orEmpty()
+                                        val updated = if (checked) (existing + target.id).distinct() else existing.filterNot { it == target.id }
+                                        saveMeta(meta.copy(sets = meta.sets + (setName to updated)))
+                                    },
+                                )
+                                Text(setName, Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    saveMeta(meta.copy(sets = meta.sets - setName))
+                                    if (filter == setName) filter = "All"
+                                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { assigningSymbol = null }) { Text("Done") } },
+        )
+    }
 }

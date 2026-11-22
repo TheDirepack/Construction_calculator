@@ -20,6 +20,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
@@ -29,6 +31,15 @@ import java.util.UUID
 import kotlin.math.min
 
 data class PlanSymbol(val id: String, val name: String, val svg: String)
+
+/** Offline symbol organization: user-defined named sets, favorites, and recently used symbol IDs. */
+data class SymbolLibraryMeta(
+    val sets: Map<String, List<String>> = emptyMap(),
+    val favorites: Set<String> = emptySet(),
+    val recents: List<String> = emptyList(),
+) {
+    val isEmpty: Boolean get() = sets.isEmpty() && favorites.isEmpty() && recents.isEmpty()
+}
 
 /** Stores SVGs independently of projects. A placed symbol carries its own SVG. */
 class PlanSymbols internal constructor(
@@ -51,6 +62,25 @@ class PlanSymbols internal constructor(
         }.getOrNull()
     }.sortedBy { it.name.lowercase() }
 
+    fun readMeta(): SymbolLibraryMeta {
+        val file = File(directory, META_FILE_NAME)
+        if (!file.isFile) return SymbolLibraryMeta()
+        return runCatching {
+            val raw = file.inputStream().use { it.readBounded(MAX_SVG_BYTES).decodeToString() }
+            decodeMeta(Json.parseToJsonElement(raw))
+        }.getOrDefault(SymbolLibraryMeta())
+    }
+
+    fun writeMeta(meta: SymbolLibraryMeta) {
+        val clean = sanitizeMeta(meta)
+        if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
+            throw IOException("Couldn't save symbol settings.")
+        }
+        val target = File(directory, META_FILE_NAME)
+        val payload = encodeMeta(clean).toString().encodeToByteArray()
+        atomicWrite(target, "sym-meta-", payload)
+    }
+
     suspend fun import(uri: Uri): PlanSymbol = withContext(Dispatchers.IO) {
         val appContext = requireNotNull(context) { "Context is required to import from a Uri." }
         val input = appContext.contentResolver.openInputStream(uri) ?: throw IOException("Couldn't open the SVG.")
@@ -65,14 +95,25 @@ class PlanSymbols internal constructor(
     fun remove(id: String) {
         if (isValidUuid(id)) {
             File(directory, "$id.json").delete()
+            if (File(directory, META_FILE_NAME).isFile) {
+                val meta = readMeta()
+                val updatedSets = meta.sets.mapValues { (_, ids) -> ids.filterNot { it == id } }
+                val updated = meta.copy(
+                    sets = updatedSets,
+                    favorites = meta.favorites - id,
+                    recents = meta.recents.filterNot { it == id },
+                )
+                if (updated != meta) writeMeta(updated)
+            }
         }
     }
 
-    /** Includes imported SVG symbols in full backups, validating every SVG on restore. */
+    /** Includes imported SVG symbols and organization metadata in full backups, validating every SVG on restore. */
     val backup: ToolBackup = object : ToolBackup {
         override fun export(): JsonElement? {
             val symbols = list()
-            if (symbols.isEmpty()) return null
+            val meta = readMeta()
+            if (symbols.isEmpty() && meta.isEmpty) return null
             return buildJsonObject {
                 put("version", JsonPrimitive(1))
                 put("symbols", buildJsonArray {
@@ -84,6 +125,7 @@ class PlanSymbols internal constructor(
                         })
                     }
                 })
+                if (!meta.isEmpty) put("meta", encodeMeta(meta))
             }
         }
 
@@ -93,6 +135,9 @@ class PlanSymbols internal constructor(
                     ?: throw IllegalArgumentException("Missing symbols array in backup.")
                 is JsonArray -> data
                 else -> throw IllegalArgumentException("Unsupported symbols backup format.")
+            }
+            val importedMeta = (data as? JsonObject)?.get("meta")?.let {
+                runCatching { decodeMeta(it) }.getOrNull()
             }
             val validated = mutableListOf<PlanSymbol>()
             for (item in array) {
@@ -107,8 +152,25 @@ class PlanSymbols internal constructor(
             }
             if (replace) {
                 directory.listFiles().orEmpty()
-                    .filter { it.isFile && it.extension == "json" }
+                    .filter { it.isFile && it.extension == "json" && isValidUuid(it.nameWithoutExtension) }
                     .forEach { it.delete() }
+                if (importedMeta != null) writeMeta(importedMeta)
+                else File(directory, META_FILE_NAME).delete()
+            } else if (importedMeta != null && !importedMeta.isEmpty) {
+                val existing = readMeta()
+                val mergedSets = LinkedHashMap<String, List<String>>().apply {
+                    putAll(existing.sets)
+                    for ((name, ids) in importedMeta.sets) {
+                        this[name] = (this[name].orEmpty() + ids).distinct()
+                    }
+                }
+                writeMeta(
+                    SymbolLibraryMeta(
+                        sets = mergedSets,
+                        favorites = existing.favorites + importedMeta.favorites,
+                        recents = (importedMeta.recents + existing.recents).distinct(),
+                    ),
+                )
             }
             for (symbol in validated) {
                 writeSymbol(symbol)
@@ -127,7 +189,11 @@ class PlanSymbols internal constructor(
             put("name", JsonPrimitive(symbol.name))
             put("svg", JsonPrimitive(symbol.svg))
         }.toString().encodeToByteArray()
-        val temp = File.createTempFile("sym-", ".tmp", directory)
+        atomicWrite(target, "sym-", payload)
+    }
+
+    private fun atomicWrite(target: File, prefix: String, payload: ByteArray) {
+        val temp = File.createTempFile(prefix, ".tmp", directory)
         try {
             temp.outputStream().use { it.write(payload) }
             if (!temp.renameTo(target)) {
@@ -144,6 +210,51 @@ class PlanSymbols internal constructor(
 
     private fun isValidUuid(id: String): Boolean =
         runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false)
+
+    private fun isValidSymbolId(id: String): Boolean =
+        id.isNotBlank() && id.length <= 120 && '/' !in id && '\\' !in id &&
+            id != "." && id != ".." && id.none(Char::isISOControl)
+
+    private fun sanitizeMeta(meta: SymbolLibraryMeta): SymbolLibraryMeta {
+        val cleanSets = LinkedHashMap<String, List<String>>()
+        for ((rawName, rawIds) in meta.sets) {
+            if (cleanSets.size >= MAX_SETS) break
+            val name = rawName.trim().take(80)
+            if (name.isBlank() || name.any(Char::isISOControl) || '/' in name || '\\' in name || name == "." || name == "..") continue
+            val ids = rawIds.asSequence().map(String::trim).filter(::isValidSymbolId).distinct().take(MAX_IDS_PER_SET).toList()
+            cleanSets[name] = ids
+        }
+        val cleanFavorites = meta.favorites.asSequence().map(String::trim).filter(::isValidSymbolId).take(MAX_IDS_PER_SET).toSet()
+        val cleanRecents = meta.recents.asSequence().map(String::trim).filter(::isValidSymbolId).distinct().take(MAX_RECENTS).toList()
+        return SymbolLibraryMeta(cleanSets, cleanFavorites, cleanRecents)
+    }
+
+    private fun encodeMeta(meta: SymbolLibraryMeta): JsonObject = buildJsonObject {
+        put("sets", buildJsonObject {
+            for ((name, ids) in meta.sets) {
+                put(name, buildJsonArray { ids.forEach { add(JsonPrimitive(it)) } })
+            }
+        })
+        put("favorites", buildJsonArray { meta.favorites.forEach { add(JsonPrimitive(it)) } })
+        put("recents", buildJsonArray { meta.recents.forEach { add(JsonPrimitive(it)) } })
+    }
+
+    private fun decodeMeta(element: JsonElement): SymbolLibraryMeta {
+        val obj = element.jsonObject
+        val sets = obj["sets"]?.jsonObject?.entries?.associate { (k, v) ->
+            k to v.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull }
+        }.orEmpty()
+        val favorites = obj["favorites"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }?.toSet().orEmpty()
+        val recents = obj["recents"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
+        return sanitizeMeta(SymbolLibraryMeta(sets, favorites, recents))
+    }
+
+    companion object {
+        private const val META_FILE_NAME = "library-meta.json"
+        private const val MAX_SETS = 50
+        private const val MAX_IDS_PER_SET = 200
+        private const val MAX_RECENTS = 24
+    }
 }
 
 private const val MAX_SVG_BYTES = 256 * 1024

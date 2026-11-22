@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -16,6 +17,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -32,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.thedirepack.constructioncalc.core.plans.SnapTarget
 import com.thedirepack.constructioncalc.feature.drawings.domain.CalibrationStatus
 import com.thedirepack.constructioncalc.core.ui.R as CoreR
 
@@ -65,6 +68,76 @@ internal fun EditorHeader(
 }
 
 @Composable
+internal fun EditorStatusBar(
+    revisionLabel: String,
+    superseded: Boolean,
+    onRevision: () -> Unit,
+    scaleLabel: String,
+    scaleStatus: CalibrationStatus,
+    onScale: () -> Unit,
+    snapEnabled: Boolean,
+    snapTarget: SnapTarget,
+    onSnapSelect: (enabled: Boolean, target: SnapTarget) -> Unit,
+    returnLabel: String? = null,
+    onReturn: (() -> Unit)? = null,
+) {
+    var snapMenu by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (returnLabel != null && onReturn != null) {
+            AssistChip(
+                onClick = onReturn,
+                label = { Text("← $returnLabel", maxLines = 1) },
+            )
+        }
+        AssistChip(
+            onClick = onRevision,
+            label = {
+                Text(
+                    revisionLabel,
+                    maxLines = 1,
+                    color = if (superseded) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                )
+            },
+        )
+        AssistChip(
+            onClick = onScale,
+            label = {
+                Text(
+                    scaleLabel,
+                    maxLines = 1,
+                    color = when (scaleStatus) {
+                        CalibrationStatus.VERIFIED -> MaterialTheme.colorScheme.primary
+                        CalibrationStatus.NEEDS_REVIEW -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurface
+                    },
+                )
+            },
+        )
+        Box {
+            val snapText = when {
+                !snapEnabled -> "Snap · Off"
+                snapTarget == SnapTarget.CENTER -> "Snap · Center"
+                else -> "Snap · Edge"
+            }
+            FilterChip(
+                selected = snapEnabled,
+                onClick = { snapMenu = true },
+                label = { Text(snapText, maxLines = 1) },
+            )
+            DropdownMenu(snapMenu, onDismissRequest = { snapMenu = false }) {
+                MenuItem("Snap to line center", { snapMenu = false }) { onSnapSelect(true, SnapTarget.CENTER) }
+                MenuItem("Snap to nearest edge", { snapMenu = false }) { onSnapSelect(true, SnapTarget.EDGE) }
+                MenuItem("Snap off", { snapMenu = false }) { onSnapSelect(false, snapTarget) }
+            }
+        }
+    }
+}
+
+@Composable
 internal fun EditorTools(
     mode: DrawingMode,
     vertical: Boolean,
@@ -80,7 +153,7 @@ internal fun EditorTools(
         Box {
             ToolChip(if (mode in primary || mode in markup) "Markup" else mode.title, mode !in primary && mode !in markup) { showMore = true }
             DropdownMenu(showMore, onDismissRequest = { showMore = false }) {
-                DrawingMode.entries.filter { it.group == ToolGroup.MARKUP && it !in primary }.forEach { tool ->
+                DrawingMode.entries.filter { it.group == ToolGroup.MARKUP && it !in primary && it !in markup }.forEach { tool ->
                     MenuItem(tool.title, { showMore = false }) { onMode(tool) }
                 }
             }

@@ -4,7 +4,10 @@ import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanPoint
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CanvasEditingTest {
@@ -55,5 +58,87 @@ class CanvasEditingTest {
             SheetLabel("A-102 - DIMENSION PLANS", "DIMENSION PLANS"),
             resolveSheetLabel("A-102 - DIMENSION PLANS", repeatedLabels, SheetLabel("A-102", "DIMENSION PLANS")),
         )
+    }
+
+    @Test fun partialEraserSplitsAndTrimsInkPreservingStyleAndPressures() {
+        val ink = PlanMark(
+            id = "ink-1",
+            page = 0,
+            kind = PlanMarkKind.INK,
+            points = listOf(PlanPoint(0.0, 0.0), PlanPoint(100.0, 0.0)),
+            pressures = listOf(0.4f, 0.8f),
+            color = 0xFFC62828L,
+            opacity = 0.7f,
+        )
+        // Erasing far away keeps the exact stroke intact.
+        val untouched = eraseStrokePartially(ink, listOf(PlanPoint(50.0, 50.0)), 4.0)
+        assertEquals(listOf(ink), untouched)
+
+        // Swiping through the middle splits the stroke into two fragments with valid pressures.
+        val split = eraseStrokePartially(ink, listOf(PlanPoint(50.0, -10.0), PlanPoint(50.0, 10.0)), 5.0)
+        assertEquals(2, split.size)
+        assertNotEquals("ink-1", split[0].id)
+        assertEquals(0xFFC62828L, split[0].color)
+        assertEquals(0.7f, split[0].opacity, 1e-6f)
+        assertTrue(split[0].points.last().x < 46.0)
+        assertTrue(split[1].points.first().x > 54.0)
+        assertEquals(split[0].points.size, split[0].pressures.size)
+        assertEquals(split[1].points.size, split[1].pressures.size)
+
+        // Single dot erased returns empty.
+        val dot = PlanMark(page = 0, kind = PlanMarkKind.HIGHLIGHT, points = listOf(PlanPoint(10.0, 10.0)), width = 8.0)
+        assertTrue(eraseStrokePartially(dot, listOf(PlanPoint(11.0, 11.0)), 3.0).isEmpty())
+
+        // Non-stroke marks are never modified by partial eraser.
+        val box = PlanMark(page = 0, kind = PlanMarkKind.RECTANGLE, points = listOf(PlanPoint(0.0, 0.0), PlanPoint(20.0, 20.0)))
+        assertEquals(listOf(box), eraseStrokePartially(box, listOf(PlanPoint(10.0, 10.0)), 10.0))
+    }
+
+    @Test fun cloudAndCloudCalloutSupportHandlesIndependentNoteAndHitTests() {
+        val cloud = PlanMark(page = 0, kind = PlanMarkKind.CLOUD, points = listOf(PlanPoint(10.0, 20.0), PlanPoint(60.0, 70.0)))
+        assertEquals(4, cloud.editHandles().size)
+        assertEquals(
+            listOf(PlanPoint(5.0, 20.0), PlanPoint(60.0, 80.0)),
+            cloud.resize(2, PlanPoint(5.0, 80.0)).points,
+        )
+        assertNotNull(markAt(listOf(cloud), PlanPoint(30.0, 40.0), 4.0))
+
+        val cc = PlanMark(
+            page = 0,
+            kind = PlanMarkKind.CLOUD_CALLOUT,
+            points = listOf(PlanPoint(10.0, 20.0), PlanPoint(60.0, 70.0), PlanPoint(90.0, 25.0)),
+            text = "RFI-4",
+            width = 12.0,
+        )
+        val handles = cc.editHandles()
+        assertEquals(5, handles.size)
+        assertEquals(PlanPoint(90.0, 25.0), handles[4])
+        // Dragging handle 4 moves only the note box.
+        assertEquals(
+            listOf(PlanPoint(10.0, 20.0), PlanPoint(60.0, 70.0), PlanPoint(120.0, 35.0)),
+            cc.resize(4, PlanPoint(120.0, 35.0)).points,
+        )
+        // Dragging cloud body moves all 3 points together.
+        assertEquals(
+            listOf(PlanPoint(15.0, 16.0), PlanPoint(65.0, 66.0), PlanPoint(95.0, 21.0)),
+            cc.move(5.0, -4.0).points,
+        )
+        assertNotNull(markAt(listOf(cc), PlanPoint(95.0, 30.0), 4.0))
+    }
+
+    @Test fun dimensionPhotoAndDetailLinkEditAndHitTest() {
+        val dim = PlanMark(page = 0, kind = PlanMarkKind.DIMENSION, points = listOf(PlanPoint(0.0, 0.0), PlanPoint(50.0, 0.0)))
+        assertEquals(2, dim.editHandles().size)
+        assertEquals(listOf(PlanPoint(0.0, 0.0), PlanPoint(75.0, 0.0)), dim.resize(1, PlanPoint(75.0, 0.0)).points)
+        assertNotNull(markAt(listOf(dim), PlanPoint(25.0, 3.0), 4.0))
+
+        val photo = PlanMark(page = 0, kind = PlanMarkKind.PHOTO, points = listOf(PlanPoint(40.0, 40.0)), photoSha256 = "a".repeat(64))
+        assertEquals(emptyList<PlanPoint>(), photo.editHandles())
+        assertEquals(listOf(PlanPoint(50.0, 35.0)), photo.move(10.0, -5.0).points)
+        assertNotNull(markAt(listOf(photo), PlanPoint(43.0, 42.0), 4.0))
+
+        val detail = PlanMark(page = 0, kind = PlanMarkKind.DETAIL_LINK, points = listOf(PlanPoint(80.0, 80.0)), targetPage = 3)
+        assertNotNull(markAt(listOf(detail), PlanPoint(84.0, 80.0), 4.0))
+        assertEquals(listOf(PlanPoint(90.0, 90.0)), detail.move(10.0, 10.0).points)
     }
 }

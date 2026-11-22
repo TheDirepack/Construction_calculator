@@ -71,6 +71,29 @@ internal fun TakeoffDialog(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+                if (takeoff.pathPolylineCount > 0 || takeoff.pathPolygonCount > 0 || takeoff.uncalibratedPathCount > 0 || takeoff.multiScalePathCount > 0) {
+                    Section("Saved paths & areas")
+                    if (takeoff.pathPolylineCount > 0) {
+                        TotalRow("Polylines · ${takeoff.pathPolylineCount}", "≈ ${settings.format(takeoff.pathPolylineTotal)}")
+                    }
+                    if (takeoff.pathPolygonCount > 0) {
+                        TotalRow("Areas · ${takeoff.pathPolygonCount}", "≈ ${settings.format(takeoff.pathPolygonArea)} (perim. ${settings.format(takeoff.pathPolygonPerimeter)})")
+                    }
+                    if (takeoff.multiScalePathCount > 0) {
+                        Text(
+                            "${takeoff.multiScalePathCount} saved path(s) span multiple scale zones and aren't totaled.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (takeoff.uncalibratedPathCount > 0) {
+                        Text(
+                            "${takeoff.uncalibratedPathCount} saved path(s) have no scale and aren't totaled.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
                 if (takeoff.byLabel.isNotEmpty()) {
                     Section("By label")
                     takeoff.byLabel.forEach { TotalRow("${it.name} · ${it.count}", "≈ ${settings.format(it.total)}") }
@@ -80,7 +103,25 @@ internal fun TakeoffDialog(
                     takeoff.symbols.forEach { TotalRow(it.name, it.count.toString()) }
                     if (takeoff.textNotes > 0) TotalRow("Text notes", takeoff.textNotes.toString())
                 }
-                if (takeoff.symbolsByCircuit.isNotEmpty()) {
+                if (takeoff.symbolsByArea.isNotEmpty()) {
+                    Section("Counts by area")
+                    takeoff.symbolsByArea.forEach { TotalRow("${it.area} · ${it.name}", it.count.toString()) }
+                }
+                if (takeoff.byCircuitCombined.isNotEmpty()) {
+                    Section("By circuit (devices & routes)")
+                    takeoff.byCircuitCombined.forEach { group ->
+                        Text(group.circuit, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 4.dp))
+                        group.symbols.forEach { TotalRow("  ${it.name}", it.count.toString()) }
+                        group.routes.forEach { entry ->
+                            val runName = project.runs.firstOrNull { it.id == entry.route.runId }?.name ?: "Run (deleted)"
+                            val lengthText = entry.current?.let { "≈ ${settings.format(it)}" } ?: "Uncalibrated"
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("  Route · $runName ($lengthText)", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                TextButton(onClick = { onShowRoute(entry.route) }) { Text("Show") }
+                            }
+                        }
+                    }
+                } else if (takeoff.symbolsByCircuit.isNotEmpty()) {
                     Section("Counts by circuit")
                     takeoff.symbolsByCircuit.forEach { TotalRow("${it.circuit} · ${it.name}", it.count.toString()) }
                 }

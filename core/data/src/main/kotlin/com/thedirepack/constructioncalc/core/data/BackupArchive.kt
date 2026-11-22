@@ -14,14 +14,43 @@ internal object BackupArchive {
     val zip = PdfZip("backup.json", "backup", maxTotalBytes = 1024L * 1024 * 1024, maxPdfs = 500, requireAllPdfs = false)
 
     fun write(out: OutputStream, backup: BackupDocument, fileForHash: (String) -> File) =
-        zip.write(out, AppFileCodec.encodeBackup(backup).encodeToByteArray(), hashes(backup), fileForHash)
+        write(out, backup, fileForHash) { File("") }
 
-    fun read(input: InputStream, storePdf: (InputStream, String) -> Unit): BackupDocument = zip.read(input, ::decode, storePdf)
+    fun write(
+        out: OutputStream,
+        backup: BackupDocument,
+        fileForHash: (String) -> File,
+        photoFileForHash: (String) -> File,
+    ) = zip.write(
+        out = out,
+        json = AppFileCodec.encodeBackup(backup).encodeToByteArray(),
+        hashes = hashes(backup),
+        fileForHash = fileForHash,
+        photoHashes = photoHashes(backup),
+        photoFileForHash = photoFileForHash,
+    )
+
+    fun read(input: InputStream, storePdf: (InputStream, String) -> Unit): BackupDocument =
+        read(input, storePdf) { _, _ -> }
+
+    fun read(
+        input: InputStream,
+        storePdf: (InputStream, String) -> Unit,
+        storePhoto: (InputStream, String) -> Unit,
+    ): BackupDocument = zip.read(input, ::decode, storePdf, ::photoHashes, storePhoto)
 
     internal fun readOpen(stream: ZipInputStream, firstName: String?, storePdf: (InputStream, String) -> Unit): BackupDocument =
-        zip.readOpen(stream, firstName, ::decode, storePdf)
+        readOpen(stream, firstName, storePdf) { _, _ -> }
+
+    internal fun readOpen(
+        stream: ZipInputStream,
+        firstName: String?,
+        storePdf: (InputStream, String) -> Unit,
+        storePhoto: (InputStream, String) -> Unit,
+    ): BackupDocument = zip.readOpen(stream, firstName, ::decode, storePdf, ::photoHashes, storePhoto)
 
     private fun hashes(backup: BackupDocument) = backup.projects.flatMap { it.drawings }.map { it.sha256 }
+    private fun photoHashes(backup: BackupDocument) = backup.projects.flatMap { p -> p.drawings.flatMap { it.referencedPhotoHashes() } }
 
     private fun decode(json: String): Pair<BackupDocument, List<String>> {
         val backup = (AppFileCodec.decode(json) as? AppFile.Backup)?.backup

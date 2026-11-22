@@ -148,7 +148,7 @@ object ProjectSharing {
 
     private fun writeProject(context: Context, out: java.io.OutputStream, project: Project, now: Long) {
         if (project.drawings.isEmpty()) out.write(ProjectCodec.encode(project, exportedAt = now).encodeToByteArray())
-        else ProjectArchive.write(out, project, now, PlanFiles(context)::file)
+        else ProjectArchive.write(out, project, now, PlanFiles(context)::file, PlanPhotos(context)::file)
     }
 
     /** Writes a full backup archive (`.backup.zip`) to a document picked with ACTION_CREATE_DOCUMENT. */
@@ -159,7 +159,7 @@ object ProjectSharing {
     }
 
     private fun writeBackup(context: Context, out: java.io.OutputStream, backup: BackupDocument) {
-        BackupArchive.write(out, backup, PlanFiles(context)::file)
+        BackupArchive.write(out, backup, PlanFiles(context)::file, PlanPhotos(context)::file)
     }
 
     /** Reads a project or backup file (`.backup.zip`, `.project.zip`, `.backup.json`, `.project.json`, or compact text). */
@@ -181,19 +181,24 @@ object ProjectSharing {
                 header[2] == 3.toByte() && header[3] == 4.toByte()
             if (isZip) {
                 val files = PlanFiles(context)
+                val photos = PlanPhotos(context)
                 val staged = mutableListOf<PlanFiles.StagedPdf>()
+                val stagedPhotos = mutableListOf<PlanPhotos.StagedPhoto>()
                 val stage = { pdf: InputStream, hash: String -> staged += files.stage(pdf, expectedHash = hash, validatePdf = true); Unit }
+                val stagePhoto = { photo: InputStream, hash: String -> stagedPhotos += photos.stage(photo, expectedHash = hash, checkHeader = true); Unit }
                 try {
                     // The first entry names the kind of archive: backup.json or project.json.
                     val result = ZipInputStream(stream).use { zip ->
                         val first = zip.nextEntry?.name
-                        if (first == BackupArchive.zip.document) AppFile.Backup(BackupArchive.readOpen(zip, first, stage))
-                        else AppFile.SingleProject(ProjectArchive.readOpen(zip, first, stage))
+                        if (first == BackupArchive.zip.document) AppFile.Backup(BackupArchive.readOpen(zip, first, stage, stagePhoto))
+                        else AppFile.SingleProject(ProjectArchive.readOpen(zip, first, stage, stagePhoto))
                     }
                     staged.forEach(files::commit)
+                    stagedPhotos.forEach(photos::commit)
                     result
                 } catch (error: Throwable) {
                     staged.forEach { it.temp.delete() }
+                    stagedPhotos.forEach { it.temp.delete() }
                     throw error
                 }
             } else {

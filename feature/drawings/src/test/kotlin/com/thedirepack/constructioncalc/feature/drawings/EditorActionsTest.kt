@@ -2,7 +2,9 @@ package com.thedirepack.constructioncalc.feature.drawings
 
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.model.PlanArrowStyle
 import com.thedirepack.constructioncalc.core.model.PlanCalibrationLayer
+import com.thedirepack.constructioncalc.core.model.PlanDashStyle
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanMeasurement
@@ -174,5 +176,52 @@ class EditorActionsTest {
     @Test fun segmentDistanceClampsToTheEnds() {
         assertEquals(5.0, EditorActions.segmentDistance(p(50.0, 5.0), p(0.0, 0.0), p(100.0, 0.0)), 1e-9)
         assertEquals(5.0, EditorActions.segmentDistance(p(-3.0, 4.0), p(0.0, 0.0), p(100.0, 0.0)), 1e-9)
+    }
+
+    @Test fun dimensionCloudPhotoAndDetailLinkActionsAndStyles() {
+        val style = MarkupToolStyle(
+            color = 0xFFC62828L,
+            width = 3.5,
+            opacity = 0.8f,
+            dash = PlanDashStyle.DASHED,
+            arrowStyle = PlanArrowStyle.FILLED_BOTH,
+            fillColor = 0xFFFFE43CL,
+            fillOpacity = 0.25f,
+        )
+
+        val dimOutcome = EditorActions.span(EditorSession(mode = DrawingMode.Dimension), drawing, p(0.0, 0.0), p(40.0, 0.0), style)
+        val dimMark = dimOutcome.change!!(drawing).marks.single()
+        assertEquals(PlanMarkKind.DIMENSION, dimMark.kind)
+        assertEquals(0xFFC62828L, dimMark.color)
+        assertEquals(PlanArrowStyle.FILLED_BOTH, dimMark.arrowStyle)
+        assertNull(dimOutcome.message)
+
+        val crossingDim = EditorActions.span(EditorSession(mode = DrawingMode.Dimension), drawing, p(100.0, 250.0), p(250.0, 250.0), style)
+        assertNull(crossingDim.change)
+        assertEquals("Split dimensions at override zone boundaries.", crossingDim.message)
+
+        val uncalibratedDim = EditorActions.span(
+            EditorSession(mode = DrawingMode.Dimension),
+            drawing.copy(calibration = PlanCalibrationLayer()),
+            p(0.0, 0.0),
+            p(10.0, 0.0),
+        )
+        assertNotNull(uncalibratedDim.change)
+        assertEquals("Placed dimension. Calibrate the sheet to show real lengths.", uncalibratedDim.message)
+
+        val flatCloud = EditorActions.span(EditorSession(mode = DrawingMode.Cloud), drawing, p(0.0, 0.0), p(10.0, 0.0), style)
+        assertNull(flatCloud.change)
+        val cloudMark = EditorActions.span(EditorSession(mode = DrawingMode.Cloud), drawing, p(0.0, 0.0), p(20.0, 30.0), style).change!!(drawing).marks.single()
+        assertEquals(PlanMarkKind.CLOUD, cloudMark.kind)
+        assertEquals(0.25f, cloudMark.fillOpacity, 1e-6f)
+
+        val ccDialog = EditorActions.span(EditorSession(mode = DrawingMode.CloudCallout), drawing, p(10.0, 10.0), p(50.0, 40.0)).session.dialog
+        assertEquals(EditorDialog.PlaceCloudCallout(p(10.0, 10.0), p(50.0, 40.0)), ccDialog)
+
+        val photoDialog = EditorActions.tap(EditorSession(mode = DrawingMode.Photo), drawing, p(15.0, 25.0), 8.0).session.dialog
+        assertEquals(EditorDialog.PlacePhoto(p(15.0, 25.0)), photoDialog)
+
+        val detailDialog = EditorActions.tap(EditorSession(mode = DrawingMode.DetailLink), drawing, p(35.0, 45.0), 8.0).session.dialog
+        assertEquals(EditorDialog.PlaceDetailLink(p(35.0, 45.0)), detailDialog)
     }
 }

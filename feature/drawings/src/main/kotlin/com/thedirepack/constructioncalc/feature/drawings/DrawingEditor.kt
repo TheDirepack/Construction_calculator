@@ -2,10 +2,15 @@ package com.thedirepack.constructioncalc.feature.drawings
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import com.thedirepack.constructioncalc.core.data.PlanSymbols
 import com.thedirepack.constructioncalc.core.data.PlanSymbol
 import com.thedirepack.constructioncalc.core.model.newId
@@ -106,6 +111,10 @@ internal fun DrawingEditor(
     onPublish: (PlanMeasurement, Quantity, PlanSheetSource) -> Unit,
     host: ToolHost,
     modifier: Modifier = Modifier,
+    jumpPageRequest: Pair<Int, Int>? = null,
+    returnLabel: String? = null,
+    onReturnToSheet: (() -> Unit)? = null,
+    onJumpToSheet: (targetDrawingId: String, targetPage: Int, fromPage: Int) -> Unit = { _, _, _ -> },
 ) {
     val context = LocalContext.current
     val settings = rememberAppSettings()
@@ -138,8 +147,15 @@ internal fun DrawingEditor(
         if (symbol == null) symbol = saved
     }
     var circuitTag by rememberSaveable(drawing.id) { mutableStateOf(views.getString("${drawing.id}/circuit", "").orEmpty()) }
+    var areaTag by rememberSaveable(drawing.id) { mutableStateOf(views.getString("${drawing.id}/area", "").orEmpty()) }
     var editCircuit by remember(drawing.id) { mutableStateOf(false) }
+    var editArea by remember(drawing.id) { mutableStateOf(false) }
     var editMarkCircuit by remember(drawing.id) { mutableStateOf(false) }
+    var editMarkArea by remember(drawing.id) { mutableStateOf(false) }
+    var eraserMode by rememberSaveable(drawing.id) { mutableStateOf(EraserMode.PARTIAL) }
+    var countGrouping by rememberSaveable(drawing.id) { mutableStateOf(CountGrouping.DEVICE) }
+    val styleStore = remember(views) { MarkupStyleStore(views) }
+    var styleVersion by remember { mutableStateOf(0) }
     var settingsOpen by rememberSaveable(drawing.id) { mutableStateOf(false) }
     var sheetsOpen by rememberSaveable(drawing.id) { mutableStateOf(false) }
     val sheetBrowserState = rememberSaveableStateHolder()
@@ -209,6 +225,19 @@ internal fun DrawingEditor(
         selectedMeasurementId = null
     }
 
+    var handledJumpSerial by rememberSaveable(drawing.id) { mutableStateOf(0) }
+    LaunchedEffect(jumpPageRequest?.second, pageCount) {
+        val total = pageCount ?: return@LaunchedEffect
+        val req = jumpPageRequest ?: return@LaunchedEffect
+        if (total > 0 && req.second > handledJumpSerial) {
+            handledJumpSerial = req.second
+            clearSelection()
+            routeFinished = false
+            session = session.goToPage(req.first.coerceIn(0, total - 1))
+            sheetsOpen = false
+        }
+    }
+
     fun switchMode(next: DrawingMode) {
         if (next != mode) {
             clearSelection()
@@ -250,10 +279,19 @@ internal fun DrawingEditor(
             }
         }
     }
+    val activeToolStyle = remember(mode, styleVersion, styleStore) {
+        if (mode.supportsStyle()) styleStore.read(mode) else null
+    }
     val snapTarget = when (mode) {
         DrawingMode.Reference -> prefs.calibrationTarget
-        DrawingMode.Measure, DrawingMode.Route, DrawingMode.Adjust -> prefs.measurementTarget
+        DrawingMode.Measure, DrawingMode.Route, DrawingMode.Adjust, DrawingMode.Dimension -> prefs.measurementTarget
         else -> SnapTarget.CENTER
+    }
+    val formatDimension: (PlanMark) -> String? = remember(drawing, settings) {
+        { mark ->
+            val measured = drawing.dimensionLength(mark)?.let { "≈ ${settings.format(it)}" } ?: "Uncalibrated"
+            if (mark.text.isBlank()) measured else "${mark.text}: $measured"
+        }
     }
 
     val pageZones = remember(drawing.zones, page) { drawing.zones.filter { it.page == page } }
@@ -413,11 +451,21 @@ internal fun DrawingEditor(
             DrawingMode.Symbol -> {
                 val current = symbol
                 if (current == null) session = session.open(EditorDialog.PickSymbol)
-                else addMark(PlanMark(page = page, kind = PlanMarkKind.SYMBOL, points = listOf(point),
-                    svg = current.svg, text = current.name.take(2_000), width = 36.0, circuitTag = circuitTag))
+                else addMark(
+                    PlanMark(
+                        page = page,
+                        kind = PlanMarkKind.SYMBOL,
+                        points = listOf(point),
+                        svg = current.svg,
+                        text = current.name.take(2_000),
+                        width = 36.0,
+                        circuitTag = circuitTag,
+                        areaTag = areaTag,
+                    ),
+                )
             }
-            DrawingMode.Route -> if (!routeFinished) apply(EditorActions.tap(session, drawing, point, radius))
-            else -> apply(EditorActions.tap(session, drawing, point, radius))
+            DrawingMode.Route -> if (!routeFinished) apply(EditorActions.tap(session, drawing, point, radius, activeToolStyle))
+            else -> apply(EditorActions.tap(session, drawing, point, radius, activeToolStyle))
         }
     }
 
@@ -539,9 +587,34 @@ internal fun DrawingEditor(
                 onToggleHighlights = { highlightsVisible = !highlightsVisible; clearSelection() },
             )
         }
-        TextButton(onClick = { revisionOpen = true }) {
-            Text(identity?.let { "Rev ${it.revision} · ${revisionStatus?.label.orEmpty()}" } ?: "Revision unassigned")
+        val statusZone = zone?.takeIf { session.selectedZoneId == it.id }
+        val activeScaleStatus = statusZone?.let { zoneStatus[it.id] } ?: docSummary.status
+        val activeScaleLabel = if (statusZone != null) {
+            "Scale · ${statusZone.name} · ${activeScaleStatus.label}"
+        } else {
+            "Scale · ${docSummary.status.label}"
         }
+        EditorStatusBar(
+            revisionLabel = identity?.let { "Rev ${it.revision} · ${revisionStatus?.label.orEmpty()}" } ?: "Rev unassigned",
+            superseded = revisionStatus == com.thedirepack.constructioncalc.core.model.SheetRevisionStatus.SUPERSEDED,
+            onRevision = { revisionOpen = true },
+            scaleLabel = activeScaleLabel,
+            scaleStatus = activeScaleStatus,
+            onScale = { session = session.open(EditorDialog.Calibration) },
+            snapEnabled = if (mode == DrawingMode.Reference) prefs.snapCalibration else prefs.snapMeasurements,
+            snapTarget = if (mode == DrawingMode.Reference) prefs.calibrationTarget else prefs.measurementTarget,
+            onSnapSelect = { enabled, target ->
+                if (mode == DrawingMode.Reference) {
+                    DrawingsSettings.setSnapCalibration(prefsStore, enabled)
+                    DrawingsSettings.setCalibrationTarget(prefsStore, target)
+                } else {
+                    DrawingsSettings.setSnapMeasurements(prefsStore, enabled)
+                    DrawingsSettings.setMeasurementTarget(prefsStore, target)
+                }
+            },
+            returnLabel = returnLabel,
+            onReturn = onReturnToSheet,
+        )
         if (revisionOpen) {
             SheetRevisionDialog(
                 fallbackId = fallbackId,
@@ -638,17 +711,15 @@ internal fun DrawingEditor(
                         onPageSize = { pageSize = it },
                         onCropProvider = { cropProvider = it },
                         onPlace = ::place,
-                        onLine = { first, second -> apply(EditorActions.span(session, drawing, first, second)) },
+                        onLine = { first, second -> apply(EditorActions.span(session, drawing, first, second, activeToolStyle)) },
                         onInk = { points ->
-                            addMark(
-                                PlanMark(
-                                    page = page,
-                                    kind = if (mode == DrawingMode.Highlight) PlanMarkKind.HIGHLIGHT else PlanMarkKind.INK,
-                                    points = points.map { it.point },
-                                    pressures = points.map { it.pressure },
-                                    width = if (mode == DrawingMode.Highlight) 11.0 else 1.8,
-                                ),
+                            val raw = PlanMark(
+                                page = page,
+                                kind = if (mode == DrawingMode.Highlight) PlanMarkKind.HIGHLIGHT else PlanMarkKind.INK,
+                                points = points.map { it.point },
+                                pressures = points.map { it.pressure },
                             )
+                            addMark(activeToolStyle?.applyTo(raw) ?: raw)
                         },
                         routePoints = routePoints,
                         routeLegLabels = routeLegLabels,
@@ -668,13 +739,30 @@ internal fun DrawingEditor(
                             }
                             apply(EditorActions.moveEndpoint(session, drawing, handle, point))
                         },
+                        activeStyle = activeToolStyle,
+                        eraserMode = eraserMode,
+                        onPartialErase = { eraserPoints, radiusPt ->
+                            val updated = drawing.marks.flatMap { m ->
+                                if (m.page == page && (m.kind == PlanMarkKind.INK || m.kind == PlanMarkKind.HIGHLIGHT) &&
+                                    (highlightsVisible || m.kind != PlanMarkKind.HIGHLIGHT)
+                                ) {
+                                    eraseStrokePartially(m, eraserPoints, radiusPt)
+                                } else {
+                                    listOf(m)
+                                }
+                            }
+                            if (updated != drawing.marks) {
+                                editDrawing { it.copy(marks = updated) }
+                            }
+                        },
+                        dimensionLabel = formatDimension,
                         modifier = Modifier.fillMaxSize(),
                     )
                     val selectedMeasurement = fittedMeasurements.firstOrNull { it.first.id == selectedMeasurementId }
                     val latest = fittedMeasurements.lastOrNull().takeIf { mode == DrawingMode.Measure }
                     val result = selectedMeasurement ?: latest
                     val hasActions = selectedMark != null || selectedPath != null || result != null || routePoints.isNotEmpty() || session.firstPoint != null
-                    if (hasActions || mode == DrawingMode.Route || mode == DrawingMode.Symbol && symbol != null) {
+                    if (hasActions || mode == DrawingMode.Route || mode == DrawingMode.Eraser || (mode == DrawingMode.Symbol && symbol != null) || activeToolStyle != null) {
                         Surface(
                             tonalElevation = 4.dp,
                             shape = MaterialTheme.shapes.medium,
@@ -686,13 +774,40 @@ internal fun DrawingEditor(
                                         Modifier.horizontalScroll(rememberScrollState()),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
-                                        if (selectedMark.kind in listOf(PlanMarkKind.TEXT, PlanMarkKind.CALLOUT)) {
-                                            TextButton(onClick = { editText = true }) { Text("Edit text") }
+                                        if (selectedMark.kind == PlanMarkKind.DETAIL_LINK) {
+                                            TextButton(onClick = {
+                                                val targetDrawingId = selectedMark.targetDrawingId ?: drawing.id
+                                                val targetPage = selectedMark.targetPage ?: page
+                                                clearSelection()
+                                                onJumpToSheet(targetDrawingId, targetPage, page)
+                                            }) { Text("Open sheet") }
+                                            TextButton(onClick = {
+                                                session = session.open(EditorDialog.EditDetailLink(selectedMark.id))
+                                            }) { Text("Edit link") }
+                                        }
+                                        if (selectedMark.kind == PlanMarkKind.PHOTO) {
+                                            TextButton(onClick = {
+                                                session = session.open(EditorDialog.ViewPhoto(selectedMark.id))
+                                            }) { Text("View photo") }
+                                            TextButton(onClick = { editText = true }) { Text("Caption") }
+                                        }
+                                        if (selectedMark.kind in listOf(PlanMarkKind.TEXT, PlanMarkKind.CALLOUT, PlanMarkKind.CLOUD_CALLOUT, PlanMarkKind.DIMENSION)) {
+                                            TextButton(onClick = { editText = true }) {
+                                                Text(if (selectedMark.kind == PlanMarkKind.DIMENSION) "Label" else "Edit text")
+                                            }
                                         }
                                         if (selectedMark.kind == PlanMarkKind.SYMBOL) {
                                             TextButton(onClick = { editMarkCircuit = true }) {
                                                 Text(selectedMark.circuitTag.ifBlank { "Circuit" })
                                             }
+                                            TextButton(onClick = { editMarkArea = true }) {
+                                                Text(selectedMark.areaTag.ifBlank { "Area" })
+                                            }
+                                        }
+                                        if (selectedMark.kind.supportsStyle()) {
+                                            TextButton(onClick = {
+                                                session = session.open(EditorDialog.EditMarkStyle(selectedMark.id))
+                                            }) { Text("Style") }
                                         }
                                         TextButton(onClick = {
                                             val duplicate = selectedMark.copy(id = newId()).move(12.0, 12.0)
@@ -736,15 +851,36 @@ internal fun DrawingEditor(
                                     }
                                     mode == DrawingMode.Symbol && symbol != null -> {
                                         val active = checkNotNull(symbol)
-                                        val total = marks.count {
-                                            it.kind == PlanMarkKind.SYMBOL && it.text == active.name && it.circuitTag == circuitTag
+                                        val symbolMarks = marks.filter { it.kind == PlanMarkKind.SYMBOL && it.text == active.name }
+                                        val groupTotal = when (countGrouping) {
+                                            CountGrouping.DEVICE -> symbolMarks.size
+                                            CountGrouping.CIRCUIT -> symbolMarks.count { it.circuitTag == circuitTag }
+                                            CountGrouping.AREA -> symbolMarks.count { it.areaTag == areaTag }
                                         }
                                         Row(Modifier.horizontalScroll(rememberScrollState())) {
                                             TextButton(onClick = { session = session.open(EditorDialog.PickSymbol) }) {
-                                                Text("${active.name} · $total  ▾")
+                                                Text("${active.name} · $groupTotal  ▾")
                                             }
+                                            TextButton(onClick = {
+                                                val nextIndex = (CountGrouping.entries.indexOf(countGrouping) + 1) % CountGrouping.entries.size
+                                                countGrouping = CountGrouping.entries[nextIndex]
+                                            }) { Text("By: ${countGrouping.label}") }
                                             TextButton(onClick = { editCircuit = true }) { Text(circuitTag.ifBlank { "Circuit" }) }
+                                            TextButton(onClick = { editArea = true }) { Text(areaTag.ifBlank { "Area" }) }
                                             TextButton(onClick = { session = session.open(EditorDialog.Takeoff) }) { Text("Totals") }
+                                        }
+                                    }
+                                    mode == DrawingMode.Eraser -> Row(
+                                        Modifier.horizontalScroll(rememberScrollState()),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        for (option in EraserMode.entries) {
+                                            TextButton(onClick = { eraserMode = option }) {
+                                                Text(if (eraserMode == option) "• ${option.label}" else option.label)
+                                            }
+                                        }
+                                        TextButton(onClick = { highlightsVisible = !highlightsVisible; clearSelection() }) {
+                                            Text(if (highlightsVisible) "Hide highlights" else "Show highlights")
                                         }
                                     }
                                     mode == DrawingMode.Route && routePoints.isEmpty() -> {
@@ -770,11 +906,22 @@ internal fun DrawingEditor(
                                         vertexCount = routePoints.size,
                                         onSendRoute = { session = session.open(EditorDialog.SendRoute) },
                                     )
-                                    session.firstPoint != null -> Text(
-                                        if (mode == DrawingMode.Callout) "Tap where the note goes." else "Tap the second point.",
-                                        Modifier.padding(8.dp),
-                                        style = MaterialTheme.typography.labelMedium,
-                                    )
+                                    session.firstPoint != null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            when (mode) {
+                                                DrawingMode.Callout -> "Tap where the note goes."
+                                                DrawingMode.CloudCallout -> "Tap the opposite cloud corner."
+                                                else -> "Tap the second point."
+                                            },
+                                            Modifier.padding(8.dp),
+                                            style = MaterialTheme.typography.labelMedium,
+                                        )
+                                        if (activeToolStyle != null) {
+                                            TextButton(onClick = { session = session.open(EditorDialog.EditMarkStyle(null)) }) {
+                                                Text("Style")
+                                            }
+                                        }
+                                    }
                                     result != null -> {
                                         val (measurement, length) = result
                                         TextButton(onClick = {
@@ -790,12 +937,44 @@ internal fun DrawingEditor(
                                             }
                                         }
                                     }
+                                    activeToolStyle != null -> Row(
+                                        Modifier.horizontalScroll(rememberScrollState()),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        TextButton(onClick = { session = session.open(EditorDialog.EditMarkStyle(null)) }) {
+                                            Box(
+                                                Modifier
+                                                    .size(12.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color(activeToolStyle.color.toInt())),
+                                            )
+                                            val opacityTxt = if (activeToolStyle.opacity < 0.99f) " · ${(activeToolStyle.opacity * 100).roundToInt()}%" else ""
+                                            Text("  Style · ${activeToolStyle.width.roundToInt()}pt$opacityTxt ▾")
+                                        }
+                                        if (mode == DrawingMode.Highlight) {
+                                            TextButton(onClick = { highlightsVisible = !highlightsVisible; clearSelection() }) {
+                                                Text(if (highlightsVisible) "Hide highlights" else "Show highlights")
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                     if (selectedMark != null && editText) {
-                        TextMarkupDialog(onDismiss = { editText = false }, initial = selectedMark.text) { text ->
+                        val isOptionalText = selectedMark.kind == PlanMarkKind.DIMENSION || selectedMark.kind == PlanMarkKind.PHOTO
+                        val textDialogTitle = when (selectedMark.kind) {
+                            PlanMarkKind.DIMENSION -> "Dimension label"
+                            PlanMarkKind.PHOTO -> "Photo caption"
+                            else -> "Edit text"
+                        }
+                        TextMarkupDialog(
+                            onDismiss = { editText = false },
+                            initial = selectedMark.text,
+                            title = textDialogTitle,
+                            label = if (selectedMark.kind == PlanMarkKind.DIMENSION || selectedMark.kind == PlanMarkKind.PHOTO) "Label" else "Text",
+                            allowEmpty = isOptionalText,
+                        ) { text ->
                             replaceMark(selectedMark.copy(text = text))
                             editText = false
                         }
@@ -819,11 +998,26 @@ internal fun DrawingEditor(
         }
     }
 
+    if (editMarkArea && selectedMark != null) {
+        AreaTagDialog(selectedMark.areaTag, onDismiss = { editMarkArea = false }) { tag ->
+            replaceMark(selectedMark.copy(areaTag = tag))
+            editMarkArea = false
+        }
+    }
+
     if (editCircuit) {
         CircuitTagDialog(circuitTag, onDismiss = { editCircuit = false }) { tag ->
             circuitTag = tag
             views.edit().putString("${drawing.id}/circuit", tag).apply()
             editCircuit = false
+        }
+    }
+
+    if (editArea) {
+        AreaTagDialog(areaTag, onDismiss = { editArea = false }) { tag ->
+            areaTag = tag
+            views.edit().putString("${drawing.id}/area", tag).apply()
+            editArea = false
         }
     }
 
@@ -833,13 +1027,18 @@ internal fun DrawingEditor(
         project = project,
         drawing = drawing,
         page = page,
+        pageCount = pageCount ?: 1,
+        labels = labels.toMap(),
         pageSize = pageSize,
         pageZones = pageZones,
         zone = zone,
         fittedMeasurements = fittedMeasurements,
+        pagePaths = pagePaths,
         marks = marks,
         routeSummary = routeSummary,
         editable = editable,
+        styleStore = styleStore,
+        onStyleUpdated = { styleVersion++ },
         onSession = {
             if (it.page != page) clearSelection()
             if (it.op == EditOp.Idle) routeFinished = false
@@ -847,6 +1046,7 @@ internal fun DrawingEditor(
         },
         editDrawing = ::editDrawing,
         addMark = ::addMark,
+        replaceMark = ::replaceMark,
         onPickSymbol = {
             symbol = it
             views.edit().putString("${drawing.id}/symbol", it.id).apply()
@@ -903,16 +1103,22 @@ private fun EditorDialogs(
     project: Project,
     drawing: PlanDrawing,
     page: Int,
+    pageCount: Int,
+    labels: Map<Int, SheetLabel>,
     pageSize: PageSize?,
     pageZones: List<PlanZone>,
     zone: PlanZone?,
     fittedMeasurements: List<Pair<PlanMeasurement, Quantity?>>,
+    pagePaths: List<CanvasPath>,
     marks: List<PlanMark>,
     routeSummary: RouteSummary?,
     editable: Boolean,
+    styleStore: MarkupStyleStore,
+    onStyleUpdated: () -> Unit,
     onSession: (EditorSession) -> Unit,
     editDrawing: ((PlanDrawing) -> PlanDrawing) -> Unit,
     addMark: (PlanMark) -> Unit,
+    replaceMark: (PlanMark) -> Unit,
     onPickSymbol: (PlanSymbol) -> Unit,
     onOpenSettings: () -> Unit,
     publish: (PlanMeasurement, Quantity) -> Unit,
@@ -947,7 +1153,8 @@ private fun EditorDialogs(
             }
         }
         is EditorDialog.PlaceText -> TextMarkupDialog(onDismiss = close) { text ->
-            addMark(PlanMark(page = page, kind = PlanMarkKind.TEXT, points = listOf(dialog.point), text = text, width = 13.0))
+            val raw = PlanMark(page = page, kind = PlanMarkKind.TEXT, points = listOf(dialog.point), text = text)
+            addMark(styleStore.read(DrawingMode.Text).applyTo(raw))
             close()
         }
         EditorDialog.PickSymbol -> SymbolDialog(onDismiss = close, openSettings = {
@@ -958,9 +1165,107 @@ private fun EditorDialogs(
             close()
         }
         is EditorDialog.PlaceCallout -> TextMarkupDialog(onDismiss = close, title = "Add leader note") { text ->
-            addMark(PlanMark(page = page, kind = PlanMarkKind.CALLOUT, points = listOf(dialog.first, dialog.second),
-                text = text, width = 13.0))
+            val raw = PlanMark(page = page, kind = PlanMarkKind.CALLOUT, points = listOf(dialog.first, dialog.second), text = text)
+            addMark(styleStore.read(DrawingMode.Callout).applyTo(raw))
             close()
+        }
+        is EditorDialog.PlaceCloudCallout -> TextMarkupDialog(onDismiss = close, title = "Revision cloud note") { text ->
+            val boxOrigin = PlanPoint(maxOf(dialog.first.x, dialog.second.x) + 18.0, minOf(dialog.first.y, dialog.second.y))
+            val raw = PlanMark(page = page, kind = PlanMarkKind.CLOUD_CALLOUT, points = listOf(dialog.first, dialog.second, boxOrigin), text = text)
+            addMark(styleStore.read(DrawingMode.CloudCallout).applyTo(raw))
+            close()
+        }
+        is EditorDialog.PlacePhoto -> PhotoPinDialog(onDismiss = close) { sha, caption ->
+            val raw = PlanMark(page = page, kind = PlanMarkKind.PHOTO, points = listOf(dialog.point), text = caption, photoSha256 = sha)
+            addMark(styleStore.read(DrawingMode.Photo).applyTo(raw))
+            close()
+        }
+        is EditorDialog.ViewPhoto -> {
+            val mark = marks.firstOrNull { it.id == dialog.markId }
+            if (mark == null) close()
+            else PhotoViewerDialog(
+                photoSha256 = mark.photoSha256,
+                initialCaption = mark.text,
+                editable = editable,
+                onReplacePhoto = { newSha -> replaceMark(mark.copy(photoSha256 = newSha)) },
+                onUpdateCaption = { caption -> replaceMark(mark.copy(text = caption)) },
+                onDismiss = close,
+            )
+        }
+        is EditorDialog.PlaceDetailLink -> DetailLinkDialog(
+            project = project,
+            currentDrawingId = drawing.id,
+            currentPage = page,
+            currentPageCount = pageCount,
+            currentLabels = labels,
+            onDismiss = close,
+        ) { targetDrawingId, targetPage, label ->
+            val raw = PlanMark(
+                page = page,
+                kind = PlanMarkKind.DETAIL_LINK,
+                points = listOf(dialog.point),
+                text = label,
+                targetPage = targetPage,
+                targetDrawingId = targetDrawingId,
+            )
+            addMark(styleStore.read(DrawingMode.DetailLink).applyTo(raw))
+            close()
+        }
+        is EditorDialog.EditDetailLink -> {
+            val mark = marks.firstOrNull { it.id == dialog.markId }
+            if (mark == null) close()
+            else DetailLinkDialog(
+                project = project,
+                currentDrawingId = drawing.id,
+                currentPage = page,
+                currentPageCount = pageCount,
+                currentLabels = labels,
+                initialTargetDrawingId = mark.targetDrawingId,
+                initialTargetPage = mark.targetPage,
+                initialLabel = mark.text,
+                onDismiss = close,
+            ) { targetDrawingId, targetPage, label ->
+                replaceMark(mark.copy(text = label, targetPage = targetPage, targetDrawingId = targetDrawingId))
+                close()
+            }
+        }
+        is EditorDialog.EditMarkStyle -> {
+            val targetMark = dialog.markId?.let { id -> marks.firstOrNull { it.id == id } }
+            if (dialog.markId != null && targetMark == null) {
+                close()
+            } else {
+                val styleKind = targetMark?.kind ?: when (session.mode) {
+                    DrawingMode.Pen -> PlanMarkKind.INK
+                    DrawingMode.Highlight -> PlanMarkKind.HIGHLIGHT
+                    DrawingMode.Arrow -> PlanMarkKind.ARROW
+                    DrawingMode.Line -> PlanMarkKind.LINE
+                    DrawingMode.Rectangle -> PlanMarkKind.RECTANGLE
+                    DrawingMode.Text -> PlanMarkKind.TEXT
+                    DrawingMode.Callout -> PlanMarkKind.CALLOUT
+                    DrawingMode.Dimension -> PlanMarkKind.DIMENSION
+                    DrawingMode.Cloud -> PlanMarkKind.CLOUD
+                    DrawingMode.CloudCallout -> PlanMarkKind.CLOUD_CALLOUT
+                    DrawingMode.Photo -> PlanMarkKind.PHOTO
+                    DrawingMode.DetailLink -> PlanMarkKind.DETAIL_LINK
+                    else -> PlanMarkKind.LINE
+                }
+                val initial = targetMark?.let { MarkupToolStyle.fromMark(it) } ?: styleStore.read(session.mode)
+                val dialogTitle = if (targetMark != null) "Markup style" else "${session.mode.title} style"
+                MarkupStyleDialog(
+                    title = dialogTitle,
+                    kind = styleKind,
+                    initial = initial,
+                    onDismiss = close,
+                ) { updated ->
+                    if (targetMark != null) {
+                        replaceMark(updated.applyTo(targetMark))
+                    } else {
+                        styleStore.save(session.mode, updated)
+                        onStyleUpdated()
+                    }
+                    close()
+                }
+            }
         }
         is EditorDialog.EditMeasurement -> {
             val entry = fittedMeasurements.firstOrNull { it.first.id == dialog.id }
@@ -998,6 +1303,7 @@ private fun EditorDialogs(
         EditorDialog.PageItems -> PageItemsDialog(
             zone = zone,
             measurements = fittedMeasurements,
+            paths = pagePaths,
             marks = marks,
             editable = editable,
             publish = publish,
@@ -1005,6 +1311,7 @@ private fun EditorDialogs(
             onZoneDelete = ::deleteZone,
             onMeasureEdit = { id -> onSession(session.open(EditorDialog.EditMeasurement(id))) },
             onMeasureDelete = { id -> editDrawing { it.copy(measurements = it.measurements.filterNot { m -> m.id == id }) } },
+            onPathDelete = { id -> editDrawing { it.copy(paths = it.paths.filterNot { p -> p.id == id }) } },
             onMarkDelete = { id -> editDrawing { it.copy(marks = it.marks.filterNot { m -> m.id == id }) } },
             onDismiss = close,
         )

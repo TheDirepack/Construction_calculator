@@ -237,6 +237,10 @@ internal fun PlanCanvas(
     selectedMark: PlanMark?,
     onMoveMark: (PlanMark) -> Unit,
     onMoveEndpoint: (EndpointHandle, PlanPoint) -> Unit = { _, _ -> },
+    activeStyle: MarkupToolStyle? = null,
+    eraserMode: EraserMode = EraserMode.PARTIAL,
+    onPartialErase: (List<PlanPoint>, Double) -> Unit = { _, _ -> },
+    dimensionLabel: (PlanMark) -> String? = { null },
 ) {
     val context = LocalContext.current
     val views = remember(context) { context.getSharedPreferences("drawing-views", 0) }
@@ -269,6 +273,10 @@ internal fun PlanCanvas(
     val currentLineMap by rememberUpdatedState(lineMap)
     val currentSnapEnabled by rememberUpdatedState(snapEnabled)
     val currentSnapTarget by rememberUpdatedState(snapTarget)
+    val currentActiveStyle by rememberUpdatedState(activeStyle)
+    val currentEraserMode by rememberUpdatedState(eraserMode)
+    val partialErase by rememberUpdatedState(onPartialErase)
+    val currentDimensionLabel by rememberUpdatedState(dimensionLabel)
     val density = LocalDensity.current
     val snapRadiusPx = with(density) { 24.dp.toPx() }
     val loupeRadiusPx = with(density) { 54.dp.toPx() }
@@ -285,6 +293,7 @@ internal fun PlanCanvas(
     // Hoisted draw objects: zero per-frame allocations inside Canvas draw lambda.
     val bitmapPaint = remember { Paint(Paint.FILTER_BITMAP_FLAG) }
     val textPaint = remember { Paint(Paint.ANTI_ALIAS_FLAG) }
+    val snapLabelPaint = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { isFakeBoldText = true } }
     val loupeLabelPaint = remember {
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textAlign = Paint.Align.CENTER
@@ -337,6 +346,8 @@ internal fun PlanCanvas(
                 }
                 var markPreview by remember(page, mode) { mutableStateOf<PlanMark?>(null) }
                 var preview by remember(page, mode) { mutableStateOf(emptyList<InkPoint>()) }
+                var eraserPreview by remember(page, mode) { mutableStateOf(emptyList<PlanPoint>()) }
+                var eraserHead by remember(page, mode) { mutableStateOf<PlanPoint?>(null) }
                 var activeSnap by remember(page, mode) { mutableStateOf<SnappedPoint?>(null) }
                 var loupe by remember(page, mode) { mutableStateOf<LoupeState?>(null) }
                 var endpointDrag by remember(page, mode) { mutableStateOf<EndpointDrag?>(null) }
@@ -408,6 +419,7 @@ internal fun PlanCanvas(
                                 val downTransform = viewport.transform(page)
                                 val (first, firstSnap) = resolvePoint(down.position, downTransform)
                                 val drawing = mode.isFreehand
+                                val partialErasing = mode == DrawingMode.Eraser && currentEraserMode == EraserMode.PARTIAL
                                 val touchRadiusPt = (snapRadiusPx / downTransform.scale).toDouble()
                                 val rawFirst = downTransform.toPage(down.position)
                                 val mark = selected.takeIf { mode == DrawingMode.Adjust }
@@ -428,11 +440,17 @@ internal fun PlanCanvas(
                                 // In Adjust, a drag that doesn't start on a handle pans the sheet.
                                 val pans = mode == DrawingMode.Navigate || (mode == DrawingMode.Adjust && grabbed == null && grabbedMark == null)
                                 val points = mutableListOf<InkPoint>()
+                                val eraserTrace = mutableListOf<PlanPoint>()
                                 if (page.hit(first) && drawing) {
                                     points += InkPoint(first, down.pressureForInk())
                                     preview = points.toList()
                                 }
-                                if (page.hit(first) && !drawing && !pans) {
+                                if (page.hit(rawFirst) && partialErasing) {
+                                    eraserTrace += rawFirst
+                                    eraserPreview = eraserTrace.toList()
+                                    eraserHead = rawFirst
+                                }
+                                if (page.hit(first) && !drawing && !partialErasing && !pans) {
                                     activeSnap = firstSnap
                                     if (mode.usesLoupe) {
                                         loupe = LoupeState(down.position, first, firstSnap)
@@ -450,6 +468,8 @@ internal fun PlanCanvas(
                                         if (event.changes.count { it.pressed } > 1) {
                                             multi = true
                                             preview = emptyList()
+                                            eraserPreview = emptyList()
+                                            eraserHead = null
                                             activeSnap = null
                                             loupe = null
                                             endpointDrag = null
@@ -468,11 +488,18 @@ internal fun PlanCanvas(
                                                     if (moved) viewport.move(page, lastPosition, delta)
                                                 } else {
                                                     val t = viewport.transform(page)
-                                                    val (point, snapped) = if (drawing || grabbedMark != null) t.toPage(change.position) to null else resolvePoint(change.position, t)
+                                                    val (point, snapped) = if (drawing || grabbedMark != null || partialErasing) t.toPage(change.position) to null else resolvePoint(change.position, t)
                                                     onPage = page.hit(point)
                                                     if (onPage) {
                                                         last = point
                                                         activeSnap = snapped
+                                                        if (partialErasing) {
+                                                            if (eraserTrace.size < 2_048 && (eraserTrace.isEmpty() || eraserTrace.last() != point)) {
+                                                                eraserTrace += point
+                                                            }
+                                                            eraserPreview = eraserTrace.toList()
+                                                            eraserHead = point
+                                                        }
                                                         if (mode.usesLoupe) {
                                                             loupe = LoupeState(change.position, point, snapped)
                                                         }
@@ -501,6 +528,7 @@ internal fun PlanCanvas(
                                         when {
                                             grabbedMark != null && moved -> if (onPage) markPreview?.let(moveMark)
                                             grabbed != null -> if (moved && onPage) moveEndpoint(grabbed, last) else place(rawFirst, touchRadiusPt)
+                                            partialErasing && eraserTrace.isNotEmpty() -> partialErase(eraserTrace.toList(), touchRadiusPt * 0.6)
                                             mode == DrawingMode.Adjust && !moved -> place(rawFirst, touchRadiusPt)
                                             drawing && points.isNotEmpty() -> ink(points.toList())
                                             pans -> if (!moved) place(first, touchRadiusPt)
@@ -511,6 +539,8 @@ internal fun PlanCanvas(
                                     }
                                 } finally {
                                     preview = emptyList()
+                                    eraserPreview = emptyList()
+                                    eraserHead = null
                                     activeSnap = null
                                     loupe = null
                                     endpointDrag = null
@@ -598,7 +628,11 @@ internal fun PlanCanvas(
                         }
                         drawIntoCanvas { canvas ->
                             for (mark in marks) drawPlanMark(
-                                canvas.nativeCanvas, markPreview?.takeIf { it.id == mark.id } ?: mark, markPaint, markPath,
+                                canvas.nativeCanvas,
+                                markPreview?.takeIf { it.id == mark.id } ?: mark,
+                                markPaint,
+                                markPath,
+                                currentDimensionLabel,
                             )
                         }
                         (markPreview ?: selectedMark)?.let { mark ->
@@ -641,15 +675,48 @@ internal fun PlanCanvas(
                             }
                             drawLine(snapColor, Offset(p.x - r * 1.4f, p.y), Offset(p.x + r * 1.4f, p.y), outline)
                             drawLine(snapColor, Offset(p.x, p.y - r * 1.4f), Offset(p.x, p.y + r * 1.4f), outline)
+                            val snapLabel = when (snapped.kind) {
+                                SnapKind.CORNER -> "Corner"
+                                SnapKind.END -> "End"
+                                SnapKind.LINE -> "Line"
+                            }
+                            drawPlanText(snapLabel, Offset(p.x + r * 1.5f, p.y - r * 1.5f), 10f / transform.scale, snapColor, snapLabelPaint)
                         }
+                        val previewColor = currentActiveStyle?.let { Color(it.color.toInt()) }
                         when (mode) {
-                            DrawingMode.Pen -> drawInk(preview, Color(0xFF155CBD), 1.8f, inkPath)
-                            DrawingMode.Highlight -> drawInk(preview, Color(0x66FFE43C), 11f, inkPath)
-                            DrawingMode.Zone, DrawingMode.Rectangle -> if (preview.size == 2) {
+                            DrawingMode.Pen -> drawInk(
+                                preview,
+                                previewColor?.copy(alpha = currentActiveStyle?.opacity ?: 1f) ?: Color(0xFF155CBD),
+                                currentActiveStyle?.width?.toFloat() ?: 1.8f,
+                                inkPath,
+                            )
+                            DrawingMode.Highlight -> drawInk(
+                                preview,
+                                previewColor?.copy(alpha = currentActiveStyle?.opacity ?: 0.40f) ?: Color(0x66FFE43C),
+                                currentActiveStyle?.width?.toFloat() ?: 12f,
+                                inkPath,
+                            )
+                            DrawingMode.Eraser -> {
+                                if (eraserPreview.size >= 2) {
+                                    val eraserColor = Color(0x55D32F2F)
+                                    val eraserStroke = (snapRadiusPx * 1.2f) / transform.scale
+                                    for (i in 0 until eraserPreview.lastIndex) {
+                                        drawLine(eraserColor, eraserPreview[i].offset(), eraserPreview[i + 1].offset(), eraserStroke, StrokeCap.Round)
+                                    }
+                                }
+                                eraserHead?.let { head ->
+                                    val er = (snapRadiusPx * 0.6f) / transform.scale
+                                    drawCircle(Color(0x99D32F2F), er, head.offset(), style = Stroke(outline))
+                                }
+                            }
+                            DrawingMode.Zone -> if (preview.size == 2) {
                                 drawZone(preview[0].point.offset(), preview[1].point.offset(), Color(0xFF007A73), outline)
                             }
+                            DrawingMode.Rectangle, DrawingMode.Cloud, DrawingMode.CloudCallout -> if (preview.size == 2) {
+                                drawZone(preview[0].point.offset(), preview[1].point.offset(), previewColor ?: Color(0xFF007A73), outline)
+                            }
                             else -> if (preview.size == 2) {
-                                val color = if (mode == DrawingMode.Reference) Color(0xFFB45309) else Color(0xFF126FB4)
+                                val color = if (mode == DrawingMode.Reference) Color(0xFFB45309) else (previewColor ?: Color(0xFF126FB4))
                                 drawLine(color, preview[0].point.offset(), preview[1].point.offset(), outline)
                             }
                         }
@@ -659,6 +726,7 @@ internal fun PlanCanvas(
                     loupe?.let { active ->
                         drawSnappingLoupe(
                             loupe = active,
+                            snapTarget = currentSnapTarget,
                             page = page,
                             tile = regionTile,
                             transform = transform,
@@ -697,6 +765,7 @@ internal fun PlanCanvas(
 
 private fun DrawScope.drawSnappingLoupe(
     loupe: LoupeState,
+    snapTarget: SnapTarget,
     page: PageBitmap,
     tile: RegionTile?,
     transform: PageTransform,
@@ -784,11 +853,13 @@ private fun DrawScope.drawSnappingLoupe(
 
     // Snap badge below the loupe
     if (snapped != null) {
-        val badgeText = when (snapped.kind) {
+        val kindText = when (snapped.kind) {
             SnapKind.CORNER -> "Corner"
             SnapKind.LINE -> "Line"
             SnapKind.END -> "End"
         }
+        val targetText = if (snapTarget == SnapTarget.CENTER) "Center" else "Edge"
+        val badgeText = "$kindText · $targetText"
         drawIntoCanvas { canvas ->
             labelPaint.textSize = labelTextSize
             labelPaint.color = accent.toArgb()

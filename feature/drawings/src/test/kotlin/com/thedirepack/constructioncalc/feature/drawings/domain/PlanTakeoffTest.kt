@@ -1,12 +1,14 @@
 package com.thedirepack.constructioncalc.feature.drawings.domain
 
 import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.measure.Dimension
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.PlanCalibrationLayer
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanMeasurement
+import com.thedirepack.constructioncalc.core.model.PlanPath
 import com.thedirepack.constructioncalc.core.model.PlanPoint
 import com.thedirepack.constructioncalc.core.model.PlanRunRoute
 import com.thedirepack.constructioncalc.core.model.PlanZone
@@ -115,5 +117,42 @@ class PlanTakeoffTest {
         val lost = PlanTakeoff.summarize(base.copy(calibration = PlanCalibrationLayer(), routes = listOf(route))).routes.single()
         assertNull(lost.current)
         assertTrue(lost.changed)
+    }
+
+    @Test fun summarizesPathsAreasAreaTagsAndCombinedCircuitTakeoff() {
+        val zone = PlanZone(id = "z", name = "Detail", page = 1, first = p(200.0, 200.0), second = p(300.0, 300.0), preset = inches(2))
+        val openPath = PlanPath(page = 0, points = listOf(p(0.0, 0.0), p(30.0, 0.0), p(30.0, 40.0)), closed = false)
+        val rectArea = PlanPath(page = 0, points = listOf(p(0.0, 0.0), p(10.0, 0.0), p(10.0, 20.0), p(0.0, 20.0)), closed = true)
+        val crossingPath = PlanPath(page = 1, points = listOf(p(50.0, 250.0), p(250.0, 250.0)), closed = false)
+
+        val takeoff = PlanTakeoff.summarize(
+            base.copy(
+                zones = listOf(zone),
+                paths = listOf(openPath, rectArea, crossingPath),
+                marks = listOf(
+                    PlanMark(page = 0, kind = PlanMarkKind.SYMBOL, points = listOf(p(1.0, 1.0)), text = "Duplex", circuitTag = "e-36", areaTag = "Kitchen"),
+                    PlanMark(page = 0, kind = PlanMarkKind.SYMBOL, points = listOf(p(2.0, 2.0)), text = "Duplex", circuitTag = "E-36", areaTag = "Kitchen"),
+                    PlanMark(page = 2, kind = PlanMarkKind.CLOUD_CALLOUT, points = listOf(p(5.0, 5.0), p(25.0, 25.0), p(35.0, 5.0)), text = "Note"),
+                ),
+                routes = listOf(
+                    PlanRunRoute(runId = "r1", page = 0, points = listOf(p(0.0, 0.0), p(100.0, 0.0)), sentInches = 100.0, circuitTag = "E-36"),
+                ),
+            ),
+        )
+        assertEquals(1, takeoff.pathPolylineCount)
+        assertEquals(Rational.of(70), takeoff.pathPolylineTotal.value)
+        assertEquals(1, takeoff.pathPolygonCount)
+        assertEquals(Rational.of(60), takeoff.pathPolygonPerimeter.value)
+        assertEquals(Dimension.AREA, takeoff.pathPolygonArea.dimension)
+        assertEquals(Rational.of(200), takeoff.pathPolygonArea.value)
+        assertEquals(1, takeoff.multiScalePathCount)
+        assertEquals(0, takeoff.uncalibratedPathCount)
+        assertEquals(1, takeoff.textNotes)
+        assertEquals(listOf(SymbolCount("Duplex", 2, area = "Kitchen")), takeoff.symbolsByArea)
+        val circuitGroup = takeoff.byCircuitCombined.single()
+        assertEquals("E-36", circuitGroup.circuit)
+        assertEquals(2, circuitGroup.symbols.single().count)
+        assertEquals("r1", circuitGroup.routes.single().route.runId)
+        assertEquals(listOf(0, 1, 2), takeoff.sources.map { it.page })
     }
 }
