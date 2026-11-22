@@ -3,7 +3,7 @@
 import json, os
 
 SRC = '/tmp/opencode/wash_devices.json'
-OUT = '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/1_blueprints/new_downloads_202611b/Washington_DEVICES.json'
+OUT = '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/1_blueprints/standardized_device_jsons_v3/Washington_DEVICES.json'
 
 SHEETS = {
     47: 'E2.01 Electrical Site & Floor Plan (Demo)',
@@ -82,38 +82,53 @@ def main():
             dtype = info['device_type']; subtype = info['subtype']
             type_counts[dtype] = type_counts.get(dtype, 0) + 1
             rec = {
-                'page': int(pnum),
+                'pdf_page': int(pnum),
                 'sheet': sheet,
+                'discipline': 'electrical',
                 'device_code': code,
                 'device_type': dtype,
                 'subtype': subtype,
-                'symbol_bbox': r['symbol_bbox'],        # [x0, y0, x1, y1] PDF points, bottom-left origin
-                'symbol_center': r['symbol_center'],    # [x, y]
+                'attributes': {},
+                'symbol_bbox': r['symbol_bbox'],
+                'symbol_center': r['symbol_center'],
+                'device_center': r.get('device_center', r['symbol_center']),
+                'wall_connection_point': r.get('wall_connection_point'),
+                'placement_rule': 'source proximity-based wall classification; review required',
+                'geometry_source': 'source extraction record',
+                'vector_path_ids': None,
+                'wall_vector_path_ids': None,
+                'confidence': 'low',
+                'verification': 'unverified_source_extraction',
+                'symbol_bbox_completeness': 'source extraction bbox; not independently reviewed',
                 'label_bbox': r['label_bbox'],
-                'label_center': r['label_center'],
                 'on_wall': r['on_wall'],
-                'wall_distance': r['wall_distance'],
-                'symbol_attached': r['symbol_attached'],
-                'label_to_symbol_distance': r.get('label_to_symbol_distance', 0.0),
+                'id': f'Washington_D{len(devices)+1:05d}',
+                'classification_status': 'migrated_from_source_legend',
+                'coordinate_precision': 'source PDF points; wall proximity is approximate',
+                'label_interpretation': 'electrical legend code and adjacent label',
+                'source_record': r,
+                'attributes': {
+                    'wall_distance': r.get('wall_distance'),
+                    'symbol_attached': r.get('symbol_attached'),
+                    'label_center': r.get('label_center'),
+                    'label_to_symbol_distance': r.get('label_to_symbol_distance', 0.0),
+                },
+                'geometry_audit': {'status': 'unverified', 'reason': 'Source extraction uses approximate wall proximity; verify symbol and wall geometry visually.'},
             }
-            if r['on_wall'] and 'wall_connection_point' in r:
-                rec['wall_connection_point'] = r['wall_connection_point']
-            else:
-                rec['device_center'] = r.get('device_center', r['symbol_center'])
             devices.append(rec)
 
     out = {
+        'schema_version': '3.0.0',
         'source_file': '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/1_blueprints/new_downloads_202611b/WashingtonDrawings (1).pdf',
         'source_pages_total': 75,
+        'coordinate_system': {'origin': 'bottom_left', 'units': 'PDF_points', 'reference': 'source extraction page coordinates', 'rotation_handling': 'preserved from source extraction', 'symbol_bbox_format': '[x_min,y_min,x_max,y_max]', 'wall_connection_point_status': 'approximate source projection; unverified'},
+        'taxonomy': {k: list({v['subtype'] for v in TYPE_LEGEND.values() if v['device_type'] == k}) for k in sorted({v['device_type'] for v in TYPE_LEGEND.values()})},
+        'legend_types': [{'device_code': k, **v} for k,v in TYPE_LEGEND.items()],
         'plan_pages_processed': sorted(int(k) for k in src['pages'].keys()),
-        'total_devices': len(devices),
-        'units': 'PDF points (origin bottom-left)',
-        'coordinate_origin': 'bottom-left',
-        'legend_source': 'Sheet E0.01 - Electrical Sheet Index, Legend & Notes (PDF page 46)',
-        'device_type_summary': dict(sorted(type_counts.items())),
-        'types_legend': TYPE_LEGEND,
+        'page_results': [{'pdf_page': int(k), 'sheet': SHEETS.get(int(k), f'Page {k}'), 'geometry_matched_devices': sum(1 for x in devices if x['pdf_page'] == int(k)), 'unlocated_equipment_candidates': 0} for k in sorted(src['pages'], key=int)],
         'devices': devices,
-        'notes': [
+        'unresolved_candidates': [],
+        'summary': {'geometry_matched_devices': len(devices), 'unresolved_label_candidates': 0, 'by_type': dict(sorted(type_counts.items())), 'extraction_status': 'migrated_source_extraction_unverified', 'limitations': [
             'Devices detected on electrical plan sheets (E2/E3 series, PDF pages 47-52) and fire alarm plan sheets (FA series, PDF pages 58-63).',
             'Device type is identified from the symbol code and matched to Sheet E0.01 electrical symbol legend.',
             'symbol_bbox / symbol_center: bounding box and center of the detected symbol glyph (PDF points, bottom-left origin).',
@@ -123,7 +138,12 @@ def main():
             'symbol_attached=false means no vector symbol glyph was found within tolerance; location is taken from the text label.',
             'Wall detection is proximity-based and approximate; wall_distance is reported for every device.',
             'Fire-alarm device codes (S, WP, etc.) are best-effort classifications; verify against the fire-alarm legend.',
-        ],
+        ]},
+        'extraction_revision': 'v3_source_legend_and_approximate_wall_mapping',
+        'source_metadata': {'source_path': '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/1_blueprints/new_downloads_202611b/WashingtonDrawings (1).pdf', 'total_devices': len(devices), 'units': 'PDF points (origin bottom-left)', 'coordinate_origin': 'bottom-left', 'legend_source': 'Sheet E0.01 - Electrical Sheet Index, Legend & Notes (PDF page 46)', 'device_type_summary': dict(sorted(type_counts.items())), 'notes': [
+            'Generated from the source extraction input in /tmp/opencode/wash_devices.json.',
+            'The source extraction is not independently visually verified.',
+        ]},
     }
     with open(OUT, 'w') as f:
         json.dump(out, f, indent=1)

@@ -37,6 +37,7 @@ exec $PY scripts_pretrain_ssl.py \
   --epochs 60 \
   --items-per-epoch 8192 \
   --val-items 512 \
-  --lr 6e-4 \
+  --optimizer MuSGD \
+  --lr 3e-3 \
   --workers 2 \
   --run

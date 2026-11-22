@@ -36,6 +36,56 @@ from blueprint_symbols.electrical_glyphs import DEFAULT_WEIGHTS, rotate_glyph, s
 
 ELECTRICAL = tuple(DEFAULT_WEIGHTS)
 
+CANONICAL_ELECTRICAL_MAP = {
+    'receptacle': 'receptacle',
+    'switch': 'switch_sensor',
+    'luminaire': 'luminaire',
+    'junction_box': 'junction_box',
+    'fire_alarm_device': 'fire_alarm',
+    'data_outlet': 'other_device',
+    'panelboard': 'other_device',
+}
+
+
+def _find_wall_sites(gray: np.ndarray, rng: np.random.Generator, max_sites: int = 800) -> list[tuple[int, int, int, int]]:
+    """Detect straight wall pixels and return (wx, wy, nx, ny) sites where (nx, ny) points into open space."""
+    h, w = gray.shape
+    scale = min(1.0, 1600.0 / max(h, w))
+    small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1.0 else gray
+    sh, sw = small.shape
+    ink = (small < 165).astype(np.uint8)
+    k = max(20, min(80, max(sh, sw) // 45))
+    long_h = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (k, 1)))
+    long_v = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, k)))
+
+    sites: list[tuple[int, int, int, int]] = []
+    hy, hx = np.nonzero(long_h > 0)
+    if len(hx):
+        idx = rng.choice(len(hx), size=min(max_sites // 2, len(hx)), replace=False)
+        for i in idx:
+            sx, sy = int(hx[i]), int(hy[i])
+            if sy < 12 or sy >= sh - 12 or sx < 12 or sx >= sw - 12:
+                continue
+            above = float(ink[max(0, sy - 14):max(1, sy - 2), max(0, sx - 6):min(sw, sx + 7)].mean())
+            below = float(ink[min(sh - 1, sy + 2):min(sh, sy + 14), max(0, sx - 6):min(sw, sx + 7)].mean())
+            ny = -1 if above <= below else 1
+            sites.append((int(round(sx / scale)), int(round(sy / scale)), 0, ny))
+
+    vy, vx = np.nonzero(long_v > 0)
+    if len(vx):
+        idx = rng.choice(len(vx), size=min(max_sites // 2, len(vx)), replace=False)
+        for i in idx:
+            sx, sy = int(vx[i]), int(vy[i])
+            if sy < 12 or sy >= sh - 12 or sx < 12 or sx >= sw - 12:
+                continue
+            left = float(ink[max(0, sy - 6):min(sh, sy + 7), max(0, sx - 14):max(1, sx - 2)].mean())
+            right = float(ink[max(0, sy - 6):min(sh, sy + 7), min(sw - 1, sx + 2):min(sw, sx + 14)].mean())
+            nx = -1 if left <= right else 1
+            sites.append((int(round(sx / scale)), int(round(sy / scale)), nx, 0))
+
+    rng.shuffle(sites)
+    return sites
+
 
 def _overlaps(box, boxes, margin=3.0) -> bool:
     return any(not (box[2] + margin < b[0] or b[2] + margin < box[0] or
@@ -61,12 +111,15 @@ def estimate_stroke(gray: np.ndarray) -> float:
 
 def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, per_page: int,
                    scale_range: tuple[float, float], max_ink: float, tag: str,
-                   stroke_match: bool = True) -> tuple[np.ndarray, list[dict]]:
+                   stroke_match: bool = True, wall_fraction: float = 0.6,
+                   canonical_classes: bool = False) -> tuple[np.ndarray, list[dict]]:
     page = image.copy()
     h, w = page.shape[:2]
     gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
     dark = (gray < 160).astype(np.uint8)
     integral = cv2.integral(dark)
+    wall_sites = _find_wall_sites(gray, rng) if wall_fraction > 0 and per_page > 0 else []
+    wall_cursor = 0
     # Match glyph line weight to the page so symbols sit at a plausible drawing scale.
     base = estimate_stroke(gray) / GLYPH_STROKE_PX if stroke_match else 1.0
     base = float(np.clip(base, .4, 6.0))
@@ -74,17 +127,45 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
     occupied = [list(map(float, i['bbox_xyxy'])) for i in doc['instances']]
     placed = []
     attempts = 0
-    while len(placed) < per_page and attempts < per_page * 40:
+    while len(placed) < per_page and attempts < per_page * 50:
         attempts += 1
         family, variant, rgba, anchors = sample_glyph(rng)
-        angle = float(rng.choice([0, 90, 180, 270])) if rng.random() < .8 else float(rng.uniform(-180, 180))
         scale = base * float(np.exp(rng.uniform(*np.log(scale_range))))
-        glyph, pts = rotate_glyph(rgba, anchors, angle, scale)
-        gh, gw = glyph.shape[:2]
-        if gw + 4 >= w or gh + 4 >= h:
-            continue
-        x = int(rng.integers(2, w - gw - 2))
-        y = int(rng.integers(2, h - gh - 2))
+
+        want_wall = bool(wall_sites) and (rng.random() < wall_fraction)
+        if want_wall:
+            wx, wy, nx, ny = wall_sites[wall_cursor % len(wall_sites)]
+            wall_cursor += 1
+            # Orient symbol so its bottom/attachment edge touches the wall and body extends along (nx, ny)
+            if ny == -1:
+                angle = 0.0
+            elif ny == 1:
+                angle = 180.0
+            elif nx == -1:
+                angle = 90.0
+            else:
+                angle = 270.0
+            anchors_with_contact = dict(anchors)
+            if 'wall_attachment' not in anchors_with_contact:
+                anchors_with_contact['wall_attachment'] = (0.5, 1.0)
+            glyph, pts = rotate_glyph(rgba, anchors_with_contact, angle, scale)
+            gh, gw = glyph.shape[:2]
+            if gw + 4 >= w or gh + 4 >= h:
+                continue
+            ax, ay = pts['wall_attachment']
+            x = int(round(wx - ax))
+            y = int(round(wy - ay))
+            if x < 2 or y < 2 or x + gw >= w - 2 or y + gh >= h - 2:
+                continue
+        else:
+            angle = float(rng.choice([0, 90, 180, 270])) if rng.random() < .8 else float(rng.uniform(-180, 180))
+            glyph, pts = rotate_glyph(rgba, anchors, angle, scale)
+            gh, gw = glyph.shape[:2]
+            if gw + 4 >= w or gh + 4 >= h:
+                continue
+            x = int(rng.integers(2, w - gw - 2))
+            y = int(rng.integers(2, h - gh - 2))
+
         alpha = glyph[:, :, 3].astype(np.float32) / 255
         ys, xs = np.nonzero(alpha > .1)
         if len(xs) == 0:
@@ -93,26 +174,45 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
         if _overlaps(box, occupied):
             continue
         bx0, by0, bx1, by1 = (int(v) for v in box)
+        # Allow slightly higher ink at the edge for wall-touching symbols (since one edge touches the wall!)
+        ink_cap = max_ink + (0.14 if want_wall else 0.0)
         ink = (integral[by1, bx1] - integral[by0, bx1] - integral[by1, bx0] + integral[by0, bx0]) / max(1, (bx1 - bx0) * (by1 - by0))
-        if ink > max_ink:
+        if ink > ink_cap:
             continue
         roi = page[y:y + gh, x:x + gw].astype(np.float32)
         a = alpha[:, :, None]
         # Ink darkens paper (multiply), in the page's own ink colour, so photos stay tinted.
-        ink = np.clip(ink_bgr + rng.normal(0, 8, 3), 0, 200).astype(np.float32)
-        inked = roi * (1 - a) + np.minimum(roi, ink) * a
+        ink_col = np.clip(ink_bgr + rng.normal(0, 8, 3), 0, 200).astype(np.float32)
+        inked = roi * (1 - a) + np.minimum(roi, ink_col) * a
         page[y:y + gh, x:x + gw] = np.clip(inked, 0, 255).astype(np.uint8)
         occupied.append(box)
+
+        cx = 0.5 * (box[0] + box[2])
+        cy = 0.5 * (box[1] + box[3])
+        if want_wall:
+            target_xy = [float(wx), float(wy)]
+            target_vec = [float(wx - cx), float(wy - cy)]
+        else:
+            target_xy = [float(cx), float(cy)]
+            target_vec = [0.0, 0.0]
+
+        out_family = CANONICAL_ELECTRICAL_MAP[family] if canonical_classes else family
+        out_anchors = {k: {'xy': [x + px, y + py], 'visible': True, 'annotated': True}
+                       for k, (px, py) in pts.items()}
+        out_anchors['wall_connection_point'] = {'xy': target_xy, 'visible': True, 'annotated': True}
+
         placed.append({
             'instance_id': f'elec_{tag}_{len(placed):03d}',
-            'symbol_family': family,
+            'symbol_family': out_family,
             'symbol_variant': variant,
             'bbox_xyxy': box,
-            'anchors': {k: {'xy': [x + px, y + py], 'visible': True, 'annotated': True}
-                        for k, (px, py) in pts.items()},
+            'on_wall': bool(want_wall),
+            'wall_connection_point': target_xy,
+            'target_vector': target_vec,
+            'anchors': out_anchors,
             'rotation_degrees_image': angle,
             'source': {'kind': 'synthetic_composite', 'label_method': 'known_placement_transform',
-                       'glyph_scale': scale},
+                       'glyph_scale': scale, 'placement_mode': 'wall_touching' if want_wall else 'free_space'},
         })
     return page, placed
 
@@ -136,22 +236,34 @@ def main() -> None:
                    help='skip spots whose box already has more than this fraction of dark pixels')
     p.add_argument('--negative', action='store_true',
                    help='place nothing: pages pass through as verified electrical-free negatives')
+    p.add_argument('--wall-fraction', type=float, default=0.6,
+                   help='fraction of placed symbols snapped touching a detected wall (with wall_connection_point & target_vector)')
+    p.add_argument('--canonical-classes', action='store_true',
+                   help='map glyph families to the 6 canonical Phase 2 device classes (matching *DEVICES.json)')
+    p.add_argument('--limit', type=int, default=0,
+                   help='randomly subsample at most N input pages (0 = all)')
     p.add_argument('--seed', type=int, default=7)
     a = p.parse_args()
     paths = sorted({Path(f) for pat in a.annotations for f in glob.glob(pat, recursive=True)})
     if not paths:
         raise SystemExit('no annotation JSON matched')
+    if a.limit > 0 and len(paths) > a.limit:
+        sel_rng = np.random.default_rng(a.seed)
+        idx = sorted(sel_rng.choice(len(paths), size=a.limit, replace=False))
+        paths = [paths[i] for i in idx]
     a.output.mkdir(parents=True, exist_ok=True)
+    out_electrical = tuple(sorted(set(CANONICAL_ELECTRICAL_MAP.values()))) if a.canonical_classes else ELECTRICAL
     total = 0
+    wall_total = 0
     for n, path in enumerate(paths):
         doc = json.loads(path.read_text())
-        if set(doc.get('exhaustive_families', [])) & set(ELECTRICAL):
+        if set(doc.get('exhaustive_families', [])) & (set(ELECTRICAL) | set(out_electrical)):
             raise SystemExit(f'{path}: already claims electrical families; refusing to composite')
         src_img = (path.parent / doc['image_path']).resolve()
         image = cv2.imread(str(src_img), cv2.IMREAD_COLOR)
         if image is None:
             raise SystemExit(f'unreadable image for {path}')
-        keep = set(ELECTRICAL) | {f for f in a.keep_families.split(',') if f}
+        keep = set(out_electrical) | {f for f in a.keep_families.split(',') if f}
         base_instances = [i for i in doc['instances']
                           if i.get('uncertain') or i.get('symbol_family') in keep
                           or i.get('symbol_family') in ('__unmapped__', None)]
@@ -164,7 +276,9 @@ def main() -> None:
             stem = f'{path.stem}_el{copy}'
             page, placed = composite_page(doc, image, np.random.default_rng(seed), per_page=count,
                                           scale_range=(a.scale_min, a.scale_max), max_ink=a.max_ink, tag=stem,
-                                          stroke_match=not a.no_stroke_match)
+                                          stroke_match=not a.no_stroke_match,
+                                          wall_fraction=a.wall_fraction,
+                                          canonical_classes=a.canonical_classes)
             ext = '.jpg' if src_img.suffix.lower() in ('.jpg', '.jpeg') else '.png'
             png = a.output / f'{stem}{ext}'
             if not cv2.imwrite(str(png), page, [cv2.IMWRITE_JPEG_QUALITY, 93] if ext == '.jpg' else []):
@@ -175,16 +289,18 @@ def main() -> None:
                 'source_type': 'cad_raster_with_synthetic_electrical',
                 'image_path': png.name,
                 'image_sha256': hashlib.sha256(png.read_bytes()).hexdigest(),
-                'exhaustive_families': sorted(set(doc.get('exhaustive_families', [])) | set(ELECTRICAL)),
+                'exhaustive_families': sorted(set(doc.get('exhaustive_families', [])) | set(out_electrical)),
                 'instances': list(doc['instances']) + placed,
                 'composite': {'background_annotation': str(path.resolve()), 'seed': seed,
-                              'electrical_families': list(ELECTRICAL)},
+                              'electrical_families': list(out_electrical)},
             })
             png.with_suffix('.json').write_text(json.dumps(new, indent=1))
             total += len(placed)
-        if (n + 1) % 200 == 0:
-            print(f'{n + 1}/{len(paths)} pages, {total} symbols placed', flush=True)
-    print(json.dumps({'pages': len(paths) * a.copies, 'electrical_symbols': total}))
+            wall_total += sum(1 for item in placed if item.get('on_wall'))
+        if (n + 1) % 100 == 0:
+            print(f'{n + 1}/{len(paths)} pages, {total} symbols placed ({wall_total} wall-touching)', flush=True)
+    print(json.dumps({'pages': len(paths) * a.copies, 'electrical_symbols': total,
+                      'wall_touching': wall_total, 'free_space': total - wall_total}))
 
 
 if __name__ == '__main__':

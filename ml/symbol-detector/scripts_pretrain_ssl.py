@@ -293,6 +293,32 @@ def save_checkpoints(
         torch.save(bb_payload, out_dir / 'best_yolo26n_p2_backbone.pt')
 
 
+def build_musgd_optimizer(model: torch.nn.Module, *, lr: float, momentum: float = 0.937, weight_decay: float = 5e-4) -> torch.optim.Optimizer:
+    """Build Ultralytics YOLO26 native MuSGD optimizer with proper Muon/SGD param groups."""
+    from ultralytics.optim import MuSGD
+
+    bn_types = tuple(v for k, v in torch.nn.__dict__.items() if 'Norm' in k and isinstance(v, type))
+    g_bn, g_weight, g_bias = [], [], []
+    seen: set[int] = set()
+    for module in model.modules():
+        for name, param in module.named_parameters(recurse=False):
+            if not param.requires_grad or id(param) in seen:
+                continue
+            seen.add(id(param))
+            if name == 'bias':
+                g_bias.append(param)
+            elif isinstance(module, bn_types) or param.ndim < 2:
+                g_bn.append(param)
+            else:
+                g_weight.append(param)
+    param_groups = [
+        {'params': g_bn, 'weight_decay': 0.0, 'use_muon': False},
+        {'params': g_weight, 'weight_decay': weight_decay, 'use_muon': True},
+        {'params': g_bias, 'weight_decay': 0.0, 'use_muon': False},
+    ]
+    return MuSGD(param_groups, lr=lr, momentum=momentum, nesterov=True)
+
+
 def train(args: argparse.Namespace) -> None:
     out_dir: Path = args.out.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -346,7 +372,10 @@ def train(args: argparse.Namespace) -> None:
             missing, unexpected = model.det_model.load_state_dict(sd, strict=False)
             print(f'Warm-started backbone+neck from {args.init_weights} (loaded={len(sd)}, missing={len(missing)}, unexpected={len(unexpected)})', flush=True)
     criterion = BlueprintSSLLoss().to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
+    if args.optimizer == 'MuSGD':
+        optimizer = build_musgd_optimizer(model, lr=args.lr)
+    else:
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.937, nesterov=True, weight_decay=5e-4)
 
     warmup_epochs = min(3, max(1, args.epochs // 15))
 
@@ -378,7 +407,7 @@ def train(args: argparse.Namespace) -> None:
     total_params = sum(p.numel() for p in model.parameters())
     bb_params = sum(p.numel() for k, p in model.det_model.named_parameters() if not k.startswith(f'model.{model.detect_idx}.'))
     print(f'Model: YOLO26n-P2 SSL | backbone+neck={bb_params:,} params | total_with_decoder={total_params:,} params', flush=True)
-    print(f'Training: epochs={args.epochs}, items/epoch={args.items_per_epoch}, batch={args.batch}, lr={args.lr}, workers={args.workers}', flush=True)
+    print(f'Training: epochs={args.epochs}, items/epoch={args.items_per_epoch}, batch={args.batch}, opt={args.optimizer}, lr={args.lr}, workers={args.workers}', flush=True)
 
     metrics_log = out_dir / 'metrics.jsonl'
 
@@ -492,7 +521,8 @@ def main() -> None:
     p.add_argument('--epochs', type=int, default=60)
     p.add_argument('--items-per-epoch', type=int, default=8192)
     p.add_argument('--val-items', type=int, default=512)
-    p.add_argument('--lr', type=float, default=1e-3)
+    p.add_argument('--optimizer', choices=('MuSGD', 'SGD'), default='MuSGD')
+    p.add_argument('--lr', type=float, default=5e-3)
     p.add_argument('--workers', type=int, default=2)
     p.add_argument('--pool-val-fraction', type=float, default=0.10)
     p.add_argument('--seed', type=int, default=2026)
