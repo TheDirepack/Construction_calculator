@@ -168,7 +168,9 @@ internal fun ProjectDetailScreen(project: Project, host: ToolHost, onBack: () ->
                             add("Save project JSON…" to { jsonExporter.launch(ProjectCodec.fileName(project)) })
                         } else {
                             add("Share compact text" to {
-                                host.shareText(project.name, CompactShare.shareMessage(project, exportedAt = services.clock()))
+                                runCatching { CompactShare.shareMessage(project, exportedAt = services.clock()) }
+                                    .onSuccess { host.shareText(project.name, it) }
+                                    .onFailure { host.showMessage(it.message ?: "Couldn't make the compact text") }
                             })
                         }
                         add("Share as text" to { host.shareText(project.name, toText()) })
