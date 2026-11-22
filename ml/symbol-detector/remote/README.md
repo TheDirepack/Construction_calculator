@@ -109,53 +109,79 @@ run). Early stopping (patience 40) can end it before 300 epochs; that has not
 been measured yet.
 
 
-## SAM 3.1 NECA proposal generation (2026-11-22)
+## SAM 3.1 hierarchical device proposals (2026-11-22)
 
-Use `scripts_run_sam3_pdfs.py` to generate **proposals**, not exhaustive or
-ground-truth labels. The NECA ZIP has 466 entries: the curated SAM catalog
-retains 284 candidate standalone/localized shapes across 16 categories and
-254 category/subcategory pairs. It omits modifier-only sections, line-based
-routing/assemblies, parent rows with separately extracted alternatives and
-generic basic silhouettes. All provenance is retained by NECA ID.
+SAM 3/3.1 processes **multiple category prompts as independent batched
+queries** against a single cached image embedding. This is not a native
+joint multiclass decoder; the practical speed win is skipping unneeded
+fine queries after discovering which families occur on a tile.
+
+The new default runs two stages on each nonblank blueprint tile:
+
+1. **Coarse**: one/two representative visual exemplars per device family
+   (switch, receptacle, luminaire, data outlet, fire alarm, etc.). Output
+   has `subtype=unspecified`, even though a prototype was used.
+2. **Fine**: only families proposed by stage 1 get detailed NECA subtype
+   queries. Both stages share the *same* cached SAM image encoding. Fine
+   predictions must overlap the corresponding coarse-family proposal.
+
+A periodic full fine scan recovers candidates that coarse prompts might
+have missed. It is not a complete recall guarantee; the real-data
+benchmark must compare this pipeline against the original flat baseline.
+
+The source NECA 100 ZIP has 466 entries; the curated bank retains 284
+eligible exemplars across 16 source categories and 254 distinct
+category/subcategory pairs. The prompt metadata preserves all fine
+categories, including those not selected for a particular query.
 
 ```bash
-# CPU metadata/prompt audit; no model weights or CUDA device required:
+# Catalog preflight without model inference:
 python scripts_run_sam3_pdfs.py --catalog-only \
     --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
     --data-root ../data/blueprints_and_libraries --out ../work/sam3_proposals
 
-# Default fast pass: 96 representative, category-balanced exemplars per tile.
+# Hierarchical default: all curated subtypes available, 2 initial
+# exemplar prompts per family, gated fine prompts and 1/12 tile fallback:
 python scripts_run_sam3_pdfs.py \
     --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
     --data-root ../data/blueprints_and_libraries --out ../work/sam3_proposals
 
-# More recall candidates, more GPU time:
-# --max-prompts 192 --prompts-per-category 16
-# Full catalog: --max-prompts 0 --prompts-per-category 0 --prompts-per-subcategory 0
-# Audit a hand-selected subset: --prompt-allowlist verified_symbol_ids.json
-# Restrict to native vector originals: --native-only
+# Key tuning:
+# --scan-mode hierarchical --coarse-per-family 2
+# --coarse-score-thr 0.30 --score-thr 0.55
+# --fine-per-family 0         # 0 = all available variants within active family
+# --fallback-every-tiles 12   # 0 disables, 1 = full fine search on each tile
+# --scan-mode flat --max-prompts 96 --prompts-per-category 12
+# --scan-mode flat --max-prompts 0 --prompts-per-category 0
+# --native-only               # native vectors only; excludes some Annex A
+# --prompt-allowlist reviewed_ids.json
 ```
 
-Only selected SVGs are rasterized/pre-encoded. Fast selection prioritizes common
-forms (duplex receptacles, switches, lighting, smoke detectors, etc.) while
-preserving all 16 system categories. It is **not** guaranteed to preserve recall
-for rare types; compare fast, balanced and exhaustive modes on the same fixed,
-real annotated test documents before choosing a production preset. Speedups
-are predictions from fewer expensive exemplar queries, not measured GPU
-benchmarks. SAM's text/example API and the custom cached-geometry path also
-require version-specific validation against the installed SAM 3.1 release.
+**Performance:** Flat mode queries all configured prototypes on every tile.
+Hierarchical mode queries only the coarse family prototypes and variants
+from observed families. The output JSON reports `query_stats`: encoded tile
+count, coarse/fine prompt calls, fallback count, and coarse/fine proposal
+counts. Compare actual GPU time, proposal recall and accepted-label precision
+on an exhaustively reviewed *small* held-out electrical set before treating
+the hierarchical setting as more accurate/faster. The old low-level cached
+SAM geometry path still needs an installed-model compatibility test.
 
-Each output embeds a full allowed NECA category/subcategory and device/subtype
-vocabulary, while recording exactly which exemplars were queried. Output names
-include model/prompt/config and source fingerprints, preventing stale
-resume results from silently masking a changed detector configuration.
+**Avoid combinatorial label explosion:** Device family and fine symbol
+form are separate from electrical attributes. A switch may be
+`pole_configuration=three_way` with
+`control_features=[dimmer,low_voltage]`. A receptacle may be duplex,
+GFCI-protected, emergency-fed and floor-mounted. Voltage, phase, amperage,
+NEMA configuration and circuit associations are optional *evidence-backed*
+properties read from the actual project's legend, adjacent notes or
+schedules; they are not inferred from stock NECA examples.
 
-Proposals flow through `scripts_circuitnet_review_sheets.py render` into
-VLM-editable contact sheets. A model must explicitly set `review_status`
-to `accepted` or `rejected` or leave it `uncertain`. `apply`
-excludes unreviewed/uncertain candidates, validates allowed subtypes and
-coordinates, and marks retained results as **provisional**.
-No VLM-approved page is considered completely annotated by default.
+The VLM review batch contains NECA `taxonomy`,
+`category_taxonomy` and `device_attribute_schema`. Model reviewers must
+explicitly accept/reject/mark uncertain. Only accepted, valid
+geometry/type/attribute proposals are exported as *provisional* devices.
+Document-specific automatic proposals never imply exhaustive annotations.
+Output names are fingerprinted by model, source, prompt selections and
+tuning so old results are not silently reused.
 
 ### Partially annotated real drawings
 
