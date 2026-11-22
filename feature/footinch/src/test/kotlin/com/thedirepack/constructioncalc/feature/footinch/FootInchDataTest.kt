@@ -158,4 +158,65 @@ class FootInchDataTest {
         assertTrue(FootInchFormat.hint(metric, true).contains("cm"))
         assertTrue(FootInchFormat.hint(AppSettings(), true).contains("'"))
     }
+
+    @Test
+    fun savedTokensRoundTripParensSqrtAndSquare() {
+        val domain = listOf(
+            Token.Sqrt,
+            Token.OpenParen,
+            Token.Literal("3'"),
+            Token.Square,
+            Token.Op(Operator.ADD),
+            Token.Literal("4'"),
+            Token.Square,
+            Token.CloseParen,
+        )
+        val inputs = FootInchInputs(
+            tokens = domain.map(SavedToken::of),
+            answer = Quantity.feet(Rational.of(5)).stored(),
+            preferInches = false,
+        )
+        val decoded = ToolInputs.decode<FootInchInputs>(ToolInputs.encode(inputs))
+        assertNotNull(decoded)
+        assertEquals(domain, decoded!!.tokens.map { it.toToken() })
+    }
+
+    @Test
+    fun historyTapeSupportsLabelsDeletionCapAndBackupRoundTrip() {
+        val q1 = Quantity.inches(Rational.of(96)).stored()
+        val q2 = Quantity.inches(Rational.of(48)).stored()
+
+        // Add assigns unique ids and puts newest first
+        var tape = emptyList<HistoryEntry>()
+        tape = HistoryTapeOps.add(tape, HistoryEntry(expression = "4' + 4'", result = q1, preferInches = false))
+        tape = HistoryTapeOps.add(tape, HistoryEntry(expression = "2' + 2'", result = q2, preferInches = false))
+        assertEquals(2, tape.size)
+        assertTrue(tape[0].id != tape[1].id)
+
+        // Label an individual entry
+        val targetId = tape[0].id
+        tape = HistoryTapeOps.setLabel(tape, targetId, "  Panel feeder  ")
+        assertEquals("Panel feeder", tape.first { it.id == targetId }.label)
+
+        // Backup round-trip preserves labels and ids
+        val backup = FootInchBackup(tape)
+        val decoded = ToolInputs.decode<FootInchBackup>(ToolInputs.encode(backup))
+        assertNotNull(decoded)
+        assertEquals(2, decoded!!.history.size)
+        assertEquals("Panel feeder", decoded.history[0].label)
+        assertEquals("", decoded.history[1].label)
+
+        // Delete an individual entry
+        tape = HistoryTapeOps.remove(tape, targetId)
+        assertEquals(1, tape.size)
+        assertEquals("4' + 4'", tape.single().expression)
+
+        // Cap at 500 entries
+        var large = emptyList<HistoryEntry>()
+        repeat(520) { i ->
+            large = HistoryTapeOps.add(large, HistoryEntry(expression = "$i\"", result = q2))
+        }
+        assertEquals(HistoryTapeOps.MAX, large.size)
+        assertEquals("519\"", large.first().expression)
+    }
 }

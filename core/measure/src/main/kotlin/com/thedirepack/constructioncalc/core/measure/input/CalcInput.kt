@@ -22,6 +22,14 @@ sealed interface Key {
     data class Fraction(val numerator: Int, val denominator: Int) : Key
     /** Insert a known value, e.g. from history. */
     data class Recall(val quantity: Quantity, val preferInches: Boolean? = null) : Key
+    /** Open grouping parenthesis `(`. */
+    data object OpenParen : Key
+    /** Close grouping parenthesis `)`. */
+    data object CloseParen : Key
+    /** Prefix square root `√`. */
+    data object Sqrt : Key
+    /** Postfix square `²`. */
+    data object Square : Key
 }
 
 /**
@@ -59,6 +67,10 @@ object CalcInput {
         Key.Clear -> Outcome(CalcState())
         is Key.Fraction -> typeFraction(state, key.numerator, key.denominator)
         is Key.Recall -> recall(state, Token.Value(key.quantity, key.preferInches))
+        Key.OpenParen -> typeOpenParen(state)
+        Key.CloseParen -> typeCloseParen(state)
+        Key.Sqrt -> typeSqrt(state)
+        Key.Square -> typeSquare(state)
     }
 
     /**
@@ -78,7 +90,7 @@ object CalcInput {
                     true -> sawInches = true
                     null -> Unit
                 }
-                is Token.Op -> Unit
+                is Token.Op, Token.OpenParen, Token.CloseParen, Token.Sqrt, Token.Square -> Unit
             }
         }
         return if (sawInches) true else null
@@ -107,7 +119,11 @@ object CalcInput {
                 if (!MeasureLiteral.isValidPrefix(c.toString())) return rejected(state)
                 tokens.dropLast(1) + Token.Literal(c.toString())
             }
-            is Token.Op, null -> {
+            Token.CloseParen, Token.Square -> {
+                if (!MeasureLiteral.isValidPrefix(c.toString())) return rejected(state)
+                tokens + Token.Op(Operator.MULTIPLY) + Token.Literal(c.toString())
+            }
+            is Token.Op, Token.OpenParen, Token.Sqrt, null -> {
                 if (!MeasureLiteral.isValidPrefix(c.toString())) return rejected(state)
                 tokens + Token.Literal(c.toString())
             }
@@ -129,17 +145,79 @@ object CalcInput {
             tokens = tokens.dropLast(1)
             if ((tokens.lastOrNull() as? Token.Op) != null) tokens = tokens.dropLast(1)
         }
-        if (tokens.isEmpty()) {
-            // Only a leading minus is meaningful at the start.
-            return if (op == Operator.SUBTRACT) Outcome(CalcState(listOf(Token.Op(op)))) else rejected(state)
+        val base = tokens.lastOrNull()
+        if (base == null || base == Token.OpenParen || base == Token.Sqrt) {
+            // Only a leading/post-paren minus is meaningful without a left operand.
+            return if (op == Operator.SUBTRACT) Outcome(CalcState(tokens + Token.Op(op))) else rejected(state)
         }
         return Outcome(CalcState(tokens + Token.Op(op)))
     }
 
+    private fun typeOpenParen(state: CalcState): Outcome {
+        val tokens = if (state.answer != null) emptyList() else state.tokens
+        val newTokens = when (tokens.lastOrNull()) {
+            null, is Token.Op, Token.OpenParen, Token.Sqrt -> tokens + Token.OpenParen
+            is Token.Literal, is Token.Value, Token.CloseParen, Token.Square ->
+                tokens + Token.Op(Operator.MULTIPLY) + Token.OpenParen
+        }
+        return Outcome(CalcState(newTokens))
+    }
+
+    private fun typeCloseParen(state: CalcState): Outcome {
+        if (state.answer != null) return rejected(state)
+        val tokens = state.tokens
+        if (unclosedParens(tokens) <= 0) return rejected(state)
+        return when (tokens.lastOrNull()) {
+            is Token.Literal, is Token.Value, Token.CloseParen, Token.Square ->
+                Outcome(CalcState(tokens + Token.CloseParen))
+            else -> rejected(state)
+        }
+    }
+
+    private fun typeSqrt(state: CalcState): Outcome {
+        state.answer?.let {
+            val carried = Token.Value(it, prefersInches(state.tokens))
+            return Outcome(CalcState(listOf(Token.Sqrt, carried)))
+        }
+        val tokens = state.tokens
+        val newTokens = when (tokens.lastOrNull()) {
+            null, is Token.Op, Token.OpenParen, Token.Sqrt -> tokens + Token.Sqrt
+            is Token.Literal, is Token.Value, Token.CloseParen, Token.Square ->
+                tokens + Token.Op(Operator.MULTIPLY) + Token.Sqrt
+        }
+        return Outcome(CalcState(newTokens))
+    }
+
+    private fun typeSquare(state: CalcState): Outcome {
+        state.answer?.let {
+            val carried = Token.Value(it, prefersInches(state.tokens))
+            return Outcome(CalcState(listOf(carried, Token.Square)))
+        }
+        val tokens = state.tokens
+        return when (tokens.lastOrNull()) {
+            is Token.Literal, is Token.Value, Token.CloseParen, Token.Square ->
+                Outcome(CalcState(tokens + Token.Square))
+            else -> rejected(state)
+        }
+    }
+
+    private fun unclosedParens(tokens: List<Token>): Int {
+        var depth = 0
+        for (t in tokens) {
+            when (t) {
+                Token.OpenParen -> depth++
+                Token.CloseParen -> depth--
+                else -> Unit
+            }
+        }
+        return depth
+    }
+
     private fun equals(state: CalcState): Outcome {
         if (state.answer != null) return Outcome(state, accepted = false)
-        val tokens = state.tokens.dropLastWhile { it is Token.Op }
-        if (tokens.isEmpty()) return rejected(state)
+        val trimmed = state.tokens.dropLastWhile { it is Token.Op || it is Token.Sqrt }
+        if (trimmed.isEmpty()) return rejected(state)
+        val tokens = Evaluator.closeOpenParens(trimmed)
         return try {
             val result = Evaluator.evaluate(tokens)
             Outcome(CalcState(tokens, answer = result), completed = Calculation(tokens, result))
@@ -170,7 +248,9 @@ object CalcInput {
                 if (!MeasureLiteral.isValidPrefix(text)) return rejected(state)
                 tokens.dropLast(1) + Token.Literal(text)
             }
-            is Token.Op, null -> tokens + Token.Literal(fraction)
+            Token.CloseParen, Token.Square ->
+                tokens + Token.Op(Operator.MULTIPLY) + Token.Literal(fraction)
+            is Token.Op, Token.OpenParen, Token.Sqrt, null -> tokens + Token.Literal(fraction)
         }
         return Outcome(CalcState(newTokens))
     }
@@ -195,7 +275,8 @@ object CalcInput {
     private fun recall(state: CalcState, value: Token.Value): Outcome {
         val tokens = if (state.answer != null) emptyList() else state.tokens
         val newTokens = when (tokens.lastOrNull()) {
-            null, is Token.Op -> tokens + value
+            null, is Token.Op, Token.OpenParen, Token.Sqrt -> tokens + value
+            Token.CloseParen, Token.Square -> tokens + Token.Op(Operator.MULTIPLY) + value
             is Token.Literal, is Token.Value -> tokens.dropLast(1) + value
         }
         return Outcome(CalcState(newTokens))
