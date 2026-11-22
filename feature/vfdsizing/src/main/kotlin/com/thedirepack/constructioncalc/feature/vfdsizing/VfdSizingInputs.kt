@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.vfdsizing
 
+import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
@@ -53,7 +54,7 @@ fun VfdSizingInputs.parse(): ParsedInputs {
 
     fun optional(text: String, name: String): Double? {
         if (text.isBlank()) return null
-        return parseNumber(text) ?: run { problems += "$name isn't a number."; null }
+        return Decimals.parse(text) ?: run { problems += "$name isn't a number."; null }
     }
 
     var convertedHp: Double? = null
@@ -61,7 +62,7 @@ fun VfdSizingInputs.parse(): ParsedInputs {
         RatingUnit.HP -> hp
         RatingUnit.KW -> {
             if (kw.isBlank()) { missing += "Motor kW"; null } else {
-                val value = parseNumber(kw)
+                val value = Decimals.parse(kw)
                 when {
                     value == null || value <= 0 -> { problems += "Motor kW must be a number above zero."; null }
                     else -> VfdSizing.horsepowerForKw(value, volts)
@@ -89,6 +90,3 @@ fun VfdSizingInputs.parse(): ParsedInputs {
     val domainProblems = VfdSizing.problems(request)
     return ParsedInputs(if (domainProblems.isEmpty()) request else null, emptyList(), domainProblems, convertedHp)
 }
-
-/** Accepts what people type; see [com.thedirepack.constructioncalc.core.measure.Decimals.parse]. */
-internal fun parseNumber(text: String): Double? = com.thedirepack.constructioncalc.core.measure.Decimals.parse(text)

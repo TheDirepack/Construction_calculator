@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.voltagedrop
 
+import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.electrical.code.codeNumber
 import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.Table9Conduit
@@ -41,7 +42,7 @@ data class VoltageDropInputs(
     val conductorSize: ConductorSize get() = ConductorSize.fromLabel(size) ?: ConductorSize.AWG_12
 
     /** The voltage as typed or chosen; null while a custom voltage is empty or unreadable. */
-    val volts: Double? get() = if (voltagePreset in VOLTAGE_PRESETS) voltagePreset.toDouble() else parseNumber(customVoltage)
+    val volts: Double? get() = if (voltagePreset in VOLTAGE_PRESETS) voltagePreset.toDouble() else Decimals.parse(customVoltage)
 
     companion object {
         val VOLTAGE_PRESETS = listOf(120, 208, 240, 277, 480)
@@ -63,7 +64,7 @@ fun VoltageDropInputs.parse(): ParsedInputs {
 
     fun number(text: String, name: String): Double? {
         if (text.isBlank()) { missing += name; return null }
-        return parseNumber(text) ?: run { problems += "$name isn't a number."; null }
+        return Decimals.parse(text) ?: run { problems += "$name isn't a number."; null }
     }
 
     val volts = if (voltagePreset in VoltageDropInputs.VOLTAGE_PRESETS) voltagePreset.toDouble() else number(customVoltage, "Voltage")
@@ -91,6 +92,3 @@ fun VoltageDropInputs.parse(): ParsedInputs {
     val domainProblems = VoltageDrop.problems(request)
     return ParsedInputs(if (domainProblems.isEmpty()) request else null, emptyList(), domainProblems)
 }
-
-/** Accepts what people type; see [com.thedirepack.constructioncalc.core.measure.Decimals.parse]. */
-internal fun parseNumber(text: String): Double? = com.thedirepack.constructioncalc.core.measure.Decimals.parse(text)
