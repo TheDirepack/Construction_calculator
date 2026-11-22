@@ -2,6 +2,8 @@ package com.thedirepack.constructioncalc.feature.drawings
 
 import android.graphics.Bitmap
 import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.Canvas
@@ -21,6 +23,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,16 +60,21 @@ import com.thedirepack.constructioncalc.core.model.PlanZone
 import com.thedirepack.constructioncalc.core.plans.LineMap
 import com.thedirepack.constructioncalc.core.plans.SnapKind
 import com.thedirepack.constructioncalc.core.plans.SnapTarget
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.ceil
+import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 internal enum class DrawingMode(val title: String, val hint: String) {
     Navigate("Pan", "Drag to pan. Pinch to zoom."),
     Reference("Calibrate", "Tap or drag between the ends of a known dimension."),
     Measure("Measure", "Tap or drag between the ends of a line to measure."),
+    Route("Route", "Tap connected points along a conduit route to measure legs and bends."),
     Zone("Zone", "Draw an override zone for a detail with a different scale."),
     Pen("Pen", "Draw with a finger or stylus. Pinch with two fingers to zoom."),
     Highlight("Highlight", "Drag a finger or stylus over the area to highlight."),
@@ -80,11 +88,18 @@ internal enum class DrawingMode(val title: String, val hint: String) {
 
     val usesSpan: Boolean
         get() = this == Zone || this == Reference || this == Measure || this == Arrow || this == Line || this == Rectangle
+
+    val usesLoupe: Boolean
+        get() = this == Reference || this == Measure || this == Route
 }
 
 internal data class InkPoint(val point: PlanPoint, val pressure: Float)
 
 private data class PageBitmap(val image: Bitmap, val width: Float, val height: Float)
+
+private data class RegionTile(val bitmap: Bitmap, val region: RectF, val scale: Float)
+
+private data class LoupeState(val screenPos: Offset, val pagePoint: PlanPoint, val snapped: SnappedPoint?)
 
 private sealed interface PageState {
     data object Loading : PageState
@@ -159,6 +174,28 @@ private class PageViewport {
         val y = ((rotatedSize.height * after.scale - size.height) / 2 + size.height * .25f).coerceAtLeast(0f)
         scroll = Offset(scroll.x.coerceIn(-x, x), scroll.y.coerceIn(-y, y))
     }
+
+    /** Visible page-coordinate bounds with a small margin for smooth panning. */
+    fun visibleRegion(page: PageBitmap): RectF? {
+        if (size.width <= 0 || size.height <= 0) return null
+        val t = transform(page)
+        val c0 = t.toPage(Offset.Zero)
+        val c1 = t.toPage(Offset(size.width.toFloat(), 0f))
+        val c2 = t.toPage(Offset(0f, size.height.toFloat()))
+        val c3 = t.toPage(Offset(size.width.toFloat(), size.height.toFloat()))
+        val minX = minOf(c0.x, c1.x, c2.x, c3.x).toFloat()
+        val maxX = maxOf(c0.x, c1.x, c2.x, c3.x).toFloat()
+        val minY = minOf(c0.y, c1.y, c2.y, c3.y).toFloat()
+        val maxY = maxOf(c0.y, c1.y, c2.y, c3.y).toFloat()
+        val padX = (maxX - minX) * 0.15f
+        val padY = (maxY - minY) * 0.15f
+        val left = (minX - padX).coerceIn(0f, page.width)
+        val top = (minY - padY).coerceIn(0f, page.height)
+        val right = (maxX + padX).coerceIn(0f, page.width)
+        val bottom = (maxY + padY).coerceIn(0f, page.height)
+        if (right - left < 1f || bottom - top < 1f) return null
+        return RectF(left, top, right, bottom)
+    }
 }
 
 private data class PageTransform(val offset: Offset, val pageCenter: Offset, val scale: Float, val quarterTurns: Int) {
@@ -205,6 +242,9 @@ internal fun PlanCanvas(
     onLine: (PlanPoint, PlanPoint) -> Unit,
     onInk: (List<InkPoint>) -> Unit,
     modifier: Modifier = Modifier,
+    routePoints: List<PlanPoint> = emptyList(),
+    routeLegLabels: List<String> = emptyList(),
+    routeCornerLabels: List<Pair<PlanPoint, String>> = emptyList(),
 ) {
     val state by produceState<PageState>(PageState.Loading, file, pageIndex) {
         value = PageState.Loading
@@ -226,7 +266,12 @@ internal fun PlanCanvas(
     val currentLineMap by rememberUpdatedState(lineMap)
     val currentSnapEnabled by rememberUpdatedState(snapEnabled)
     val currentSnapTarget by rememberUpdatedState(snapTarget)
-    val snapRadiusPx = with(LocalDensity.current) { 24.dp.toPx() }
+    val density = LocalDensity.current
+    val snapRadiusPx = with(density) { 24.dp.toPx() }
+    val loupeRadiusPx = with(density) { 54.dp.toPx() }
+    val loupeMarginPx = with(density) { 14.dp.toPx() }
+    val loupeBorderPx = with(density) { 2.5.dp.toPx() }
+    val loupeLabelSizePx = with(density) { 11.dp.toPx() }
     val background = MaterialTheme.colorScheme.surfaceContainerHighest
 
     LaunchedEffect(state) {
@@ -234,15 +279,84 @@ internal fun PlanCanvas(
         onPageSize(PageSize(loaded.width, loaded.height))
     }
 
+    // Hoisted draw objects: zero per-frame allocations inside Canvas draw lambda.
+    val bitmapPaint = remember { Paint(Paint.FILTER_BITMAP_FLAG) }
+    val textPaint = remember { Paint(Paint.ANTI_ALIAS_FLAG) }
+    val loupeLabelPaint = remember {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
+        }
+    }
+    val inkPath = remember { Path() }
+    val loupeClipPath = remember { android.graphics.Path() }
+    val loupeSrcRect = remember { Rect() }
+    val loupeDstRect = remember { RectF() }
+
     Box(modifier.clipToBounds().background(background), contentAlignment = Alignment.Center) {
         when (val current = state) {
             is PageState.Loading -> CircularProgressIndicator()
             is PageState.Error -> Text(current.message)
             is PageState.Loaded -> {
                 val page = current.page
+                // Recycle the base page bitmap when switching pages/files or leaving composition.
+                DisposableEffect(page) {
+                    onDispose {
+                        if (!page.image.isRecycled) page.image.recycle()
+                    }
+                }
+
+                val pageRect = remember(page) { RectF(0f, 0f, page.width, page.height) }
                 val viewport = remember(page) { PageViewport() }
                 var preview by remember(page, mode) { mutableStateOf(emptyList<InkPoint>()) }
                 var activeSnap by remember(page, mode) { mutableStateOf<SnappedPoint?>(null) }
+                var loupe by remember(page, mode) { mutableStateOf<LoupeState?>(null) }
+                var regionTile by remember(page) { mutableStateOf<RegionTile?>(null) }
+
+                // Recycle high-zoom region tiles cleanly whenever replaced or disposed.
+                DisposableEffect(regionTile) {
+                    val tile = regionTile
+                    onDispose {
+                        tile?.bitmap?.let { if (!it.isRecycled) it.recycle() }
+                    }
+                }
+
+                // Quantized tile request key so high-zoom vector PDFs re-render crisply after pan/zoom settles.
+                val tileKey = remember(
+                    viewport.zoom,
+                    viewport.scroll,
+                    viewport.quarterTurns,
+                    viewport.size,
+                ) {
+                    if (viewport.zoom < TILE_ZOOM_THRESHOLD || viewport.size == IntSize.Zero) null
+                    else Triple(
+                        (viewport.zoom * 10f).roundToInt(),
+                        (viewport.scroll.x / 24f).roundToInt() to (viewport.scroll.y / 24f).roundToInt(),
+                        viewport.quarterTurns to viewport.size,
+                    )
+                }
+
+                LaunchedEffect(file, pageIndex, page, tileKey) {
+                    if (tileKey == null) {
+                        if (viewport.zoom < TILE_CLEAR_THRESHOLD) regionTile = null
+                        return@LaunchedEffect
+                    }
+                    delay(TILE_DEBOUNCE_MS)
+                    val visible = viewport.visibleRegion(page) ?: return@LaunchedEffect
+                    val t = viewport.transform(page)
+                    val maxSide = max(visible.width(), visible.height()).coerceAtLeast(1f)
+                    val targetScale = min(t.scale, MAX_TILE_PIXELS / maxSide).coerceAtLeast(1f)
+                    val rendered = try {
+                        withContext(Dispatchers.IO) { renderRegion(file, pageIndex, visible, targetScale) }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Throwable) {
+                        null
+                    }
+                    if (rendered != null) {
+                        regionTile = RegionTile(rendered, visible, targetScale)
+                    }
+                }
 
                 fun resolvePoint(screenPos: Offset, transform: PageTransform): Pair<PlanPoint, SnappedPoint?> {
                     val raw = transform.toPage(screenPos)
@@ -270,7 +384,12 @@ internal fun PlanCanvas(
                                     points += InkPoint(first, down.pressureForInk())
                                     preview = points.toList()
                                 }
-                                if (page.hit(first) && !drawing) activeSnap = firstSnap
+                                if (page.hit(first) && !drawing) {
+                                    activeSnap = firstSnap
+                                    if (mode.usesLoupe) {
+                                        loupe = LoupeState(down.position, first, firstSnap)
+                                    }
+                                }
                                 var last = first
                                 var lastPosition = down.position
                                 var moved = false
@@ -283,6 +402,7 @@ internal fun PlanCanvas(
                                             multi = true
                                             preview = emptyList()
                                             activeSnap = null
+                                            loupe = null
                                             val center = event.calculateCentroid(useCurrent = false)
                                             if (center != Offset.Unspecified) {
                                                 viewport.move(page, center, event.calculatePan(), event.calculateZoom())
@@ -302,6 +422,9 @@ internal fun PlanCanvas(
                                                     if (onPage) {
                                                         last = point
                                                         activeSnap = snapped
+                                                        if (mode.usesLoupe) {
+                                                            loupe = LoupeState(change.position, point, snapped)
+                                                        }
                                                         if (drawing && points.isNotEmpty() && points.size < 2_048 && point != points.last().point) {
                                                             points += InkPoint(point, change.pressureForInk())
                                                         }
@@ -319,14 +442,15 @@ internal fun PlanCanvas(
                                     if (!multi && page.hit(first) && mode != DrawingMode.Navigate) {
                                         when {
                                             drawing && points.isNotEmpty() -> ink(points.toList())
+                                            mode == DrawingMode.Route && onPage -> place(last)
                                             !moved && onPage -> place(last)
-                                            moved && onPage && mode.usesSpan ->
-                                                line(first, last)
+                                            moved && onPage && mode.usesSpan -> line(first, last)
                                         }
                                     }
                                 } finally {
                                     preview = emptyList()
                                     activeSnap = null
+                                    loupe = null
                                 }
                             }
                         },
@@ -339,12 +463,13 @@ internal fun PlanCanvas(
                         translate(-transform.pageCenter.x, -transform.pageCenter.y)
                     }) {
                         drawIntoCanvas { canvas ->
-                            canvas.nativeCanvas.drawBitmap(
-                                page.image,
-                                null,
-                                android.graphics.RectF(0f, 0f, page.width, page.height),
-                                Paint(Paint.FILTER_BITMAP_FLAG),
-                            )
+                            if (!page.image.isRecycled) {
+                                canvas.nativeCanvas.drawBitmap(page.image, null, pageRect, bitmapPaint)
+                            }
+                            val tile = regionTile
+                            if (tile != null && !tile.bitmap.isRecycled) {
+                                canvas.nativeCanvas.drawBitmap(tile.bitmap, null, tile.region, bitmapPaint)
+                            }
                         }
                         val outline = 1.5f / transform.scale
                         for (zone in zones) {
@@ -360,7 +485,28 @@ internal fun PlanCanvas(
                             drawLine(color, saved.first.offset(), saved.second.offset(), outline)
                             drawCircle(color, 2.5f / transform.scale, saved.first.offset())
                             drawCircle(color, 2.5f / transform.scale, saved.second.offset())
-                            drawPlanText(saved.label, (saved.first.offset() + saved.second.offset()) / 2f, 12f / transform.scale, color)
+                            drawPlanText(saved.label, (saved.first.offset() + saved.second.offset()) / 2f, 12f / transform.scale, color, textPaint)
+                        }
+                        // Draw active polyline route
+                        if (routePoints.isNotEmpty()) {
+                            val routeColor = Color(0xFF7B1FA2)
+                            for (i in 0 until routePoints.lastIndex) {
+                                val a = routePoints[i].offset()
+                                val b = routePoints[i + 1].offset()
+                                drawLine(routeColor, a, b, outline * 1.4f, cap = StrokeCap.Round)
+                                routeLegLabels.getOrNull(i)?.let { legLabel ->
+                                    drawPlanText(legLabel, (a + b) / 2f, 12f / transform.scale, routeColor, textPaint)
+                                }
+                            }
+                            for ((cornerPt, angleLabel) in routeCornerLabels) {
+                                val pos = cornerPt.offset() + Offset(4f / transform.scale, -4f / transform.scale)
+                                drawPlanText(angleLabel, pos, 10.5f / transform.scale, Color(0xFF4A148C), textPaint)
+                            }
+                            for (pt in routePoints) {
+                                val pos = pt.offset()
+                                drawCircle(Color.White, 4.5f / transform.scale, pos)
+                                drawCircle(routeColor, 3f / transform.scale, pos)
+                            }
                         }
                         for (mark in marks) drawMark(mark)
                         pending?.let {
@@ -381,8 +527,8 @@ internal fun PlanCanvas(
                             drawLine(snapColor, Offset(p.x, p.y - r * 1.4f), Offset(p.x, p.y + r * 1.4f), outline)
                         }
                         when (mode) {
-                            DrawingMode.Pen -> drawInk(preview, Color(0xFF155CBD), 1.8f)
-                            DrawingMode.Highlight -> drawInk(preview, Color(0x66FFE43C), 11f)
+                            DrawingMode.Pen -> drawInk(preview, Color(0xFF155CBD), 1.8f, inkPath)
+                            DrawingMode.Highlight -> drawInk(preview, Color(0x66FFE43C), 11f, inkPath)
                             DrawingMode.Zone, DrawingMode.Rectangle -> if (preview.size == 2) {
                                 drawZone(preview[0].point.offset(), preview[1].point.offset(), Color(0xFF007A73), outline)
                             }
@@ -391,6 +537,25 @@ internal fun PlanCanvas(
                                 drawLine(color, preview[0].point.offset(), preview[1].point.offset(), outline)
                             }
                         }
+                    }
+
+                    // Snapping loupe / magnifier overlay drawn in screen coordinates so fingers never hide the target.
+                    loupe?.let { active ->
+                        drawSnappingLoupe(
+                            loupe = active,
+                            page = page,
+                            tile = regionTile,
+                            transform = transform,
+                            radius = loupeRadiusPx,
+                            margin = loupeMarginPx,
+                            borderWidth = loupeBorderPx,
+                            labelTextSize = loupeLabelSizePx,
+                            bitmapPaint = bitmapPaint,
+                            labelPaint = loupeLabelPaint,
+                            clipPath = loupeClipPath,
+                            srcRect = loupeSrcRect,
+                            dstRect = loupeDstRect,
+                        )
                     }
                 }
                 Surface(
@@ -414,6 +579,107 @@ internal fun PlanCanvas(
     }
 }
 
+private fun DrawScope.drawSnappingLoupe(
+    loupe: LoupeState,
+    page: PageBitmap,
+    tile: RegionTile?,
+    transform: PageTransform,
+    radius: Float,
+    margin: Float,
+    borderWidth: Float,
+    labelTextSize: Float,
+    bitmapPaint: Paint,
+    labelPaint: Paint,
+    clipPath: android.graphics.Path,
+    srcRect: Rect,
+    dstRect: RectF,
+) {
+    // Place loupe in top-left, or shift to top-right when finger is near top-left.
+    val placeRight = loupe.screenPos.x < size.width * 0.45f && loupe.screenPos.y < size.height * 0.45f
+    val cx = if (placeRight) size.width - margin - radius else margin + radius
+    val cy = margin + radius
+    val center = Offset(cx, cy)
+
+    // Sample half-width in PDF points for ~2.5x magnification over the current display scale.
+    val loupeScale = transform.scale * 2.5f
+    val halfPts = (radius / loupeScale).coerceAtLeast(4f)
+    val px = loupe.pagePoint.x.toFloat()
+    val py = loupe.pagePoint.y.toFloat()
+
+    // Background disc
+    drawCircle(Color.White, radius, center)
+
+    drawIntoCanvas { canvas ->
+        val native = canvas.nativeCanvas
+        val save = native.save()
+        try {
+            clipPath.reset()
+            clipPath.addCircle(cx, cy, radius - borderWidth * 0.5f, android.graphics.Path.Direction.CW)
+            native.clipPath(clipPath)
+            native.translate(cx, cy)
+            native.rotate(transform.quarterTurns * 90f)
+            dstRect.set(-radius, -radius, radius, radius)
+
+            val useTile = tile != null && !tile.bitmap.isRecycled &&
+                px - halfPts >= tile.region.left && px + halfPts <= tile.region.right &&
+                py - halfPts >= tile.region.top && py + halfPts <= tile.region.bottom
+
+            if (useTile && tile != null) {
+                val sx = tile.bitmap.width / tile.region.width()
+                val sy = tile.bitmap.height / tile.region.height()
+                val left = ((px - halfPts - tile.region.left) * sx).roundToInt().coerceIn(0, tile.bitmap.width - 1)
+                val top = ((py - halfPts - tile.region.top) * sy).roundToInt().coerceIn(0, tile.bitmap.height - 1)
+                val right = ((px + halfPts - tile.region.left) * sx).roundToInt().coerceIn(left + 1, tile.bitmap.width)
+                val bottom = ((py + halfPts - tile.region.top) * sy).roundToInt().coerceIn(top + 1, tile.bitmap.height)
+                srcRect.set(left, top, right, bottom)
+                native.drawBitmap(tile.bitmap, srcRect, dstRect, bitmapPaint)
+            } else if (!page.image.isRecycled) {
+                val sx = page.image.width / page.width
+                val sy = page.image.height / page.height
+                val left = ((px - halfPts) * sx).roundToInt().coerceIn(0, page.image.width - 1)
+                val top = ((py - halfPts) * sy).roundToInt().coerceIn(0, page.image.height - 1)
+                val right = ((px + halfPts) * sx).roundToInt().coerceIn(left + 1, page.image.width)
+                val bottom = ((py + halfPts) * sy).roundToInt().coerceIn(top + 1, page.image.height)
+                srcRect.set(left, top, right, bottom)
+                native.drawBitmap(page.image, srcRect, dstRect, bitmapPaint)
+            }
+        } finally {
+            native.restoreToCount(save)
+        }
+    }
+
+    // Center crosshair and snap reticle
+    val snapped = loupe.snapped
+    val accent = if (snapped != null) Color(0xFF00897B) else Color(0xFF126FB4)
+    val cross = radius * 0.32f
+    drawLine(accent, Offset(cx - cross, cy), Offset(cx + cross, cy), 1.5f)
+    drawLine(accent, Offset(cx, cy - cross), Offset(cx, cy + cross), 1.5f)
+    if (snapped != null) {
+        val r = radius * 0.16f
+        if (snapped.kind == SnapKind.CORNER) {
+            drawRect(accent, Offset(cx - r, cy - r), Size(r * 2f, r * 2f), style = Stroke(2f))
+        } else {
+            drawCircle(accent, r, center, style = Stroke(2f))
+        }
+    }
+
+    // Outer ring
+    drawCircle(accent, radius, center, style = Stroke(borderWidth))
+
+    // Snap badge below the loupe
+    if (snapped != null) {
+        val badgeText = when (snapped.kind) {
+            SnapKind.CORNER -> "Corner"
+            SnapKind.LINE -> "Line"
+        }
+        drawIntoCanvas { canvas ->
+            labelPaint.textSize = labelTextSize
+            labelPaint.color = accent.toArgb()
+            canvas.nativeCanvas.drawText(badgeText, cx, cy + radius + labelTextSize * 1.3f, labelPaint)
+        }
+    }
+}
+
 private fun androidx.compose.ui.input.pointer.PointerInputChange.pressureForInk(): Float =
     if (type == PointerType.Stylus || type == PointerType.Eraser) pressure.takeIf { it.isFinite() }?.coerceIn(.15f, 1f) ?: 1f else 1f
 
@@ -424,7 +690,7 @@ private fun DrawScope.drawZone(a: Offset, b: Offset, color: Color, width: Float)
     drawRect(color, start, size, style = Stroke(width))
 }
 
-private fun DrawScope.drawInk(points: List<InkPoint>, color: Color, width: Float) {
+private fun DrawScope.drawInk(points: List<InkPoint>, color: Color, width: Float, reusablePath: Path) {
     if (points.isEmpty()) return
     if (points.size == 1) {
         drawCircle(color, width * points[0].pressure / 2, points[0].point.offset())
@@ -432,11 +698,12 @@ private fun DrawScope.drawInk(points: List<InkPoint>, color: Color, width: Float
     }
     if (color.alpha < 1f) {
         // One stroked path so translucent highlighter segments do not darken on their seams.
-        val path = Path().apply {
-            moveTo(points[0].point.x.toFloat(), points[0].point.y.toFloat())
-            for (point in points.drop(1)) lineTo(point.point.x.toFloat(), point.point.y.toFloat())
+        reusablePath.reset()
+        reusablePath.moveTo(points[0].point.x.toFloat(), points[0].point.y.toFloat())
+        for (index in 1 until points.size) {
+            reusablePath.lineTo(points[index].point.x.toFloat(), points[index].point.y.toFloat())
         }
-        drawPath(path, color, style = Stroke(width, cap = StrokeCap.Round))
+        drawPath(reusablePath, color, style = Stroke(width, cap = StrokeCap.Round))
         return
     }
     for ((a, b) in points.zipWithNext()) {
@@ -448,15 +715,18 @@ private fun DrawScope.drawMark(mark: PlanMark) {
     drawIntoCanvas { drawPlanMark(it.nativeCanvas, mark) }
 }
 
-private fun DrawScope.drawPlanText(text: String, point: Offset, textSize: Float, color: Color) {
+private fun DrawScope.drawPlanText(text: String, point: Offset, textSize: Float, color: Color, paint: Paint) {
     if (text.isBlank()) return
     drawIntoCanvas { canvas ->
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            this.textSize = textSize
-            this.color = color.toArgb()
-        }
+        paint.textSize = textSize
+        paint.color = color.toArgb()
         text.lines().forEachIndexed { index, line ->
             canvas.nativeCanvas.drawText(line, point.x, point.y + textSize * (index + 1), paint)
         }
     }
 }
+
+private const val TILE_ZOOM_THRESHOLD = 2.0f
+private const val TILE_CLEAR_THRESHOLD = 1.7f
+private const val TILE_DEBOUNCE_MS = 120L
+private const val MAX_TILE_PIXELS = 2048f

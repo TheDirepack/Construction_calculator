@@ -20,25 +20,31 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.data.PlanSymbol
 import com.thedirepack.constructioncalc.core.data.PlanSymbols
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.model.PathSegment
 import com.thedirepack.constructioncalc.core.model.PlanCalibrationLayer
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMeasurement
 import com.thedirepack.constructioncalc.core.model.PlanScaleMode
 import com.thedirepack.constructioncalc.core.model.PlanZone
+import com.thedirepack.constructioncalc.core.model.Project
+import com.thedirepack.constructioncalc.core.model.RunPath
 import com.thedirepack.constructioncalc.core.model.SheetSize
 import com.thedirepack.constructioncalc.core.model.StoredQuantity
 import com.thedirepack.constructioncalc.core.model.stored
@@ -46,14 +52,17 @@ import com.thedirepack.constructioncalc.core.ui.components.MeasureField
 import com.thedirepack.constructioncalc.core.ui.components.SettingsGroup
 import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.produceState
+import com.thedirepack.constructioncalc.feature.drawings.domain.CalibrationDiagnostics
+import com.thedirepack.constructioncalc.feature.drawings.domain.CalibrationStatus
+import com.thedirepack.constructioncalc.feature.drawings.domain.PlanRoute
+import com.thedirepack.constructioncalc.feature.drawings.domain.RouteSummary
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private val scalePresets = listOf(
     "¼″ = 1′" to 48L,
@@ -81,6 +90,64 @@ private fun presetWarning(pageSize: PageSize?): String? {
     } else {
         "Sheet matches ${sheet.label}. Verify with a known dimension if this set was printed at reduced size."
     }
+}
+
+@Composable
+private fun statusColor(status: CalibrationStatus): Color = when (status) {
+    CalibrationStatus.VERIFIED -> MaterialTheme.colorScheme.primary
+    CalibrationStatus.FITTED, CalibrationStatus.PRESET -> MaterialTheme.colorScheme.secondary
+    CalibrationStatus.NEEDS_REVIEW -> MaterialTheme.colorScheme.error
+    CalibrationStatus.UNCALIBRATED -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+@Composable
+internal fun RenameDialog(
+    title: String,
+    label: String,
+    initialName: String,
+    maxLength: Int = 240,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var name by rememberSaveable(initialName) { mutableStateOf(initialName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.take(maxLength) },
+                label = { Text(label) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(name.trim()) }, enabled = name.isNotBlank()) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+internal fun ConfirmDeleteDialog(
+    title: String,
+    message: String,
+    confirmLabel: String = "Delete",
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(message) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(confirmLabel, color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -188,7 +255,7 @@ internal fun CalibrationDialog(
     onDismiss: () -> Unit,
 ) {
     val settings = rememberAppSettings()
-    val fit = remember(calibration, page) { calibration.fit(page) }
+    val summary = remember(calibration, page) { CalibrationDiagnostics.evaluate(calibration, page) }
     val activePageMode = calibration.modeFor(page)
     val hasPageOverride = calibration.pageModes.containsKey(page)
     val selectedPresetRatio = remember(calibration.preset) {
@@ -196,6 +263,9 @@ internal fun CalibrationDialog(
             scalePresets.firstOrNull { (_, ratio) -> v == Rational.of(ratio, 72) }?.second
         }
     }
+    var renamingZone by remember { mutableStateOf<PlanZone?>(null) }
+    var deletingZone by remember { mutableStateOf<PlanZone?>(null) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Calibration layer") },
@@ -204,15 +274,22 @@ internal fun CalibrationDialog(
                 Modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("Document scale (all pages)", style = MaterialTheme.typography.titleMedium)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Document scale (all pages)", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        summary.status.label,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = statusColor(summary.status),
+                    )
+                }
                 Text(
-                    when {
-                        fit == null -> "Pick a preset or use Calibrate to tap known dimensions on any page."
-                        calibration.preset != null && calibration.references.none { !it.check } -> "Preset scale active across all pages."
-                        calibration.references.none { it.check } -> "Fitted from ${calibration.references.size} dimension(s). Add more anywhere to refine or check."
-                        else -> "Fitted across document · check differences below."
-                    },
+                    summary.message,
                     style = MaterialTheme.typography.bodySmall,
+                    color = if (summary.status == CalibrationStatus.NEEDS_REVIEW) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text("Document preset", style = MaterialTheme.typography.labelLarge)
                 Row(
@@ -245,11 +322,12 @@ internal fun CalibrationDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     for ((mode, label) in scaleModeLabels) {
+                        val supported = mode in summary.supportedModes
                         FilterChip(
                             selected = calibration.mode == mode,
                             onClick = { onCalibrationChange(calibration.copy(mode = mode)) },
                             enabled = editable,
-                            label = { Text(label) },
+                            label = { Text(if (supported) label else "$label ·") },
                         )
                     }
                 }
@@ -278,17 +356,20 @@ internal fun CalibrationDialog(
                 if (calibration.references.isEmpty()) {
                     Text("No known dimensions recorded yet.", style = MaterialTheme.typography.bodySmall)
                 }
-                calibration.references.forEachIndexed { index, ref ->
-                    val residual = fit?.residuals?.getOrNull(index)
+                summary.residuals.forEach { entry ->
+                    val ref = entry.reference
+                    val detail = entry.deltaInches?.let { delta ->
+                        val difference = settings.format(Quantity.inches(Rational.of(abs(delta))))
+                        val percent = entry.percentError ?: 0.0
+                        val flag = if (entry.exceedsTolerance) " · Review" else ""
+                        "Diff ${if (delta < 0) "−" else "+"}$difference (${String.format(Locale.getDefault(), "%+.2f", percent)}%)$flag"
+                    }
                     ItemRow(
                         title = "P${ref.page + 1} · ${if (ref.check) "Check" else "Fit"} · ${settings.format(ref.length.toQuantity())}",
-                        detail = residual?.let { delta ->
-                            val difference = settings.format(Quantity.inches(Rational.of(abs(delta))))
-                            val percent = 100 * delta / ref.length.toQuantity().value.toDouble()
-                            "Diff ${if (delta < 0) "−" else "+"}$difference (${String.format(Locale.getDefault(), "%+.2f", percent)}%)"
-                        },
+                        detail = detail,
+                        detailIsError = entry.exceedsTolerance,
                         onDelete = if (editable) ({
-                            onCalibrationChange(calibration.copy(references = calibration.references.filterIndexed { i, _ -> i != index }))
+                            onCalibrationChange(calibration.copy(references = calibration.references.filterIndexed { i, _ -> i != entry.index }))
                         }) else null,
                     )
                 }
@@ -296,24 +377,53 @@ internal fun CalibrationDialog(
                     HorizontalDivider()
                     Text("Override zones on Page ${page + 1}", style = MaterialTheme.typography.titleMedium)
                     for (zone in pageZones) {
-                        val zoneFit = remember(zone) { zone.fit() }
-                        ItemRow(
-                            title = "${zone.name} (${scaleModeLabels[zone.mode]})",
-                            detail = "${zone.references.size} dimension(s)" + if (zoneFit == null) " · Uncalibrated" else "",
-                            onDelete = if (editable) ({ onZoneDelete(zone.id) }) else null,
-                        )
+                        val zoneSummary = remember(zone) { CalibrationDiagnostics.evaluateZone(zone) }
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(zone.name, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "${zoneSummary.status.label} · ${zone.references.size} dim(s)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = statusColor(zoneSummary.status),
+                                )
+                            }
+                            if (editable) {
+                                TextButton(onClick = { renamingZone = zone }) { Text("Rename") }
+                                TextButton(onClick = { deletingZone = zone }) { Text("Delete") }
+                            }
+                        }
                         Row(
                             Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             for ((mode, label) in scaleModeLabels) {
+                                val supported = mode in zoneSummary.supportedModes
                                 FilterChip(
                                     selected = zone.mode == mode,
                                     onClick = { onZoneChange(zone.copy(mode = mode)) },
                                     enabled = editable,
-                                    label = { Text(label) },
+                                    label = { Text(if (supported) label else "$label ·") },
                                 )
                             }
+                        }
+                        zoneSummary.residuals.forEach { entry ->
+                            val ref = entry.reference
+                            val detail = entry.deltaInches?.let { delta ->
+                                val difference = settings.format(Quantity.inches(Rational.of(abs(delta))))
+                                val percent = entry.percentError ?: 0.0
+                                "Diff ${if (delta < 0) "−" else "+"}$difference (${String.format(Locale.getDefault(), "%+.2f", percent)}%)"
+                            }
+                            ItemRow(
+                                title = "${if (ref.check) "Check" else "Fit"} · ${settings.format(ref.length.toQuantity())}",
+                                detail = detail,
+                                detailIsError = entry.exceedsTolerance,
+                                onDelete = if (editable) ({
+                                    onZoneChange(zone.copy(references = zone.references.filterIndexed { i, _ -> i != entry.index }))
+                                }) else null,
+                            )
                         }
                     }
                 }
@@ -321,6 +431,31 @@ internal fun CalibrationDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
     )
+
+    renamingZone?.let { target ->
+        RenameDialog(
+            title = "Rename scale zone",
+            label = "Zone name",
+            initialName = target.name,
+            maxLength = 80,
+            onDismiss = { renamingZone = null },
+            onConfirm = { updated ->
+                onZoneChange(target.copy(name = updated))
+                renamingZone = null
+            },
+        )
+    }
+    deletingZone?.let { target ->
+        ConfirmDeleteDialog(
+            title = "Delete scale zone?",
+            message = "Remove “${target.name}” and its ${target.references.size} reference(s)? Measurements inside it will fall back to the document scale.",
+            onDismiss = { deletingZone = null },
+            onConfirm = {
+                onZoneDelete(target.id)
+                deletingZone = null
+            },
+        )
+    }
 }
 
 @Composable
@@ -353,52 +488,63 @@ internal fun PageItemsDialog(
     editable: Boolean,
     publish: (PlanMeasurement, Quantity) -> Unit,
     onZoneChange: (PlanZone) -> Unit,
+    onZoneDelete: (String) -> Unit,
     onMeasureDelete: (String) -> Unit,
     onMarkDelete: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val settings = rememberAppSettings()
+    var renamingZone by remember { mutableStateOf<PlanZone?>(null) }
+    var deletingZone by remember { mutableStateOf<PlanZone?>(null) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Page details") },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                 if (zone != null) {
-                    val fit = remember(zone) { zone.fit() }
-                    Text(zone.name, style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        when {
-                            fit == null -> "Add references in different directions for this correction."
-                            zone.preset != null && zone.references.none { !it.check } -> "Preset scale"
-                            zone.references.none { it.check } -> "Fitted · add an independent check"
-                            else -> "Review check differences below"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    val zoneSummary = remember(zone) { CalibrationDiagnostics.evaluateZone(zone) }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(zone.name, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "${zoneSummary.status.label} · ${zoneSummary.message}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = statusColor(zoneSummary.status),
+                            )
+                        }
+                        if (editable) {
+                            TextButton(onClick = { renamingZone = zone }) { Text("Rename") }
+                            TextButton(onClick = { deletingZone = zone }) { Text("Delete") }
+                        }
+                    }
                     Row(
                         Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         for ((mode, label) in scaleModeLabels) {
+                            val supported = mode in zoneSummary.supportedModes
                             FilterChip(
                                 selected = zone.mode == mode,
                                 onClick = { onZoneChange(zone.copy(mode = mode)) },
                                 enabled = editable,
-                                label = { Text(label) },
+                                label = { Text(if (supported) label else "$label ·") },
                             )
                         }
                     }
-                    zone.references.forEachIndexed { index, ref ->
-                        val residual = fit?.residuals?.getOrNull(index)
+                    zoneSummary.residuals.forEach { entry ->
+                        val ref = entry.reference
+                        val detail = entry.deltaInches?.let { delta ->
+                            val difference = settings.format(Quantity.inches(Rational.of(abs(delta))))
+                            val percent = entry.percentError ?: 0.0
+                            "Difference ${if (delta < 0) "−" else "+"}$difference (${String.format(Locale.getDefault(), "%+.2f", percent)}%)"
+                        }
                         ItemRow(
                             title = "${if (ref.check) "Check" else "Fit"} · ${settings.format(ref.length.toQuantity())}",
-                            detail = residual?.let { delta ->
-                                val difference = settings.format(Quantity.inches(Rational.of(abs(delta))))
-                                val percent = 100 * delta / ref.length.toQuantity().value.toDouble()
-                                "Difference ${if (delta < 0) "−" else "+"}$difference (${String.format(Locale.getDefault(), "%+.2f", percent)}%)"
-                            },
+                            detail = detail,
+                            detailIsError = entry.exceedsTolerance,
                             onDelete = if (editable) ({
-                                onZoneChange(zone.copy(references = zone.references.filterIndexed { i, _ -> i != index }))
+                                onZoneChange(zone.copy(references = zone.references.filterIndexed { i, _ -> i != entry.index }))
                             }) else null,
                         )
                     }
@@ -432,14 +578,180 @@ internal fun PageItemsDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
     )
+
+    renamingZone?.let { target ->
+        RenameDialog(
+            title = "Rename scale zone",
+            label = "Zone name",
+            initialName = target.name,
+            maxLength = 80,
+            onDismiss = { renamingZone = null },
+            onConfirm = { updated ->
+                onZoneChange(target.copy(name = updated))
+                renamingZone = null
+            },
+        )
+    }
+    deletingZone?.let { target ->
+        ConfirmDeleteDialog(
+            title = "Delete scale zone?",
+            message = "Remove “${target.name}” and its ${target.references.size} reference(s)?",
+            onDismiss = { deletingZone = null },
+            onConfirm = {
+                onZoneDelete(target.id)
+                deletingZone = null
+            },
+        )
+    }
 }
 
 @Composable
-private fun ItemRow(title: String, detail: String?, onDelete: (() -> Unit)?) {
+internal fun SendRouteToRunDialog(
+    project: Project,
+    summary: RouteSummary,
+    onDismiss: () -> Unit,
+    onSend: (runId: String?, newRunName: String?, segments: List<PathSegment>) -> Unit,
+) {
+    val settings = rememberAppSettings()
+    var selectedRunId by rememberSaveable(project.id) { mutableStateOf(project.runs.firstOrNull()?.id) }
+    var createNewRun by rememberSaveable(project.id) { mutableStateOf(project.runs.isEmpty()) }
+    var newRunName by rememberSaveable { mutableStateOf("Plan route") }
+    var startVertical by remember { mutableStateOf<Quantity?>(null) }
+    var startUp by rememberSaveable { mutableStateOf(true) }
+    var endVertical by remember { mutableStateOf<Quantity?>(null) }
+    var endUp by rememberSaveable { mutableStateOf(false) }
+
+    val startInches = startVertical?.value?.toDouble()?.coerceAtLeast(0.0) ?: 0.0
+    val endInches = endVertical?.value?.toDouble()?.coerceAtLeast(0.0) ?: 0.0
+    val segments = remember(summary, startInches, startUp, endInches, endUp) {
+        PlanRoute.toRunPath(
+            summary = summary,
+            startVerticalInches = startInches,
+            startVerticalUp = startUp,
+            endVerticalInches = endInches,
+            endVerticalUp = endUp,
+        )
+    }
+    val totalLength = remember(summary, startInches, endInches) {
+        Quantity.inches(Rational.of(summary.totalHorizontalInches + startInches + endInches))
+    }
+    val totalDegrees = remember(segments) { RunPath.totalDegrees(segments) }
+    val bendCount = remember(segments) { segments.count { it is PathSegment.Bend } }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Send route to Run") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Plan horizontal: ≈ ${settings.format(summary.totalHorizontalQuantity)} (${summary.legs.size} legs, ${summary.corners.size} corners)",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Total route: ≈ ${settings.format(totalLength)} · $bendCount bend(s) (${totalDegrees.roundToInt()}°)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (totalDegrees > 360.0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                )
+                if (totalDegrees > 360.0) {
+                    Text(
+                        "Exceeds 360° between pull points — add a pull point in Wire Pull Planner.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                HorizontalDivider()
+                Text("Optional vertical drops / rises", style = MaterialTheme.typography.labelLarge)
+                MeasureField(
+                    label = "Start vertical (optional)",
+                    value = startVertical,
+                    onValueChange = { startVertical = it },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (startInches > 0.0) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(selected = startUp, onClick = { startUp = true }, label = { Text("Rise up") })
+                        FilterChip(selected = !startUp, onClick = { startUp = false }, label = { Text("Drop down") })
+                    }
+                }
+                MeasureField(
+                    label = "End vertical (optional)",
+                    value = endVertical,
+                    onValueChange = { endVertical = it },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (endInches > 0.0) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(selected = endUp, onClick = { endUp = true }, label = { Text("Rise up") })
+                        FilterChip(selected = !endUp, onClick = { endUp = false }, label = { Text("Drop down") })
+                    }
+                }
+                HorizontalDivider()
+                Text("Target run in ${project.name}", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    for (run in project.runs) {
+                        FilterChip(
+                            selected = !createNewRun && selectedRunId == run.id,
+                            onClick = {
+                                createNewRun = false
+                                selectedRunId = run.id
+                            },
+                            label = { Text(run.name) },
+                        )
+                    }
+                    FilterChip(
+                        selected = createNewRun,
+                        onClick = { createNewRun = true },
+                        label = { Text("+ New run") },
+                    )
+                }
+                if (createNewRun) {
+                    OutlinedTextField(
+                        value = newRunName,
+                        onValueChange = { newRunName = it.take(120) },
+                        label = { Text("New run name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            val canSend = if (createNewRun) newRunName.isNotBlank() else selectedRunId != null
+            TextButton(
+                onClick = {
+                    if (createNewRun) onSend(null, newRunName.trim(), segments)
+                    else onSend(selectedRunId, null, segments)
+                },
+                enabled = canSend,
+            ) { Text("Send to Run") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun ItemRow(
+    title: String,
+    detail: String?,
+    detailIsError: Boolean = false,
+    onDelete: (() -> Unit)?,
+) {
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title)
-            if (detail != null) Text(detail, style = MaterialTheme.typography.bodySmall)
+            if (detail != null) {
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (detailIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         if (onDelete != null) TextButton(onClick = onDelete) { Text("Delete") }
     }
