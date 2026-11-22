@@ -40,6 +40,9 @@ from blueprint_symbols.neca_prompt_catalog import (SamNecaPrompt, list_neca_prom
     choose_neca_prompts, load_neca_sam_prompts)
 from blueprint_symbols.proposal_fusion import merge_sam_proposals
 from blueprint_symbols.sam_precision import filter_sam_detections
+from blueprint_symbols.preencoded_prompt_cache import (
+    prompt_feature_cache_path, load_prompt_features, save_prompt_features,
+)
 from blueprint_symbols.hierarchical_sam import (build_hierarchical_prompt_plan,
     active_fine_indices, accepted_fine_match, explain_query_savings)
 
@@ -510,6 +513,12 @@ def main() -> None:
                     help='Catalog budget; default 0 loads all eligible fine exemplars for hierarchical mode. Flat mode: set 96 or 192 for speed')
     ap.add_argument('--native-only', action='store_true',
                     help='Exclude raster-traced NECA symbols; default retains traced Annex A alternatives')
+    ap.add_argument('--reference-render-height', type=int, default=96,
+                    help='Height used when rasterizing individual NECA vectors before prompt encoding')
+    ap.add_argument('--no-reference-quality', action='store_true',
+                    help='Disable cluttered/filled reference glyph rejection for A/B comparison')
+    ap.add_argument('--no-prompt-cache', action='store_true',
+                    help='Disable local raster and preencoded-geometry caches for debugging')
     ap.add_argument('--catalog-only', action='store_true',
                     help='Audit selected NECA categories and prompts, then exit without loading a model/GPU')
     ap.add_argument('--scan-mode', choices=['hierarchical', 'flat'], default='hierarchical',
@@ -580,14 +589,46 @@ def main() -> None:
     processor = Sam3Processor.from_pretrained(args.model_id)
     print(f'Model loaded in {time.time() - t0:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
 
-    glyphs = load_neca_sam_prompts(selected, args.neca_dir.resolve(), render_height=96)
-    if not glyphs:
-        ap.error('no NECA prompt SVG rendered successfully')
-    print(f'Rendered only {len(glyphs)} selected NECA exemplars before pre-encoding...', flush=True)
-    t_enc = time.time()
-    geo_feats, geo_masks, blank_tf, blank_tm = preencode_svg_prompts(
-        model, processor, glyphs, device='cuda', dtype=dtype, target_px=44,
+    cache_root = args.out.resolve() / '_sam_prompt_cache'
+    reference_stats: Counter = Counter()
+    glyphs = load_neca_sam_prompts(
+        selected, args.neca_dir.resolve(),
+        render_height=args.reference_render_height,
+        cache_dir=None if args.no_prompt_cache else cache_root / 'raster',
+        check_quality=not args.no_reference_quality,
+        reference_stats=reference_stats,
     )
+    if not glyphs:
+        ap.error('no usable NECA prompt SVGs after reference quality screening')
+    print(f'NECA reference preflight: {len(glyphs)}/{len(selected)} usable; '
+          f'details={dict(reference_stats)}', flush=True)
+    t_enc = time.time()
+    feature_cache = None
+    cached_features = None
+    if not args.no_prompt_cache:
+        feature_cache = prompt_feature_cache_path(
+            cache_root / 'encoded', glyphs,
+            model_id=args.model_id,
+            model_revision=getattr(model.config, '_commit_hash', None),
+            model_config=model.config.to_json_string(),
+            dtype=dtype, target_px=44,
+        )
+        cached_features = load_prompt_features(
+            feature_cache, glyph_count=len(glyphs), device='cuda', dtype=dtype,
+        )
+    if cached_features is not None:
+        print('Loaded locally cached SAM visual geometry embeddings', flush=True)
+        geo_feats, geo_masks, blank_tf, blank_tm = cached_features
+    else:
+        geo_feats, geo_masks, blank_tf, blank_tm = preencode_svg_prompts(
+            model, processor, glyphs, device='cuda', dtype=dtype, target_px=44,
+        )
+        if feature_cache is not None:
+            save_prompt_features(
+                feature_cache,
+                (geo_feats, geo_masks, blank_tf, blank_tm),
+            )
+            print('Cached SAM visual geometry embeddings locally', flush=True)
     if args.svg_dedup_sim < 1.0:
         orig_n = len(glyphs)
         glyphs, geo_feats, geo_masks = deduplicate_svg_prompts(
@@ -626,6 +667,10 @@ def main() -> None:
         'min_page_pts': args.min_page_pts,
         'prompt_budgets': catalog_summary['prompt_budgets'],
         'native_only': args.native_only,
+        'reference_render_height': args.reference_render_height,
+        'reference_quality': not args.no_reference_quality,
+        'reference_quality_stats': dict(reference_stats),
+        'prompt_feature_cache_schema': 2,
         'scan_mode': args.scan_mode,
         'coarse_per_family': args.coarse_per_family,
         'fine_per_family': args.fine_per_family,
@@ -777,7 +822,11 @@ def main() -> None:
             'annotations_are_exhaustive': False,
             'verified_ground_truth': False,
             'prompt_selection': 'allowlisted' if args.prompt_allowlist else 'hierarchical_neca',
-            'prompt_catalog': {**catalog_summary, 'active_after_render_and_dedup': len(glyphs)},
+            'prompt_catalog': {
+                **catalog_summary,
+                'active_after_render_and_dedup': len(glyphs),
+                'reference_quality_stats': dict(reference_stats),
+            },
             'run_config': run_config,
             'run_config_hash': run_config_hash,
             'query_stats': dict(pdf_query_stats),
