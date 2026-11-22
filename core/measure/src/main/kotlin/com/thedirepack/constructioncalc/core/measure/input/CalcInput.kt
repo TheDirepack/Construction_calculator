@@ -20,8 +20,12 @@ sealed interface Key {
     data object Clear : Key
     /** A fraction-of-an-inch key: adds (or replaces) the fraction on the current measurement. */
     data class Fraction(val numerator: Int, val denominator: Int) : Key
-    /** Insert a known value, e.g. from history. */
-    data class Recall(val quantity: Quantity, val preferInches: Boolean? = null) : Key
+    /** Insert a known value, e.g. from history or the active answer (`Ans`). */
+    data class Recall(
+        val quantity: Quantity,
+        val preferInches: Boolean? = null,
+        val fromPreviousAnswer: Boolean = false,
+    ) : Key
     /** Open grouping parenthesis `(`. */
     data object OpenParen : Key
     /** Close grouping parenthesis `)`. */
@@ -66,7 +70,7 @@ object CalcInput {
         Key.Backspace -> backspace(state)
         Key.Clear -> Outcome(CalcState())
         is Key.Fraction -> typeFraction(state, key.numerator, key.denominator)
-        is Key.Recall -> recall(state, Token.Value(key.quantity, key.preferInches))
+        is Key.Recall -> recall(state, Token.Value(key.quantity, key.preferInches, key.fromPreviousAnswer))
         Key.OpenParen -> typeOpenParen(state)
         Key.CloseParen -> typeCloseParen(state)
         Key.Sqrt -> typeSqrt(state)
@@ -133,7 +137,7 @@ object CalcInput {
 
     private fun typeOperator(state: CalcState, op: Operator): Outcome {
         state.answer?.let {
-            val carried = Token.Value(it, prefersInches(state.tokens))
+            val carried = Token.Value(it, prefersInches(state.tokens), fromPreviousAnswer = true)
             return Outcome(CalcState(listOf(carried, Token.Op(op))))
         }
         var tokens = state.tokens
@@ -176,7 +180,7 @@ object CalcInput {
 
     private fun typeSqrt(state: CalcState): Outcome {
         state.answer?.let {
-            val carried = Token.Value(it, prefersInches(state.tokens))
+            val carried = Token.Value(it, prefersInches(state.tokens), fromPreviousAnswer = true)
             return Outcome(CalcState(listOf(Token.Sqrt, carried)))
         }
         val tokens = state.tokens
@@ -190,7 +194,7 @@ object CalcInput {
 
     private fun typeSquare(state: CalcState): Outcome {
         state.answer?.let {
-            val carried = Token.Value(it, prefersInches(state.tokens))
+            val carried = Token.Value(it, prefersInches(state.tokens), fromPreviousAnswer = true)
             return Outcome(CalcState(listOf(carried, Token.Square)))
         }
         val tokens = state.tokens

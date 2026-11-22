@@ -21,8 +21,13 @@ sealed interface Token {
     /**
      * An already-computed value, e.g. the previous answer or one recalled from history.
      * [preferInches] remembers whether it came from an inches-only calculation (null = unknown).
+     * [fromPreviousAnswer] is true when carried directly from the previous finished result.
      */
-    data class Value(val quantity: Quantity, val preferInches: Boolean? = null) : Token
+    data class Value(
+        val quantity: Quantity,
+        val preferInches: Boolean? = null,
+        val fromPreviousAnswer: Boolean = false,
+    ) : Token
 
     /** Grouping open parenthesis `(`. */
     data object OpenParen : Token

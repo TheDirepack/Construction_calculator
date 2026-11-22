@@ -218,5 +218,61 @@ class FootInchDataTest {
         }
         assertEquals(HistoryTapeOps.MAX, large.size)
         assertEquals("519\"", large.first().expression)
+        // SavedToken.PrevAnswer serialization round-trip
+        val withPrev = FootInchInputs(
+            tokens = listOf(SavedToken.PrevAnswer, SavedToken.Op(Operator.ADD), SavedToken.Literal("2'")),
+            answer = Quantity.feet(Rational.of(7)).stored(),
+            preferInches = false,
+        )
+        val decodedPrev = ToolInputs.decode<FootInchInputs>(ToolInputs.encode(withPrev))
+        assertNotNull(decodedPrev)
+        assertEquals(SavedToken.PrevAnswer, decodedPrev!!.tokens.first())
+        val resolved = decodedPrev.tokens.map { it.toToken(Quantity.feet(Rational.of(5)), false) }
+        assertEquals(Quantity.feet(Rational.of(5)), (resolved[0] as Token.Value).quantity)
+        assertTrue((resolved[0] as Token.Value).fromPreviousAnswer)
+    }
+
+    @Test
+    fun footInchBackupRoundTripsGroupsMemoryAndLegacyHistory() {
+        val q1 = Quantity.inches(Rational.of(96)).stored()
+        val group = CalcGroup(
+            id = 1L,
+            label = "Header layout",
+            favorite = true,
+            steps = listOf(
+                CalcStep(id = 1L, tokens = listOf(SavedToken.Literal("5'")), result = Quantity.feet(Rational.of(5)).stored(), preferInches = false),
+                CalcStep(id = 2L, tokens = listOf(SavedToken.PrevAnswer, SavedToken.Op(Operator.ADD), SavedToken.Literal("3'")), result = q1, preferInches = false),
+            ),
+            updatedAt = 1234L,
+        )
+        val mem = listOf(
+            MemoryEntry(id = 1L, value = q1, preferInches = false, label = "Beam"),
+        )
+        val backup = FootInchBackup(
+            history = listOf(HistoryEntry("5' + 3'", q1, preferInches = false)),
+            groups = listOf(group),
+            memory = mem,
+            activeMemoryId = 1L,
+        )
+        val decoded = ToolInputs.decode<FootInchBackup>(ToolInputs.encode(backup))
+        assertNotNull(decoded)
+        val restored = decoded!!.restoredGroups().single()
+        assertTrue(restored.favorite)
+        assertEquals("Header layout", restored.label)
+        assertEquals(2, restored.steps.size)
+        assertEquals(1, decoded.memory.size)
+        assertEquals("Beam", decoded.memory.first().label)
+        assertEquals(1L, decoded.activeMemoryId)
+    }
+
+    @Test
+    fun emptyGroupedBackupDoesNotRestoreClearedLegacyRows() {
+        val legacy = HistoryEntry("5'", Quantity.feet(Rational.of(5)).stored())
+        val oldBackup = FootInchBackup(history = listOf(legacy))
+        val currentBackup = oldBackup.copy(groups = emptyList())
+
+        assertEquals(1, oldBackup.restoredGroups().size)
+        val decoded = ToolInputs.decode<FootInchBackup>(ToolInputs.encode(currentBackup))
+        assertTrue(decoded!!.restoredGroups().isEmpty())
     }
 }
