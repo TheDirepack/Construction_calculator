@@ -113,7 +113,9 @@ def merge_review_taxonomy(provisional: dict) -> dict[str, list[str]]:
 
 
 REFINEMENT_INSTRUCTIONS = (
-    "Nothing is approved merely because it appears in the batch. Set review_status to "
+    "Nothing is approved merely because it appears in the batch. Set review_source "
+    "to 'vlm' for model review or 'human' for human-confirmed review. "
+    "Set review_status to "
     "accepted/rejected/uncertain, and keep=true ONLY after explicit visual review. "
     "Unreviewed or uncertain detections are excluded from output. "
     "Independent electrical attributes may coexist: e.g. three_way + dimmer, "
@@ -429,6 +431,7 @@ Review the provisional bounding-box detections for **`{source_file}`** ({total_d
    - Set `"keep": false` for **anything that is not a real placed electrical device** on a floor/ceiling/power/lighting/fire-alarm plan:
      - Cover sheets, title blocks, PE stamps, logos, vicinity/location maps, sheet indexes, general notes, specifications, schedules, riser/one-line diagrams, and **symbol legend examples** (never keep a legend entry as a placed device!).
      - Ordinary text, room numbers, grid bubbles, dimension ticks, door/window tags, plumbing/civil/structural marks, or duplicate hits on the same symbol.
+   - Set `"review_source": "vlm"` for model-only decisions, or `"review_source": "human"` only after a human confirms. Never misattribute model decisions.
    - Only set `"review_status": "accepted"` and `"keep": true` after evaluating a real placed device. Set `"review_status": "rejected", "keep": false` for false positives; use `"review_status": "uncertain"` when identification is inconclusive. Missing status is never accepted.
 2. **Tight Bounding Box (`refined_bbox_cell`)**:
    - Update `"refined_bbox_cell": [x0, y0, x1, y1]` in `[0..1000]` tightly around the **actual device symbol graphic only** (exclude circuit home-run arrows, adjacent walls, and nearby text callouts unless the letter is part of the symbol itself, like `S`, `S3`, `SD`, `GFI`).
@@ -601,6 +604,7 @@ def cmd_render(args: argparse.Namespace) -> None:
                         'provisional_bbox_pdf_bl': bbox_bl,
                         # Fields for the refinement model to update (v7 taxonomy):
                         'review_status': 'unreviewed',
+                        'review_source': None,
                         'keep': None,
                         'refined_device_type': None,
                         'refined_subtype': None,
@@ -794,7 +798,8 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
                 'on_wall': bool(on_wall) if on_wall is not None else False,
                 'wall_connection_point': wall_pt,
                 'target_vector_pts': vec_pts,
-                'status': 'vlm_reviewed_provisional',
+                'status': 'reviewed_provisional',
+                'review_source': item.get('review_source') or 'unattributed',
                 'verified_ground_truth': False,
                 'geometry_verified': False,
             })
