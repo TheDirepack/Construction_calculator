@@ -227,6 +227,10 @@ internal fun PlanCanvas(
     routeLegLabels: List<String> = emptyList(),
     routeCornerLabels: List<Pair<PlanPoint, String>> = emptyList(),
     savedRoutes: List<CanvasRoute> = emptyList(),
+    savedPaths: List<CanvasPath> = emptyList(),
+    selectedPathId: String? = null,
+    selectedPathVertex: Int? = null,
+    selectedPathEdge: Int? = null,
     handles: List<EndpointHandle> = emptyList(),
     selectedMark: PlanMark?,
     onMoveMark: (PlanMark) -> Unit,
@@ -409,7 +413,7 @@ internal fun PlanCanvas(
                                 val grabbed = if (mode == DrawingMode.Adjust && grabbedMark == null) {
                                     EditorActions.handleAt(currentHandles, downTransform.toPage(down.position), touchRadiusPt)
                                 } else null
-                                val anchor = grabbed?.let { g ->
+                                val anchor = grabbed?.takeUnless { it.target is EndpointTarget.Path }?.let { g ->
                                     currentHandles.firstOrNull { it.target == g.target && it.end != g.end }?.point
                                 }
                                 // In Adjust, a drag that doesn't start on a handle pans the sheet.
@@ -548,6 +552,20 @@ internal fun PlanCanvas(
                                 drawPlanText(saved.label, start.offset() + Offset(4f / transform.scale, 0f), 11f / transform.scale, color, textPaint)
                             }
                         }
+                        for ((path, label) in savedPaths) {
+                            val selectedPath = path.id == selectedPathId
+                            val color = Color(0xFF007A73)
+                            val drag = endpointDrag?.takeIf { (it.handle.target as? EndpointTarget.Path)?.id == path.id }
+                            for (i in 0 until path.edgeCount) {
+                                val next = (i + 1) % path.points.size
+                                val a = (if (drag?.handle?.end == i) drag.point else path.points[i]).offset()
+                                val b = (if (drag?.handle?.end == next) drag.point else path.points[next]).offset()
+                                val edgeColor = if (selectedPath && selectedPathEdge == i) Color(0xFF126FB4) else color
+                                drawLine(edgeColor, a, b, if (selectedPath) outline * 2f else outline, cap = StrokeCap.Round)
+                            }
+                            drawPlanText(label, path.points.first().offset() + Offset(4f / transform.scale, 0f),
+                                11f / transform.scale, color, textPaint)
+                        }
                         // Draw active polyline route
                         if (routePoints.isNotEmpty()) {
                             val routeColor = Color(0xFF7B1FA2)
@@ -585,8 +603,12 @@ internal fun PlanCanvas(
                         if (mode == DrawingMode.Adjust) {
                             val r = 4f / transform.scale
                             for (handle in handles) {
-                                val p = handle.point.offset()
-                                drawRect(Color.White, Offset(p.x - r, p.y - r), Size(r * 2, r * 2))
+                                val pathVertex = handle.target is EndpointTarget.Path
+                                val drag = endpointDrag?.takeIf { pathVertex && it.handle == handle }
+                                val p = (drag?.point ?: handle.point).offset()
+                                val activeVertex = pathVertex && handle.end == selectedPathVertex
+                                drawRect(if (activeVertex) Color(0xFF126FB4) else Color.White,
+                                    Offset(p.x - r, p.y - r), Size(r * 2, r * 2))
                                 drawRect(Color(0xFF126FB4), Offset(p.x - r, p.y - r), Size(r * 2, r * 2), style = Stroke(outline))
                             }
                             endpointDrag?.let { drag ->
