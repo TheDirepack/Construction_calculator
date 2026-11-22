@@ -27,20 +27,36 @@ from torch.utils.data import Dataset
 
 
 def load_bgr_white_bg(path: str | Path) -> np.ndarray | None:
-    """Decode an image as uint8 BGR, flattening RGBA onto white paper."""
+    """Decode an image as uint8 BGR on white paper.
+
+    - Transparent-background CAD rasters (e.g. FloorPlanCAD RGBA with colored/light
+      CAD layer strokes) are converted to crisp black lines on pure white paper.
+    - Dark-background CAD rasters (light/colored lines on black) are inverted to
+      black lines on white paper.
+    """
     raw = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if raw is None:
         return None
     if raw.ndim == 2:
-        return cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
-    if raw.shape[2] == 3:
-        return raw
-    if raw.shape[2] == 4:
-        bgr = raw[:, :, :3].astype(np.float32)
-        alpha = raw[:, :, 3:4].astype(np.float32) / 255.0
-        flat = np.clip(bgr * alpha + 255.0 * (1.0 - alpha), 0.0, 255.0).round().astype(np.uint8)
-        return flat
-    return raw[:, :, :3]
+        bgr = cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
+    elif raw.shape[2] == 4:
+        alpha = raw[:, :, 3]
+        if float((alpha < 12).mean()) > 0.50:
+            # Transparent CAD line-art (FloorPlanCAD etc.): convert any drawn stroke to black on white.
+            bw = 255 - alpha
+            return cv2.cvtColor(bw, cv2.COLOR_GRAY2BGR)
+        bgr_f = raw[:, :, :3].astype(np.float32)
+        a_f = alpha[:, :, None].astype(np.float32) / 255.0
+        bgr = np.clip(bgr_f * a_f + 255.0 * (1.0 - a_f), 0.0, 255.0).round().astype(np.uint8)
+    else:
+        bgr = raw[:, :, :3]
+
+    # Dark-background CAD sheet (e.g. AutoCAD modelspace black background with colored lines)
+    max_ch = bgr.max(axis=2)
+    if float((max_ch < 40).mean()) > 0.65:
+        bw = 255 - max_ch
+        return cv2.cvtColor(bw, cv2.COLOR_GRAY2BGR)
+    return bgr
 
 
 def sample_random_crop(image: np.ndarray, size: int, rng: np.random.Generator) -> np.ndarray:
