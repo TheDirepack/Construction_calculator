@@ -9,7 +9,13 @@ class EvaluatorTest {
 
     /** Splits e.g. `5'3 + 2'8` into tokens. */
     private fun tokens(expr: String): List<Token> = expr.split(' ').filter { it.isNotEmpty() }.map { part ->
-        Operator.entries.firstOrNull { it.symbol == part }?.let { Token.Op(it) } ?: Token.Literal(part)
+        when (part) {
+            "(" -> Token.OpenParen
+            ")" -> Token.CloseParen
+            "√" -> Token.Sqrt
+            "²" -> Token.Square
+            else -> Operator.entries.firstOrNull { it.symbol == part }?.let { Token.Op(it) } ?: Token.Literal(part)
+        }
     }
 
     private fun eval(expr: String) = Evaluator.evaluate(tokens(expr))
@@ -57,6 +63,50 @@ class EvaluatorTest {
     @Test fun previewIgnoresTrailingOperator() {
         assertEquals(Quantity.inches(Rational.of(60)), Evaluator.preview(tokens("5' +")))
         assertNull(Evaluator.preview(tokens("5' ÷ 0")))
+    }
+
+    @Test fun parenthesesOverridePrecedence() {
+        assertEquals("14' 0\"", fmt("( 2' + 5' ) × 2"))
+        assertEquals("2' 6\"", fmt("( 10' − ( 3' + 2' ) ) ÷ 2"))
+        assertEquals(Quantity.number(Rational.of(9)), eval("( − 3 ) ²"))
+        assertEquals(Quantity.number(Rational.of(-9)), eval("− 3 ²"))
+        // Preview auto-closes open parens
+        assertEquals(Quantity.inches(Rational.of(84)), Evaluator.preview(tokens("( 2' + 5'")))
+        assertThrows<CalcException.Incomplete> { eval("( 2' + 5'") }
+        assertThrows<CalcException.Syntax> { eval("2' + 5' )") }
+        assertThrows<CalcException.Syntax> { eval("( )") }
+    }
+
+    @Test fun squareAndSquareRootExactAndDimensions() {
+        // Exact rational squares and roots
+        assertEquals(Quantity.number(Rational.of(25)), eval("5 ²"))
+        assertEquals(Quantity.number(Rational.of(9, 16)), eval("3/4 ²"))
+        assertEquals(Quantity.number(Rational.of(3, 4)), eval("√ 9/16"))
+        assertEquals(Quantity.number(Rational.of(0)), eval("√ 0"))
+        // Length squared -> Area; Area square root -> Length (exact 3-4-5 right triangle!)
+        val area = eval("3' ²")
+        assertEquals(Dimension.AREA, area.dimension)
+        assertEquals("9 sq ft", MeasureFormat.primary(area, Precision.SIXTEENTH, LengthStyle.FEET_INCHES))
+        val diag = eval("√ ( 3' ² + 4' ² )")
+        assertEquals(Quantity.feet(Rational.of(5)), diag)
+        // Irrational root falls back cleanly
+        val root2 = eval("√ 2")
+        assertEquals(Dimension.NUMBER, root2.dimension)
+        assertEquals(1.41421356, root2.value.toDouble(), 1e-6)
+        // Dimension & domain errors
+        assertThrows<CalcException.UnitMismatch> { eval("( 3' × 4' ) ²") } // AREA² rejected
+        assertThrows<CalcException.UnitMismatch> { eval("( 1' × 1' × 1' ) ²") } // VOLUME² rejected
+        assertThrows<CalcException.UnitMismatch> { eval("√ 5'") } // √LENGTH rejected
+        assertThrows<CalcException.UnitMismatch> { eval("√ ( 1' × 1' × 1' )") } // √VOLUME rejected
+        assertThrows<CalcException.Syntax> { eval("√ − 4") } // negative rejected
+    }
+
+    @Test fun mixedMetricAndImperialArithmetic() {
+        // 25.4 mm == 1" exact
+        assertEquals(Quantity.inches(Rational.of(1)), eval("25.4mm"))
+        assertEquals(Quantity.inches(Rational.of(10)), eval("25.4cm"))
+        assertEquals(Quantity.inches(Rational.of(13)), eval("1' + 25.4mm"))
+        assertEquals("1' 1\"", fmt("1' + 25.4mm"))
     }
 
     private inline fun <reified T : Throwable> assertThrows(block: () -> Unit) {
