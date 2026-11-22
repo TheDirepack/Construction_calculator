@@ -746,7 +746,11 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
 
     for batch in sorted(batch_payloads, key=lambda b: int(b.get('batch_index', 0))):
         for item in batch.get('items', []):
-            decision = review_decision(item, batch.get('taxonomy', DEVICE_TAXONOMY_V7), coord_max=COORD_MAX)
+            decision = review_decision(
+                item, batch.get('taxonomy', DEVICE_TAXONOMY_V7),
+                coord_max=COORD_MAX,
+                category_taxonomy=batch.get('category_taxonomy'),
+            )
             if decision == 'rejected':
                 removed_count += 1
                 continue
