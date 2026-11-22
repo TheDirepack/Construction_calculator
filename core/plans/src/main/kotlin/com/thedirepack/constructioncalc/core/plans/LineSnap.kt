@@ -38,7 +38,8 @@ class GrayImage(val width: Int, val height: Int, val pixels: ByteArray) {
     }
 }
 
-enum class SnapKind { LINE, CORNER }
+/** What a snap landed on: along a line, where two lines meet, or a line's free end. */
+enum class SnapKind { LINE, CORNER, END }
 
 /**
  * Where a tap snapped, in image pixels. [angle] is the line's direction in radians (for a corner,

@@ -76,7 +76,9 @@ class LineMap(
     /**
      * Snaps a tap at ([x], [y]) to the nearest line within [radius] points: to its center line or
      * to the edge facing the tap. Within [cornerRadius] of where two lines meet (at 35° or more),
-     * it snaps to that corner instead: of the center lines, or of the edges facing the tap.
+     * it snaps to that corner instead: of the center lines, or of the edges facing the tap. Failing
+     * that, within [cornerRadius] of the line's own end (a door jamb, the end of a run), it snaps
+     * to that end.
      */
     fun snap(x: Double, y: Double, radius: Double, target: SnapTarget, cornerRadius: Double = radius * .6): PlanSnap? {
         val candidates = near(x, y, radius)
@@ -98,6 +100,8 @@ class LineMap(
             }
         }
         if (bestCorner != null) return bestCorner
+        val (ex, ey) = first.nearestEnd(x, y)
+        if (hypot(ex - x, ey - y) <= cornerRadius) return PlanSnap(ex, ey, SnapKind.END, line)
         val (fx, fy) = first.foot(x, y)
         return PlanSnap(fx, fy, SnapKind.LINE, line)
     }
@@ -119,6 +123,12 @@ class LineMap(
         fun foot(x: Double, y: Double): Pair<Double, Double> {
             val t = ((x - px) * ux + (y - py) * uy).coerceIn(0.0, length)
             return (px + t * ux) to (py + t * uy)
+        }
+
+        fun nearestEnd(x: Double, y: Double): Pair<Double, Double> {
+            val t = (x - px) * ux + (y - py) * uy
+            val end = if (t * 2 < length) 0.0 else length
+            return (px + end * ux) to (py + end * uy)
         }
 
         fun intersect(other: Guide): Pair<Double, Double>? {

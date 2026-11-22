@@ -60,6 +60,26 @@ class LineMapTest {
     }
 
     @Test
+    fun snapsToAFreeLineEndNearTheTap() {
+        val wall = PlanLine(10.0, 50.0, 190.0, 50.0, width = 4.0)
+        val map = LineMap(200.0, 200.0, listOf(wall), LineSource.VECTOR, 8.0)
+
+        val end = map.snap(186.0, 55.0, radius = 16.0, target = SnapTarget.CENTER)!!
+        assertEquals(SnapKind.END, end.kind)
+        assertEquals(190.0, end.x, 1e-6)
+        assertEquals(50.0, end.y, 1e-6)
+
+        // The edge target keeps the end on the face nearest the tap.
+        val edgeEnd = map.snap(14.0, 55.0, radius = 16.0, target = SnapTarget.EDGE)!!
+        assertEquals(SnapKind.END, edgeEnd.kind)
+        assertEquals(10.0, edgeEnd.x, 1e-6)
+        assertEquals(52.0, edgeEnd.y, 1e-6)
+
+        // Away from the ends it stays on the line.
+        assertEquals(SnapKind.LINE, map.snap(120.0, 55.0, radius = 16.0, target = SnapTarget.CENTER)!!.kind)
+    }
+
+    @Test
     fun mergesCollinearPiecesFarFromOriginAndDropsShortStrokes() {
         val merged = mergeLines(
             listOf(
