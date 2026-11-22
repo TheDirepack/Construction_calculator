@@ -233,10 +233,14 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
                         continue
                     raw_type = str(dev.get('device_type') or dev.get('symbol_name') or 'unknown')
                     fam = canonical_family(raw_type)
+                    # Model-refined proposals can be useful positives for a future
+                    # partial-label objective, but are not manually verified truth.
+                    trusted = dev.get('verified_ground_truth') is True
                     instances.append({
                         'instance_id': f'{project_id}_p{page_idx+1:03d}_{k:04d}',
                         'symbol_family': fam,
                         'symbol_variant': raw_type,
+                        'uncertain': not trusted,
                         'bbox_xyxy': [round(px0, 2), round(py0, 2), round(px1, 2), round(py1, 2)],
                         'anchors': {},
                         'source': {
@@ -244,10 +248,12 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
                             'json_file': jpath.name,
                             'pdf_page': page_idx + 1,
                             'label_method': 'bbox_only_device_extraction',
+                            'verified_ground_truth': trusted,
                         },
                     })
                     class_counts[fam] += 1
                     counts['instances'] += 1
+                    counts['trusted_positive' if trusted else 'unverified_provisional'] += 1
 
                 if not instances:
                     counts['empty_page_after_filter'] += 1
@@ -272,7 +278,10 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
                     'image_width': w,
                     'image_height': h,
                     'coordinate_system': 'original_page_pixels_top_left_y_down',
-                    'exhaustive_families': list(CANONICAL_CLASSES),
+                    # The presence of some correct boxes does NOT imply that
+                    # the remaining devices on a construction page were labeled.
+                    'exhaustive_families': [],
+                    'annotation_completeness': 'partial',
                     'instances': instances,
                 }
                 png.with_suffix('.json').write_text(json.dumps(norm_doc, indent=1))
