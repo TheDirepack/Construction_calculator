@@ -213,38 +213,50 @@ Next:
 - [ ] Editable local conventions (phase colors) and user notes on entries
 - [ ] Deep links from individual notices (tap a citation to open its entry)
 
-## Next improvements (to-do)
+## Next improvements (prioritized to-do)
 
-- **Core electrical & calculators**:
-  - [ ] Box fill (NEC 314.16) and pull/junction box sizing (NEC 314.28), paired with Pull Planner pull points
-  - [ ] GEC & bonding jumpers (Table 250.66), across-the-line motor circuits (Art. 430), burial depth (Table 300.5), support spacing, and PVC thermal expansion
-  - [ ] Named, reusable cable definitions feeding Conduit Fill, Wire Pull Planner, and Reel Length
-  - [ ] Cu/Al and parallel-feeder what-if comparisons
-  - [ ] Foot-Inch full calculation history/tape, memory (`M+`, `M−`, `MR`, `Ans`), parentheses, metric entry, `√`/`x²` right-triangle helper, and spacing/layout marks
-- **Panels & automatic updates**:
-  - [ ] Flexible partial-detail inputs on panels/circuits (just a measurement, or conduit number + size, without requiring a full Run)
-  - [ ] Automatic recomputation of Voltage Drop and Conduit Fill on upstream edits, with out-of-spec warnings (Pull Planner flagged / on-demand)
-  - [ ] Printable panel schedule export: export directly from the panel schedule creator as a print-ready PDF or image (PNG) formatted to print and post inside a panel door or job binder
-  - [ ] Focused on-device OCR for pre-filling circuit labels from existing panel schedule photos (standardized A/B/C and L1/L2 phase mapping)
-- **Drawings UX & takeoff**:
-  - [ ] Crisp high-zoom region tiling in `PlanCanvas` (reusing `PlanRendering.renderRegion`), avoiding per-frame allocations and recycling page bitmaps
-  - [ ] Loupe / magnifier overlay while snapping endpoints on plans
-  - [ ] Multi-segment / polyline measurement on plans (summing chained legs + bend count straight into a Project Run / Wire Pull Planner)
-  - [ ] Undo/redo stack for drawing markups and measurements
-  - [ ] Rename and delete imported drawings in the drawing list, plus garbage-collecting unreferenced PDFs
-  - [ ] Include drawing measurement summaries in `ProjectText` exports
-  - [ ] Bluetooth laser distance meter integration for length fields and exact two-point PDF plan calibration
-- **Projects, backups & sharing**:
-  - [ ] Full `.backup.zip` export/restore carrying everything (all projects, original PDFs, imported SVG symbols, all settings, tool data, and recents) for complete device-to-device migration
-  - [ ] Compact SMS-friendly share format for non-PDF projects and calculations; ZIP over email/share sheet when PDFs are included (no cloud relay)
-  - [ ] Add a `Panels · N` entry point directly on `ProjectDetailScreen`
-  - [ ] CSV / spreadsheet export for material takeoffs and panel schedules
-  - [ ] Search and filter on `ProjectsScreen` (by name, note, panel, or circuit)
-  - [ ] Optional on-app-open nearby-project suggestion using Android's native `LocationManager` and coarse location only (`ACCESS_COARSE_LOCATION`, no precise GPS, no background geofencing, no Play Services)
-- **Platform polish**:
-  - [ ] Store lightweight `(projectId, itemId)` in `DestinationCodec` instead of full `ProjectItem` JSON in `rememberSaveable`
-  - [ ] Standardize `FileProjectStore` writes on `AtomicFile` / atomic moves
-  - [ ] Show clipboard copy feedback snackbar on Android API < 33
+Ordered by priority and reasonableness of implementation — start at Tier 1 and work down.
+
+### Tier 1 — Quick Wins & High-Impact Polish *(small effort, no new dependencies)*
+- [ ] Add a `Panels · N` entry point directly on `ProjectDetailScreen`
+- [ ] Rename and delete imported drawings **and scale zones**, plus garbage-collecting unreferenced PDFs
+- [ ] Unify jam ratio between Conduit Fill (`D/d`) and Wire Pull Planner / `ProjectAnalysis` (`1.05 × D/d`), or explicitly label the 1.05 ovality allowance in both
+- [ ] One-tap "Check on reel" from Material Takeoff / Pull Planner (prefills Reel Length with wire OD and needed footage)
+- [ ] Include drawing measurement summaries in `ProjectText` exports
+- [ ] Show clipboard copy feedback snackbar on Android API < 33
+- [ ] Move `PlanSymbols.list()` / `remove()` off the main thread, normalize PDF rotation in `PlanExports.overlayMatrix`, and include extra pull/takeoff pages in `PanelPdf` page numbering
+- [ ] Search and filter on `ProjectsScreen` (by name, note, panel, or circuit)
+- [ ] CSV / spreadsheet export for material takeoffs and panel schedules
+- [ ] Deep links from individual NEC notices into their Reference entries
+- [ ] Clean up `scripts/download_*.py`: restore TLS verification (remove `CERT_NONE`), guard `extractall` against Zip Slip, and replace hardcoded machine paths
+
+### Tier 2 — Data Integrity, Sharing & Everyday Workflow *(medium effort, high daily utility)*
+- [ ] Full `.backup.zip` export/restore carrying everything (all projects, original PDFs, imported SVG symbols, all settings, tool data, and recents) for complete device-to-device migration
+- [ ] Flexible partial-detail inputs on panels/circuits (just a measurement, or conduit number + size, without requiring a full `Run`)
+- [ ] Automatic recomputation of Voltage Drop and Conduit Fill on upstream edits, with out-of-spec warnings (Wire Pull Planner stays on-demand / flagged)
+- [ ] Compact SMS-friendly share format for non-PDF projects and calculations; ZIP over email/share sheet when PDFs are included (no cloud relay)
+- [ ] Printable panel schedule export: export directly from the panel schedule creator as a print-ready PDF or image (PNG) formatted for panel doors or job binders
+- [ ] Store lightweight `(projectId, itemId)` in `DestinationCodec` instead of full `ProjectItem` JSON in `rememberSaveable`, and standardize `FileProjectStore` writes on `AtomicFile` / atomic moves
+- [ ] Add unit test coverage for under-tested areas (`:feature:drawings`, `:feature:projects`, `BackupService`, `PlanSymbols`, `PlanFiles`)
+
+### Tier 3 — Core Electrical & Calculator Expansions *(medium effort, reuses existing engines)*
+- [ ] Foot-Inch full calculation history/tape, memory (`M+`, `M−`, `MR`, `Ans`), parentheses, metric entry, `√`/`x²` right-triangle helper, and spacing/layout marks
+- [ ] Box fill (NEC 314.16) and pull/junction box sizing (NEC 314.28), paired with Pull Planner pull points
+- [ ] Named, reusable cable definitions feeding Conduit Fill, Wire Pull Planner, and Reel Length
+- [ ] GEC & bonding jumpers (Table 250.66), across-the-line motor circuits (Art. 430), burial depth (Table 300.5), support spacing, and PVC thermal expansion
+- [ ] Article 220 feeder and service load calculations with demand factors, plus Cu/Al and parallel-feeder what-if comparisons
+
+### Tier 4 — Drawings Takeoff Polish *(medium–large effort, builds on `PlanCanvas` & `:core:plans`)*
+- [ ] Crisp high-zoom region tiling in `PlanCanvas` (reusing `PlanRendering.renderRegion`), avoiding per-frame allocations and recycling page bitmaps
+- [ ] Undo/redo stack for drawing markups and measurements
+- [ ] Loupe / magnifier overlay while snapping endpoints on plans
+- [ ] Multi-segment / polyline measurement on plans (summing chained legs + bend count straight into a Project Run / Wire Pull Planner, with a "View on plan" link back from the run)
+
+### Tier 5 — Optional Hardware, Vision & Context Integrations *(larger effort / optional permissions, off by default)*
+- [ ] Optional on-app-open nearby-project suggestion using Android's native `LocationManager` and coarse location only (`ACCESS_COARSE_LOCATION`, no precise GPS, no background geofencing, no Play Services)
+- [ ] Focused on-device OCR for pre-filling circuit labels from existing panel schedule photos (standardized A/B/C and L1/L2 phase mapping; no Play Services)
+- [ ] Bluetooth laser distance meter integration for length fields and exact two-point PDF plan calibration
+- [ ] Blueprint symbol detector (`ml/symbol-detector/`): keep isolated outside the Android build until a trained model is ready
 
 ## Idea backlog
 

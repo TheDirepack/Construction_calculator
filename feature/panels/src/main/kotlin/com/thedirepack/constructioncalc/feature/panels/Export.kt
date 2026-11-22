@@ -7,6 +7,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalContext
 import com.thedirepack.constructioncalc.core.data.ProjectSharing
+import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 import com.thedirepack.constructioncalc.feature.panels.domain.ScheduleText
@@ -53,11 +54,11 @@ internal fun rememberExportActions(ctx: PanelsContext): ExportActions {
                         withContext(Dispatchers.IO) {
                             ProjectSharing.shareFileIntent(
                                 context,
-                                fileName = "${safeFileName(project.name)} panel schedule.pdf",
+                                fileName = "${ProjectCodec.safeFileName(project.name)} panel schedule.pdf",
                                 mimeType = "application/pdf",
                                 subject = "${project.name} panel schedule",
                                 body = ScheduleText.render(project, design, panelIds, companyLines, dateText, format, units),
-                            ) { out -> PanelPdf.write(out, project, design, panelIds, companyLines, dateText, format, units) }
+                            ) { out -> PanelPdf.write(out, project, design, panelIds, companyLines, dateText, units) }
                         }
                     }.onSuccess { intent ->
                         try {
@@ -82,6 +83,3 @@ internal fun rememberExportActions(ctx: PanelsContext): ExportActions {
         )
     }
 }
-
-private fun safeFileName(name: String): String =
-    name.replace(Regex("""[\\/:*?"<>|\u0000-\u001f]"""), "_").trim().ifEmpty { "Project" }.take(60)

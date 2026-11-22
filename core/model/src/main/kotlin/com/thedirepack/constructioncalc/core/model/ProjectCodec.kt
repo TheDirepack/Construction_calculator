@@ -57,11 +57,12 @@ object ProjectCodec {
         return document.project
     }
 
+    /** Sanitizes a display name into a safe file name stem (no path separators or control chars). */
+    fun safeFileName(name: String, fallback: String = "Project"): String =
+        name.replace(Regex("""[\\/:*?"<>|\u0000-\u001f]"""), " ").trim().trimStart('.').ifEmpty { fallback }.take(60)
+
     /** A safe file name like `Smith Residence.project.json`. */
-    fun fileName(project: Project): String {
-        val base = project.name.replace(Regex("""[\\/:*?"<>|\n\r\t]"""), " ").trim().ifEmpty { "Project" }
-        return "${base.take(60)}$FILE_SUFFIX"
-    }
+    fun fileName(project: Project): String = "${safeFileName(project.name)}$FILE_SUFFIX"
 }
 
 /** Encodes and decodes a tool's own input class to the [ProjectItem.inputs] object. */

@@ -1,7 +1,7 @@
 # Wire Pull Planner: plan
 
 Status: **implemented** (v1, November 2026). See [the tool notes](../tools/pull-planner.md) for
-what shipped, the reference checks and where it differs from this plan. Well & Pump stays last.
+what shipped, the reference checks and where it differs from this plan.
 
 ### As built: differences from this plan
 

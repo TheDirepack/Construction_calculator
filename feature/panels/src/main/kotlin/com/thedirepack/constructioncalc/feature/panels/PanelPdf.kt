@@ -5,7 +5,6 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
-import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.Circuit
 import com.thedirepack.constructioncalc.core.model.CircuitKind
@@ -37,7 +36,6 @@ internal object PanelPdf {
         panelIds: List<String>?,
         header: List<String>,
         date: String,
-        length: (Quantity) -> String,
         units: UnitSystem = UnitSystem.IMPERIAL,
     ) {
         val panels = panelIds?.mapNotNull(project::panel) ?: project.panels
