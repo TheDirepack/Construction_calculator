@@ -624,8 +624,12 @@ def main() -> None:
             'prompt_selection': 'allowlisted' if args.prompt_allowlist else 'hierarchical_neca',
             'prompt_catalog': {**catalog_summary, 'active_after_render_and_dedup': len(glyphs)},
             'prompt_taxonomy': {
-                dtype: sorted({g.subtype for g in glyphs if g.device_type == dtype})
-                for dtype in sorted({g.device_type for g in glyphs})
+                dtype: sorted({g.subtype for g in specs if g.device_type == dtype})
+                for dtype in sorted({g.device_type for g in specs})
+            },
+            'prompt_category_taxonomy': {
+                category: sorted({g.subcategory for g in specs if g.category == category})
+                for category in sorted({g.category for g in specs})
             },
             'hierarchy': 'NECA: category > subcategory; separate from detector device_type > subtype',
             'coordinate_system': {
