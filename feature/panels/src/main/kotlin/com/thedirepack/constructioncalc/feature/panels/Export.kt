@@ -86,7 +86,7 @@ internal fun rememberExportActions(ctx: PanelsContext): ExportActions {
                     subject = "${project.name} panel schedule",
                     body = ScheduleText.render(project, design, panelIds, companyLines, dateText, format, units),
                     errorFallback = "Couldn't make the PDF",
-                ) { out -> PanelPdf.write(out, project, design, panelIds, companyLines, dateText, format, units) }
+                ) { out -> PanelPdf.write(out, project, design, panelIds, companyLines, dateText, units) }
             },
             png = { panelId ->
                 val c = current.value
