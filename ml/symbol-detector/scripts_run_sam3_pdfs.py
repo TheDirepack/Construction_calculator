@@ -39,6 +39,8 @@ from transformers.models.sam3.modeling_sam3 import box_cxcywh_to_xyxy, inverse_s
 from blueprint_symbols.neca_prompt_catalog import (SamNecaPrompt, list_neca_prompt_specs,
     choose_neca_prompts, load_neca_sam_prompts)
 from blueprint_symbols.proposal_fusion import merge_sam_proposals
+from blueprint_symbols.hierarchical_sam import (build_hierarchical_prompt_plan,
+    active_fine_indices, accepted_fine_match, explain_query_savings)
 
 
 SKIP_NAME_PATTERNS = (
@@ -290,20 +292,33 @@ def detect_page_sam3(
     tile_size: int = 1008,
     overlap: int = 128,
     svg_batch: int = 8,
-    score_thr: float = 0.45,
+    score_thr: float = 0.55,
+    coarse_score_thr: float = 0.30,
+    prompt_plan: dict[str, Any] | None = None,
+    fallback_every_tiles: int = 12,
+    fine_match_iou: float = 0.10,
+    query_stats: Counter | None = None,
     max_box_px: float = 220.0,
     min_box_px: float = 10.0,
     device: str = 'cuda',
     dtype: torch.dtype = torch.float16,
 ) -> list[dict[str, Any]]:
-    """Run SAM 3.1 across all non-blank tiles of one page, querying every NECA SVG."""
+    """Cache a tile's vision embedding; batch broad families, then targeted variants.
+
+    With prompt_plan=None, preserve the original flat scan for A/B evaluation.
+    Each category is a separate prompt query *in a batch*, not a joint
+    multiclass SAM classification. Broad exemplar subtypes are never trusted.
+    """
+    if tile_size <= overlap or svg_batch < 1:
+        raise ValueError('tile_size must exceed overlap; svg_batch must be positive')
+    if fallback_every_tiles < 0 or not 0 <= fine_match_iou <= 1:
+        raise ValueError('invalid hierarchical SAM fallback / geometry thresholds')
     H, W = page_rgb.shape[:2]
     step = tile_size - overlap
-    n_svgs = len(glyphs)
-    raw_dets: list[dict[str, Any]] = []
-
     ys = list(range(0, max(1, H - overlap), step))
     xs = list(range(0, max(1, W - overlap), step))
+    raw_dets: list[dict[str, Any]] = []
+    tile_no = 0
 
     with torch.inference_mode():
         for y0 in ys:
@@ -312,95 +327,116 @@ def detect_page_sam3(
                 xe = min(W, x0 + tile_size)
                 sub = page_rgb[y0:ye, x0:xe]
                 if sub.size == 0 or sub.min() > 240:
-                    continue  # skip blank white tile
-
+                    continue
+                tile_no += 1
                 tile = np.full((tile_size, tile_size, 3), 255, dtype=np.uint8)
                 th, tw = sub.shape[:2]
                 tile[:th, :tw] = sub
-
                 t_inp = processor(images=Image.fromarray(tile), return_tensors='pt')
+                # The expensive vision encoder executes ONCE per tile.
                 t_ve = model.get_vision_features(pixel_values=t_inp['pixel_values'].to(device, dtype))
                 t_fpn_last = t_ve.fpn_hidden_states[-2]
                 t_pos_last = t_ve.fpn_position_encoding[-2]
 
-                # Query every NECA SVG against this tile's cached vision features (batched for GPU speed)
-                for s_start in range(0, n_svgs, svg_batch):
-                    s_end = min(n_svgs, s_start + svg_batch)
-                    B = s_end - s_start
-
-                    gf = geo_feats[s_start:s_end]
-                    gm = geo_masks[s_start:s_end]
-                    tf = blank_text_feat.expand(B, -1, -1)
-                    tm = blank_text_mask.expand(B, -1)
-                    comb_feat = torch.cat([tf, gf], dim=1)
-                    comb_mask = torch.cat([tm, gm], dim=1)
-
-                    vf = t_fpn_last.expand(B, -1, -1, -1)
-                    vp = t_pos_last.expand(B, -1, -1, -1)
-
-                    enc = model.detr_encoder(
-                        vision_features=[vf],
-                        text_features=comb_feat,
-                        vision_pos_embeds=[vp],
-                        text_mask=comb_mask,
-                    )
-                    dec = model.detr_decoder(
-                        vision_features=enc.last_hidden_state,
-                        text_features=enc.text_features,
-                        vision_pos_encoding=enc.pos_embeds_flattened,
-                        text_mask=comb_mask,
-                        spatial_shapes=enc.spatial_shapes,
-                    )
-                    logits = model.dot_product_scoring(
-                        decoder_hidden_states=dec.intermediate_hidden_states,
-                        text_features=enc.text_features,
-                        text_mask=comb_mask,
-                    )[-1].squeeze(-1)  # [B, Q]
-                    pres = dec.presence_logits[-1].squeeze(-1)  # [B, 1] or [B]
-                    if pres.ndim == 1:
-                        pres = pres.unsqueeze(-1)
-                    scores = (logits.sigmoid() * pres.sigmoid())  # [B, Q]
-
-                    # Filter above threshold on GPU before pulling to CPU
-                    hits = torch.nonzero(scores >= score_thr, as_tuple=False)
-                    if hits.numel() == 0:
-                        continue
-
-                    all_box_offsets = model.detr_decoder.box_head(dec.intermediate_hidden_states)[-1]
-                    ref_boxes = dec.reference_boxes[-1] if dec.reference_boxes.ndim == 4 else dec.reference_boxes
-                    ref_inv = inverse_sigmoid(ref_boxes)
-                    pred_boxes = box_cxcywh_to_xyxy((ref_inv + all_box_offsets).sigmoid()) * float(tile_size)
-
-                    hits_cpu = hits.cpu().tolist()
-                    scores_cpu = scores.float().cpu().numpy()
-                    boxes_cpu = pred_boxes.float().cpu().numpy()
-
-                    for b_i, q_i in hits_cpu:
-                        bx0, by0, bx1, by1 = boxes_cpu[b_i, q_i].tolist()
-                        bw, bh = bx1 - bx0, by1 - by0
-                        if bw < min_box_px or bh < min_box_px or bw > max_box_px or bh > max_box_px:
+                def query_indices(indices: list[int], stage: str, threshold: float) -> list[dict[str, Any]]:
+                    found: list[dict[str, Any]] = []
+                    if query_stats is not None:
+                        query_stats[f'{stage}_prompts'] += len(indices)
+                    for s_start in range(0, len(indices), svg_batch):
+                        subset = indices[s_start:s_start + svg_batch]
+                        B = len(subset)
+                        idx_t = torch.tensor(subset, dtype=torch.long, device=geo_feats.device)
+                        gf = geo_feats.index_select(0, idx_t)
+                        gm = geo_masks.index_select(0, idx_t)
+                        tf = blank_text_feat.expand(B, -1, -1)
+                        tm = blank_text_mask.expand(B, -1)
+                        comb_feat = torch.cat([tf, gf], dim=1)
+                        comb_mask = torch.cat([tm, gm], dim=1)
+                        vf = t_fpn_last.expand(B, -1, -1, -1)
+                        vp = t_pos_last.expand(B, -1, -1, -1)
+                        enc = model.detr_encoder(
+                            vision_features=[vf],
+                            text_features=comb_feat,
+                            vision_pos_embeds=[vp],
+                            text_mask=comb_mask,
+                        )
+                        dec = model.detr_decoder(
+                            vision_features=enc.last_hidden_state,
+                            text_features=enc.text_features,
+                            vision_pos_encoding=enc.pos_embeds_flattened,
+                            text_mask=comb_mask,
+                            spatial_shapes=enc.spatial_shapes,
+                        )
+                        logits = model.dot_product_scoring(
+                            decoder_hidden_states=dec.intermediate_hidden_states,
+                            text_features=enc.text_features,
+                            text_mask=comb_mask,
+                        )[-1].squeeze(-1)
+                        pres = dec.presence_logits[-1].squeeze(-1)
+                        if pres.ndim == 1:
+                            pres = pres.unsqueeze(-1)
+                        scores = logits.sigmoid() * pres.sigmoid()
+                        hits = torch.nonzero(scores >= threshold, as_tuple=False)
+                        if hits.numel() == 0:
                             continue
-                        # Clip to actual non-padded tile region
-                        gx0 = max(0.0, min(float(W), x0 + bx0))
-                        gy0 = max(0.0, min(float(H), y0 + by0))
-                        gx1 = max(0.0, min(float(W), x0 + bx1))
-                        gy1 = max(0.0, min(float(H), y0 + by1))
-                        if gx1 - gx0 < min_box_px or gy1 - gy0 < min_box_px:
-                            continue
-                        g = glyphs[s_start + b_i]
-                        raw_dets.append({
-                            'box_px': [gx0, gy0, gx1, gy1],
-                            'score': float(scores_cpu[b_i, q_i]),
-                            'device_type': g.device_type,
-                            'subtype': g.subtype,
-                            'broad_family': g.canonical_class,
-                            'symbol_id': g.symbol_id,
-                            'neca_code': g.code,
-                            'neca_name': g.name,
-                            'category': g.category,
-                            'subcategory': g.subcategory,
-                        })
 
+                        offsets = model.detr_decoder.box_head(dec.intermediate_hidden_states)[-1]
+                        refs = dec.reference_boxes[-1] if dec.reference_boxes.ndim == 4 else dec.reference_boxes
+                        boxes = box_cxcywh_to_xyxy(
+                            (inverse_sigmoid(refs) + offsets).sigmoid()
+                        ) * float(tile_size)
+                        for b_i, q_i in hits.cpu().tolist():
+                            bx0, by0, bx1, by1 = boxes[b_i, q_i].float().cpu().tolist()
+                            bw, bh = bx1 - bx0, by1 - by0
+                            if bw < min_box_px or bh < min_box_px or bw > max_box_px or bh > max_box_px:
+                                continue
+                            gx0 = max(0.0, min(float(W), x0 + bx0))
+                            gy0 = max(0.0, min(float(H), y0 + by0))
+                            gx1 = max(0.0, min(float(W), x0 + bx1))
+                            gy1 = max(0.0, min(float(H), y0 + by1))
+                            if gx1 - gx0 < min_box_px or gy1 - gy0 < min_box_px:
+                                continue
+                            glyph = glyphs[subset[b_i]]
+                            found.append({
+                                'box_px': [gx0, gy0, gx1, gy1],
+                                'score': float(scores[b_i, q_i].float().cpu().item()),
+                                'stage': stage,
+                                'device_type': glyph.device_type,
+                                # Coarse stage is a family proposal, not a verified variant.
+                                'subtype': glyph.subtype if stage != 'coarse' else 'unspecified',
+                                'exemplar_subtype': glyph.subtype,
+                                'broad_family': glyph.canonical_class,
+                                'symbol_id': glyph.symbol_id,
+                                'neca_code': glyph.code,
+                                'neca_name': glyph.name,
+                                'category': glyph.category,
+                                'subcategory': glyph.subcategory if stage != 'coarse' else 'unspecified',
+                            })
+                    return found
+
+                if prompt_plan is None:
+                    tile_dets = query_indices(list(range(len(glyphs))), 'flat', score_thr)
+                else:
+                    coarse = query_indices(prompt_plan['coarse_indices'], 'coarse', coarse_score_thr)
+                    active_types = {d['device_type'] for d in coarse}
+                    fallback = bool(fallback_every_tiles and tile_no % fallback_every_tiles == 0)
+                    if query_stats is not None:
+                        query_stats['tiles'] += 1
+                        query_stats['fallback_tiles'] += int(fallback)
+                        query_stats['active_family_sum'] += len(active_types)
+                    fine_indices = active_fine_indices(
+                        prompt_plan, active_types, fallback_full=fallback)
+                    fine = query_indices(fine_indices, 'fine', score_thr)
+                    if not fallback:
+                        fine = [d for d in fine if accepted_fine_match(
+                            d, coarse, min_iou=fine_match_iou)]
+                    if query_stats is not None:
+                        query_stats['coarse_boxes'] += len(coarse)
+                        query_stats['fine_boxes'] += len(fine)
+                    tile_dets = coarse + fine
+                raw_dets.extend(tile_dets)
+    if query_stats is not None:
+        query_stats['vision_encoded_tiles'] += tile_no
     return nms_detections(raw_dets, iou_thr=0.50)
 
 
@@ -428,14 +464,24 @@ def main() -> None:
     ap.add_argument('--svg-batch', type=int, default=12)
     ap.add_argument('--prompt-allowlist', type=Path, default=None,
                     help='Optional JSON list of reviewed standalone NECA symbol IDs to use as prompts')
-    ap.add_argument('--prompts-per-subcategory', type=int, default=2)
-    ap.add_argument('--prompts-per-category', type=int, default=12)
-    ap.add_argument('--max-prompts', type=int, default=96,
-                    help='Maximum exemplar queries per image tile (fast=96, balanced=192, exhaustive=0 with both per-category and per-subcategory set to 0)')
+    ap.add_argument('--prompts-per-subcategory', type=int, default=0)
+    ap.add_argument('--prompts-per-category', type=int, default=0)
+    ap.add_argument('--max-prompts', type=int, default=0,
+                    help='Catalog budget; default 0 loads all eligible fine exemplars for hierarchical mode. Flat mode: set 96 or 192 for speed')
     ap.add_argument('--native-only', action='store_true',
                     help='Exclude raster-traced NECA symbols; default retains traced Annex A alternatives')
     ap.add_argument('--catalog-only', action='store_true',
                     help='Audit selected NECA categories and prompts, then exit without loading a model/GPU')
+    ap.add_argument('--scan-mode', choices=['hierarchical', 'flat'], default='hierarchical',
+                    help='Hierarchical shares each tile embedding across coarse-family and gated-subtype passes')
+    ap.add_argument('--coarse-per-family', type=int, default=2)
+    ap.add_argument('--fine-per-family', type=int, default=0,
+                    help='Subtype prompts per active family; 0 = all in catalog')
+    ap.add_argument('--coarse-score-thr', type=float, default=0.30,
+                    help='Lower proposal threshold for high-recall family gating (not calibrated)')
+    ap.add_argument('--fallback-every-tiles', type=int, default=12,
+                    help='Full fine scan every N nonblank tiles to recover coarse misses; 0 = disabled, 1 = every tile')
+    ap.add_argument('--fine-match-iou', type=float, default=0.10)
     ap.add_argument('--score-thr', type=float, default=0.55)
     ap.add_argument('--svg-dedup-sim', type=float, default=0.90,
                     help='Cosine similarity threshold in SAM3 prompt space to deduplicate near-identical SVG variants (1.0 disables)')
@@ -504,6 +550,17 @@ def main() -> None:
             flush=True,
         )
     print(f'Pre-encoded {len(glyphs)} active SVG prompts in {time.time() - t_enc:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
+    prompt_plan = None
+    if args.scan_mode == 'hierarchical':
+        try:
+            prompt_plan = build_hierarchical_prompt_plan(
+                glyphs, coarse_per_family=args.coarse_per_family,
+                fine_per_family=args.fine_per_family)
+        except ValueError as exc:
+            ap.error(str(exc))
+        print(f'SAM hierarchical: {len(prompt_plan["families"])} device families; '
+              f'{prompt_plan["coarse_count"]} coarse queries per tile; '
+              f'{prompt_plan["fine_catalog_count"]} subtype prompts available for gated pass', flush=True)
 
     # Prompt/model changes must invalidate resume cache; otherwise revised
     # detectors silently read old labels and appear to run impossibly fast.
@@ -519,6 +576,13 @@ def main() -> None:
         'min_page_pts': args.min_page_pts,
         'prompt_budgets': catalog_summary['prompt_budgets'],
         'native_only': args.native_only,
+        'scan_mode': args.scan_mode,
+        'coarse_per_family': args.coarse_per_family,
+        'fine_per_family': args.fine_per_family,
+        'coarse_score_thr': args.coarse_score_thr,
+        'fallback_every_tiles': args.fallback_every_tiles,
+        'fine_match_iou': args.fine_match_iou,
+        'sam_hierarchy_version': 1,
     }
     run_config_hash = hashlib.sha256(
         json.dumps(run_config, sort_keys=True).encode('utf-8')
@@ -559,6 +623,7 @@ def main() -> None:
         pages_meta: list[dict[str, Any]] = []
         cls_counts: Counter = Counter()
         scanned_here = 0
+        pdf_query_stats: Counter = Counter()
 
         skipped_reasons: Counter = Counter()
         try:
@@ -576,6 +641,11 @@ def main() -> None:
                     geo_feats, geo_masks, blank_tf, blank_tm,
                     tile_size=args.tile_size, overlap=args.overlap,
                     svg_batch=args.svg_batch, score_thr=args.score_thr,
+                    coarse_score_thr=args.coarse_score_thr,
+                    prompt_plan=prompt_plan,
+                    fallback_every_tiles=args.fallback_every_tiles,
+                    fine_match_iou=args.fine_match_iou,
+                    query_stats=pdf_query_stats,
                     device='cuda', dtype=dtype,
                 )
                 scanned_here += 1
@@ -614,6 +684,8 @@ def main() -> None:
                         'alternative_labels': d.get('alternative_labels', []),
                         'same_region_prompt_hits': d.get('same_region_prompt_hits', 1),
                         'needs_class_review': d.get('needs_class_review', False),
+                        'detection_stage': d.get('stage', 'flat'),
+                        'exemplar_subtype': d.get('exemplar_subtype'),
                         'verified_ground_truth': False,
                         'symbol_bbox': [bx0, by0, bx1, by1],
                         'symbol_center': [cx, cy],
@@ -645,6 +717,9 @@ def main() -> None:
             'prompt_catalog': {**catalog_summary, 'active_after_render_and_dedup': len(glyphs)},
             'run_config': run_config,
             'run_config_hash': run_config_hash,
+            'query_stats': dict(pdf_query_stats),
+            'device_family_vocabulary': prompt_plan['families'] if prompt_plan else sorted({g.device_type for g in glyphs}),
+            'coarse_fine_policy': 'family_proposal_then_gated_variant_evidence' if prompt_plan else 'all_prototypes',
             'prompt_taxonomy': {
                 dtype: sorted({g.subtype for g in specs if g.device_type == dtype})
                 for dtype in sorted({g.device_type for g in specs})
