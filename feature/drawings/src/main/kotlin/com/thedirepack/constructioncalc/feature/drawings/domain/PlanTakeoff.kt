@@ -3,13 +3,14 @@ package com.thedirepack.constructioncalc.feature.drawings.domain
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
+import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanRunRoute
 
 /** Length measurements of one group (a page, a zone, a label) and their total. */
 data class LengthGroup(val name: String, val count: Int, val total: Quantity)
 
-data class SymbolCount(val name: String, val count: Int)
+data class SymbolCount(val name: String, val count: Int, val circuit: String = "")
 
 /** A route sent to a run, measured with the drawing's current calibration. */
 data class RouteTakeoff(
@@ -34,6 +35,7 @@ data class TakeoffSummary(
     val uncalibratedCount: Int,
     val symbols: List<SymbolCount>,
     val textNotes: Int,
+    val symbolsByCircuit: List<SymbolCount> = emptyList(),
     val routes: List<RouteTakeoff>,
 ) {
     val isEmpty: Boolean
@@ -58,11 +60,16 @@ object PlanTakeoff {
             .groupBy { it.first.label.trim().lowercase() }
             .map { (_, items) -> LengthGroup(items.first().first.label.trim(), items.size, total(items)) }
             .sortedBy { it.name.lowercase() }
-        val symbols = drawing.marks.filter { it.kind == PlanMarkKind.SYMBOL }
-            .groupingBy { it.text.trim().ifBlank { "Symbol" } }
-            .eachCount()
-            .map { (name, count) -> SymbolCount(name, count) }
-            .sortedBy { it.name.lowercase() }
+        val symbolMarks = drawing.marks.filter { it.kind == PlanMarkKind.SYMBOL }
+        fun counts(marks: List<PlanMark>, circuit: String = "") =
+            marks.groupingBy { it.text.trim().ifBlank { "Symbol" } }
+                .eachCount()
+                .map { (name, count) -> SymbolCount(name, count, circuit) }
+                .sortedBy { it.name.lowercase() }
+        val byCircuit = symbolMarks.filter { it.circuitTag.isNotBlank() }
+            .groupBy { it.circuitTag.trim().uppercase() }
+            .toSortedMap()
+            .flatMap { (circuit, marks) -> counts(marks, circuit) }
         val routes = drawing.routes.map { route ->
             val summary = PlanRoute.measure(drawing, route.page, route.points)
             RouteTakeoff(
@@ -77,8 +84,9 @@ object PlanTakeoff {
             measuredTotal = total(measured),
             measuredCount = measured.size,
             uncalibratedCount = lengths.size - measured.size,
-            symbols = symbols,
-            textNotes = drawing.marks.count { it.kind == PlanMarkKind.TEXT },
+            symbols = counts(symbolMarks),
+            symbolsByCircuit = byCircuit,
+            textNotes = drawing.marks.count { it.kind == PlanMarkKind.TEXT || it.kind == PlanMarkKind.CALLOUT },
             routes = routes,
         )
     }

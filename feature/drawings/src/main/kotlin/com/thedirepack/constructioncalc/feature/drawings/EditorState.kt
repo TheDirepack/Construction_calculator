@@ -16,7 +16,7 @@ internal enum class DrawingMode(val title: String, val hint: String, val group: 
     Navigate("Pan", "Drag to pan. Pinch to zoom.", ToolGroup.TAKEOFF),
     Measure("Measure", "Tap or drag between the ends of a line to measure.", ToolGroup.TAKEOFF),
     Route("Route", "Tap connected points along a conduit route to measure legs and bends.", ToolGroup.TAKEOFF),
-    Adjust("Adjust", "Drag an end of a measurement or dimension to move it. Tap a measurement to rename it.", ToolGroup.TAKEOFF),
+    Adjust("Select", "Tap a markup or measurement to select it. Drag the sheet to pan.", ToolGroup.TAKEOFF),
     Reference("Calibrate", "Tap or drag between the ends of a known dimension.", ToolGroup.TAKEOFF),
     Zone("Zone", "Draw an override zone for a detail with a different scale.", ToolGroup.TAKEOFF),
     Pen("Pen", "Draw with a finger or stylus. Pinch with two fingers to zoom.", ToolGroup.MARKUP),
@@ -25,12 +25,14 @@ internal enum class DrawingMode(val title: String, val hint: String, val group: 
     Line("Line", "Tap or drag between the line endpoints.", ToolGroup.MARKUP),
     Rectangle("Rectangle", "Tap or drag between two opposite corners.", ToolGroup.MARKUP),
     Text("Text", "Tap where the text should begin.", ToolGroup.MARKUP),
-    Symbol("Symbol", "Tap where the symbol should go. Placed symbols are counted in the takeoff.", ToolGroup.MARKUP),
+    Symbol("Count", "Tap each device to place the chosen symbol.", ToolGroup.MARKUP),
+    Callout("Callout", "Place the leader tip, then the note.", ToolGroup.MARKUP),
+    Eraser("Eraser", "Tap an ink stroke or highlight to erase it.", ToolGroup.MARKUP),
     ;
 
     /** Two points, tapped one after the other or dragged. */
     val usesSpan: Boolean
-        get() = this == Zone || this == Reference || this == Measure || this == Arrow || this == Line || this == Rectangle
+        get() = this == Zone || this == Reference || this == Measure || this == Arrow || this == Line || this == Rectangle || this == Callout
 
     val usesLoupe: Boolean
         get() = this == Reference || this == Measure || this == Route || this == Adjust
@@ -59,7 +61,8 @@ internal sealed interface EditorDialog {
     data class NewZone(val first: PlanPoint, val second: PlanPoint) : EditorDialog
     data class Reference(val zoneId: String?, val first: PlanPoint, val second: PlanPoint) : EditorDialog
     data class PlaceText(val point: PlanPoint) : EditorDialog
-    data class PlaceSymbol(val point: PlanPoint) : EditorDialog
+    data object PickSymbol : EditorDialog
+    data class PlaceCallout(val first: PlanPoint, val second: PlanPoint) : EditorDialog
     data class EditMeasurement(val id: String) : EditorDialog
     data object Calibration : EditorDialog
     data object PageItems : EditorDialog
@@ -74,7 +77,7 @@ internal sealed interface EditorDialog {
  */
 internal data class EditorSession(
     val page: Int = 0,
-    val mode: DrawingMode = DrawingMode.Navigate,
+    val mode: DrawingMode = DrawingMode.Adjust,
     val op: EditOp = EditOp.Idle,
     val dialog: EditorDialog? = null,
     val selectedZoneId: String? = null,
@@ -125,11 +128,8 @@ internal object EditorActions {
         when (session.mode) {
             DrawingMode.Navigate -> EditorOutcome(session)
             DrawingMode.Text -> EditorOutcome(session.open(EditorDialog.PlaceText(point)))
-            DrawingMode.Symbol -> EditorOutcome(session.open(EditorDialog.PlaceSymbol(point)))
-            DrawingMode.Adjust -> {
-                val hit = measurementAt(drawing.measurements.filter { it.page == session.page }, point, hitRadius)
-                EditorOutcome(if (hit == null) session else session.open(EditorDialog.EditMeasurement(hit.id)))
-            }
+            DrawingMode.Symbol -> EditorOutcome(session.open(EditorDialog.PickSymbol))
+            DrawingMode.Adjust, DrawingMode.Eraser -> EditorOutcome(session)
             DrawingMode.Route -> addRoutePoint(session, drawing, point)
             DrawingMode.Pen, DrawingMode.Highlight -> EditorOutcome(session)
             else -> {
@@ -164,6 +164,7 @@ internal object EditorActions {
         if (first == second) return EditorOutcome(cleared)
         val page = session.page
         return when (session.mode) {
+            DrawingMode.Callout -> EditorOutcome(cleared.open(EditorDialog.PlaceCallout(first, second)))
             DrawingMode.Zone -> {
                 if (first.x == second.x || first.y == second.y) {
                     return EditorOutcome(cleared, message = "An override zone needs a width and height.")

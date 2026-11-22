@@ -1,5 +1,12 @@
 package com.thedirepack.constructioncalc.feature.drawings
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -90,4 +97,19 @@ internal fun DrawingsSettingsScreen() {
         )
     }
     SymbolSettings()
+}
+
+
+@Composable
+internal fun DrawingSettingsDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Drawing settings") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                DrawingsSettingsScreen()
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }

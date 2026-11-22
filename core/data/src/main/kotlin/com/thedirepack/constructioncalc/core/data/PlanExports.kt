@@ -121,7 +121,9 @@ object PlanExports {
                         paint.textSize = 10f
                         paint.typeface = Typeface.DEFAULT_BOLD
                         val start = route.points.first()
-                        page.canvas.drawText(routeLabel(route.runId), start.x.toFloat() + 3f, start.y.toFloat() - 4f, paint)
+                        val name = routeLabel(route.runId)
+                        val label = if (route.circuitTag.isBlank()) name else "$name · ${route.circuitTag}"
+                        page.canvas.drawText(label, start.x.toFloat() + 3f, start.y.toFloat() - 4f, paint)
                     }
                     drawing.measurements.filter { it.page == pageNumber }.forEach { measure ->
                         val value = drawing.length(measure)?.let { "≈ ${format(it)}" } ?: "Uncalibrated"
@@ -212,14 +214,35 @@ fun drawPlanMark(canvas: Canvas, mark: PlanMark, paint: Paint = Paint(), path: P
             paint.style = Paint.Style.STROKE
             canvas.drawRect(minOf(x, endX), minOf(y, endY), maxOf(x, endX), maxOf(y, endY), paint)
         }
-        PlanMarkKind.TEXT -> {
+        PlanMarkKind.TEXT, PlanMarkKind.CALLOUT -> {
+            val callout = mark.kind == PlanMarkKind.CALLOUT
             paint.textSize = width
+            val left = if (callout) endX else x
+            val top = if (callout) endY else y
+            val inset = if (callout) width * .25f else 0f
+            if (callout) {
+                val color = paint.color
+                val lines = mark.text.lines()
+                val right = left + lines.maxOf { paint.measureText(it) } + inset * 2
+                val bottom = top + (lines.size + 1) * width + inset
+                paint.strokeWidth = maxOf(1f, width / 8)
+                val edgeX = x.coerceIn(left, right)
+                val edgeY = y.coerceIn(top, bottom)
+                canvas.drawLine(x, y, edgeX, edgeY, paint)
+                drawArrowHead(canvas, paint, edgeX, edgeY, x, y)
+                paint.color = android.graphics.Color.WHITE
+                canvas.drawRect(left, top, right, bottom, paint)
+                paint.color = color
+                paint.style = Paint.Style.STROKE
+                canvas.drawRect(left, top, right, bottom, paint)
+                paint.style = Paint.Style.FILL
+            }
             var line = 0
             var start = 0
             val text = mark.text
             while (start <= text.length) {
                 val end = text.indexOf('\n', start).let { if (it < 0) text.length else it }
-                canvas.drawText(text, start, end, x, y + width * (line + 1), paint)
+                canvas.drawText(text, start, end, left + inset, top + inset + width * (line + 1), paint)
                 line++
                 start = end + 1
             }

@@ -1,17 +1,23 @@
 package com.thedirepack.constructioncalc.feature.drawings
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.runtime.mutableStateMapOf
+import com.thedirepack.constructioncalc.core.data.PlanSymbols
+import com.thedirepack.constructioncalc.core.data.PlanSymbol
+import com.thedirepack.constructioncalc.core.model.newId
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -62,7 +68,7 @@ import java.io.File
 import kotlin.math.roundToInt
 
 /** A route ready for a run: where it was traced and its plan length, for the run's link back. */
-internal data class TracedRoute(val page: Int, val points: List<PlanPoint>, val horizontalInches: Double)
+internal data class TracedRoute(val page: Int, val points: List<PlanPoint>, val horizontalInches: Double, val circuitTag: String)
 
 /** Saves the page and tool across configuration changes; a half-done operation is dropped. */
 private val SessionSaver = Saver<EditorSession, List<Any>>(
@@ -70,7 +76,7 @@ private val SessionSaver = Saver<EditorSession, List<Any>>(
     restore = { saved ->
         EditorSession(
             page = (saved[0] as Int).coerceAtLeast(0),
-            mode = DrawingMode.entries.firstOrNull { it.name == saved[1] } ?: DrawingMode.Navigate,
+            mode = DrawingMode.entries.firstOrNull { it.name == saved[1] } ?: DrawingMode.Adjust,
         )
     },
 )
@@ -104,10 +110,43 @@ internal fun DrawingEditor(
         }
     }
     val focusRoute = drawing.routes.firstOrNull { it.id == focusRouteId }
+    val views = remember(context) { context.getSharedPreferences("drawing-views", 0) }
+    var rotation by rememberSaveable(drawing.id) { mutableStateOf(views.getInt("${drawing.id}/rotation", 0)) }
+    var selectedMarkId by remember(drawing.id) { mutableStateOf<String?>(null) }
+    var selectedMeasurementId by remember(drawing.id) { mutableStateOf<String?>(null) }
+    var symbol by remember(drawing.id) { mutableStateOf<PlanSymbol?>(null) }
+    LaunchedEffect(drawing.id) {
+        val id = views.getString("${drawing.id}/symbol", null) ?: return@LaunchedEffect
+        val saved = starterSymbols.firstOrNull { it.id == id } ?: withContext(Dispatchers.IO) {
+            PlanSymbols(context.applicationContext).list().firstOrNull { it.id == id }
+        }
+        if (symbol == null) symbol = saved
+    }
+    var circuitTag by rememberSaveable(drawing.id) { mutableStateOf(views.getString("${drawing.id}/circuit", "").orEmpty()) }
+    var editCircuit by remember(drawing.id) { mutableStateOf(false) }
+    var editMarkCircuit by remember(drawing.id) { mutableStateOf(false) }
+    var settingsOpen by rememberSaveable(drawing.id) { mutableStateOf(false) }
+    var sheetsOpen by rememberSaveable(drawing.id) { mutableStateOf(false) }
+    var routeFinished by remember(drawing.id) { mutableStateOf(false) }
+    var highlightsVisible by rememberSaveable(drawing.id) { mutableStateOf(true) }
+    var editText by remember(drawing.id) { mutableStateOf(false) }
+    val labels = remember(file) { mutableStateMapOf<Int, SheetLabel>() }
+    var indexing by remember(file) { mutableStateOf(true) }
+    LaunchedEffect(file) {
+        try {
+            indexSheets(context.applicationContext, file) { index, label -> labels[index] = label }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Page numbers and thumbnails are available when PDF text extraction fails.
+        } finally {
+            indexing = false
+        }
+    }
     var session by rememberSaveable(drawing.id, focusRouteId, stateSaver = SessionSaver) {
         mutableStateOf(
             if (focusRoute != null) EditorSession(page = focusRoute.page, focusedRouteId = focusRoute.id)
-            else EditorSession(),
+            else EditorSession(page = views.getInt("${drawing.id}/page", 0).coerceAtLeast(0)),
         )
     }
     var history by remember(drawing.id) { mutableStateOf(DrawingHistory<PlanDrawing>()) }
@@ -115,6 +154,38 @@ internal fun DrawingEditor(
     var busy by remember { mutableStateOf(false) }
     val page = session.page
     val mode = if (editable) session.mode else DrawingMode.Navigate
+    LaunchedEffect(drawing.id, page, rotation, pageCount) {
+        if (pageCount?.let { page < it } == true) {
+            views.edit().putInt("${drawing.id}/page", page).putInt("${drawing.id}/rotation", rotation).apply()
+        }
+    }
+
+    fun clearSelection() {
+        selectedMarkId = null
+        selectedMeasurementId = null
+    }
+
+    fun switchMode(next: DrawingMode) {
+        if (next != mode) {
+            clearSelection()
+            routeFinished = false
+        }
+        session = session.withMode(next)
+        if (next == DrawingMode.Symbol && symbol == null) session = session.open(EditorDialog.PickSymbol)
+    }
+
+    BackHandler(enabled = session.dialog == null && !settingsOpen && !sheetsOpen &&
+        (selectedMarkId != null || selectedMeasurementId != null || session.op != EditOp.Idle || mode != DrawingMode.Adjust && editable)
+    ) {
+        when {
+            selectedMarkId != null || selectedMeasurementId != null -> clearSelection()
+            session.op != EditOp.Idle -> {
+                session = session.copy(op = EditOp.Idle)
+                routeFinished = false
+            }
+            else -> switchMode(DrawingMode.Adjust)
+        }
+    }
 
     val snapEnabled = when {
         !mode.snaps -> false
@@ -144,6 +215,10 @@ internal fun DrawingEditor(
     val pageZones = remember(drawing.zones, page) { drawing.zones.filter { it.page == page } }
     val zone = pageZones.firstOrNull { it.id == session.selectedZoneId } ?: pageZones.firstOrNull()
     val marks = remember(drawing.marks, page) { drawing.marks.filter { it.page == page } }
+    val visibleMarks = remember(marks, highlightsVisible) {
+        if (highlightsVisible) marks else marks.filterNot { it.kind == PlanMarkKind.HIGHLIGHT }
+    }
+    val selectedMark = visibleMarks.firstOrNull { it.id == selectedMarkId }
     val docSummary = remember(drawing.calibration, page) { CalibrationDiagnostics.evaluate(drawing.calibration, page) }
     val fittedMeasurements = remember(drawing, page) {
         drawing.measurements.filter { it.page == page }.map { it to drawing.length(it) }
@@ -155,23 +230,39 @@ internal fun DrawingEditor(
             refs.map { ref -> CanvasLine(ref.first, ref.second, settings.format(ref.length.toQuantity()), isReference = true) }
         }
     }
+    val zoneStatus = remember(pageZones) {
+        pageZones.associateWith { CalibrationDiagnostics.evaluateZone(it).status }.mapKeys { it.key.id }
+    }
+    fun scaleFor(first: PlanPoint, second: PlanPoint): String {
+        val region = drawing.zoneContaining(page, first, second)
+        return if (region == null) "Sheet · ${docSummary.status.label}"
+        else "${region.name} · ${zoneStatus[region.id]?.label}"
+    }
     val displayedLines = remember(fittedMeasurements, calibrationLines, settings) {
         fittedMeasurements.map { (measurement, length) ->
-            val value = length?.let { "≈ " + settings.format(it) } ?: "Uncalibrated"
+            val value = length?.let { "≈ ${settings.format(it)}" } ?: "Uncalibrated"
             CanvasLine(measurement.first, measurement.second, if (measurement.label.isBlank()) value else "${measurement.label}\n$value")
         } + calibrationLines
     }
     val savedRoutes = remember(drawing.routes, project.runs, page, session.focusedRouteId) {
         drawing.routes.filter { it.page == page }.map { route ->
+            val runName = project.runs.firstOrNull { it.id == route.runId }?.name ?: "Run (deleted)"
             CanvasRoute(
                 points = route.points,
-                label = project.runs.firstOrNull { it.id == route.runId }?.name ?: "Run (deleted)",
+                label = if (route.circuitTag.isBlank()) runName else "$runName · ${route.circuitTag}",
                 focused = route.id == session.focusedRouteId,
             )
         }
     }
-    val handles = remember(drawing, page, mode, prefs.showCalibrationLayer) {
-        if (mode == DrawingMode.Adjust) EditorActions.handles(drawing, page, includeReferences = prefs.showCalibrationLayer)
+    val handles = remember(drawing, page, mode, prefs.showCalibrationLayer, selectedMeasurementId, selectedMark) {
+        if (mode == DrawingMode.Adjust && selectedMark == null) {
+            EditorActions.handles(drawing, page, includeReferences = prefs.showCalibrationLayer).filter {
+                when (val target = it.target) {
+                    is EndpointTarget.Measurement -> target.id == selectedMeasurementId
+                    else -> selectedMeasurementId == null
+                }
+            }
+        }
         else emptyList()
     }
 
@@ -210,6 +301,35 @@ internal fun DrawingEditor(
     }
 
     fun addMark(mark: PlanMark) = editDrawing { it.copy(marks = it.marks + mark) }
+
+    fun replaceMark(mark: PlanMark) = editDrawing { d -> d.copy(marks = d.marks.map { if (it.id == mark.id) mark else it }) }
+    fun deleteMark(mark: PlanMark) {
+        editDrawing { d -> d.copy(marks = d.marks.filterNot { it.id == mark.id }) }
+        clearSelection()
+    }
+
+    fun place(point: PlanPoint, radius: Double) {
+        when (mode) {
+            DrawingMode.Adjust -> {
+                selectedMarkId = markAt(visibleMarks, point, radius * .55)?.id
+                selectedMeasurementId = if (selectedMarkId == null) {
+                    EditorActions.measurementAt(fittedMeasurements.map { it.first }, point, radius * .55)?.id
+                } else null
+            }
+            DrawingMode.Eraser -> {
+                val strokes = visibleMarks.filter { it.kind == PlanMarkKind.INK || it.kind == PlanMarkKind.HIGHLIGHT }
+                markAt(strokes, point, radius * .55)?.let(::deleteMark)
+            }
+            DrawingMode.Symbol -> {
+                val current = symbol
+                if (current == null) session = session.open(EditorDialog.PickSymbol)
+                else addMark(PlanMark(page = page, kind = PlanMarkKind.SYMBOL, points = listOf(point),
+                    svg = current.svg, text = current.name.take(2_000), width = 36.0, circuitTag = circuitTag))
+            }
+            DrawingMode.Route -> if (!routeFinished) apply(EditorActions.tap(session, drawing, point, radius))
+            else -> apply(EditorActions.tap(session, drawing, point, radius))
+        }
+    }
 
     fun writeExport(uri: Uri?, pdf: Boolean) {
         if (uri == null) return
@@ -255,100 +375,212 @@ internal fun DrawingEditor(
             LaunchedEffect(count) { session = session.goToPage(count - 1) }
             return@Column
         }
-        EditorToolbar(
-            state = ToolbarState(
-                page = page,
-                pageCount = count,
+        fun goToPage(target: Int) {
+            clearSelection()
+            routeFinished = false
+            session = session.goToPage(target.coerceIn(0, count - 1))
+            sheetsOpen = false
+        }
+        EditorHeader(
+            sheet = labels[page]?.let { "${it.number} · ${page + 1}/$count" } ?: "${page + 1} / $count",
+            onSheets = { sheetsOpen = true },
+            canUndo = editable && history.canUndo,
+            canRedo = editable && history.canRedo,
+            onUndo = { clearSelection(); undo() },
+            onRedo = { clearSelection(); redo() },
+            onSettings = { settingsOpen = true },
+        ) {
+            EditorOptions(
                 editable = editable,
-                canUndo = history.canUndo,
-                canRedo = history.canRedo,
-                mode = mode,
-                scaleStatus = docSummary.status,
-                snapEnabled = if (mode.snaps) snapEnabled else null,
-                snapReady = lineMap != null,
-                snapTarget = snapTarget,
-                showCalibrationLayer = prefs.showCalibrationLayer,
                 busy = busy,
-            ),
-            actions = ToolbarActions(
-                onPage = { session = session.goToPage(it.coerceIn(0, count - 1)) },
-                onUndo = ::undo,
-                onRedo = ::redo,
-                onMode = { session = session.withMode(it) },
+                showCalibration = prefs.showCalibrationLayer,
+                scale = docSummary.status,
+                onMode = ::switchMode,
                 onScale = { session = session.open(EditorDialog.Calibration) },
-                onToggleSnap = {
-                    if (mode == DrawingMode.Reference) DrawingsSettings.setSnapCalibration(prefsStore, !prefs.snapCalibration)
-                    else DrawingsSettings.setSnapMeasurements(prefsStore, !prefs.snapMeasurements)
-                },
-                onToggleCalibrationLayer = { DrawingsSettings.setShowCalibrationLayer(prefsStore, !prefs.showCalibrationLayer) },
+                onRotate = { rotation = (rotation + 1) % 4 },
+                onToggleCalibration = { DrawingsSettings.setShowCalibrationLayer(prefsStore, !prefs.showCalibrationLayer) },
                 onTakeoff = { session = session.open(EditorDialog.Takeoff) },
                 onPageItems = { session = session.open(EditorDialog.PageItems) },
                 onExportPdf = { pdf.launch("$baseName annotated.pdf") },
                 onExportJson = { json.launch("$baseName.drawing.json") },
-                onSettings = host::openSettings,
-            ),
-        )
-        Text(
-            when {
-                session.firstPoint != null -> "Tap the second point."
-                session.focusedRouteId != null && mode == DrawingMode.Navigate -> "Highlighted: the route this run was traced from."
-                else -> mode.hint
-            },
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
-        )
-        PlanCanvas(
-            file = file,
-            pageIndex = page,
-            mode = mode,
-            zones = pageZones,
-            selectedZone = zone?.id,
-            lines = displayedLines,
-            marks = marks,
-            pending = session.firstPoint,
-            lineMap = lineMap,
-            snapEnabled = snapEnabled,
-            snapTarget = snapTarget,
-            onPageSize = { pageSize = it },
-            onPlace = { point, radius -> apply(EditorActions.tap(session, drawing, point, radius)) },
-            onLine = { first, second -> apply(EditorActions.span(session, drawing, first, second)) },
-            onInk = { points ->
-                addMark(
-                    PlanMark(
-                        page = page,
-                        kind = if (mode == DrawingMode.Highlight) PlanMarkKind.HIGHLIGHT else PlanMarkKind.INK,
-                        points = points.map { it.point },
-                        pressures = points.map { it.pressure },
-                        width = if (mode == DrawingMode.Highlight) 11.0 else 1.8,
-                    ),
-                )
-            },
-            routePoints = routePoints,
-            routeLegLabels = routeLegLabels,
-            routeCornerLabels = routeCornerLabels,
-            savedRoutes = savedRoutes,
-            handles = handles,
-            onMoveEndpoint = { handle, point -> apply(EditorActions.moveEndpoint(session, drawing, handle, point)) },
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        )
-        BottomBar(
-            routeSummary = routeSummary,
-            routePoints = routePoints,
-            lastMeasurement = fittedMeasurements.lastOrNull { it.second != null }?.let { it.first to it.second!! },
-            editable = editable,
-            onUndoPoint = { session = session.withRoute(routePoints.dropLast(1)) },
-            onClearRoute = { session = session.withRoute(emptyList()) },
-            onSaveLegs = { summary ->
-                val legs = summary.legs.map { leg -> PlanMeasurement(page = page, zoneId = leg.zoneId, first = leg.from, second = leg.to) }
-                editDrawing { it.copy(measurements = it.measurements + legs) }
-                host.showMessage("Saved ${legs.size} leg(s) as measurements.")
-            },
-            onSendRoute = { session = session.open(EditorDialog.SendRoute) },
-            publish = publish,
-        )
+                highlightsVisible = highlightsVisible,
+                onToggleHighlights = { highlightsVisible = !highlightsVisible; clearSelection() },
+            )
+        }
+        if (sheetsOpen) {
+            SheetBrowser(file, drawing.name, project.name, page, count, labels, indexing, { sheetsOpen = false }, ::goToPage)
+        }
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val landscape = maxWidth > maxHeight && maxWidth >= 560.dp
+            val strip: @Composable () -> Unit = {
+                if (editable) {
+                    EditorTools(mode, landscape, ::switchMode)
+                }
+            }
+            val canvas: @Composable (Modifier) -> Unit = { canvasModifier ->
+                Box(canvasModifier) {
+                    PlanCanvas(
+                        file = file,
+                        pageIndex = page,
+                        drawingId = drawing.id,
+                        quarterTurns = rotation,
+                        mode = mode,
+                        zones = pageZones,
+                        selectedZone = zone?.id,
+                        lines = displayedLines,
+                        marks = visibleMarks,
+                        pending = session.firstPoint,
+                        lineMap = lineMap,
+                        snapEnabled = snapEnabled,
+                        snapTarget = snapTarget,
+                        onPageSize = { pageSize = it },
+                        onPlace = ::place,
+                        onLine = { first, second -> apply(EditorActions.span(session, drawing, first, second)) },
+                        onInk = { points ->
+                            addMark(
+                                PlanMark(
+                                    page = page,
+                                    kind = if (mode == DrawingMode.Highlight) PlanMarkKind.HIGHLIGHT else PlanMarkKind.INK,
+                                    points = points.map { it.point },
+                                    pressures = points.map { it.pressure },
+                                    width = if (mode == DrawingMode.Highlight) 11.0 else 1.8,
+                                ),
+                            )
+                        },
+                        routePoints = routePoints,
+                        routeLegLabels = routeLegLabels,
+                        routeCornerLabels = routeCornerLabels,
+                        savedRoutes = savedRoutes,
+                        handles = handles,
+                        selectedMark = selectedMark,
+                        onMoveMark = ::replaceMark,
+                        onMoveEndpoint = { handle, point -> apply(EditorActions.moveEndpoint(session, drawing, handle, point)) },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    val selectedMeasurement = fittedMeasurements.firstOrNull { it.first.id == selectedMeasurementId }
+                    val latest = fittedMeasurements.lastOrNull().takeIf { mode == DrawingMode.Measure }
+                    val result = selectedMeasurement ?: latest
+                    val hasActions = selectedMark != null || result != null || routePoints.isNotEmpty() || session.firstPoint != null
+                    if (hasActions || mode == DrawingMode.Route || mode == DrawingMode.Symbol && symbol != null) {
+                        Surface(
+                            tonalElevation = 4.dp,
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.align(Alignment.TopStart).padding(6.dp).sizeIn(maxWidth = 370.dp),
+                        ) {
+                            Column(Modifier.padding(horizontal = 6.dp)) {
+                                when {
+                                    selectedMark != null -> Row(
+                                        Modifier.horizontalScroll(rememberScrollState()),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        if (selectedMark.kind in listOf(PlanMarkKind.TEXT, PlanMarkKind.CALLOUT)) {
+                                            TextButton(onClick = { editText = true }) { Text("Edit text") }
+                                        }
+                                        if (selectedMark.kind == PlanMarkKind.SYMBOL) {
+                                            TextButton(onClick = { editMarkCircuit = true }) {
+                                                Text(selectedMark.circuitTag.ifBlank { "Circuit" })
+                                            }
+                                        }
+                                        TextButton(onClick = {
+                                            val duplicate = selectedMark.copy(id = newId()).move(12.0, 12.0)
+                                            addMark(duplicate)
+                                            selectedMarkId = duplicate.id
+                                        }) { Text("Duplicate") }
+                                        TextButton(onClick = { deleteMark(selectedMark) }) { Text("Delete") }
+                                    }
+                                    mode == DrawingMode.Symbol && symbol != null -> {
+                                        val active = checkNotNull(symbol)
+                                        val total = marks.count {
+                                            it.kind == PlanMarkKind.SYMBOL && it.text == active.name && it.circuitTag == circuitTag
+                                        }
+                                        Row(Modifier.horizontalScroll(rememberScrollState())) {
+                                            TextButton(onClick = { session = session.open(EditorDialog.PickSymbol) }) {
+                                                Text("${active.name} · $total  ▾")
+                                            }
+                                            TextButton(onClick = { editCircuit = true }) { Text(circuitTag.ifBlank { "Circuit" }) }
+                                            TextButton(onClick = { session = session.open(EditorDialog.Takeoff) }) { Text("Totals") }
+                                        }
+                                    }
+                                    mode == DrawingMode.Route && routePoints.isEmpty() -> {
+                                        TextButton(onClick = { editCircuit = true }) { Text(circuitTag.ifBlank { "Circuit" }) }
+                                    }
+                                    routePoints.isNotEmpty() -> RouteControls(
+                                        routeSummary = routeSummary,
+                                        scale = routePoints.getOrNull(1)?.let { scaleFor(routePoints.first(), it) },
+                                        finished = routeFinished,
+                                        onUndoPoint = { session = session.withRoute(routePoints.dropLast(1)); routeFinished = false },
+                                        onFinish = { routeFinished = true },
+                                        onContinue = { routeFinished = false },
+                                        onSaveLegs = { summary ->
+                                            val legs = summary.legs.map { leg ->
+                                                PlanMeasurement(page = page, zoneId = leg.zoneId, first = leg.from, second = leg.to)
+                                            }
+                                            editDrawing { it.copy(measurements = it.measurements + legs) }
+                                            session = session.withRoute(emptyList())
+                                            routeFinished = false
+                                            host.showMessage("Saved ${legs.size} leg(s) as measurements.")
+                                        },
+                                        onSendRoute = { session = session.open(EditorDialog.SendRoute) },
+                                    )
+                                    session.firstPoint != null -> Text(
+                                        if (mode == DrawingMode.Callout) "Tap where the note goes." else "Tap the second point.",
+                                        Modifier.padding(8.dp),
+                                        style = MaterialTheme.typography.labelMedium,
+                                    )
+                                    result != null -> {
+                                        val (measurement, length) = result
+                                        TextButton(onClick = {
+                                            if (selectedMeasurement != null || length == null) {
+                                                session = session.open(EditorDialog.EditMeasurement(measurement.id))
+                                            } else publish(measurement, length)
+                                        }) {
+                                            val value = length?.let { "≈ ${settings.format(it)}" } ?: "Uncalibrated"
+                                            Column {
+                                                val action = if (selectedMeasurement != null || length == null) "Edit" else "Use"
+                                                Text("$value · $action", style = MaterialTheme.typography.labelLarge)
+                                                if (length != null) Text(scaleFor(measurement.first, measurement.second), style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (selectedMark != null && editText) {
+                        TextMarkupDialog(onDismiss = { editText = false }, initial = selectedMark.text) { text ->
+                            replaceMark(selectedMark.copy(text = text))
+                            editText = false
+                        }
+                    }
+                }
+            }
+            if (landscape) {
+                Row(Modifier.fillMaxSize()) { canvas(Modifier.weight(1f)); strip() }
+            } else {
+                Column(Modifier.fillMaxSize()) { canvas(Modifier.weight(1f)); strip() }
+            }
+        }
+    }
+
+    if (settingsOpen) DrawingSettingsDialog { settingsOpen = false }
+
+    if (editMarkCircuit && selectedMark != null) {
+        CircuitTagDialog(selectedMark.circuitTag, onDismiss = { editMarkCircuit = false }) { tag ->
+            replaceMark(selectedMark.copy(circuitTag = tag))
+            editMarkCircuit = false
+        }
+    }
+
+    if (editCircuit) {
+        CircuitTagDialog(circuitTag, onDismiss = { editCircuit = false }) { tag ->
+            circuitTag = tag
+            views.edit().putString("${drawing.id}/circuit", tag).apply()
+            editCircuit = false
+        }
     }
 
     EditorDialogs(
+        circuitTag = circuitTag,
         session = session,
         project = project,
         drawing = drawing,
@@ -360,59 +592,57 @@ internal fun DrawingEditor(
         marks = marks,
         routeSummary = routeSummary,
         editable = editable,
-        onSession = { session = it },
+        onSession = {
+            if (it.page != page) clearSelection()
+            if (it.op == EditOp.Idle) routeFinished = false
+            session = it
+        },
         editDrawing = ::editDrawing,
         addMark = ::addMark,
+        onPickSymbol = {
+            symbol = it
+            views.edit().putString("${drawing.id}/symbol", it.id).apply()
+        },
+        onOpenSettings = { settingsOpen = true },
         publish = publish,
         onSendRouteToRun = onSendRouteToRun,
-        host = host,
     )
 }
 
 @Composable
-private fun BottomBar(
+private fun RouteControls(
     routeSummary: RouteSummary?,
-    routePoints: List<PlanPoint>,
-    lastMeasurement: Pair<PlanMeasurement, Quantity>?,
-    editable: Boolean,
+    scale: String?,
+    finished: Boolean,
     onUndoPoint: () -> Unit,
-    onClearRoute: () -> Unit,
+    onFinish: () -> Unit,
+    onContinue: () -> Unit,
     onSaveLegs: (RouteSummary) -> Unit,
     onSendRoute: () -> Unit,
-    publish: (PlanMeasurement, Quantity) -> Unit,
 ) {
     val settings = rememberAppSettings()
-    if (routePoints.isNotEmpty()) {
-        Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-                Text(
-                    routeSummary?.let { summary ->
-                        val bends = if (summary.corners.isEmpty()) "no bends"
-                        else "${summary.corners.size} bend(s), ${summary.totalBendDegrees.roundToInt()}°"
-                        "Route ≈ ${settings.format(summary.totalHorizontalQuantity)} · ${summary.legs.size} leg(s) · $bends"
-                    } ?: "Route: 1 point placed · tap the next point",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (routeSummary != null && editable) {
-                        Button(onClick = onSendRoute) { Text("Send to run") }
-                        TextButton(onClick = { onSaveLegs(routeSummary) }) { Text("Save legs") }
-                    }
-                    TextButton(onClick = onUndoPoint) { Text("Undo point") }
-                    TextButton(onClick = onClearRoute) { Text("Clear") }
-                }
-            }
-        }
-    } else if (lastMeasurement != null) {
-        val (measurement, length) = lastMeasurement
-        TextButton(onClick = { publish(measurement, length) }, modifier = Modifier.padding(horizontal = 4.dp)) {
-            Text("≈ ${settings.format(length)} · Use measurement")
+    Text(
+        routeSummary?.let { "≈ ${settings.format(it.totalHorizontalQuantity)} · ${it.corners.size} bends · ${it.totalBendDegrees.roundToInt()}°" }
+            ?: "Tap the next route point",
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(start = 8.dp, top = 6.dp),
+    )
+    if (scale != null) Text(scale, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelSmall)
+    Row {
+        if (finished && routeSummary != null) {
+            TextButton(onClick = onSendRoute) { Text("Send to run") }
+            TextButton(onClick = { onSaveLegs(routeSummary) }) { Text("Save legs") }
+            TextButton(onClick = onContinue) { Text("Continue") }
+        } else {
+            TextButton(onClick = onUndoPoint) { Text("Undo point") }
+            TextButton(onClick = onFinish, enabled = routeSummary != null) { Text("Finish") }
         }
     }
 }
 
 @Composable
 private fun EditorDialogs(
+    circuitTag: String,
     session: EditorSession,
     project: Project,
     drawing: PlanDrawing,
@@ -427,9 +657,10 @@ private fun EditorDialogs(
     onSession: (EditorSession) -> Unit,
     editDrawing: ((PlanDrawing) -> PlanDrawing) -> Unit,
     addMark: (PlanMark) -> Unit,
+    onPickSymbol: (PlanSymbol) -> Unit,
+    onOpenSettings: () -> Unit,
     publish: (PlanMeasurement, Quantity) -> Unit,
     onSendRouteToRun: (runId: String?, newRunName: String?, segments: List<PathSegment>, route: TracedRoute) -> Unit,
-    host: ToolHost,
 ) {
     val close = { onSession(session.closeDialog()) }
     fun updateZone(updated: PlanZone) = editDrawing { d -> d.copy(zones = d.zones.map { if (it.id == updated.id) updated else it }) }
@@ -463,12 +694,16 @@ private fun EditorDialogs(
             addMark(PlanMark(page = page, kind = PlanMarkKind.TEXT, points = listOf(dialog.point), text = text, width = 13.0))
             close()
         }
-        is EditorDialog.PlaceSymbol -> SymbolDialog(onDismiss = close, openSettings = {
+        EditorDialog.PickSymbol -> SymbolDialog(onDismiss = close, openSettings = {
             close()
-            host.openSettings()
+            onOpenSettings()
         }) { symbol ->
-            // The name travels with the mark so the takeoff can count symbols by name.
-            addMark(PlanMark(page = page, kind = PlanMarkKind.SYMBOL, points = listOf(dialog.point), svg = symbol.svg, text = symbol.name.take(2_000), width = 36.0))
+            onPickSymbol(symbol)
+            close()
+        }
+        is EditorDialog.PlaceCallout -> TextMarkupDialog(onDismiss = close, title = "Add leader note") { text ->
+            addMark(PlanMark(page = page, kind = PlanMarkKind.CALLOUT, points = listOf(dialog.first, dialog.second),
+                text = text, width = 13.0))
             close()
         }
         is EditorDialog.EditMeasurement -> {
@@ -521,7 +756,7 @@ private fun EditorDialogs(
             project = project,
             drawing = drawing,
             onShowRoute = { route ->
-                onSession(session.goToPage(route.page).copy(focusedRouteId = route.id))
+                onSession(session.goToPage(route.page).withMode(DrawingMode.Adjust).copy(dialog = null, focusedRouteId = route.id))
             },
             onDismiss = close,
         )
@@ -530,7 +765,7 @@ private fun EditorDialogs(
             summary = routeSummary,
             onDismiss = close,
             onSend = { runId, newRunName, segments ->
-                onSendRouteToRun(runId, newRunName, segments, TracedRoute(page, routeSummary.points, routeSummary.totalHorizontalInches))
+                onSendRouteToRun(runId, newRunName, segments, TracedRoute(page, routeSummary.points, routeSummary.totalHorizontalInches, circuitTag))
                 onSession(session.closeDialog().withRoute(emptyList()))
             },
         )

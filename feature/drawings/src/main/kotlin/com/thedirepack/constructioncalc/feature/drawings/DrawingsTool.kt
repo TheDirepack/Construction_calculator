@@ -1,7 +1,14 @@
 package com.thedirepack.constructioncalc.feature.drawings
 
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
+import androidx.compose.ui.res.painterResource
 import android.content.Context
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -44,7 +51,7 @@ import com.thedirepack.constructioncalc.core.model.newId
 import com.thedirepack.constructioncalc.core.model.planRouteFor
 import com.thedirepack.constructioncalc.core.model.withRunPath
 import com.thedirepack.constructioncalc.core.model.withRunRoute
-import com.thedirepack.constructioncalc.core.ui.R
+import com.thedirepack.constructioncalc.core.ui.R as CoreR
 import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
 import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
@@ -62,7 +69,7 @@ object DrawingsTool : ToolModule {
     override val title = "Drawings"
     override val summary = "PDF plans, measurements and markups"
     override val category = ToolCategory.PROJECTS
-    override val icon = R.drawable.ic_straighten
+    override val icon = CoreR.drawable.ic_straighten
     override val hasSettings = true
 
     override fun backup(context: Context): ToolBackup = PlanSymbols(context.applicationContext).backup
@@ -187,7 +194,7 @@ private fun DrawingsScreen(host: ToolHost) {
                 else -> return@edit current
             }
             // Keep the run's link back to this trace; a run has one plan source, so drop older ones.
-            val route = PlanRunRoute(runId = targetId, page = traced.page, points = traced.points, sentInches = traced.horizontalInches)
+            val route = PlanRunRoute(runId = targetId, page = traced.page, points = traced.points, sentInches = traced.horizontalInches, circuitTag = traced.circuitTag)
             updated.copy(
                 drawings = updated.drawings.map { d ->
                     if (d.id == drawing.id) d.withRunRoute(route)
@@ -210,18 +217,33 @@ private fun DrawingsScreen(host: ToolHost) {
         )
     }
 
+    if (project != null && drawing != null && file != null) {
+        BackHandler {
+            if (focusRouteId != null) host.back() else activeDrawingId = null
+        }
+        DrawingEditor(
+            project = project,
+            drawing = drawing,
+            file = file,
+            editable = !project.archived,
+            focusRouteId = focusRouteId,
+            onChange = ::updateDrawing,
+            onSendRouteToRun = ::sendRouteToRun,
+            publish = { measurement, value -> publish(measurement, value, drawing.name) },
+            host = host,
+            modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing),
+        )
+        return
+    }
+
     ToolScaffold(
-        title = if (drawing == null) "Drawings" else drawing.name,
+        title = "Drawings",
         host = host,
-        onBack = when {
-            drawing != null -> { { activeDrawingId = null } }
-            host.target != null -> host::back
-            else -> null
-        },
-        subtitle = if (host.target != null || drawing != null) project?.name else null,
+        onBack = if (host.target != null) host::back else null,
+        subtitle = if (host.target != null) project?.name else null,
         actions = {
-            if (drawing != null || project == null) {
-                TextButton(onClick = host::openSettings) { Text("Settings") }
+            IconButton(onClick = host::openSettings) {
+                Icon(painterResource(R.drawable.ic_plan_settings), "Drawing settings")
             }
         },
     ) { padding ->
@@ -230,7 +252,7 @@ private fun DrawingsScreen(host: ToolHost) {
                 Text("Choose a project to store your drawings.")
                 TextButton(onClick = { host.openProject(null) }) { Text("Open projects") }
             }
-            drawing == null || file == null -> DrawingList(
+            else -> DrawingList(
                 project = project,
                 importing = importing,
                 onImport = { importPdf.launch(arrayOf("application/pdf")) },
@@ -240,18 +262,7 @@ private fun DrawingsScreen(host: ToolHost) {
                 onDelete = ::deleteDrawing,
                 modifier = Modifier.padding(padding),
             )
-            else -> DrawingEditor(
-                project = project,
-                drawing = drawing,
-                file = file,
-                editable = !project.archived,
-                focusRouteId = focusRouteId,
-                onChange = ::updateDrawing,
-                onSendRouteToRun = ::sendRouteToRun,
-                publish = { measurement, value -> publish(measurement, value, drawing.name) },
-                host = host,
-                modifier = Modifier.padding(padding),
-            )
+
         }
     }
 }

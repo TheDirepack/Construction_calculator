@@ -79,6 +79,15 @@ class PlanTakeoffTest {
         assertTrue(PlanTakeoff.summarize(base).isEmpty)
     }
 
+    @Test fun circuitCountsPreserveOverallDeviceTotals() {
+        val mark = PlanMark(page = 0, kind = PlanMarkKind.SYMBOL, points = listOf(p(1.0, 1.0)), text = "Duplex")
+        val takeoff = PlanTakeoff.summarize(base.copy(marks = listOf(
+            mark, mark.copy(circuitTag = "E-36"), mark.copy(circuitTag = "e-36"), mark.copy(circuitTag = "E-38"),
+        )))
+        assertEquals(listOf(SymbolCount("Duplex", 4)), takeoff.symbols)
+        assertEquals(listOf(SymbolCount("Duplex", 2, "E-36"), SymbolCount("Duplex", 1, "E-38")), takeoff.symbolsByCircuit)
+    }
+
     @Test fun flagsRoutesWhosePlanLengthMovedSinceTheyWereSent() {
         val route = PlanRunRoute(runId = "r", page = 0, points = listOf(p(0.0, 0.0), p(120.0, 0.0), p(120.0, 60.0)), sentInches = 180.0)
         val same = PlanTakeoff.summarize(base.copy(routes = listOf(route))).routes.single()

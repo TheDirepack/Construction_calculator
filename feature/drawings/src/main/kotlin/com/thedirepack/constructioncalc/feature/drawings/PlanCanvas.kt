@@ -32,7 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,7 +74,7 @@ import kotlin.math.roundToInt
 
 internal data class InkPoint(val point: PlanPoint, val pressure: Float)
 
-private data class PageBitmap(val image: Bitmap, val width: Float, val height: Float)
+internal data class PageBitmap(val image: Bitmap, val width: Float, val height: Float)
 
 private data class RegionTile(val bitmap: Bitmap, val region: RectF, val scale: Float)
 
@@ -93,11 +93,11 @@ internal fun pdfPageCount(file: File): Int =
         PdfRenderer(descriptor).use { it.pageCount }
     }
 
-private fun loadPage(file: File, pageIndex: Int): PageBitmap =
+internal fun loadPage(file: File, pageIndex: Int, maxPixels: Float = 2000f): PageBitmap =
     ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
         PdfRenderer(descriptor).use { renderer ->
             renderer.openPage(pageIndex).use { page ->
-                val ratio = min(2.5f, 2000f / maxOf(page.width, page.height))
+                val ratio = min(2.5f, maxPixels / maxOf(page.width, page.height))
                 val bitmap = Bitmap.createBitmap(
                     ceil(page.width * ratio).toInt().coerceAtLeast(1),
                     ceil(page.height * ratio).toInt().coerceAtLeast(1),
@@ -114,8 +114,7 @@ private class PageViewport(quarterTurns: Int) {
     var size by mutableStateOf(IntSize.Zero)
     var scroll by mutableStateOf(Offset.Zero)
     var zoom by mutableStateOf(1f)
-    var quarterTurns by mutableStateOf(quarterTurns)
-        private set
+    val quarterTurns = quarterTurns
 
     private fun pageSize(page: PageBitmap) =
         if (quarterTurns % 2 == 0) Size(page.width, page.height) else Size(page.height, page.width)
@@ -133,12 +132,6 @@ private class PageViewport(quarterTurns: Int) {
     }
 
     fun zoomFromCenter(page: PageBitmap, factor: Float) = move(page, center(), Offset.Zero, factor)
-
-    fun rotate() {
-        quarterTurns = (quarterTurns + 1) % 4
-        scroll = Offset.Zero
-        zoom = 1f
-    }
 
     private fun center() = Offset(size.width / 2f, size.height / 2f)
 
@@ -213,6 +206,8 @@ private data class EndpointDrag(val handle: EndpointHandle, val anchor: PlanPoin
 internal fun PlanCanvas(
     file: File,
     pageIndex: Int,
+    drawingId: String,
+    quarterTurns: Int,
     mode: DrawingMode,
     zones: List<PlanZone>,
     selectedZone: String?,
@@ -233,9 +228,15 @@ internal fun PlanCanvas(
     routeCornerLabels: List<Pair<PlanPoint, String>> = emptyList(),
     savedRoutes: List<CanvasRoute> = emptyList(),
     handles: List<EndpointHandle> = emptyList(),
+    selectedMark: PlanMark?,
+    onMoveMark: (PlanMark) -> Unit,
     onMoveEndpoint: (EndpointHandle, PlanPoint) -> Unit = { _, _ -> },
 ) {
-    var quarterTurns by rememberSaveable(file) { mutableStateOf(0) }
+    val context = LocalContext.current
+    val views = remember(context) { context.getSharedPreferences("drawing-views", 0) }
+    val viewKey = "$drawingId/$pageIndex"
+    val selected by rememberUpdatedState(selectedMark)
+    val moveMark by rememberUpdatedState(onMoveMark)
     val state by key(file, pageIndex) {
         produceState<PageState>(PageState.Loading) {
             value = try {
@@ -304,7 +305,24 @@ internal fun PlanCanvas(
                 }
 
                 val pageRect = remember(page) { RectF(0f, 0f, page.width, page.height) }
-                val viewport = remember(page) { PageViewport(quarterTurns) }
+                val viewport = remember(page, quarterTurns) {
+                    PageViewport(quarterTurns).apply {
+                        if (views.getInt("$viewKey/rotation", 0) == quarterTurns) {
+                            zoom = views.getFloat("$viewKey/zoom", 1f)
+                            scroll = Offset(views.getFloat("$viewKey/x", 0f), views.getFloat("$viewKey/y", 0f))
+                        }
+                    }
+                }
+                DisposableEffect(viewport, viewKey) {
+                    onDispose {
+                        views.edit().putInt("$viewKey/rotation", quarterTurns)
+                            .putFloat("$viewKey/zoom", viewport.zoom)
+                            .putFloat("$viewKey/x", viewport.scroll.x)
+                            .putFloat("$viewKey/y", viewport.scroll.y)
+                            .apply()
+                    }
+                }
+                var markPreview by remember(page, mode) { mutableStateOf<PlanMark?>(null) }
                 var preview by remember(page, mode) { mutableStateOf(emptyList<InkPoint>()) }
                 var activeSnap by remember(page, mode) { mutableStateOf<SnappedPoint?>(null) }
                 var loupe by remember(page, mode) { mutableStateOf<LoupeState?>(null) }
@@ -371,21 +389,31 @@ internal fun PlanCanvas(
                         .fillMaxSize()
                         .onSizeChanged { viewport.size = it }
                         .semantics { contentDescription = "Drawing page ${pageIndex + 1}. ${mode.hint}" }
-                        .pointerInput(page, mode) {
+                        .pointerInput(page, mode, viewport) {
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false)
                                 val downTransform = viewport.transform(page)
                                 val (first, firstSnap) = resolvePoint(down.position, downTransform)
                                 val drawing = mode.isFreehand
                                 val touchRadiusPt = (snapRadiusPx / downTransform.scale).toDouble()
-                                val grabbed = if (mode == DrawingMode.Adjust) {
+                                val rawFirst = downTransform.toPage(down.position)
+                                val mark = selected.takeIf { mode == DrawingMode.Adjust }
+                                val markHandle = mark?.editHandles()?.let { points ->
+                                    points.indices.minByOrNull { i ->
+                                        EditorActions.segmentDistance(rawFirst, points[i], points[i])
+                                    }?.takeIf { i -> EditorActions.segmentDistance(rawFirst, points[i], points[i]) <= touchRadiusPt * .55 }
+                                }
+                                val grabbedMark = mark?.takeIf {
+                                    markHandle != null || markAt(listOf(it), rawFirst, touchRadiusPt * .55) != null
+                                }
+                                val grabbed = if (mode == DrawingMode.Adjust && grabbedMark == null) {
                                     EditorActions.handleAt(currentHandles, downTransform.toPage(down.position), touchRadiusPt)
                                 } else null
                                 val anchor = grabbed?.let { g ->
                                     currentHandles.firstOrNull { it.target == g.target && it.end != g.end }?.point
                                 }
                                 // In Adjust, a drag that doesn't start on a handle pans the sheet.
-                                val pans = mode == DrawingMode.Navigate || (mode == DrawingMode.Adjust && grabbed == null)
+                                val pans = mode == DrawingMode.Navigate || (mode == DrawingMode.Adjust && grabbed == null && grabbedMark == null)
                                 val points = mutableListOf<InkPoint>()
                                 if (page.hit(first) && drawing) {
                                     points += InkPoint(first, down.pressureForInk())
@@ -412,6 +440,7 @@ internal fun PlanCanvas(
                                             activeSnap = null
                                             loupe = null
                                             endpointDrag = null
+                                            markPreview = null
                                             val center = event.calculateCentroid(useCurrent = false)
                                             if (center != Offset.Unspecified) {
                                                 viewport.move(page, center, event.calculatePan(), event.calculateZoom())
@@ -426,7 +455,7 @@ internal fun PlanCanvas(
                                                     if (moved) viewport.move(page, lastPosition, delta)
                                                 } else {
                                                     val t = viewport.transform(page)
-                                                    val (point, snapped) = if (drawing) t.toPage(change.position) to null else resolvePoint(change.position, t)
+                                                    val (point, snapped) = if (drawing || grabbedMark != null) t.toPage(change.position) to null else resolvePoint(change.position, t)
                                                     onPage = page.hit(point)
                                                     if (onPage) {
                                                         last = point
@@ -439,6 +468,12 @@ internal fun PlanCanvas(
                                                         }
                                                         if (drawing) preview = points.toList()
                                                         endpointDrag = endpointDrag?.copy(point = point)
+                                                        if (moved && grabbedMark != null) {
+                                                            val dx = point.x - rawFirst.x
+                                                            val dy = point.y - rawFirst.y
+                                                            markPreview = if (markHandle == null) grabbedMark.move(dx, dy)
+                                                            else grabbedMark.resize(markHandle, grabbedMark.editHandles()[markHandle].offset(dx, dy))
+                                                        }
                                                         if (moved && page.hit(first) && mode.usesSpan) {
                                                             preview = listOf(InkPoint(first, 1f), InkPoint(last, 1f))
                                                         }
@@ -451,7 +486,9 @@ internal fun PlanCanvas(
                                     } while (event.changes.any { it.pressed })
                                     if (!multi && page.hit(first) && mode != DrawingMode.Navigate) {
                                         when {
-                                            grabbed != null -> if (moved && onPage) moveEndpoint(grabbed, last)
+                                            grabbedMark != null && moved -> if (onPage) markPreview?.let(moveMark)
+                                            grabbed != null -> if (moved && onPage) moveEndpoint(grabbed, last) else place(rawFirst, touchRadiusPt)
+                                            mode == DrawingMode.Adjust && !moved -> place(rawFirst, touchRadiusPt)
                                             drawing && points.isNotEmpty() -> ink(points.toList())
                                             pans -> if (!moved) place(first, touchRadiusPt)
                                             mode == DrawingMode.Route && onPage -> place(last, touchRadiusPt)
@@ -464,6 +501,7 @@ internal fun PlanCanvas(
                                     activeSnap = null
                                     loupe = null
                                     endpointDrag = null
+                                    markPreview = null
                                 }
                             }
                         },
@@ -531,7 +569,19 @@ internal fun PlanCanvas(
                                 drawCircle(routeColor, 3f / transform.scale, pos)
                             }
                         }
-                        drawIntoCanvas { canvas -> for (mark in marks) drawPlanMark(canvas.nativeCanvas, mark, markPaint, markPath) }
+                        drawIntoCanvas { canvas ->
+                            for (mark in marks) drawPlanMark(
+                                canvas.nativeCanvas, markPreview?.takeIf { it.id == mark.id } ?: mark, markPaint, markPath,
+                            )
+                        }
+                        (markPreview ?: selectedMark)?.let { mark ->
+                            val points = mark.editHandles().ifEmpty { listOf(mark.points.first()) }
+                            val r = 5f / transform.scale
+                            for (point in points) {
+                                drawCircle(Color.White, r, point.offset())
+                                drawCircle(Color(0xFF126FB4), r, point.offset(), style = Stroke(outline))
+                            }
+                        }
                         if (mode == DrawingMode.Adjust) {
                             val r = 4f / transform.scale
                             for (handle in handles) {
@@ -606,12 +656,7 @@ internal fun PlanCanvas(
                         IconButton(onClick = { viewport.zoomFromCenter(page, 1.5f) }, enabled = viewport.zoom < 16f) {
                             Icon(painterResource(R.drawable.ic_plan_zoom_in), contentDescription = "Zoom in")
                         }
-                        IconButton(onClick = {
-                            viewport.rotate()
-                            quarterTurns = viewport.quarterTurns
-                        }) {
-                            Icon(painterResource(R.drawable.ic_plan_rotate), contentDescription = "Rotate view")
-                        }
+
                     }
                 }
             }

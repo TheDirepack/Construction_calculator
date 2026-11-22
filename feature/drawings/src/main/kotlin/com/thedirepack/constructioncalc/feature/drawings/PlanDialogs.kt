@@ -472,11 +472,30 @@ internal fun CalibrationDialog(
 }
 
 @Composable
-internal fun TextMarkupDialog(onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
-    var value by rememberSaveable { mutableStateOf("") }
+internal fun CircuitTagDialog(initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var tag by rememberSaveable(initial) { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Place text") },
+        title = { Text("Circuit tag") },
+        text = {
+            OutlinedTextField(tag, { tag = it.take(80) }, singleLine = true, label = { Text("Circuit") })
+        },
+        confirmButton = { TextButton(onClick = { onSave(tag.trim().uppercase().take(80)) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+internal fun TextMarkupDialog(
+    onDismiss: () -> Unit,
+    initial: String = "",
+    title: String = if (initial.isBlank()) "Place text" else "Edit text",
+    onConfirm: (String) -> Unit,
+) {
+    var value by rememberSaveable(initial) { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
         text = {
             OutlinedTextField(
                 value = value,
@@ -487,7 +506,7 @@ internal fun TextMarkupDialog(onDismiss: () -> Unit, onConfirm: (String) -> Unit
             )
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(value.trim()) }, enabled = value.isNotBlank()) { Text("Place text") }
+            TextButton(onClick = { onConfirm(value.trim()) }, enabled = value.isNotBlank()) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
@@ -831,16 +850,18 @@ internal fun SymbolDialog(
 ) {
     val context = LocalContext.current
     val entries by produceState<List<PlanSymbol>>(emptyList(), context) {
-        value = withContext(Dispatchers.IO) { PlanSymbols(context.applicationContext).list() }
+        value = starterSymbols + withContext(Dispatchers.IO) { PlanSymbols(context.applicationContext).list() }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Place an SVG symbol") },
+        title = { Text("Choose a count symbol") },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
-                if (entries.isEmpty()) Text("Import an SVG in Settings to place it here.")
                 entries.forEach { symbol ->
-                    TextButton(onClick = { onSelect(symbol) }, modifier = Modifier.fillMaxWidth()) { Text(symbol.name) }
+                    TextButton(onClick = { onSelect(symbol) }, modifier = Modifier.fillMaxWidth()) {
+                        SymbolPreview(symbol)
+                        Text(symbol.name, Modifier.weight(1f).padding(start = 8.dp))
+                    }
                 }
             }
         },

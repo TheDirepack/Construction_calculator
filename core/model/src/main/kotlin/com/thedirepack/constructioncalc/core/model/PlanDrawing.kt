@@ -439,7 +439,7 @@ private fun solveLinear(system: Array<DoubleArray>, size: Int): DoubleArray? {
 }
 
 @Serializable
-enum class PlanMarkKind { INK, HIGHLIGHT, ARROW, LINE, RECTANGLE, TEXT, SYMBOL }
+enum class PlanMarkKind { INK, HIGHLIGHT, ARROW, LINE, RECTANGLE, TEXT, SYMBOL, CALLOUT }
 
 @Serializable
 data class PlanMark(
@@ -452,9 +452,11 @@ data class PlanMark(
     val pressures: List<Float> = emptyList(),
     val width: Double = 2.0,
     val color: Long? = null,
+    val circuitTag: String = "",
 ) {
     init {
         require(page >= 0 && points.size in 1..20_000 && text.length <= 2_000)
+        require(circuitTag.length <= 80)
         require(svg == null || svg.length <= 256 * 1024)
         require(pressures.isEmpty() || pressures.size == points.size && pressures.all { it.isFinite() && it >= 0f })
         require(width.isFinite() && width > 0 && width <= 1_000)
@@ -492,8 +494,10 @@ data class PlanRunRoute(
     val points: List<PlanPoint>,
     /** The plan's horizontal length in inches when the route was sent, before vertical rises. */
     val sentInches: Double = 0.0,
+    val circuitTag: String = "",
 ) {
     init {
+        require(circuitTag.length <= 80)
         require(page >= 0 && points.size in 2..RunPath.MAX_SEGMENTS && runId.isNotBlank())
         require(sentInches.isFinite() && sentInches >= 0)
     }

@@ -114,17 +114,13 @@ class EditorActionsTest {
 
     @Test fun textAndSymbolTapsOpenTheirDialogs() {
         assertEquals(EditorDialog.PlaceText(p(3.0, 4.0)), EditorActions.tap(EditorSession(mode = DrawingMode.Text), drawing, p(3.0, 4.0), 8.0).session.dialog)
-        assertEquals(EditorDialog.PlaceSymbol(p(3.0, 4.0)), EditorActions.tap(EditorSession(mode = DrawingMode.Symbol), drawing, p(3.0, 4.0), 8.0).session.dialog)
+        assertEquals(EditorDialog.PickSymbol, EditorActions.tap(EditorSession(mode = DrawingMode.Symbol), drawing, p(3.0, 4.0), 8.0).session.dialog)
     }
 
-    @Test fun adjustTapsOpenTheNearestMeasurement() {
+    @Test fun selectFindsTheNearestMeasurementWithinTouchRadius() {
         val m = PlanMeasurement(id = "m", page = 0, first = p(0.0, 0.0), second = p(100.0, 0.0))
-        val withMeasure = drawing.copy(measurements = listOf(m))
-        val session = EditorSession(mode = DrawingMode.Adjust)
-        assertEquals(EditorDialog.EditMeasurement("m"), EditorActions.tap(session, withMeasure, p(50.0, 5.0), 8.0).session.dialog)
-        assertNull(EditorActions.tap(session, withMeasure, p(50.0, 20.0), 8.0).session.dialog)
-        // Another page's measurement isn't hit.
-        assertNull(EditorActions.tap(session.goToPage(1), withMeasure, p(50.0, 5.0), 8.0).session.dialog)
+        assertEquals(m, EditorActions.measurementAt(listOf(m), p(50.0, 5.0), 8.0))
+        assertNull(EditorActions.measurementAt(listOf(m), p(50.0, 20.0), 8.0))
     }
 
     @Test fun movingAMeasurementEndRezonesItAndRejectsCrossingAZone() {

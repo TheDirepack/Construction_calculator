@@ -72,13 +72,17 @@ internal fun TakeoffDialog(
                     takeoff.symbols.forEach { TotalRow(it.name, it.count.toString()) }
                     if (takeoff.textNotes > 0) TotalRow("Text notes", takeoff.textNotes.toString())
                 }
+                if (takeoff.symbolsByCircuit.isNotEmpty()) {
+                    Section("Counts by circuit")
+                    takeoff.symbolsByCircuit.forEach { TotalRow("${it.circuit} · ${it.name}", it.count.toString()) }
+                }
                 if (takeoff.routes.isNotEmpty()) {
                     Section("Routes sent to runs")
                     takeoff.routes.forEach { entry ->
                         val runName = project.runs.firstOrNull { it.id == entry.route.runId }?.name ?: "Run (deleted)"
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text("$runName · page ${entry.route.page + 1}")
+                                Text(listOf(runName, entry.route.circuitTag, "page ${entry.route.page + 1}").filter(String::isNotBlank).joinToString(" · "))
                                 Text(
                                     when {
                                         entry.current == null -> "Can't be measured now: the scale was removed."
@@ -92,7 +96,6 @@ internal fun TakeoffDialog(
                             }
                             TextButton(onClick = {
                                 onShowRoute(entry.route)
-                                onDismiss()
                             }) { Text("Show") }
                         }
                     }
