@@ -198,7 +198,17 @@ object ScheduleText {
         val groups = c.groupIds.mapNotNull(groupNames::get)
         if (groups.isNotEmpty()) parts += groups.joinToString(", ", prefix = "[", postfix = "]")
         val runs = c.runIds.mapNotNull(runNames::get)
-        if (runs.isNotEmpty()) parts += "in " + runs.joinToString(", ")
+        if (runs.isNotEmpty()) {
+            parts += "in " + runs.joinToString(", ")
+        } else {
+            val inlineConduit = listOfNotNull(
+                c.conduitTag.trim().takeIf { it.isNotEmpty() },
+                listOfNotNull(c.conduitSize?.display, c.conduitType?.displayName)
+                    .takeIf { it.isNotEmpty() }
+                    ?.joinToString(" "),
+            ).joinToString(" ")
+            if (inlineConduit.isNotEmpty()) parts += "conduit $inlineConduit"
+        }
         d?.lengthInches?.let { parts += "length " + length(Quantity.inches(com.thedirepack.constructioncalc.core.math.Rational.of(it))) }
         return parts.joinToString(" · ")
     }

@@ -315,13 +315,14 @@ object ProjectAnalysis {
         val overrideLength = c.length?.toQuantity()?.value?.toDouble()
         val length = overrideLength ?: routeLength
         if (length == null && c.runIds.isNotEmpty()) notes += info("Set the length of every assigned run to check voltage drop.")
+        val inlineConduit = if (c.runIds.isEmpty()) c.conduitType?.let(::table9Conduit) else null
         val dropSegments = when {
             length == null -> emptyList()
             runs.size != c.runIds.size -> {
                 notes += info("An assigned run is missing. Check the route before calculating voltage drop.")
                 emptyList()
             }
-            runConduits.distinct().size <= 1 -> listOf(DropSegment(length, runConduits.firstOrNull() ?: Table9Conduit.PVC))
+            runConduits.distinct().size <= 1 -> listOf(DropSegment(length, runConduits.firstOrNull() ?: inlineConduit ?: Table9Conduit.PVC))
             routeLength == null || routeLength <= 0.0 -> {
                 notes += info("Set each run's length to check voltage drop through mixed raceways.")
                 emptyList()
@@ -388,6 +389,27 @@ object ProjectAnalysis {
             EquipmentGroundingConductor.sizeWithUpsize(breaker, spec.material, minimum, size)
         } else {
             null
+        }
+        // Lightweight inline conduit fill check when no full Run is assigned.
+        if (c.runIds.isEmpty() && c.conduitType != null && c.conduitSize != null && size != null) {
+            val inlineConduitSize = ConduitTable.find(c.conduitType, c.conduitSize)
+            if (inlineConduitSize == null) {
+                notes += warn("${c.conduitType.displayName} has no ${c.conduitSize.display} size in ${CodeRule.CONDUIT_DIMENSIONS.cite}.")
+            } else {
+                val mainCount = c.poles + if (c.neutral) 1 else 0
+                val groups = buildList {
+                    add(ConductorGroup(mainCount, FillConductor.Insulated(spec.insulation, size)))
+                    if (ground != null) add(ConductorGroup(1, FillConductor.Insulated(spec.insulation, ground)))
+                }
+                val fill = ConduitFill.analyze(inlineConduitSize, groups)
+                if (!fill.withinLimit) {
+                    val smallest = ConduitFill.minimumConduit(c.conduitType, groups)
+                    notes += warn(
+                        "Inline conduit ${inlineConduitSize.displayName} is over ${fill.limitPercent}% fill (${fmt(fill.percentFill)}%)." +
+                            (smallest?.let { " Smallest that fits: ${it.displayName}." } ?: ""),
+                    )
+                }
+            }
         }
         return CircuitDesign(panel, c, spec, load?.va, fromFed, amps, ccc, sizing, minimum, size, ground, length, vd?.first, vd?.second, notes)
     }
