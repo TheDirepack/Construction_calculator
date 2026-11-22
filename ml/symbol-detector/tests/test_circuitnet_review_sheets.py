@@ -169,7 +169,7 @@ def test_neca_fine_subtypes_extend_review_taxonomy_and_roundtrip():
         'prompt_taxonomy': {'fire_alarm_detector': ['photoelectric_smoke_detector']},
     })
     assert 'duplex' in extended['receptacle']
-    assert extended['fire_alarm_detector'] == ['photoelectric_smoke_detector']
+    assert extended['fire_alarm_detector'] == ['photoelectric_smoke_detector', 'unspecified']
     batch = {
         'batch_index': 1, 'taxonomy': extended, 'items': [{
             'device_index': 3, 'pdf_page': 1,
