@@ -39,6 +39,7 @@ from transformers.models.sam3.modeling_sam3 import box_cxcywh_to_xyxy, inverse_s
 from blueprint_symbols.neca_prompt_catalog import (SamNecaPrompt, list_neca_prompt_specs,
     choose_neca_prompts, load_neca_sam_prompts)
 from blueprint_symbols.proposal_fusion import merge_sam_proposals
+from blueprint_symbols.sam_precision import filter_sam_detections
 from blueprint_symbols.hierarchical_sam import (build_hierarchical_prompt_plan,
     active_fine_indices, accepted_fine_match, explain_query_savings)
 
@@ -292,11 +293,17 @@ def detect_page_sam3(
     tile_size: int = 1008,
     overlap: int = 128,
     svg_batch: int = 8,
-    score_thr: float = 0.55,
-    coarse_score_thr: float = 0.30,
+    score_thr: float = 0.72,
+    coarse_score_thr: float = 0.50,
     prompt_plan: dict[str, Any] | None = None,
-    fallback_every_tiles: int = 12,
+    fallback_every_tiles: int = 0,
     fine_match_iou: float = 0.10,
+    emit_generic: bool = False,
+    max_box_aspect: float = 6.0,
+    min_ink_fraction: float = 0.018,
+    max_ink_fraction: float = 0.85,
+    coarse_family_limit: int = 50,
+    fine_family_limit: int = 80,
     query_stats: Counter | None = None,
     max_box_px: float = 220.0,
     min_box_px: float = 10.0,
@@ -313,6 +320,8 @@ def detect_page_sam3(
         raise ValueError('tile_size must exceed overlap; svg_batch must be positive')
     if fallback_every_tiles < 0 or not 0 <= fine_match_iou <= 1:
         raise ValueError('invalid hierarchical SAM fallback / geometry thresholds')
+    if coarse_family_limit < 0 or fine_family_limit < 0 or max_box_aspect < 1.0:
+        raise ValueError('invalid SAM precision gate configuration')
     H, W = page_rgb.shape[:2]
     step = tile_size - overlap
     ys = list(range(0, max(1, H - overlap), step))
@@ -420,10 +429,28 @@ def detect_page_sam3(
                             })
                     return found
 
+                def gate(detections: list[dict[str, Any]], family_limit: int):
+                    return filter_sam_detections(
+                        detections, page_rgb, tile_x=x0, tile_y=y0,
+                        tile_size=tile_size, overlap=overlap,
+                        max_aspect_ratio=max_box_aspect,
+                        min_ink_fraction=min_ink_fraction,
+                        max_ink_fraction=max_ink_fraction,
+                        minimum_box_size=min_box_px,
+                        max_per_family=family_limit,
+                        stats=query_stats,
+                    )
+
                 if prompt_plan is None:
-                    tile_dets = query_indices(list(range(len(glyphs))), 'flat', score_thr)
+                    tile_dets = gate(
+                        query_indices(list(range(len(glyphs))), 'flat', score_thr),
+                        fine_family_limit,
+                    )
                 else:
-                    coarse = query_indices(prompt_plan['coarse_indices'], 'coarse', coarse_score_thr)
+                    coarse = gate(
+                        query_indices(prompt_plan['coarse_indices'], 'coarse', coarse_score_thr),
+                        coarse_family_limit,
+                    )
                     active_types = {d['device_type'] for d in coarse}
                     fallback = bool(fallback_every_tiles and tile_no % fallback_every_tiles == 0)
                     if query_stats is not None:
@@ -434,12 +461,19 @@ def detect_page_sam3(
                         prompt_plan, active_types, fallback_full=fallback)
                     fine = query_indices(fine_indices, 'fine', score_thr)
                     if not fallback:
-                        fine = [d for d in fine if accepted_fine_match(
+                        fine_matched = [d for d in fine if accepted_fine_match(
                             d, coarse, min_iou=fine_match_iou)]
+                        if query_stats is not None:
+                            query_stats['filtered_no_coarse_family_match'] += len(fine) - len(fine_matched)
+                        fine = fine_matched
+                    fine = gate(fine, fine_family_limit)
                     if query_stats is not None:
                         query_stats['coarse_boxes'] += len(coarse)
                         query_stats['fine_boxes'] += len(fine)
-                    tile_dets = coarse + fine
+                        query_stats['generic_boxes_suppressed'] += 0 if emit_generic else len(coarse)
+                    # Crucial precision default: coarse hits route fine queries,
+                    # but never become VLM candidates unless explicitly enabled.
+                    tile_dets = fine + (coarse if emit_generic else [])
                 raw_dets.extend(tile_dets)
     if query_stats is not None:
         query_stats['vision_encoded_tiles'] += tile_no
@@ -483,12 +517,22 @@ def main() -> None:
     ap.add_argument('--coarse-per-family', type=int, default=2)
     ap.add_argument('--fine-per-family', type=int, default=0,
                     help='Subtype prompts per active family; 0 = all in catalog')
-    ap.add_argument('--coarse-score-thr', type=float, default=0.30,
+    ap.add_argument('--coarse-score-thr', type=float, default=0.50,
                     help='Lower proposal threshold for high-recall family gating (not calibrated)')
-    ap.add_argument('--fallback-every-tiles', type=int, default=12,
+    ap.add_argument('--fallback-every-tiles', type=int, default=0,
                     help='Full fine scan every N nonblank tiles to recover coarse misses; 0 = disabled, 1 = every tile')
     ap.add_argument('--fine-match-iou', type=float, default=0.10)
-    ap.add_argument('--score-thr', type=float, default=0.55)
+    ap.add_argument('--score-thr', type=float, default=0.72,
+                    help='Final fine-instance threshold, higher by default to limit VLM false positives')
+    ap.add_argument('--emit-generic', action='store_true',
+                    help='Export coarse-only candidates too (high-recall, many false positives)')
+    ap.add_argument('--max-box-aspect', type=float, default=6.0)
+    ap.add_argument('--min-ink-fraction', type=float, default=0.018)
+    ap.add_argument('--max-ink-fraction', type=float, default=0.85)
+    ap.add_argument('--coarse-family-limit', type=int, default=50,
+                    help='Max raw family proposals per tile before class-gated fine search; 0 disables')
+    ap.add_argument('--fine-family-limit', type=int, default=80,
+                    help='Max final proposals per family per tile before global NMS; 0 disables')
     ap.add_argument('--svg-dedup-sim', type=float, default=0.90,
                     help='Cosine similarity threshold in SAM3 prompt space to deduplicate near-identical SVG variants (1.0 disables)')
     ap.add_argument('--min-page-pts', type=float, default=900.0)
@@ -588,6 +632,13 @@ def main() -> None:
         'coarse_score_thr': args.coarse_score_thr,
         'fallback_every_tiles': args.fallback_every_tiles,
         'fine_match_iou': args.fine_match_iou,
+        'emit_generic': args.emit_generic,
+        'max_box_aspect': args.max_box_aspect,
+        'min_ink_fraction': args.min_ink_fraction,
+        'max_ink_fraction': args.max_ink_fraction,
+        'coarse_family_limit': args.coarse_family_limit,
+        'fine_family_limit': args.fine_family_limit,
+        'sam_precision_version': 2,
         'sam_hierarchy_version': 1,
     }
     run_config_hash = hashlib.sha256(
@@ -651,6 +702,12 @@ def main() -> None:
                     prompt_plan=prompt_plan,
                     fallback_every_tiles=args.fallback_every_tiles,
                     fine_match_iou=args.fine_match_iou,
+                    emit_generic=args.emit_generic,
+                    max_box_aspect=args.max_box_aspect,
+                    min_ink_fraction=args.min_ink_fraction,
+                    max_ink_fraction=args.max_ink_fraction,
+                    coarse_family_limit=args.coarse_family_limit,
+                    fine_family_limit=args.fine_family_limit,
                     query_stats=pdf_query_stats,
                     device='cuda', dtype=dtype,
                 )
