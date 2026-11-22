@@ -215,8 +215,9 @@ def preencode_svg_prompts(
     device: str = 'cuda',
     dtype: torch.dtype = torch.float16,
     target_px: int = 44,
+    geometry_batch: int = 4,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Pre-encode all NECA SVG geometry prompts ONCE from clean 5x5 legend sheets.
+    """Pre-encode NECA geometry from a shared reference sheet in bounded GPU batches.
 
     Returns:
       geo_feats: [N_svg, L_geo, D] on GPU
@@ -255,20 +256,30 @@ def preencode_svg_prompts(
             s_fpn = s_ve.fpn_hidden_states[:-1]
             s_pos = s_ve.fpn_position_encoding[:-1]
 
-            for lb in boxes:
-                cx = (lb[0] + lb[2]) / 2.0 / 1008.0
-                cy = (lb[1] + lb[3]) / 2.0 / 1008.0
-                bw = (lb[2] - lb[0]) / 1008.0
-                bh = (lb[3] - lb[1]) / 1008.0
-                b_emb = torch.tensor([[[cx, cy, bw, bh]]], dtype=dtype, device=device)
-                b_lbl = torch.tensor([[1]], dtype=torch.long, device=device)
-                b_msk = torch.tensor([[True]], dtype=torch.bool, device=device)
+            # Each SVG previously triggered a separate geometry-encoder call.
+            # Batch prompt boxes against the SAME reference image embedding;
+            # small batches bound GPU VRAM on the self-hosted 6GB machine.
+            if geometry_batch < 1:
+                raise ValueError('geometry_batch must be positive')
+            for box_start in range(0, len(boxes), geometry_batch):
+                group = boxes[box_start:box_start + geometry_batch]
+                coords = []
+                for lb in group:
+                    cx = (lb[0] + lb[2]) / 2.0 / 1008.0
+                    cy = (lb[1] + lb[3]) / 2.0 / 1008.0
+                    bw = (lb[2] - lb[0]) / 1008.0
+                    bh = (lb[3] - lb[1]) / 1008.0
+                    coords.append([[cx, cy, bw, bh]])
+                B = len(group)
+                b_emb = torch.tensor(coords, dtype=dtype, device=device)
+                b_lbl = torch.ones((B, 1), dtype=torch.long, device=device)
+                b_msk = torch.ones((B, 1), dtype=torch.bool, device=device)
                 geo = model.geometry_encoder(
                     box_embeddings=b_emb,
                     box_mask=b_msk,
                     box_labels=b_lbl,
-                    img_feats=s_fpn,
-                    img_pos_embeds=s_pos,
+                    img_feats=[t.expand(B, *t.shape[1:]) for t in s_fpn],
+                    img_pos_embeds=[t.expand(B, *t.shape[1:]) for t in s_pos],
                 )
                 geo_feat_list.append(geo.last_hidden_state.to(dtype))
                 geo_mask_list.append(geo.attention_mask.bool())
@@ -530,6 +541,8 @@ def main() -> None:
                     help='Catalog budget; default 0 loads all eligible fine exemplars for hierarchical mode. Flat mode: set 96 or 192 for speed')
     ap.add_argument('--native-only', action='store_true',
                     help='Exclude raster-traced NECA symbols; default retains traced Annex A alternatives')
+    ap.add_argument('--reference-geometry-batch', type=int, default=4,
+                    help='Bounded multi-exemplar geometry encoding on cached reference sheets (VRAM tradeoff)')
     ap.add_argument('--reference-render-height', type=int, default=96,
                     help='Height used when rasterizing individual NECA vectors before prompt encoding')
     ap.add_argument('--no-reference-quality', action='store_true',
@@ -640,7 +653,8 @@ def main() -> None:
         geo_feats, geo_masks, blank_tf, blank_tm = cached_features
     else:
         geo_feats, geo_masks, blank_tf, blank_tm = preencode_svg_prompts(
-            model, processor, glyphs, device='cuda', dtype=dtype, target_px=44,
+            model, processor, glyphs, device='cuda', dtype=dtype,
+            target_px=44, geometry_batch=args.reference_geometry_batch,
         )
         if feature_cache is not None:
             save_prompt_features(
@@ -706,6 +720,7 @@ def main() -> None:
         'prompt_budgets': catalog_summary['prompt_budgets'],
         'native_only': args.native_only,
         'reference_render_height': args.reference_render_height,
+        'reference_geometry_batch': args.reference_geometry_batch,
         'reference_quality': not args.no_reference_quality,
         'prompt_feature_cache_schema': 2,
         'scan_mode': args.scan_mode,
