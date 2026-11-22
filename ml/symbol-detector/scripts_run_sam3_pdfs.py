@@ -385,8 +385,14 @@ def detect_page_sam3(
                         boxes = box_cxcywh_to_xyxy(
                             (inverse_sigmoid(refs) + offsets).sigmoid()
                         ) * float(tile_size)
-                        for b_i, q_i in hits.cpu().tolist():
-                            bx0, by0, bx1, by1 = boxes[b_i, q_i].float().cpu().tolist()
+                        # Exactly one CPU synchronization per batch. Pulling
+                        # individual boxes/scores causes hundreds of tiny
+                        # cuda syncs on dense electrical sheets.
+                        hits_cpu = hits.cpu().tolist()
+                        boxes_cpu = boxes.float().cpu().numpy()
+                        scores_cpu = scores.float().cpu().numpy()
+                        for b_i, q_i in hits_cpu:
+                            bx0, by0, bx1, by1 = boxes_cpu[b_i, q_i].tolist()
                             bw, bh = bx1 - bx0, by1 - by0
                             if bw < min_box_px or bh < min_box_px or bw > max_box_px or bh > max_box_px:
                                 continue
@@ -399,7 +405,7 @@ def detect_page_sam3(
                             glyph = glyphs[subset[b_i]]
                             found.append({
                                 'box_px': [gx0, gy0, gx1, gy1],
-                                'score': float(scores[b_i, q_i].float().cpu().item()),
+                                'score': float(scores_cpu[b_i, q_i]),
                                 'stage': stage,
                                 'device_type': glyph.device_type,
                                 # Coarse stage is a family proposal, not a verified variant.
