@@ -23,7 +23,8 @@ def _numbers(value: Any, size: int, label: str) -> list[float]:
     return result
 
 
-def review_decision(item: dict, taxonomy: Mapping[str, list[str]], *, coord_max: float = 1000.) -> str:
+def review_decision(item: dict, taxonomy: Mapping[str, list[str]], *, coord_max: float = 1000.,
+                    category_taxonomy: Mapping[str, list[str]] | None = None) -> str:
     """Return accepted/rejected/pending; reject malformed explicit acceptance.
 
     Missing status, legacy keep=True, or uncertain decisions never pass.
@@ -45,6 +46,14 @@ def review_decision(item: dict, taxonomy: Mapping[str, list[str]], *, coord_max:
     subtype = item.get('refined_subtype')
     if dtype not in taxonomy or subtype not in taxonomy[dtype]:
         raise ValueError(f'Unsupported accepted device type/subtype: {dtype!r}/{subtype!r}')
+    if category_taxonomy:
+        category = item.get('refined_category') or item.get('provisional_category')
+        subcategory = item.get('refined_subcategory') or item.get('provisional_subcategory')
+        if category is not None:
+            if category not in category_taxonomy:
+                raise ValueError(f'Unknown accepted category: {category!r}')
+            if subcategory not in (None, 'unspecified') and subcategory not in category_taxonomy[category]:
+                raise ValueError(f'Unknown subcategory {subcategory!r} for {category!r}')
     box = _numbers(item.get('refined_bbox_cell'), 4, 'refined_bbox_cell')
     if (not all(0 <= n <= coord_max for n in box) or box[0] >= box[2] or box[1] >= box[3]):
         raise ValueError('refined_bbox_cell is out of bounds or inverted')
