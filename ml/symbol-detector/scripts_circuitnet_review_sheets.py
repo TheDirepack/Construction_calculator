@@ -434,7 +434,14 @@ Review the provisional bounding-box detections for **`{source_file}`** ({total_d
      - Set `"on_wall": false`.
      - Set `"wall_contact_cell": [cx, cy]` to the **exact center** of `refined_bbox_cell` (`[(x0+x1)/2, (y0+y1)/2]`).
 
-## Allowed `v7` Device Taxonomy (`refined_device_type` → `refined_subtype`)
+## Allowed Device Taxonomy (`refined_device_type` → `refined_subtype`)
+
+The list below is the standard v7 taxonomy. For SAM-generated review batches, the
+companion JSON's `taxonomy` also includes the complete NECA fine-grained device
+classes and is authoritative. Its `category_taxonomy` captures the separate
+discipline/category hierarchy. Use only allowed values; preserve distinct devices
+rather than folding them into `other_device`. Set `refined_category` and
+`refined_subcategory` when correcting SAM's proposed hierarchy.
 {taxonomy_lines}
 
 ## Expected Output Format
