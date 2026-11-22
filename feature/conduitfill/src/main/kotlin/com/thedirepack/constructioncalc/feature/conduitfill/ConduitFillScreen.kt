@@ -72,6 +72,8 @@ import com.thedirepack.constructioncalc.core.ui.tool.ItemDraft
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 import com.thedirepack.constructioncalc.feature.conduitfill.domain.ConduitFillReport
 import com.thedirepack.constructioncalc.feature.conduitfill.domain.ReportSeverity
+import com.thedirepack.constructioncalc.feature.conduitfill.domain.FillRefs
+import com.thedirepack.constructioncalc.core.ui.components.NamedCableActions
 import java.util.Locale
 
 @Composable
@@ -130,23 +132,29 @@ fun ConduitFillScreen(host: ToolHost) {
             val notices = if (parsed.problems.isNotEmpty()) {
                 parsed.problems.map { Notice(it, NoticeLevel.ERROR) }
             } else {
-                report?.notices.orEmpty().map { Notice(it.text, it.severity.toLevel()) }
+                report?.notices.orEmpty().map { Notice(it.text, it.severity.toLevel(), it.refId) }
             }
             ResultCard(
                 results = report?.results.orEmpty(),
                 notices = notices,
+                onOpenReference = { host.openReference(it) },
                 emptyText = if (parsed.problems.isEmpty()) "Enter a count above 0 for at least one conductor to see the fill." else "Fix the inputs above to see the fill.",
             )
             Text("Ampacity derating", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             ResultCard(
                 results = deratingResults,
-                notices = derating?.let { d -> d.noticeTexts(settings.unitSystem).map { Notice(it, NoticeLevel.INFO) } }
-                    ?: listOf(Notice("Enter the ambient temperature to see derating.", NoticeLevel.ERROR)),
+                notices = derating?.let { d -> d.noticeTexts(settings.unitSystem).map { Notice(it, NoticeLevel.INFO, deratingRef(it)) } }
+                    ?: listOf(Notice("Enter the ambient temperature to see derating.", NoticeLevel.ERROR, FillRefs.AMBIENT)),
+                onOpenReference = { host.openReference(it) },
                 emptyText = "Mark at least one insulated group as current-carrying to see derating.",
             )
         }
     }
 }
+
+/** The Reference page a derating note is about: ambient correction, or the more-than-three adjustment. */
+private fun deratingRef(text: String): String =
+    if (text.contains("ambient", ignoreCase = true) || text.contains("rooftop", ignoreCase = true)) FillRefs.AMBIENT else FillRefs.ADJUSTMENT
 
 private fun ReportSeverity.toLevel() = when (this) {
     ReportSeverity.INFO -> NoticeLevel.INFO
@@ -200,6 +208,19 @@ private fun ConductorsSection(inputs: ConduitFillInputs, vm: ConduitFillViewMode
                             }
                         }
                     }
+                    if (group.isCable) {
+                        NumberField(
+                            label = "Count",
+                            value = group.count,
+                            onValueChange = { vm.setCount(index, it) },
+                        )
+                        Text(
+                            "${group.cableName}: OD ${group.cableOdIn?.let { settings.show(Measure.SMALL_LENGTH, it) } ?: "—"}, " +
+                                "area ${group.cableAreaSqIn?.let { settings.show(Measure.SMALL_AREA, it, if (settings.isMetric) 1 else 4) } ?: "—"} (named cable)",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        return@Column
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         NumberField(
                             label = "Count",
@@ -242,6 +263,7 @@ private fun ConductorsSection(inputs: ConduitFillInputs, vm: ConduitFillViewMode
                 Spacer(Modifier.width(8.dp))
                 Text("Add conductor group")
             }
+            NamedCableActions(onPick = vm::addCable, pickLabel = "Add a named cable…")
         }
     }
 }

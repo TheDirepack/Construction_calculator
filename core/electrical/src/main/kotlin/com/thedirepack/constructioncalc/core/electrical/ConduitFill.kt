@@ -5,17 +5,17 @@ import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import kotlin.math.abs
 import kotlin.math.floor
 
-/** One kind of conductor: an insulated wire from NEC Table 5, or a bare one from Table 8. */
+/** One kind of conductor: an insulated wire from NEC Table 5, a bare one from Table 8, or a custom/named cable. */
 sealed interface FillConductor {
-    val size: ConductorSize
+    val size: ConductorSize?
 
-    /** Table 5 or Table 8 area and diameter, or null if the NEC has no row for this combination. */
+    /** Table 5, Table 8, or custom area and diameter, or null if the NEC has no row for this combination. */
     val dimensions: ConductorDimensions?
 
-    /** "12 AWG THHN / THWN / THWN-2" or "6 AWG bare". */
+    /** "12 AWG THHN / THWN / THWN-2", "6 AWG bare", or a custom cable's name. */
     val label: String
 
-    /** "12 AWG THHN" or "6 AWG bare": for tight spaces such as a result label. */
+    /** "12 AWG THHN", "6 AWG bare", or a custom cable's name: for tight spaces such as a result label. */
     val shortLabel: String
 
     data class Insulated(val type: InsulationType, override val size: ConductorSize) : FillConductor {
@@ -28,6 +28,19 @@ sealed interface FillConductor {
         override val dimensions get() = BareConductorArea.dimensions(size, solid)
         override val label get() = "${size.label} bare"
         override val shortLabel get() = label
+    }
+
+    data class Custom(val name: String, val diameterIn: Double, val areaSqIn: Double) : FillConductor {
+        init {
+            require(name.isNotBlank()) { "Cable name cannot be blank" }
+            require(diameterIn.isFinite() && diameterIn > 0.0) { "Cable diameter must be positive" }
+            require(areaSqIn.isFinite() && areaSqIn > 0.0) { "Cable area must be positive" }
+        }
+
+        override val size: ConductorSize? = null
+        override val dimensions: ConductorDimensions = ConductorDimensions(areaSqIn = areaSqIn, diameterIn = diameterIn)
+        override val label: String get() = name
+        override val shortLabel: String get() = name
     }
 }
 
@@ -162,18 +175,19 @@ object ConduitFill {
     }
 
     /**
-     * Jam ratio (conduit inside diameter / conductor outside diameter) when exactly three
-     * conductors are installed, else null. With three different sizes the largest is used.
+     * Jam ratio (`1.05 × D / d`, unified with [PullFormulas.jamRatio] including the 5% bend ovality
+     * factor) when exactly three conductors are installed, else null. With three different sizes the
+     * largest is used.
      */
     fun jamCheck(conduit: ConduitSize, groups: List<ConductorGroup>): JamCheck? {
         val active = groups.filter { it.count > 0 }
         if (conductorCount(active) != 3) return null
         val diameters = active.map { it.spec.dimensions?.diameterIn ?: return null }
         val largest = diameters.max()
-        val ratio = conduit.internalDiameterIn / largest
+        val ratio = PullFormulas.jamRatio(conduit.internalDiameterIn, largest)
         return JamCheck(
             ratio = ratio,
-            inJamRange = ratio >= JAM_LOW - EPS && ratio <= JAM_HIGH + EPS,
+            inJamRange = PullFormulas.inJamRange(ratio),
             mixedSizes = diameters.any { abs(it - largest) > 1e-9 },
         )
     }

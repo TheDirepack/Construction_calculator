@@ -46,6 +46,11 @@ import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Choic
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Paragraph
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Table
 import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.ToolLink
+import com.thedirepack.constructioncalc.feature.reference.content.RefBlock.Calculator
+import com.thedirepack.constructioncalc.core.electrical.BoxFill
+import com.thedirepack.constructioncalc.core.electrical.BurialWiringMethod
+import com.thedirepack.constructioncalc.core.electrical.GecBonding
+import com.thedirepack.constructioncalc.core.electrical.RacewayInstall
 
 /**
  * NEC tables, generated from the same `core:electrical` data the calculators use, so the Reference
@@ -503,7 +508,173 @@ internal object CodeTables {
                 ToolLink("Size a motor circuit with a drive", ToolIds.VFD_SIZING),
             )
         },
+        RefEntry(
+            "nec-motor-circuit", "Single-motor branch circuit", RefSection.MOTORS,
+            "Conductors, short-circuit protection, overloads, disconnect and ground for one across-the-line motor.",
+            RefSource.CodeRef(listOf(CodeRule.MOTOR_TABLE_FLC, CodeRule.MOTOR_CONDUCTORS, CodeRule.MOTOR_BRANCH_PROTECTION, CodeRule.MOTOR_OVERLOAD, CodeRule.MOTOR_DISCONNECT_RATING, CodeRule.EGC_SIZE)),
+            keywords = listOf("motor", "across the line", "dol", "starter", "branch circuit", "overload", "heater", "430"),
+        ) {
+            val mv = Code.book.values
+            listOf(
+                Calculator(QuickCalc.MOTOR_CIRCUIT),
+                Bullets(
+                    listOf(
+                        "Full-load current from the tables, not the nameplate (${CodeRule.MOTOR_TABLE_FLC.cite}).",
+                        "Conductor ampacity at least ${codePercent(mv.motorConductorFactor, spaced = false)} of it (${CodeRule.MOTOR_CONDUCTORS.cite}), in the column the terminals allow.",
+                        "Short-circuit and ground-fault device up to the ${CodeRule.MOTOR_BRANCH_PROTECTION.cite} percentage, next size up allowed (${CodeRule.MOTOR_NEXT_HIGHER_RATING.cite}).",
+                        "Overloads from the nameplate current (${CodeRule.MOTOR_OVERLOAD.cite}); disconnect at least ${codePercent(mv.motorDisconnectFactor, spaced = false)} of the table current (${CodeRule.MOTOR_DISCONNECT_RATING.cite}).",
+                        "Equipment ground from the short-circuit device rating (${CodeRule.EGC_SIZE.cite}).",
+                    ),
+                ),
+            )
+        },
+        RefEntry(
+            "nec-box-fill", "Box fill", RefSection.RACEWAY,
+            "Cubic inches each conductor, clamp, device and ground takes up, and standard metal box volumes.",
+            RefSource.CodeRef(listOf(CodeRule.BOX_FILL, CodeRule.BOX_VOLUME_ALLOWANCE, CodeRule.METAL_BOX_VOLUMES)),
+            tools = listOf(ToolIds.CONDUIT_FILL),
+            keywords = listOf("box", "box fill", "cubic inch", "device box", "4 square", "1900", "314.16", "yoke", "clamp"),
+        ) { ctx ->
+            val v = Code.book.values
+            listOf(
+                Calculator(QuickCalc.BOX_FILL),
+                Table(
+                    listOf("Conductor", "Volume each (${volUnit(ctx)})"),
+                    BoxFill.supportedSizes.map { listOf(it.label, vol(BoxFill.volumeAllowanceCuIn(it), ctx)) },
+                ),
+                Bullets(
+                    listOf(
+                        "Each conductor that starts, ends or is spliced in the box: one allowance for its size. An unbroken loop of ${codeLength(v.boxFillLoopLengthIn, v.boxFillLoopLengthMm, ctx.system)} or more counts twice.",
+                        "Internal cable clamps, one or more: one allowance for the largest conductor.",
+                        "Each luminaire stud or hickey: one allowance for the largest conductor.",
+                        "Each device yoke or strap: ${v.boxFillDeviceYokeAllowances} allowances for the largest conductor connected to it.",
+                        "Equipment grounding conductors: one allowance for the largest, covering up to ${v.boxFillEgcCountedAsOne}; ${codeNumber(v.boxFillExtraEgcFraction)} allowance for each one after that.",
+                        "Conductors that don't leave the box don't count, and the code's exceptions leave out some fixture wires under a luminaire canopy.",
+                    ),
+                ),
+                Table(
+                    listOf("Metal box", "Volume (${volUnit(ctx)})"),
+                    BoxFill.standardMetalBoxes.map { listOf(it.name, vol(it.volumeCuIn, ctx)) },
+                    "Trade sizes in inches. Nonmetallic and other boxes: use the volume marked on the box.",
+                ),
+            )
+        },
+        RefEntry(
+            "nec-pull-box", "Pull and junction box size", RefSection.RACEWAY,
+            "Minimum box dimensions for conductors 4 AWG and larger: straight, angle and U pulls.",
+            RefSource.CodeRef(listOf(CodeRule.PULL_BOX_STRAIGHT, CodeRule.PULL_BOX_ANGLE)),
+            tools = listOf(ToolIds.PULL_PLANNER, ToolIds.CONDUIT_FILL),
+            keywords = listOf("pull box", "junction box", "j box", "314.28", "straight pull", "angle pull", "u pull", "8 times", "6 times"),
+        ) {
+            val v = Code.book.values
+            listOf(
+                Calculator(QuickCalc.PULL_BOX),
+                Bullets(
+                    listOf(
+                        "Straight pull: length at least ${v.pullBoxStraightMultiplier} × the trade size of the largest raceway (${CodeRule.PULL_BOX_STRAIGHT.cite}).",
+                        "Angle or U pull: from each raceway entry to the opposite wall, at least ${v.pullBoxAngleMultiplier} × the largest raceway in that row plus the trade sizes of the other raceways in the same row on that wall (${CodeRule.PULL_BOX_ANGLE.cite}).",
+                        "Entries enclosing the same conductor: at least ${v.pullBoxAngleMultiplier} × the larger raceway apart.",
+                        "Conductors 6 AWG and smaller follow box fill instead.",
+                    ),
+                ),
+            )
+        },
+        RefEntry(
+            "nec-gec", "Grounding electrode conductor and bonding jumpers", RefSection.PROTECTION,
+            "Grounding electrode conductor and main or supply-side bonding jumper by service conductor size.",
+            RefSource.CodeRef(listOf(CodeRule.GEC_SIZE, CodeRule.SUPPLY_SIDE_BONDING, CodeRule.GEC_GROUND_ROD_MAX, CodeRule.GEC_CONCRETE_ENCASED_MAX)),
+            tools = listOf(ToolIds.PANELS),
+            keywords = listOf("gec", "grounding electrode", "ground rod", "ufer", "bonding jumper", "main bonding", "250.66", "250.102"),
+        ) {
+            val v = Code.book.values
+            listOf(
+                Calculator(QuickCalc.GEC),
+                Table(
+                    listOf("Copper service", "Aluminum service", "GEC copper", "GEC aluminum"),
+                    GecBonding.table.map { listOf(it.copperRangeLabel, it.aluminumRangeLabel, it.gecCopper.label, it.gecAluminum.label) },
+                    "Size of the largest ungrounded service conductor, or the equivalent area of parallel sets.",
+                ),
+                Bullets(
+                    listOf(
+                        "Only connected to rod, pipe or plate electrodes: never more than ${v.gecRodMaxCopper.label} copper or ${v.gecRodMaxAluminum.label} aluminum (${CodeRule.GEC_GROUND_ROD_MAX.cite}).",
+                        "Only connected to a concrete-encased electrode: never more than ${v.gecConcreteEncasedMaxCopper.label} copper (${CodeRule.GEC_CONCRETE_ENCASED_MAX.cite}).",
+                        "Main, system and supply-side bonding jumpers use the same rows up to the last; beyond it, at least ${codePercent(v.bondingJumperLargeAreaFraction, spaced = false)} of the largest ungrounded conductor's area (${CodeRule.SUPPLY_SIDE_BONDING.cite}).",
+                    ),
+                ),
+            )
+        },
+        RefEntry(
+            "nec-burial-depth", "Burial depth", RefSection.RACEWAY,
+            "Minimum cover over underground cables and raceways, 1000 V and below.",
+            RefSource.CodeRef(CodeRule.BURIAL_DEPTH),
+            keywords = listOf("burial", "bury", "underground", "cover", "trench", "depth", "uf", "300.5"),
+        ) { ctx ->
+            val rows = RacewayInstall.burialDepths
+            listOf(
+                Table(
+                    listOf("Location") + BurialWiringMethod.entries.map { "${it.shortLabel} (${lenUnit(ctx)})" },
+                    rows.map { r -> listOf(r.location) + BurialWiringMethod.entries.map { m -> cover(r.coverInches.getOrNull(m.columnIndex), ctx) } },
+                    "Cover is measured from the top of the cable or raceway to finished grade or the top of the concrete.",
+                ),
+                Bullets(BurialWiringMethod.entries.map { "${it.shortLabel}: ${it.label}" } + rows.mapNotNull { r -> r.note?.let { "${r.location}: $it" } }),
+            )
+        },
+        RefEntry(
+            "nec-raceway-support", "Raceway support spacing", RefSection.RACEWAY,
+            "How close to boxes and how far apart conduit and tubing must be secured.",
+            RefSource.CodeRef(CodeRule.RACEWAY_SUPPORT),
+            tools = listOf(ToolIds.CONDUIT_BENDING),
+            keywords = listOf("support", "strap", "secure", "spacing", "emt", "pvc", "rigid", "within 3 ft", "10 ft"),
+        ) { ctx ->
+            val types = ConduitType.entries.filter { RacewayInstall.supportRule(it) != null }
+            listOf(
+                Calculator(QuickCalc.RACEWAY_SUPPORT),
+                Table(
+                    listOf("Raceway", "Section", "Within box (${feetUnit(ctx)})", "Between supports (${feetUnit(ctx)})"),
+                    types.map { t ->
+                        val r = RacewayInstall.supportRule(t)!!
+                        listOf(t.displayName, r.section, feet(r.withinBoxFt, ctx), if (r.byTradeSizeFt.isEmpty()) feet(r.defaultIntervalFt, ctx) else "By size")
+                    },
+                ),
+                Choice("Spacing by trade size", types.filter { RacewayInstall.supportRule(it)!!.byTradeSizeFt.isNotEmpty() }.map { it.displayName }) { i ->
+                    val t = types.filter { RacewayInstall.supportRule(it)!!.byTradeSizeFt.isNotEmpty() }[i]
+                    val r = RacewayInstall.supportRule(t)!!
+                    listOfNotNull(
+                        Table(listOf("Trade size", "Between supports (${feetUnit(ctx)})"), r.byTradeSizeFt.entries.sortedBy { it.key.ordinal }.map { (size, ft) -> listOf(size.label, feet(ft, ctx)) }),
+                        r.note?.let { Paragraph(it) },
+                    )
+                },
+            )
+        },
+        RefEntry(
+            "nec-pvc-expansion", "PVC thermal expansion", RefSection.RACEWAY,
+            "How much rigid PVC conduit grows and shrinks with temperature, and when it needs an expansion fitting.",
+            RefSource.CodeRef(CodeRule.PVC_EXPANSION),
+            keywords = listOf("pvc", "expansion", "expansion fitting", "thermal", "352.44", "temperature change"),
+        ) { ctx ->
+            val v = Code.book.values
+            listOf(
+                Calculator(QuickCalc.PVC_EXPANSION),
+                Paragraph(
+                    if (ctx.metric) "Rigid PVC changes length by ${n(v.pvcExpansionInPer100FtPer100F * 25.4 / 30.48 * 1.8 / 100.0, 4)} mm per meter for every °C of temperature change. Use an expansion fitting when the expected change is ${codeLength(v.pvcExpansionFittingThresholdIn, v.pvcExpansionFittingThresholdMm, ctx.system)} or more."
+                    else "Rigid PVC changes length by ${n(v.pvcExpansionInPer100FtPer100F, 2)} in. per 100 ft for every 100 °F of temperature change. Use an expansion fitting when the expected change is ${codeLength(v.pvcExpansionFittingThresholdIn, v.pvcExpansionFittingThresholdMm, ctx.system)} or more.",
+                ),
+                Table(
+                    if (ctx.metric) listOf("Temperature change (°C)", "Change (mm per 30.48 m)") else listOf("Temperature change (°F)", "Change (in. per 100 ft)"),
+                    RacewayInstall.pvcExpansionTable.map { r ->
+                        if (ctx.metric) listOf(Decimals.trim(r.tempChangeF * 5.0 / 9.0, 1), Decimals.trim(r.changeInPer100Ft * 25.4, 1))
+                        else listOf(r.tempChangeF.toString(), n(r.changeInPer100Ft, 2))
+                    },
+                ),
+            )
+        },
     )
+
+    private fun volUnit(ctx: RefContext) = if (ctx.metric) "cm³" else "in³"
+    private fun vol(cuIn: Double?, ctx: RefContext) = cuIn?.let { if (ctx.metric) Decimals.trim(it * 16.387064, 1) else Decimals.trim(it, 2) } ?: BLANK
+    private fun cover(inches: Int?, ctx: RefContext) = inches?.let { if (ctx.metric) (it * 25).toString() else it.toString() } ?: BLANK
+    private fun feetUnit(ctx: RefContext) = if (ctx.metric) "m" else "ft"
+    private fun feet(ft: Double, ctx: RefContext) = if (ctx.metric) Decimals.trim(ft * 0.3048, 2) else Decimals.trim(ft, 1)
 
     private fun motorTable(phase: AcPhases): Table {
         val volts = MotorFullLoadCurrent.voltages(phase)

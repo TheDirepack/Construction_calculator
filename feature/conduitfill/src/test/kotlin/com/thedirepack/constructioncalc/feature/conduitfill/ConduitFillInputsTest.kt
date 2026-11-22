@@ -128,4 +128,21 @@ class ConduitFillInputsTest {
         vm.restore(item) // the screen may call this on every recomposition
         assertEquals(false, vm.inputs.nipple)
     }
+
+    @Test fun namedCableGroupUsesItsOwnDimensionsAndIsntDerated() {
+        val cable = com.thedirepack.constructioncalc.core.electrical.NamedCable("x", "3/C #12 MC", diameterIn = 0.55)
+        val inputs = ConduitFillInputs(groups = listOf(ConductorGroupInput("3"), ConductorGroupInput.of(cable, count = "2")))
+        val parsed = inputs.toRequest()
+        assertTrue(parsed.problems.toString(), parsed.problems.isEmpty())
+        val spec = parsed.request!!.groups[1].spec as FillConductor.Custom
+        assertEquals("3/C #12 MC", spec.name)
+        assertEquals(com.thedirepack.constructioncalc.core.electrical.NamedCable.circularArea(0.55), spec.dimensions.areaSqIn, 1e-12)
+        assertEquals(1, inputs.deratingGroups().size) // only the THHN group
+        assertEquals(inputs, ToolInputs.decode<ConduitFillInputs>(ToolInputs.encode(inputs)))
+    }
+
+    @Test fun damagedCableGroupIsAProblemNotACrash() {
+        val bad = ConduitFillInputs(groups = listOf(ConductorGroupInput("1", insulation = CABLE_CODE, cableName = "Mystery")))
+        assertTrue(bad.toRequest().problems.single().contains("Mystery"))
+    }
 }

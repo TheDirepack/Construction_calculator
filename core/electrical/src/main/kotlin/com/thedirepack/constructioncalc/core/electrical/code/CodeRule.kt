@@ -61,6 +61,22 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
     EGC_INCREASED("Equipment grounding conductor increased with the ungrounded conductors"),
     EGC_IDENTIFICATION("Identifying wire-type equipment grounding conductors"),
     EGC_MULTIPLE_CIRCUITS("One equipment grounding conductor for several circuits in a raceway"),
+    GEC_SIZE("Grounding electrode conductor for alternating-current systems", isTable = true),
+    GEC_GROUND_ROD_MAX("Grounding electrode conductor to rod, pipe, or plate electrodes"),
+    GEC_CONCRETE_ENCASED_MAX("Grounding electrode conductor to concrete-encased electrodes"),
+    SUPPLY_SIDE_BONDING("Supply-side and main bonding jumper sizing", isTable = true),
+
+    // Boxes and enclosures
+    BOX_FILL("Box fill calculations"),
+    METAL_BOX_VOLUMES("Standard metal box volumes", isTable = true),
+    BOX_VOLUME_ALLOWANCE("Volume allowance required per conductor", isTable = true),
+    PULL_BOX_STRAIGHT("Pull and junction boxes: straight pulls"),
+    PULL_BOX_ANGLE("Pull and junction boxes: angle or U pulls"),
+
+    // Wiring methods and raceway installation
+    BURIAL_DEPTH("Minimum cover requirements, 0 to 1000 volts ac, 1500 volts dc", isTable = true),
+    RACEWAY_SUPPORT("Securing and supporting of raceways"),
+    PVC_EXPANSION("Expansion characteristics of PVC rigid nonmetallic conduit", isTable = true),
 
     // Conductors
     MINIMUM_CONDUCTOR_SIZE("Minimum size of conductors"),

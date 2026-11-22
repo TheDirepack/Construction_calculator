@@ -55,5 +55,20 @@ internal object Nec2023Values {
         workingSpaceMinWidthMm = 762,
         workingSpaceMinHeightIn = 78, // 110.26(A)(3): 2.0 m (6-1/2 ft)
         workingSpaceMinHeightMm = 2000,
+
+        pullBoxStraightMultiplier = 8, // 314.28(A)(1): not less than 8 times the trade size of the largest raceway
+        pullBoxAngleMultiplier = 6, // 314.28(A)(2): not less than 6 times the trade size of the largest raceway
+        bondingJumperLargeAreaFraction = 0.125, // Table 250.102(C)(1) Note 1: 12-1/2 percent of the area
+        pvcExpansionFittingThresholdIn = 0.25, // 352.44: 6 mm (1/4 in.) or greater
+        pvcExpansionInPer100FtPer100F = 4.06, // Table 352.44: 4.06 in. per 100 ft per 100 °F
+        pvcExpansionFittingThresholdMm = 6, // 352.44: 6 mm (1/4 in.)
+        boxFillLoopLengthIn = 12, // 314.16(B)(1): 300 mm (12 in.) or more
+        boxFillLoopLengthMm = 300,
+        boxFillEgcCountedAsOne = 4, // 314.16(B)(5): up to four EGCs, a single allowance
+        boxFillExtraEgcFraction = 0.25, // 314.16(B)(5): 1/4 allowance for each additional EGC
+        boxFillDeviceYokeAllowances = 2, // 314.16(B)(4): double allowance per yoke or strap
+        gecRodMaxCopper = ConductorSize.AWG_6, // 250.66(A): 6 AWG copper or 4 AWG aluminum
+        gecRodMaxAluminum = ConductorSize.AWG_4,
+        gecConcreteEncasedMaxCopper = ConductorSize.AWG_4, // 250.66(B): 4 AWG copper
     )
 }
