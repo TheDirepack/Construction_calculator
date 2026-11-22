@@ -280,6 +280,8 @@ internal fun PlanCanvas(
         }
     }
     val inkPath = remember { Path() }
+    val markPaint = remember { Paint() }
+    val markPath = remember { android.graphics.Path() }
     val loupeClipPath = remember { android.graphics.Path() }
     val loupeSrcRect = remember { Rect() }
     val loupeDstRect = remember { RectF() }
@@ -525,7 +527,7 @@ internal fun PlanCanvas(
                                 drawCircle(routeColor, 3f / transform.scale, pos)
                             }
                         }
-                        for (mark in marks) drawMark(mark)
+                        drawIntoCanvas { canvas -> for (mark in marks) drawPlanMark(canvas.nativeCanvas, mark, markPaint, markPath) }
                         if (mode == DrawingMode.Adjust) {
                             val r = 4f / transform.scale
                             for (handle in handles) {
@@ -743,17 +745,18 @@ private fun DrawScope.drawInk(points: List<InkPoint>, color: Color, width: Float
     }
 }
 
-private fun DrawScope.drawMark(mark: PlanMark) {
-    drawIntoCanvas { drawPlanMark(it.nativeCanvas, mark) }
-}
-
 private fun DrawScope.drawPlanText(text: String, point: Offset, textSize: Float, color: Color, paint: Paint) {
     if (text.isBlank()) return
     drawIntoCanvas { canvas ->
         paint.textSize = textSize
         paint.color = color.toArgb()
-        text.lines().forEachIndexed { index, line ->
-            canvas.nativeCanvas.drawText(line, point.x, point.y + textSize * (index + 1), paint)
+        var line = 0
+        var start = 0
+        while (start <= text.length) {
+            val end = text.indexOf('\n', start).let { if (it < 0) text.length else it }
+            canvas.nativeCanvas.drawText(text, start, end, point.x, point.y + textSize * (line + 1), paint)
+            line++
+            start = end + 1
         }
     }
 }

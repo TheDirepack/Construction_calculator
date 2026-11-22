@@ -166,35 +166,40 @@ object PlanExports {
     }
 }
 
-/** Used for the on-screen markup and its vector appearance in an exported PDF. */
-fun drawPlanMark(canvas: Canvas, mark: PlanMark) {
-    val first = mark.points.first()
-    val last = mark.points.last()
+/**
+ * Used for the on-screen markup and its vector appearance in an exported PDF. The editor passes
+ * its own [paint] and [path] so drawing every mark each frame allocates nothing; both are reset here.
+ */
+fun drawPlanMark(canvas: Canvas, mark: PlanMark, paint: Paint = Paint(), path: Path = Path()) {
+    val points = mark.points
+    val first = points.first()
+    val last = points.last()
     val x = first.x.toFloat()
     val y = first.y.toFloat()
     val endX = last.x.toFloat()
     val endY = last.y.toFloat()
     val width = mark.width.toFloat()
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = mark.color?.toInt() ?: if (mark.kind == PlanMarkKind.HIGHLIGHT) 0x66ffe43c else 0xff155cbd.toInt()
-        strokeWidth = width
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
+    paint.reset()
+    paint.isAntiAlias = true
+    paint.color = mark.color?.toInt() ?: if (mark.kind == PlanMarkKind.HIGHLIGHT) 0x66ffe43c else 0xff155cbd.toInt()
+    paint.strokeWidth = width
+    paint.strokeCap = Paint.Cap.ROUND
+    paint.strokeJoin = Paint.Join.ROUND
     when (mark.kind) {
         PlanMarkKind.INK, PlanMarkKind.HIGHLIGHT -> {
-            val path = Path().apply {
-                moveTo(x, y)
-                mark.points.drop(1).forEach { lineTo(it.x.toFloat(), it.y.toFloat()) }
-            }
-            if (mark.points.size == 1) {
+            if (points.size == 1) {
                 canvas.drawCircle(x, y, width * (mark.pressures.firstOrNull() ?: 1f) / 2, paint)
             } else if (paint.alpha == 255 && mark.pressures.isNotEmpty()) {
-                mark.points.zipWithNext().forEachIndexed { index, (from, to) ->
+                for (index in 0 until points.lastIndex) {
+                    val from = points[index]
+                    val to = points[index + 1]
                     paint.strokeWidth = width * (mark.pressures[index] + mark.pressures[index + 1]) / 2
                     canvas.drawLine(from.x.toFloat(), from.y.toFloat(), to.x.toFloat(), to.y.toFloat(), paint)
                 }
             } else {
+                path.reset()
+                path.moveTo(x, y)
+                for (index in 1 until points.size) path.lineTo(points[index].x.toFloat(), points[index].y.toFloat())
                 paint.style = Paint.Style.STROKE
                 canvas.drawPath(path, paint)
             }
@@ -209,8 +214,14 @@ fun drawPlanMark(canvas: Canvas, mark: PlanMark) {
         }
         PlanMarkKind.TEXT -> {
             paint.textSize = width
-            mark.text.lineSequence().forEachIndexed { line, text ->
-                canvas.drawText(text, x, y + width * (line + 1), paint)
+            var line = 0
+            var start = 0
+            val text = mark.text
+            while (start <= text.length) {
+                val end = text.indexOf('\n', start).let { if (it < 0) text.length else it }
+                canvas.drawText(text, start, end, x, y + width * (line + 1), paint)
+                line++
+                start = end + 1
             }
         }
         PlanMarkKind.SYMBOL -> mark.svg?.let { drawPlanSymbol(canvas, it, x, y, x + width, y + width) }
@@ -222,7 +233,8 @@ private fun drawArrowHead(canvas: Canvas, paint: Paint, x: Float, y: Float, endX
     if (length == 0f) return
     val size = min(paint.strokeWidth * 5f, length * .45f)
     val angle = atan2(endY - y, endX - x)
-    for (direction in listOf(angle - .52f, angle + .52f)) {
+    for (side in 0..1) {
+        val direction = if (side == 0) angle - .52f else angle + .52f
         canvas.drawLine(endX, endY, endX - cos(direction) * size, endY - sin(direction) * size, paint)
     }
 }
