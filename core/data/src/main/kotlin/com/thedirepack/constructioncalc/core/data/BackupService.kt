@@ -3,6 +3,8 @@ package com.thedirepack.constructioncalc.core.data
 import com.thedirepack.constructioncalc.core.model.BackupDocument
 import com.thedirepack.constructioncalc.core.model.ProjectMerge
 import com.thedirepack.constructioncalc.core.model.ProjectMergeMode
+import com.thedirepack.constructioncalc.core.model.RecentResult
+import kotlinx.serialization.json.JsonObject
 
 /** Which sections go into, or come out of, a backup. */
 data class BackupSections(
@@ -17,17 +19,56 @@ data class BackupSections(
     }
 }
 
+internal interface BackupSettingsPort {
+    fun exportSettings(): JsonObject
+    fun exportToolSettings(): Map<String, JsonObject>
+    fun importSettings(json: JsonObject)
+    fun importToolSettings(toolSettings: Map<String, JsonObject>, replace: Boolean)
+    fun activeProjectId(): String?
+    fun clearActiveTarget()
+}
+
+internal interface BackupRecentsPort {
+    fun current(): List<RecentResult>
+    fun importAll(results: List<RecentResult>, replace: Boolean)
+}
+
 /**
  * Builds and restores [BackupDocument]s: the "save/load everything" system. A backup can hold
  * every project, app and tool settings, tools' own data (via [ToolBackup]) and recent values.
  */
-class BackupService(
-    private val settings: SettingsRepository,
+class BackupService internal constructor(
+    private val settings: BackupSettingsPort,
     private val projects: ProjectRepository,
-    private val recents: RecentResultsRepository,
+    private val recents: BackupRecentsPort,
     private val toolBackups: Map<String, ToolBackup>,
     private val clock: () -> Long,
 ) {
+    constructor(
+        settings: SettingsRepository,
+        projects: ProjectRepository,
+        recents: RecentResultsRepository,
+        toolBackups: Map<String, ToolBackup>,
+        clock: () -> Long,
+    ) : this(
+        settings = object : BackupSettingsPort {
+            override fun exportSettings() = settings.exportSettings()
+            override fun exportToolSettings() = settings.exportToolSettings()
+            override fun importSettings(json: JsonObject) = settings.importSettings(json)
+            override fun importToolSettings(toolSettings: Map<String, JsonObject>, replace: Boolean) =
+                settings.importToolSettings(toolSettings, replace)
+            override fun activeProjectId() = settings.settings.value.activeProjectId
+            override fun clearActiveTarget() = settings.setActiveTarget(null, null)
+        },
+        projects = projects,
+        recents = object : BackupRecentsPort {
+            override fun current() = recents.recents.value
+            override fun importAll(results: List<RecentResult>, replace: Boolean) = recents.importAll(results, replace)
+        },
+        toolBackups = toolBackups,
+        clock = clock,
+    )
+
     /** A backup of [sections]; [projectIds] limits which projects are included (null = all). */
     fun create(sections: BackupSections = BackupSections.ALL, projectIds: Set<String>? = null): BackupDocument =
         BackupDocument(
@@ -44,7 +85,7 @@ class BackupService(
             } else {
                 emptyMap()
             },
-            recents = if (sections.recents) recents.recents.value else emptyList(),
+            recents = if (sections.recents) recents.current() else emptyList(),
         )
 
     data class Report(val lines: List<String>) {
@@ -92,8 +133,8 @@ class BackupService(
             lines += "Recent values restored"
         }
         // Drop an active project that no longer exists.
-        val active = settings.settings.value.activeProjectId
-        if (active != null && projects.get(active) == null) settings.setActiveTarget(null, null)
+        val active = settings.activeProjectId()
+        if (active != null && projects.get(active) == null) settings.clearActiveTarget()
         return Report(lines)
     }
 }

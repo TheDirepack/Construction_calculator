@@ -68,10 +68,18 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
+/** Lightweight reference to a saved [ProjectItem] for saved instance state. */
+data class ItemRef(val projectId: String? = null, val itemId: String)
+
 /** A place in the app. The shell keeps a simple back stack of these. */
 sealed interface Destination {
-    /** A tool, optionally showing a saved item, or opened for a project, circuit or run. */
-    data class Tool(val toolId: String, val item: ProjectItem? = null, val target: ToolTarget? = null) : Destination
+    /** A tool, optionally showing a saved item (or its lightweight [itemRef]), or opened for a project, circuit or run. */
+    data class Tool(
+        val toolId: String,
+        val item: ProjectItem? = null,
+        val target: ToolTarget? = null,
+        val itemRef: ItemRef? = null,
+    ) : Destination
 
     /** The one Settings screen; [toolId] opens that tool's page directly. */
     data class Settings(val toolId: String? = null) : Destination
@@ -81,24 +89,45 @@ sealed interface Destination {
 private const val PUBLISH_SETTLE_MS = 1_200L
 
 private const val SEP = '\u0001'
+private const val SUBSEP = '\u0002'
 
-/** A back-stack entry as a string, for saved instance state (a saved item travels as its JSON). */
+/**
+ * A back-stack entry as a string, for saved instance state.
+ * Stores lightweight `(projectId, itemId)` references instead of full [ProjectItem] JSON,
+ * while keeping fallback decoding for legacy JSON-encoded entries.
+ */
 internal object DestinationCodec {
     fun encode(d: Destination): String = when (d) {
-        is Destination.Tool -> "T" + d.toolId + SEP +
-            (d.item?.let { ProjectCodec.json.encodeToString(ProjectItem.serializer(), it) } ?: "") + SEP +
-            (d.target?.encode() ?: "")
+        is Destination.Tool -> {
+            val ref = d.itemRef ?: d.item?.let { ItemRef(projectId = null, itemId = it.id) }
+            val encodedRef = ref?.let { "R" + (it.projectId ?: "") + SUBSEP + it.itemId } ?: ""
+            "T" + d.toolId + SEP + encodedRef + SEP + (d.target?.encode() ?: "")
+        }
         is Destination.Settings -> "S" + (d.toolId ?: "")
     }
 
     /** Null for anything [encode] didn't produce. A damaged item or target is dropped, not the entry. */
     fun decode(s: String): Destination? = when (s.firstOrNull()) {
         'T' -> {
-            // JSON escapes control characters, so SEP never appears inside the item.
             val parts = s.drop(1).split(SEP)
-            val item = parts.getOrNull(1)?.takeIf { it.isNotEmpty() }
-                ?.let { runCatching { ProjectCodec.json.decodeFromString(ProjectItem.serializer(), it) }.getOrNull() }
-            parts[0].takeIf { it.isNotEmpty() }?.let { Destination.Tool(it, item, parts.getOrNull(2)?.let(ToolTarget::decode)) }
+            val toolId = parts[0].takeIf { it.isNotEmpty() } ?: return null
+            val itemPart = parts.getOrNull(1).orEmpty()
+            var item: ProjectItem? = null
+            var itemRef: ItemRef? = null
+            when {
+                itemPart.startsWith("R") -> {
+                    val refParts = itemPart.drop(1).split(SUBSEP)
+                    val projectId = refParts.getOrNull(0)?.ifEmpty { null }
+                    val itemId = refParts.getOrNull(1)?.ifEmpty { null }
+                    if (itemId != null) itemRef = ItemRef(projectId, itemId)
+                }
+                itemPart.startsWith("{") -> {
+                    // Legacy fallback: decode full ProjectItem JSON from older saved state.
+                    item = runCatching { ProjectCodec.json.decodeFromString(ProjectItem.serializer(), itemPart) }.getOrNull()
+                    if (item != null) itemRef = ItemRef(projectId = null, itemId = item.id)
+                }
+            }
+            Destination.Tool(toolId, item, parts.getOrNull(2)?.let(ToolTarget::decode), itemRef)
         }
         'S' -> Destination.Settings(s.drop(1).ifEmpty { null })
         else -> null
@@ -179,20 +208,34 @@ fun AppShell(imports: Flow<Result<AppFile>>) {
                 when (current) {
                     is Destination.Tool -> {
                         val tool = ToolRegistry.all.firstOrNull { it.id == current.toolId } ?: ToolRegistry.default
-                        val host = remember(current) {
+                        val projects by services.projects.projects.collectAsStateWithLifecycle()
+                        val resolvedItem = current.item ?: current.itemRef?.let { ref ->
+                            if (ref.projectId != null) {
+                                projects.firstOrNull { it.id == ref.projectId }?.item(ref.itemId)?.second
+                            } else {
+                                projects.firstNotNullOfOrNull { it.item(ref.itemId)?.second }
+                            }
+                        }
+                        val host = remember(current, resolvedItem) {
                             ShellHost(
                                 tool = tool,
-                                openedItem = current.item,
+                                openedItem = resolvedItem,
                                 target = current.target,
                                 onOpenDrawer = { scope.launch { drawer.open() } },
-                                onOpenTool = { id, item, target -> push(Destination.Tool(id, item, target)) },
+                                onOpenTool = { id, item, target ->
+                                    val ref = item?.let {
+                                        val projectId = services.projects.projects.value.firstOrNull { p -> p.item(it.id) != null }?.id
+                                        ItemRef(projectId, it.id)
+                                    }
+                                    push(Destination.Tool(id, item, target, ref))
+                                },
                                 onOpenProject = { id ->
-                                    val projects = Destination.Tool(ProjectsTool.ID, target = id?.let { ToolTarget.OfProject(it) })
+                                    val projectsDest = Destination.Tool(ProjectsTool.ID, target = id?.let { ToolTarget.OfProject(it) })
                                     // Already in Projects: show that page (or the list) in place.
-                                    if (tool.id == ProjectsTool.ID) stack[stack.lastIndex] = projects else push(projects)
+                                    if (tool.id == ProjectsTool.ID) stack[stack.lastIndex] = projectsDest else push(projectsDest)
                                 },
                                 onBack = ::pop,
-                                onSave = { pendingSave = Triple(it, current.item, current.target) },
+                                onSave = { pendingSave = Triple(it, resolvedItem, current.target) },
                                 onPublish = { results, ctx, immediate ->
                                     publishJobs.remove(tool.id)?.cancel()
                                     val publish = {

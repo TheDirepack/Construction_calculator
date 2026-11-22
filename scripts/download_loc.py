@@ -4,13 +4,15 @@ import urllib.parse
 import ssl
 import re
 from bs4 import BeautifulSoup
+from pathlib import Path
 
 ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
 
-dest_dir = '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/1_blueprints/library_of_congress'
+BLUEPRINTS_ROOT = Path(
+    os.environ.get('BLUEPRINTS_ROOT', Path(__file__).resolve().parent.parent / 'blueprints_and_libraries')
+)
+dest_dir = str(BLUEPRINTS_ROOT / '1_blueprints/library_of_congress')
 os.makedirs(dest_dir, exist_ok=True)
 
 loc_url = 'https://www.loc.gov/free-to-use/architecture-and-design/'

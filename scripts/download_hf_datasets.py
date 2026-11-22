@@ -10,8 +10,12 @@ import time
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
-ROOT = '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries'
+BLUEPRINTS_ROOT = Path(
+    os.environ.get('BLUEPRINTS_ROOT', Path(__file__).resolve().parent.parent / 'blueprints_and_libraries')
+)
+ROOT = str(BLUEPRINTS_ROOT)
 H = {'User-Agent': 'Mozilla/5.0'}
 
 DATASETS = [
@@ -22,8 +26,6 @@ DATASETS = [
 ]
 
 ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
 
 
 def api(url):

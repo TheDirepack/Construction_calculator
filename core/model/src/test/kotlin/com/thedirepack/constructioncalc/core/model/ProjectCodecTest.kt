@@ -111,4 +111,22 @@ class ProjectCodecTest {
         assertTrue(text, "1 · 20/1 · Kitchen · 1,200 VA · 2#12, 1#12G" in text)
         assertTrue(text, "Conduit: 1/2\" EMT (auto) · 50' 0\" · 1 circuit · fill" in text)
     }
+
+    @Test fun sharedTextIncludesDrawingMeasurementSummaries() {
+        val calibration = PlanCalibrationLayer(preset = Quantity.inches(Rational.of(1)).stored())
+        val m1 = PlanMeasurement(page = 0, first = PlanPoint(0.0, 0.0), second = PlanPoint(120.0, 0.0))
+        val m2 = PlanMeasurement(page = 1, first = PlanPoint(0.0, 0.0), second = PlanPoint(60.0, 0.0))
+        val drawing = PlanDrawing(
+            name = "E101.pdf",
+            sha256 = "a".repeat(64),
+            calibration = calibration,
+            measurements = listOf(m1, m2),
+        )
+        val project = Project.create("Job", now = 0).copy(drawings = listOf(drawing))
+        val text = ProjectText.render(project, zone = ZoneOffset.UTC)
+        assertTrue(text, "DRAWINGS" in text)
+        assertTrue(text, "■ E101.pdf — 2 measurements · total 15' 0\"" in text)
+        assertTrue(text, "Page 1: 10' 0\"" in text)
+        assertTrue(text, "Page 2: 5' 0\"" in text)
+    }
 }

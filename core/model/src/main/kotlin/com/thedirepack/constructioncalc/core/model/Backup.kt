@@ -63,12 +63,20 @@ object AppFileCodec {
     const val BACKUP_FORMAT = "construction-calc/backup"
     const val BACKUP_VERSION = 1
     const val BACKUP_SUFFIX = ".backup.json"
+    const val BACKUP_ZIP_SUFFIX = ".backup.zip"
 
     fun encodeBackup(backup: BackupDocument): String =
         ProjectCodec.fileJson.encodeToString(BackupDocument.serializer(), backup)
 
-    /** Decodes a project or backup file. Both are JSON; the `format` field says which. */
+    /** Decodes a project, backup JSON, or compact share text payload. */
     fun decode(text: String): AppFile {
+        if (!text.trimStart().startsWith("{") && CompactShare.isCompactShare(text)) {
+            return CompactShare.decode(text)
+        }
+        return decodeJson(text)
+    }
+
+    internal fun decodeJson(text: String): AppFile {
         val format = try {
             ProjectCodec.json.parseToJsonElement(text).jsonObject["format"]?.jsonPrimitive?.contentOrNull
         } catch (e: SerializationException) {
@@ -93,6 +101,12 @@ object AppFileCodec {
     fun backupFileName(now: Long, label: String = "Construction Calc backup", zone: ZoneId = ZoneId.systemDefault()): String {
         val date = DateTimeFormatter.ISO_LOCAL_DATE.withZone(zone).format(Instant.ofEpochMilli(now))
         return "$label $date$BACKUP_SUFFIX"
+    }
+
+    /** E.g. `Construction Calc backup 2026-11-20.backup.zip`. */
+    fun backupZipFileName(now: Long, label: String = "Construction Calc backup", zone: ZoneId = ZoneId.systemDefault()): String {
+        val date = DateTimeFormatter.ISO_LOCAL_DATE.withZone(zone).format(Instant.ofEpochMilli(now))
+        return "$label $date$BACKUP_ZIP_SUFFIX"
     }
 }
 
