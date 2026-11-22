@@ -432,8 +432,8 @@ def main() -> None:
     ap.add_argument('--prompts-per-category', type=int, default=16)
     ap.add_argument('--max-prompts', type=int, default=192,
                     help='Balanced maximum number of exemplar queries per image tile; 0 disables cap')
-    ap.add_argument('--allow-raster-traces', action='store_true',
-                    help='Include raster-traced symbols (default: native vector exemplars only)')
+    ap.add_argument('--native-only', action='store_true',
+                    help='Exclude raster-traced NECA symbols; default retains traced Annex A alternatives')
     ap.add_argument('--catalog-only', action='store_true',
                     help='Audit selected NECA categories and prompts, then exit without loading a model/GPU')
     ap.add_argument('--score-thr', type=float, default=0.55)
@@ -444,7 +444,7 @@ def main() -> None:
     args = ap.parse_args()
 
     specs, catalog_report = list_neca_prompt_specs(
-        args.neca_dir.resolve(), allow_raster_traces=args.allow_raster_traces)
+        args.neca_dir.resolve(), allow_raster_traces=not args.native_only)
     allowlist = None
     if args.prompt_allowlist:
         ids = json.loads(args.prompt_allowlist.read_text())
@@ -623,6 +623,11 @@ def main() -> None:
             'verified_ground_truth': False,
             'prompt_selection': 'allowlisted' if args.prompt_allowlist else 'hierarchical_neca',
             'prompt_catalog': {**catalog_summary, 'active_after_render_and_dedup': len(glyphs)},
+            'prompt_taxonomy': {
+                dtype: sorted({g.subtype for g in glyphs if g.device_type == dtype})
+                for dtype in sorted({g.device_type for g in glyphs})
+            },
+            'hierarchy': 'NECA: category > subcategory; separate from detector device_type > subtype',
             'coordinate_system': {
                 'origin': 'bottom_left',
                 'units': 'PDF_points',
