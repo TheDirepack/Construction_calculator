@@ -7,13 +7,22 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.net.Uri
-import android.util.AtomicFile
 import android.util.LruCache
 import android.util.Xml
 import androidx.core.graphics.PathParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
 import java.io.IOException
@@ -23,44 +32,228 @@ import kotlin.math.min
 
 data class PlanSymbol(val id: String, val name: String, val svg: String)
 
+/** Offline symbol organization: user-defined named sets, favorites, and recently used symbol IDs. */
+data class SymbolLibraryMeta(
+    val sets: Map<String, List<String>> = emptyMap(),
+    val favorites: Set<String> = emptySet(),
+    val recents: List<String> = emptyList(),
+) {
+    val isEmpty: Boolean get() = sets.isEmpty() && favorites.isEmpty() && recents.isEmpty()
+}
+
 /** Stores SVGs independently of projects. A placed symbol carries its own SVG. */
-class PlanSymbols(private val context: Context) {
-    private val directory = File(context.filesDir, "plan-symbols")
+class PlanSymbols internal constructor(
+    private val directory: File,
+    private val context: Context? = null,
+    private val validateSvg: (String) -> Unit = { parseSvg(it) },
+) {
+    constructor(context: Context) : this(File(context.filesDir, "plan-symbols"), context.applicationContext)
 
     fun list(): List<PlanSymbol> = directory.listFiles().orEmpty().mapNotNull { file ->
-        if (file.extension != "json") return@mapNotNull null
+        if (!file.isFile || file.extension != "json") return@mapNotNull null
+        val id = file.nameWithoutExtension
+        if (!isValidUuid(id)) return@mapNotNull null
         runCatching {
-            val data = JSONObject(AtomicFile(file).openRead().use { it.readBounded(MAX_SVG_BYTES * 2).decodeToString() })
-            PlanSymbol(file.nameWithoutExtension, data.getString("name"), data.getString("svg"))
+            val raw = file.inputStream().use { it.readBounded(MAX_SVG_BYTES * 2).decodeToString() }
+            val data = Json.parseToJsonElement(raw) as? JsonObject ?: return@mapNotNull null
+            val name = data["name"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val svg = data["svg"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            PlanSymbol(id, name, svg)
         }.getOrNull()
     }.sortedBy { it.name.lowercase() }
 
-    suspend fun import(uri: Uri): PlanSymbol = withContext(Dispatchers.IO) {
-        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Couldn't open the SVG.")
-        val svg = input.use { it.readBounded(MAX_SVG_BYTES).decodeToString().removePrefix("\uFEFF") }
-        val valid = runCatching { parseSvg(svg) }
-        if (valid.isFailure) throw IOException(valid.exceptionOrNull()?.message ?: "Couldn't read this SVG.")
+    fun readMeta(): SymbolLibraryMeta {
+        val file = File(directory, META_FILE_NAME)
+        if (!file.isFile) return SymbolLibraryMeta()
+        return runCatching {
+            val raw = file.inputStream().use { it.readBounded(MAX_SVG_BYTES).decodeToString() }
+            decodeMeta(Json.parseToJsonElement(raw))
+        }.getOrDefault(SymbolLibraryMeta())
+    }
+
+    fun writeMeta(meta: SymbolLibraryMeta) {
+        val clean = sanitizeMeta(meta)
         if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
-            throw IOException("Couldn't save the symbol.")
+            throw IOException("Couldn't save symbol settings.")
         }
-        val symbol = PlanSymbol(UUID.randomUUID().toString(), displayName(context, uri, "Symbol.svg"), svg)
-        val data = JSONObject().put("name", symbol.name).put("svg", svg)
-        val file = AtomicFile(File(directory, "${symbol.id}.json"))
-        val output = file.startWrite()
-        try {
-            output.write(data.toString().encodeToByteArray())
-            file.finishWrite(output)
-        } catch (error: Exception) {
-            file.failWrite(output)
-            throw error
-        }
+        val target = File(directory, META_FILE_NAME)
+        val payload = encodeMeta(clean).toString().encodeToByteArray()
+        atomicWrite(target, "sym-meta-", payload)
+    }
+
+    suspend fun import(uri: Uri): PlanSymbol = withContext(Dispatchers.IO) {
+        val appContext = requireNotNull(context) { "Context is required to import from a Uri." }
+        val input = appContext.contentResolver.openInputStream(uri) ?: throw IOException("Couldn't open the SVG.")
+        val svg = input.use { it.readBounded(MAX_SVG_BYTES).decodeToString().removePrefix("\uFEFF") }
+        val valid = runCatching { validateSvg(svg) }
+        if (valid.isFailure) throw IOException(valid.exceptionOrNull()?.message ?: "Couldn't read this SVG.")
+        val symbol = PlanSymbol(UUID.randomUUID().toString(), displayName(appContext, uri, "Symbol.svg"), svg)
+        writeSymbol(symbol)
         symbol
     }
 
     fun remove(id: String) {
-        if (runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false)) {
-            AtomicFile(File(directory, "$id.json")).delete()
+        if (isValidUuid(id)) {
+            File(directory, "$id.json").delete()
+            if (File(directory, META_FILE_NAME).isFile) {
+                val meta = readMeta()
+                val updatedSets = meta.sets.mapValues { (_, ids) -> ids.filterNot { it == id } }
+                val updated = meta.copy(
+                    sets = updatedSets,
+                    favorites = meta.favorites - id,
+                    recents = meta.recents.filterNot { it == id },
+                )
+                if (updated != meta) writeMeta(updated)
+            }
         }
+    }
+
+    /** Includes imported SVG symbols and organization metadata in full backups, validating every SVG on restore. */
+    val backup: ToolBackup = object : ToolBackup {
+        override fun export(): JsonElement? {
+            val symbols = list()
+            val meta = readMeta()
+            if (symbols.isEmpty() && meta.isEmpty) return null
+            return buildJsonObject {
+                put("version", JsonPrimitive(1))
+                put("symbols", buildJsonArray {
+                    for (symbol in symbols) {
+                        add(buildJsonObject {
+                            put("id", JsonPrimitive(symbol.id))
+                            put("name", JsonPrimitive(symbol.name))
+                            put("svg", JsonPrimitive(symbol.svg))
+                        })
+                    }
+                })
+                if (!meta.isEmpty) put("meta", encodeMeta(meta))
+            }
+        }
+
+        override fun import(data: JsonElement, replace: Boolean) {
+            val array = when (data) {
+                is JsonObject -> data["symbols"] as? JsonArray
+                    ?: throw IllegalArgumentException("Missing symbols array in backup.")
+                is JsonArray -> data
+                else -> throw IllegalArgumentException("Unsupported symbols backup format.")
+            }
+            val importedMeta = (data as? JsonObject)?.get("meta")?.let {
+                runCatching { decodeMeta(it) }.getOrNull()
+            }
+            val validated = mutableListOf<PlanSymbol>()
+            for (item in array) {
+                val obj = item as? JsonObject ?: continue
+                val id = obj["id"]?.jsonPrimitive?.contentOrNull?.trim() ?: continue
+                if (!isValidUuid(id)) continue
+                val name = obj["name"]?.jsonPrimitive?.contentOrNull?.trim()?.take(240)?.ifBlank { null } ?: continue
+                val svg = obj["svg"]?.jsonPrimitive?.contentOrNull?.removePrefix("\uFEFF") ?: continue
+                if (svg.isBlank() || svg.encodeToByteArray().size > MAX_SVG_BYTES) continue
+                if (runCatching { validateSvg(svg) }.isFailure) continue
+                validated += PlanSymbol(id, name, svg)
+            }
+            if (replace) {
+                directory.listFiles().orEmpty()
+                    .filter { it.isFile && it.extension == "json" && isValidUuid(it.nameWithoutExtension) }
+                    .forEach { it.delete() }
+                if (importedMeta != null) writeMeta(importedMeta)
+                else File(directory, META_FILE_NAME).delete()
+            } else if (importedMeta != null && !importedMeta.isEmpty) {
+                val existing = readMeta()
+                val mergedSets = LinkedHashMap<String, List<String>>().apply {
+                    putAll(existing.sets)
+                    for ((name, ids) in importedMeta.sets) {
+                        this[name] = (this[name].orEmpty() + ids).distinct()
+                    }
+                }
+                writeMeta(
+                    SymbolLibraryMeta(
+                        sets = mergedSets,
+                        favorites = existing.favorites + importedMeta.favorites,
+                        recents = (importedMeta.recents + existing.recents).distinct(),
+                    ),
+                )
+            }
+            for (symbol in validated) {
+                writeSymbol(symbol)
+            }
+        }
+    }
+
+    internal fun writeSymbol(symbol: PlanSymbol) {
+        require(isValidUuid(symbol.id)) { "Invalid symbol id." }
+        if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
+            throw IOException("Couldn't save the symbol.")
+        }
+        val target = File(directory, "${symbol.id}.json")
+        require(target.canonicalFile.parentFile == directory.canonicalFile) { "Invalid symbol path." }
+        val payload = buildJsonObject {
+            put("name", JsonPrimitive(symbol.name))
+            put("svg", JsonPrimitive(symbol.svg))
+        }.toString().encodeToByteArray()
+        atomicWrite(target, "sym-", payload)
+    }
+
+    private fun atomicWrite(target: File, prefix: String, payload: ByteArray) {
+        val temp = File.createTempFile(prefix, ".tmp", directory)
+        try {
+            temp.outputStream().use { it.write(payload) }
+            if (!temp.renameTo(target)) {
+                target.delete()
+                if (!temp.renameTo(target)) {
+                    throw IOException("Couldn't save the symbol.")
+                }
+            }
+        } catch (error: Exception) {
+            temp.delete()
+            throw error
+        }
+    }
+
+    private fun isValidUuid(id: String): Boolean =
+        runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false)
+
+    private fun isValidSymbolId(id: String): Boolean =
+        id.isNotBlank() && id.length <= 120 && '/' !in id && '\\' !in id &&
+            id != "." && id != ".." && id.none(Char::isISOControl)
+
+    private fun sanitizeMeta(meta: SymbolLibraryMeta): SymbolLibraryMeta {
+        val cleanSets = LinkedHashMap<String, List<String>>()
+        for ((rawName, rawIds) in meta.sets) {
+            if (cleanSets.size >= MAX_SETS) break
+            val name = rawName.trim().take(80)
+            if (name.isBlank() || name.any(Char::isISOControl) || '/' in name || '\\' in name || name == "." || name == "..") continue
+            val ids = rawIds.asSequence().map(String::trim).filter(::isValidSymbolId).distinct().take(MAX_IDS_PER_SET).toList()
+            cleanSets[name] = ids
+        }
+        val cleanFavorites = meta.favorites.asSequence().map(String::trim).filter(::isValidSymbolId).take(MAX_IDS_PER_SET).toSet()
+        val cleanRecents = meta.recents.asSequence().map(String::trim).filter(::isValidSymbolId).distinct().take(MAX_RECENTS).toList()
+        return SymbolLibraryMeta(cleanSets, cleanFavorites, cleanRecents)
+    }
+
+    private fun encodeMeta(meta: SymbolLibraryMeta): JsonObject = buildJsonObject {
+        put("sets", buildJsonObject {
+            for ((name, ids) in meta.sets) {
+                put(name, buildJsonArray { ids.forEach { add(JsonPrimitive(it)) } })
+            }
+        })
+        put("favorites", buildJsonArray { meta.favorites.forEach { add(JsonPrimitive(it)) } })
+        put("recents", buildJsonArray { meta.recents.forEach { add(JsonPrimitive(it)) } })
+    }
+
+    private fun decodeMeta(element: JsonElement): SymbolLibraryMeta {
+        val obj = element.jsonObject
+        val sets = obj["sets"]?.jsonObject?.entries?.associate { (k, v) ->
+            k to v.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull }
+        }.orEmpty()
+        val favorites = obj["favorites"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }?.toSet().orEmpty()
+        val recents = obj["recents"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
+        return sanitizeMeta(SymbolLibraryMeta(sets, favorites, recents))
+    }
+
+    companion object {
+        private const val META_FILE_NAME = "library-meta.json"
+        private const val MAX_SETS = 50
+        private const val MAX_IDS_PER_SET = 200
+        private const val MAX_RECENTS = 24
     }
 }
 

@@ -43,11 +43,40 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
     SMALL_CONDUCTOR_14_CCA("14 AWG copper-clad aluminum conditions"),
     STANDARD_OCPD("Standard ampere ratings of fuses and inverse-time breakers"),
 
+    // Feeder and service load calculations (Article 220)
+    LIGHTING_DEMAND("Lighting load demand factors", isTable = true),
+    RECEPTACLE_DEMAND("Demand factors for non-dwelling receptacle loads", isTable = true),
+    SMALL_APPLIANCE_LAUNDRY("Small-appliance and laundry loads, dwelling unit"),
+    DWELLING_APPLIANCE_DEMAND("Fastened-in-place appliance load, dwelling units"),
+    DRYER_DEMAND("Demand factors for household electric clothes dryers", isTable = true),
+    RANGE_DEMAND("Demand loads for household electric ranges and cooking appliances", isTable = true),
+    FEEDER_MOTOR_LOAD("Motors on a feeder: 125% of the largest motor"),
+    NONCOINCIDENT_LOADS("Noncoincident loads"),
+    OPTIONAL_DWELLING("Optional feeder and service calculation, dwelling unit"),
+    OPTIONAL_DWELLING_GENERAL("Optional dwelling calculation: general loads"),
+    OPTIONAL_DWELLING_HVAC("Optional dwelling calculation: heating and air-conditioning load"),
+
     // Grounding
     EGC_SIZE("Minimum size of equipment grounding conductors", isTable = true),
     EGC_INCREASED("Equipment grounding conductor increased with the ungrounded conductors"),
     EGC_IDENTIFICATION("Identifying wire-type equipment grounding conductors"),
     EGC_MULTIPLE_CIRCUITS("One equipment grounding conductor for several circuits in a raceway"),
+    GEC_SIZE("Grounding electrode conductor for alternating-current systems", isTable = true),
+    GEC_GROUND_ROD_MAX("Grounding electrode conductor to rod, pipe, or plate electrodes"),
+    GEC_CONCRETE_ENCASED_MAX("Grounding electrode conductor to concrete-encased electrodes"),
+    SUPPLY_SIDE_BONDING("Supply-side and main bonding jumper sizing", isTable = true),
+
+    // Boxes and enclosures
+    BOX_FILL("Box fill calculations"),
+    METAL_BOX_VOLUMES("Standard metal box volumes", isTable = true),
+    BOX_VOLUME_ALLOWANCE("Volume allowance required per conductor", isTable = true),
+    PULL_BOX_STRAIGHT("Pull and junction boxes: straight pulls"),
+    PULL_BOX_ANGLE("Pull and junction boxes: angle or U pulls"),
+
+    // Wiring methods and raceway installation
+    BURIAL_DEPTH("Minimum cover requirements, 0 to 1000 volts ac, 1500 volts dc", isTable = true),
+    RACEWAY_SUPPORT("Securing and supporting of raceways"),
+    PVC_EXPANSION("Expansion characteristics of PVC rigid nonmetallic conduit", isTable = true),
 
     // Conductors
     MINIMUM_CONDUCTOR_SIZE("Minimum size of conductors"),

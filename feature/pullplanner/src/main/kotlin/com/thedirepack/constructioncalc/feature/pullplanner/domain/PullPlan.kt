@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.pullplanner.domain
 
+import com.thedirepack.constructioncalc.core.electrical.PullFormulas
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.FrictionPreset
@@ -97,7 +98,7 @@ object PullReport {
         }
         if (r.run.path.isNotEmpty()) add(ResultValue.number(KEY_BEND_DEGREES, "Total bends", ValueKind.ANGLE, r.totalDegrees, "${num(r.totalDegrees)}°"))
         r.tensionLimit?.let { add(ResultValue.number("tension_limit", "Tension limit (${it.label})", ValueKind.FORCE, it.value, lb(it.value, units))) }
-        r.jamRatio?.let { add(ResultValue.number("jam_ratio", "Jam ratio (1.05 D/d)", ValueKind.NUMBER, it, num(it, 2))) }
+        r.jamRatio?.let { add(ResultValue.number("jam_ratio", "Jam ratio (${PullFormulas.OVALITY_LABEL})", ValueKind.NUMBER, it, num(it, 2))) }
         r.clearanceIn?.let { add(ResultValue.number("clearance", "Clearance", ValueKind.LENGTH, it, Measure.SMALL_LENGTH.format(it, units, if (units == UnitSystem.METRIC) 1 else 2))) }
     }
 

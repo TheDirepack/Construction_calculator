@@ -167,7 +167,7 @@ class ProjectEditsTest {
     @Test fun deletingARunTakesItOutOfEveryCircuit() {
         val run = Run(name = "R", raceway = Raceway())
         val c = Circuit(slot = 1, runIds = listOf(run.id))
-        val r = project(Panel(name = "A", circuits = listOf(c)), runs = listOf(run)).deleteRunAndUnassign(run.id, now = 1)
+        val r = project(Panel(name = "A", circuits = listOf(c)), runs = listOf(run)).removeRun(run.id, now = 1)
         assertTrue(r.runs.isEmpty())
         assertTrue(r.panels.single().circuits.single().runIds.isEmpty())
     }

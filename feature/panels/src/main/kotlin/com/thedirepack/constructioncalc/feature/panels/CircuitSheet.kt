@@ -1,5 +1,9 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.runtime.produceState
 import com.thedirepack.constructioncalc.core.electrical.code.codePercent
 import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.ui.show
@@ -40,9 +44,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
+import com.thedirepack.constructioncalc.core.electrical.ConduitTable
+import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import com.thedirepack.constructioncalc.core.electrical.StandardOcpd
 import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
+import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.Circuit
 import com.thedirepack.constructioncalc.core.model.CircuitKind
@@ -124,17 +131,26 @@ internal fun CircuitSheet(
     var confirmDelete by remember { mutableStateOf(false) }
     var newGroupPrompt by remember { mutableStateOf(false) }
     var newRunPrompt by remember { mutableStateOf(false) }
+    var showInlineConduit by remember {
+        mutableStateOf(initial.conduitTag.isNotBlank() || initial.conduitType != null || initial.conduitSize != null)
+    }
     val settings = rememberAppSettings()
     val length = rememberLengthFormatter()
 
     val vaValue = loadText.toDecimalOrNull()?.let { if (loadUnit == LoadUnit.VA) it else LoadMath.va(panel.system, draft.poles, it) }
     val effective = draft.copy(loadVa = if (draft.kind == CircuitKind.LOAD) vaValue else null)
-    val design: CircuitDesign? = remember(ctx.project, panelId, effective, settings.unitSystem) {
-        ProjectAnalysis.analyze(ctx.project.upsertCircuit(panelId, effective, 0L), settings.unitSystem).circuits[effective.id]
+    // The whole-project analysis (shared runs, feeders) is heavy: run it off the main thread, a beat
+    // after typing stops, and cancel a draft's analysis as soon as the next keystroke supersedes it.
+    // The last result stays on screen meanwhile.
+    val design: CircuitDesign? by produceState<CircuitDesign?>(null, ctx.project, panelId, effective, settings.unitSystem) {
+        if (value != null) delay(150)
+        value = withContext(Dispatchers.Default) {
+            ProjectAnalysis.analyze(ctx.project.upsertCircuit(panelId, effective, 0L), settings.unitSystem).circuits[effective.id]
+        }
     }
     LaunchedEffect(design) {
-        if (design != null) {
-            val values = PublishedValues.circuit(design, length)
+        design?.let { d ->
+            val values = PublishedValues.circuit(d, length)
             if (values.isNotEmpty()) ctx.host.publish(values, context = "${panel.name} circuit ${effective.slots.joinToString(",")}")
         }
     }
@@ -322,6 +338,49 @@ internal fun CircuitSheet(
                                 null
                             },
                         )
+                        if (draft.runIds.isEmpty()) {
+                            ToggleRow(
+                                "Inline conduit details (optional)",
+                                showInlineConduit,
+                                { on ->
+                                    showInlineConduit = on
+                                    if (!on) draft = draft.copy(conduitTag = "", conduitType = null, conduitSize = null)
+                                },
+                                "Conduit tag, type & size without creating a full Run.",
+                            )
+                            if (showInlineConduit) {
+                                OutlinedTextField(
+                                    value = draft.conduitTag,
+                                    onValueChange = { draft = draft.copy(conduitTag = it) },
+                                    label = { Text("Conduit tag / number") },
+                                    placeholder = { Text("e.g. C-1, HR-12") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                ChoiceField<ConduitType?>(
+                                    label = "Conduit type",
+                                    options = listOf<ConduitType?>(null) + ConduitType.entries,
+                                    selected = draft.conduitType,
+                                    onSelect = { type ->
+                                        val validSize = if (type != null && draft.conduitSize != null && ConduitTable.find(type, draft.conduitSize!!) == null) {
+                                            null
+                                        } else {
+                                            draft.conduitSize
+                                        }
+                                        draft = draft.copy(conduitType = type, conduitSize = validSize)
+                                    },
+                                    optionLabel = { it?.displayName ?: "Not set (PVC for voltage drop)" },
+                                )
+                                ChoiceField<TradeSize?>(
+                                    label = "Conduit size",
+                                    options = listOf<TradeSize?>(null) + (draft.conduitType?.let(ConduitTable::tradeSizes) ?: TradeSize.entries),
+                                    selected = draft.conduitSize,
+                                    onSelect = { draft = draft.copy(conduitSize = it) },
+                                    optionLabel = { it?.display ?: "Not set" },
+                                )
+                            }
+                        }
                     }
 
                     FormSection("Conductor") {
@@ -364,7 +423,16 @@ internal fun CircuitSheet(
                             enabled = canSave,
                             onClick = {
                                 val saved = when (effective.kind) {
-                                    CircuitKind.SPACE -> effective.copy(breakerAmps = null, loadVa = null, neutral = false, continuous = false, runIds = emptyList())
+                                    CircuitKind.SPACE -> effective.copy(
+                                        breakerAmps = null,
+                                        loadVa = null,
+                                        neutral = false,
+                                        continuous = false,
+                                        runIds = emptyList(),
+                                        conduitTag = "",
+                                        conduitType = null,
+                                        conduitSize = null,
+                                    )
                                     CircuitKind.SPARE -> effective.copy(loadVa = null, continuous = false)
                                     CircuitKind.LOAD -> effective
                                 }
@@ -420,6 +488,14 @@ private fun ReadOnlySummary(c: Circuit, panel: Panel) {
         c.description.takeIf { it.isNotBlank() }?.let { "Description: $it" },
         c.loadVa?.let { "Load: ${Wire.va(it)}" },
         "Continuous: ${if (c.continuous) "yes" else "no"} · Neutral: ${if (c.neutral) "yes" else "no"} · Nonlinear: ${if (c.nonlinear) "yes" else "no"}",
+        if (c.runIds.isEmpty()) {
+            listOfNotNull(
+                c.conduitTag.trim().takeIf { it.isNotEmpty() },
+                listOfNotNull(c.conduitSize?.display, c.conduitType?.displayName).takeIf { it.isNotEmpty() }?.joinToString(" "),
+            ).takeIf { it.isNotEmpty() }?.let { "Inline conduit: ${it.joinToString(" ")}" }
+        } else {
+            null
+        },
         c.note.takeIf { it.isNotBlank() }?.let { "Note: $it" },
     )
     lines.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }

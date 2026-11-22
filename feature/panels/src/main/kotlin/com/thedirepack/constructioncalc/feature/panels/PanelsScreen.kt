@@ -145,11 +145,27 @@ private fun ProjectPanels(project: Project, host: ToolHost) {
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     if (openPanel != null) {
                         DropdownMenuItem(text = { Text("Share ${openPanel.name} as PDF") }, onClick = { menu = false; export.pdf(listOf(openPanel.id)) })
+                        DropdownMenuItem(text = { Text("Share ${openPanel.name} as printable PNG") }, onClick = { menu = false; export.png(openPanel.id) })
+                        DropdownMenuItem(text = { Text("Export ${openPanel.name} as CSV") }, onClick = { menu = false; export.scheduleCsv(listOf(openPanel.id)) })
                         DropdownMenuItem(text = { Text("Share ${openPanel.name} as text") }, onClick = { menu = false; export.text(listOf(openPanel.id)) })
                     }
                     DropdownMenuItem(
                         text = { Text(if (openPanel != null) "Share all panels as PDF" else "Share panel schedule (PDF)") },
                         onClick = { menu = false; export.pdf(null) },
+                    )
+                    if (openPanel == null && project.panels.isNotEmpty()) {
+                        DropdownMenuItem(
+                            text = { Text("Share printable PNG") },
+                            onClick = { menu = false; export.png(null) },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text(if (openPanel != null) "Export all panels as CSV" else "Export schedule (CSV)") },
+                        onClick = { menu = false; export.scheduleCsv(null) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Export material takeoff (CSV)") },
+                        onClick = { menu = false; export.takeoffCsv() },
                     )
                     DropdownMenuItem(
                         text = { Text(if (openPanel != null) "Share all panels as text" else "Share as text") },

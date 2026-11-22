@@ -8,12 +8,13 @@ import os
 import json
 import ssl
 import urllib.request
+from pathlib import Path
 
-DEST = ('/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/'
-        '4_archives/state_dot_samples/caltrans')
+BLUEPRINTS_ROOT = Path(
+    os.environ.get('BLUEPRINTS_ROOT', Path(__file__).resolve().parent.parent / 'blueprints_and_libraries')
+)
+DEST = str(BLUEPRINTS_ROOT / '4_archives/state_dot_samples/caltrans')
 ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
 H = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                    '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
 

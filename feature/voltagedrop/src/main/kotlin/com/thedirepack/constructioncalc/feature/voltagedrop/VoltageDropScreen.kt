@@ -110,7 +110,7 @@ fun VoltageDropScreen(host: ToolHost) {
             }
 
             FormSection("Conductor") {
-                SegmentedChoice(
+                ChoiceField(
                     options = ConductorMaterial.entries,
                     selected = inputs.conductorMaterial,
                     onSelect = { m -> vm.update { it.copy(material = m.name) } },

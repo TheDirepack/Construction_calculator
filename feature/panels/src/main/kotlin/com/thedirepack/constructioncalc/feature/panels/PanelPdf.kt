@@ -1,11 +1,12 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import android.text.TextUtils
+import android.text.TextPaint
 import com.thedirepack.constructioncalc.core.electrical.code.Code
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
-import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.Circuit
 import com.thedirepack.constructioncalc.core.model.CircuitKind
@@ -26,8 +27,8 @@ import java.io.OutputStream
  * (descriptions at the outer edges, circuit numbers beside the phase column), totals and the date.
  */
 internal object PanelPdf {
-    private const val PAGE_W = 612
-    private const val PAGE_H = 792
+    internal const val PAGE_W = 612
+    internal const val PAGE_H = 792
     private const val MARGIN = 36f
 
     fun write(
@@ -37,40 +38,54 @@ internal object PanelPdf {
         panelIds: List<String>?,
         header: List<String>,
         date: String,
-        length: (Quantity) -> String,
         units: UnitSystem = UnitSystem.IMPERIAL,
     ) {
         val panels = panelIds?.mapNotNull(project::panel) ?: project.panels
+        // Panels with more warnings than fit on their page get the full list on the extra pages.
+        val overflow = panels.mapNotNull { p -> warningsOf(design, p).takeIf { it.size > MAX_PAGE_WARNINGS }?.let { p to it } }
+        val warningLines = if (overflow.isEmpty()) emptyList() else buildList {
+            add("WARNINGS")
+            overflow.forEach { (p, list) -> add("  ${p.name}"); list.forEach { add("    $it") } }
+            add("")
+        }
+        val extras = warningLines + ScheduleText.projectExtras(project, design, units)
+        val lineHeight = 14f
+        val linesPerExtraPage = ((PAGE_H - 2 * MARGIN - 56f) / lineHeight).toInt().coerceAtLeast(1)
+        val extraChunks = if (extras.isEmpty()) emptyList() else extras.chunked(linesPerExtraPage)
+        val panelPages = maxOf(panels.size, 1)
+        val totalPages = panelPages + extraChunks.size
+        val width = PAGE_W - 2 * MARGIN
+
         val doc = PdfDocument()
         try {
             panels.forEachIndexed { index, panel ->
                 val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, index + 1).create())
-                drawPanel(page.canvas, project, design, panel, header, date, index + 1, panels.size)
+                drawPanel(page.canvas, project, design, panel, header, date, index + 1, totalPages)
                 doc.finishPage(page)
             }
             if (panels.isEmpty()) {
                 val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, 1).create())
                 page.canvas.drawText("No panels.", MARGIN, MARGIN + 20f, paint(12f))
+                drawPageFooter(page.canvas, date, 1, totalPages, width)
                 doc.finishPage(page)
             }
             // Project-wide pages: pulls and the material takeoff, as plain lines.
-            val extras = ScheduleText.projectExtras(project, design, units)
-            if (extras.isNotEmpty()) {
-                var pageNumber = maxOf(panels.size, 1)
+            if (extraChunks.isNotEmpty()) {
+                var pageNumber = panelPages
                 val body = paint(10f)
                 val bold = paint(11f, bold = true)
-                val lineHeight = 14f
-                extras.chunked(((PAGE_H - 2 * MARGIN - 40f) / lineHeight).toInt()).forEach { chunk ->
+                extraChunks.forEach { chunk ->
                     pageNumber++
                     val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, pageNumber).create())
                     var y = MARGIN + 14f
-                    page.canvas.drawText(fit("${project.name} · $date", bold, PAGE_W - 2 * MARGIN), MARGIN, y, bold)
+                    page.canvas.drawText(fit("${project.name} · $date", bold, width), MARGIN, y, bold)
                     y += 24f
                     chunk.forEach { text ->
                         val heading = text.isNotEmpty() && !text.startsWith(" ")
-                        page.canvas.drawText(fit(text, if (heading) bold else body, PAGE_W - 2 * MARGIN), MARGIN, y, if (heading) bold else body)
+                        page.canvas.drawText(fit(text, if (heading) bold else body, width), MARGIN, y, if (heading) bold else body)
                         y += lineHeight
                     }
+                    drawPageFooter(page.canvas, date, pageNumber, totalPages, width)
                     doc.finishPage(page)
                 }
             }
@@ -78,6 +93,12 @@ internal object PanelPdf {
         } finally {
             doc.close()
         }
+    }
+
+    private fun drawPageFooter(canvas: Canvas, date: String, pageNumber: Int, pageCount: Int, width: Float) {
+        val foot = paint(7f, gray = true)
+        val pageText = "Construction Calc · $date · page $pageNumber of $pageCount"
+        canvas.drawText(pageText, MARGIN + width - foot.measureText(pageText), PAGE_H - MARGIN + 16f, foot)
     }
 
     private fun paint(size: Float, bold: Boolean = false, gray: Boolean = false) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -90,14 +111,19 @@ internal object PanelPdf {
     private val strongLine = Paint().apply { color = 0xFF333333.toInt(); strokeWidth = 0.9f; style = Paint.Style.STROKE }
 
     /** [text] cut with an ellipsis to fit [width] points. */
-    private fun fit(text: String, p: Paint, width: Float): String {
-        if (p.measureText(text) <= width) return text
-        var end = text.length
-        while (end > 1 && p.measureText(text.substring(0, end) + "…") > width) end--
-        return text.substring(0, end).trimEnd() + "…"
+    private fun fit(text: String, p: Paint, width: Float): String =
+        TextUtils.ellipsize(text, TextPaint(p), width, TextUtils.TruncateAt.END).toString()
+
+    /** How many warnings fit under a panel's totals; the rest are counted and listed elsewhere. */
+    private const val MAX_PAGE_WARNINGS = 4
+
+    /** Every conflict and note for [panel], in schedule order. */
+    internal fun warningsOf(design: ProjectDesign, panel: Panel): List<String> {
+        val pd = design.panels.firstOrNull { it.panel.id == panel.id }
+        return pd?.conflicts.orEmpty() + pd?.notes.orEmpty().map { it.text }
     }
 
-    private fun drawPanel(
+    internal fun drawPanel(
         canvas: Canvas,
         project: Project,
         design: ProjectDesign,
@@ -106,6 +132,7 @@ internal object PanelPdf {
         date: String,
         pageNumber: Int,
         pageCount: Int,
+        overflowHint: String = "see the warnings page",
     ) {
         val width = PAGE_W - 2 * MARGIN
         var y = MARGIN
@@ -132,7 +159,9 @@ internal object PanelPdf {
 
         // --- Table ---
         val pd = design.panels.firstOrNull { it.panel.id == panel.id }
-        val warnings = (pd?.conflicts.orEmpty() + pd?.notes.orEmpty().map { it.text }).take(4)
+        val all = warningsOf(design, panel)
+        val warnings = if (all.size <= MAX_PAGE_WARNINGS) all
+        else all.take(MAX_PAGE_WARNINGS - 1) + "${all.size - MAX_PAGE_WARNINGS + 1} more — $overflowHint"
         val totalsHeight = 16f + 12f * (3 + warnings.size) + 24f
         val schedule = ScheduleLayout.build(panel)
         val rows = schedule.rows.size

@@ -1,16 +1,28 @@
 package com.thedirepack.constructioncalc.feature.formulas
 
+import com.thedirepack.constructioncalc.core.electrical.ConductorResistance
+import com.thedirepack.constructioncalc.core.electrical.ResistanceLength
+import com.thedirepack.constructioncalc.core.electrical.ResistanceLengthResult
+import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.formula.Formula
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaQuantity
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaSolution
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaSolver
 import com.thedirepack.constructioncalc.core.electrical.formula.Variable
 import com.thedirepack.constructioncalc.core.data.AppSettings
+import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Decimals
+import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.ui.components.Notice
 import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
+import com.thedirepack.constructioncalc.core.ui.format
+import com.thedirepack.constructioncalc.core.ui.isMetric
+import com.thedirepack.constructioncalc.core.ui.show
 import java.math.BigDecimal
 import java.math.MathContext
 import kotlin.math.abs
@@ -103,3 +115,104 @@ fun formulasOutput(inputs: FormulaInputs, settings: AppSettings = AppSettings())
 
 private fun needMore(formula: Formula, inputs: FormulaInputs, system: com.thedirepack.constructioncalc.core.measure.UnitSystem): String =
     if (inputs.given(system).isEmpty()) "Enter the values you know; the empty ones are solved for." else "Enter one more value to solve."
+
+/** Output of the Resistance → Wire Length calculator mode. Pure, so it's tested without Android. */
+data class ResistanceLengthOutput(
+    val calculation: ResistanceLengthResult?,
+    val results: List<ResultValue>,
+    val notices: List<Notice>,
+    val summary: String,
+)
+
+fun resistanceLengthOutput(inputs: FormulaInputs, settings: AppSettings = AppSettings()): ResistanceLengthOutput {
+    val size = inputs.conductorSize
+    val material = inputs.wireMaterial
+    val stranding = if (ConductorResistance.hasSolidOption(size)) inputs.wireStranding else com.thedirepack.constructioncalc.core.electrical.Stranding.STRANDED
+    val resistanceText = inputs.measuredResistance.trim()
+    val resistance = Decimals.parse(resistanceText)
+    val ambientText = inputs.wireAmbientC.trim()
+    val ambientC = if (ambientText.isEmpty()) ResistanceLength.DEFAULT_AMBIENT_C else Decimals.parse(ambientText)
+
+    val problems = buildList {
+        if (resistanceText.isNotEmpty() && (resistance == null || resistance <= 0.0)) {
+            add(Notice("Measured resistance must be a positive number.", NoticeLevel.ERROR))
+        }
+        if (ambientText.isNotEmpty() && ambientC == null) {
+            add(Notice("Ambient temperature isn't a number.", NoticeLevel.ERROR))
+        }
+    }
+
+    if (problems.isNotEmpty() || resistance == null || ambientC == null) {
+        return ResistanceLengthOutput(
+            calculation = null,
+            results = emptyList(),
+            notices = problems.ifEmpty {
+                listOf(Notice("Enter a measured DC resistance to calculate conductor length.", NoticeLevel.INFO, refId = "nec-conductor-properties"))
+            },
+            summary = "",
+        )
+    }
+
+    val calc = ResistanceLength.calculate(
+        measuredResistance = resistance,
+        unit = inputs.resistanceUnit,
+        size = size,
+        material = material,
+        stranding = stranding,
+        ambientC = ambientC,
+        roundTrip = inputs.wireRoundTrip,
+    ) ?: return ResistanceLengthOutput(
+        calculation = null,
+        results = emptyList(),
+        notices = listOf(Notice("Temperature or resistance is out of range for ${size.label} ${material.label}.", NoticeLevel.ERROR)),
+        summary = "",
+    )
+
+    val lengthQty = Quantity.inches(Rational.of(calc.lengthIn))
+    val lengthText = settings.format(lengthQty)
+    val perUnit = if (settings.isMetric) calc.ohmsPerKftAtTemp / 0.3048 else calc.ohmsPerKftAtTemp
+    val perUnitLabel = if (settings.isMetric) "Ω/km" else "Ω/kft"
+    val effText = "${FormulasText.number(calc.effectiveResistanceOhms)} Ω"
+
+    val results = listOf(
+        ResultValue.of(
+            key = "resistance_length.length",
+            label = if (calc.roundTrip) "One-way conductor length" else "Conductor length",
+            quantity = lengthQty,
+            text = lengthText,
+        ),
+        ResultValue.number(
+            key = "resistance_length.ohms_per_unit",
+            label = "Resistance at ${settings.show(Measure.TEMPERATURE, ambientC, 0)}",
+            kind = ValueKind.NUMBER,
+            value = perUnit,
+            text = "${FormulasText.number(perUnit)} $perUnitLabel",
+        ),
+        ResultValue.number(
+            key = "resistance_length.effective_ohms",
+            label = if (calc.roundTrip) "One-way resistance (÷2)" else "Conductor resistance",
+            kind = ValueKind.RESISTANCE,
+            value = calc.effectiveResistanceOhms,
+            text = effText,
+        ),
+    )
+
+    val refTemp = settings.show(Measure.TEMPERATURE, Code.book.values.resistanceReferenceC, 0)
+    val notices = buildList {
+        if (calc.roundTrip) {
+            add(Notice("Round-trip loop: measured resistance was divided by 2 for the one-way conductor length."))
+        }
+        add(
+            Notice(
+                "Based on ${Code.label} ${CodeRule.CONDUCTOR_PROPERTIES.cite} (${size.label} ${material.label}, ${stranding.label.lowercase()}) corrected from $refTemp to ${settings.show(Measure.TEMPERATURE, ambientC, 0)}.",
+                refId = "nec-conductor-properties",
+            ),
+        )
+        if (!ConductorResistance.hasOwnColumn(material)) {
+            add(Notice("${material.label} has no separate ${CodeRule.CONDUCTOR_PROPERTIES.cite} column; aluminum values are used.", refId = "nec-conductor-properties"))
+        }
+    }
+
+    val summary = "${size.label} ${material.shortLabel} (${FormulasText.number(resistance)} ${inputs.resistanceUnit.label}): $lengthText"
+    return ResistanceLengthOutput(calc, results, notices, summary)
+}

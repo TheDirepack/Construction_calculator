@@ -9,29 +9,13 @@ path is derivable from the item id:
 So the sheets are fetched directly from tile.loc.gov without further API calls.
 """
 import os
-import re
 import json
-import ssl
-import time
-import urllib.request
-import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-DEST = ('/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/'
-        '4_archives/loc_habs_haer_hals')
+from dl_common import BLUEPRINTS_ROOT, save, slug
+
+DEST = str(BLUEPRINTS_ROOT / '4_archives/loc_habs_haer_hals')
 MANIFEST = os.path.join(DEST, 'manifest.json')
-
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
-H = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                   '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-
-
-def slug(text, limit=70):
-    text = re.sub(r'<[^>]+>', '', text or '')
-    text = re.sub(r'[^A-Za-z0-9]+', '_', text).strip('_').lower()
-    return text[:limit] or 'drawing'
 
 
 def base_url(item_id):
@@ -42,41 +26,11 @@ def base_url(item_id):
 
 
 def download(url, path, jpeg):
-    if os.path.exists(path) and os.path.getsize(path) > 0:
-        return os.path.getsize(path)
-    for attempt in range(4):
-        try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=H), timeout=180, context=ctx) as r, \
-                    open(path + '.part', 'wb') as f:
-                while True:
-                    chunk = r.read(1024 * 256)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-            os.replace(path + '.part', path)
-            return os.path.getsize(path)
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                break
-            time.sleep(4 * (attempt + 1))
-        except Exception:  # noqa: BLE001
-            time.sleep(4 * (attempt + 1))
-    # Fall back to the 1024px JPEG when the master TIFF is unavailable.
-    if jpeg:
-        jpath = path.rsplit('.', 1)[0] + '.jpg'
-        try:
-            with urllib.request.urlopen(urllib.request.Request(jpeg, headers=H), timeout=180, context=ctx) as r, \
-                    open(jpath + '.part', 'wb') as f:
-                while True:
-                    chunk = r.read(1024 * 256)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-            os.replace(jpath + '.part', jpath)
-            return os.path.getsize(jpath)
-        except Exception:  # noqa: BLE001
-            pass
-    return 0
+    """The master TIFF, or the 1024px JPEG beside it when the master is unavailable."""
+    n = save(url, path, timeout=180, attempts=4, backoff=4, stop_on_404=True)
+    if n or not jpeg:
+        return n
+    return save(jpeg, path.rsplit('.', 1)[0] + '.jpg', timeout=180, attempts=1)
 
 
 def main():
@@ -86,7 +40,7 @@ def main():
     for item in manifest['items']:
         prefix = base_url(item['item_id'])
         for sp in range(1, item['sheets'] + 1):
-            name = f"{item['item_id']}_sheet{sp:02d}_{slug(item['title'])}.tif"
+            name = f"{item['item_id']}_sheet{sp:02d}_{slug(item['title'], limit=70, fallback='drawing')}.tif"
             jobs.append((prefix + f'{sp:05d}a.tif', os.path.join(DEST, name),
                          prefix + f'{sp:05d}v.jpg'))
     print(f'{len(jobs)} sheets to fetch for {len(manifest["items"])} items', flush=True)

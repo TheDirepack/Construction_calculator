@@ -12,9 +12,9 @@ See [Requirements and acceptance checklist](REQUIREMENTS.md) for the original sc
 - Multi-module build with convention plugins; pure-Kotlin engine (`:core:measure`), model
   (`:core:model`) and electrical tables (`:core:electrical`)
 - Tool API (`ToolModule` / `ToolHost`): one drawer, one look, one back stack
-- Projects → runs → items from any tool; saved as one readable JSON file per project (`Name.project.json`); full backups as `….backup.json`;
-  share as attachment + text (email/messages), save via file picker, open/import from other apps;
-  no permissions
+- Projects → runs → items from any tool; saved as one readable JSON file per project (`Name.project.json`, or `.zip` with PDFs); full backups as a complete `.backup.zip` for device-to-device migration;
+  share as compact text (SMS-friendly for non-PDF work) or attachment + text (email/messages), save via file picker, open/import from other apps;
+  no permissions required for core workflows
 - Values flow between tools: every finished result is published; every length field is the
   feet-inch calculator and offers recent results and active-project results by kind
 - One Settings screen: General (theme, animations on/off), Measurements (Auto/ft-in/in, precision),
@@ -38,11 +38,11 @@ inventory of features, never as a source of code, art or text.
 | Partial Reel Length | **done** (v1) | Southwire Partial Reel (`com.southwire.partialReelCalculator`) |
 | Unit Conversions | **done** (v1) | Southwire Conversion (`com.southwire.conversion`) |
 | VFD Sizing | **done** (v1, tables checked vs NEC 2023) | Southwire VFD Sizing (`com.southwire.VFDSizingCalculator`) |
-| Well & Pump | last (after everything else) | Well Drilling (`com.welldrilling`) |
 | Panels & Circuits | **done** (v1: schedules, feeders, design engine, PDF/text, links to the other tools) | Original: panel schedules linked to runs, wire sizing |
 | Electrical Formulas | **done** (v1: 18 formulas, solve for any blank; [tool notes](tools/formulas.md)) | Ugly's-style formula pages, Southwire Power Conversion |
 | Reference | **done** (v1: NEC tables generated from the engine data, formula sheet, field references; [tool notes](tools/reference.md)) | Original; edition-aware via `CodeRule` ([CODE_UPDATES.md](CODE_UPDATES.md)) |
 | Projects & Runs | **done** (circuits and runs open Voltage Drop, Conduit Fill, Bending and Panels; shared text includes the design) | Original to this app: links all of the above |
+| Drawings | **done** (v1: offline PDF takeoff, snap/loupe, routes, markups, stylus, revisions, exports; [plan](plans/pdf-plan-measuring.md)) | Bluebeam, Fieldwire, Autodesk Build |
 
 ## 1. Foot-Inch Calculator (done: v0.1)
 
@@ -62,7 +62,7 @@ Next for this tool:
 - [ ] Circle helpers (circumference and area from a diameter)
 - [ ] Edit an earlier part of the expression, not only the end
 - [ ] Landscape and tablet layout
-- [ ] Calculation **tape** showing each step's running total, where you can tap any line to edit it, swipe to delete it, and long-press to name it (ArchCalc's best history feature)
+- [ ] Full calculation history / **tape** showing everything calculated with each step's running total, where you can tap any line to edit or recall it, swipe to delete it, and long-press to name it (ArchCalc's best history feature)
 - [ ] **Series / layout marks**: multiples of the answer plus an offset, for spacing studs, balusters and joists
 - [ ] Saved values / favorites, plus a picker to drop a saved, copied or clipboard value into any input
 - [ ] **Material outputs**: show an area or volume as sheets, bags or yards of concrete, using material units the user defines
@@ -153,22 +153,17 @@ Further examples from the [Southwire calculator catalog](https://www.southwire.c
 - Constant- or variable-torque loads, single-phase input derating, altitude and temperature derating
 - Outputs: the drive's current rating needed, input and output conductors, OCPD guidance
 
-## 9. Well & Pump
-
-To be scoped once the reference research for `com.welldrilling` is done. That app's actual function
-still needs confirming; it likely covers well volume, grout and gravel-pack volume, pump sizing and
-total dynamic head.
-
-## 10. Projects & Runs (linking everything together)
+## 9. Projects & Runs (linking everything together)
 
 The main thing this app adds over single-purpose calculators:
 - A **Project** holds **Runs**, for example "Panel A → RTU-3".
 - A run collects linked calculations: feet-inch takeoffs → total length → conduit bends along the run → conduit fill → voltage drop for the run length → pull tension along the bends → wire from the reel.
 - Values flow between tools: a length worked out in Foot-Inch can feed Voltage Drop and Pull Planner without retyping it.
 - Each tool's screen gets an "Add to run" action, and a run shows every step and its result.
-- Sharing: export a run or project as a readable summary (text or PDF) and as a file that someone else's copy of the app can import. Later: a share link.
-- Drawings can open project PDFs, calibrate scale zones, save measured lines, and add ink, vector marks, text, and imported SVG symbols. Export an annotated PDF or editable drawing JSON, or ship the originals with the project ZIP. [PDF plan measuring proposal](plans/pdf-plan-measuring.md)
-- Storage: one plain JSON file per project (`core:data` `FileProjectStore`, unreadable files set aside in `projects/damaged/`), the same format that is shared.
+- **Sharing:** export a run or project as a readable summary (text or PDF) and as a file that someone else's copy of the app can import. For non-PDF projects/calculations, support a compact share format small enough to send over a text message; projects with PDFs share as a ZIP over email/share sheet (no cloud relay or accounts).
+- **Full device-to-device backups:** export everything (all projects, original PDFs, imported SVG symbols, app & tool settings, tool data, and recents) in one `.backup.zip` so you can move from one device to another and restore completely.
+- **Drawings:** open project PDFs, calibrate scale zones (including with a Bluetooth laser distance meter for exact known-dimension calibration), snap to lines, save measured lines, and add ink, vector marks, text, and imported SVG symbols. Export an annotated PDF or editable drawing JSON, or ship the originals with the project ZIP. [PDF plan measuring proposal](plans/pdf-plan-measuring.md)
+- **Storage:** one plain JSON file per project (`core:data` `FileProjectStore`, unreadable files set aside in `projects/damaged/`), the same format that is shared.
 
 ## Architecture notes
 
@@ -197,8 +192,12 @@ Panels, circuits and conduit runs live in the project and are linked:
   - computes conduit fill and the smallest conduit (Chapter 9 Tables 1, 4, 5)
 - **Exports:** panel schedule PDF and text, headed with the company profile.
 
-Next: feeder and service load calculations (Article 220), demand factors, available fault current,
-series ratings, and selective coordination notes.
+Next:
+- [ ] **Flexible partial-detail inputs**: let circuits work without requiring a full conduit run — enter just a length measurement, or a conduit tag + size, or a full linked run, and compute what's possible from the details available
+- [ ] **Automatic recomputation**: automatically recompute Voltage Drop and Conduit Fill whenever upstream circuit or run inputs change, surfacing a warning immediately if out of spec (Wire Pull Planner stays on-demand / flagged)
+- [ ] **Article 220 feeder and service load calculations** with demand factors, plus Cu/Al and parallel feeder comparisons
+- [ ] **Focused panel-schedule label OCR**: on-device OCR to pre-fill circuit labels from a photo of an existing panel schedule (with review); standardized phase rotation (A/B/C for 3φ, L1/L2 for 1φ) fills automatically, leaving only breaker amperage to confirm
+- [ ] Available fault current, series ratings, and selective coordination notes
 
 ## Reference and formulas (done: v1)
 
@@ -210,33 +209,78 @@ series ratings, and selective coordination notes.
 - [x] Formula sheet and Electrical Formulas tool from one catalog
 - [x] Field references: offsets and saddles, NEMA configurations, conductor colors, knockouts,
   voltage systems, abbreviations, fractions
-- [ ] Box fill (314.16) and pull box sizing (314.28) entries, with calculators
-- [ ] Burial depth (Table 300.5), support spacing, GEC (Table 250.66) entries
+- [x] Box fill (314.16) and pull box sizing (314.28) entries, with calculators
+- [x] Burial depth (Table 300.5), support spacing, GEC (Table 250.66) entries
 - [ ] Editable local conventions (phase colors) and user notes on entries
-- [ ] Deep links from individual notices (tap a citation to open its entry)
+- [x] Deep links from individual notices (tap a citation to open its entry)
 
-## Next improvements (to-do)
+## Next improvements (prioritized to-do)
 
-- **Printable panel schedule export**: export directly from the panel schedule creator as a print-ready PDF or image (PNG) formatted to print and post inside a panel door or job binder.
-- **Drawings UX & takeoff**:
-  - [ ] Crisp high-zoom region tiling in `PlanCanvas` (reusing `PlanRendering.renderRegion`), avoiding per-frame allocations and recycling page bitmaps
-  - [ ] Loupe / magnifier overlay while snapping endpoints on plans
-  - [ ] Multi-segment / polyline measurement on plans (summing chained legs + bend count straight into a Project Run / Wire Pull Planner)
-  - [ ] Undo/redo stack for drawing markups and measurements
-  - [ ] Rename and delete imported drawings in the drawing list, plus garbage-collecting unreferenced PDFs
-  - [ ] Include drawing measurement summaries in `ProjectText` exports
-- **Projects & exports**:
-  - [ ] Add a `Panels · N` entry point directly on `ProjectDetailScreen`
-  - [ ] CSV / spreadsheet export for material takeoffs and panel schedules
-  - [ ] Search and filter on `ProjectsScreen` (by name, note, panel, or circuit)
-  - [ ] Full `.backup.zip` export/restore that carries drawing PDFs alongside project JSON
-- **Platform polish**:
-  - [ ] Store lightweight `(projectId, itemId)` in `DestinationCodec` instead of full `ProjectItem` JSON in `rememberSaveable`
-  - [ ] Standardize `FileProjectStore` writes on `AtomicFile` / atomic moves
-  - [ ] Show clipboard copy feedback snackbar on Android API < 33
+Ordered by priority and reasonableness of implementation — start at Tier 1 and work down.
+
+### Tier 1 — Quick Wins & High-Impact Polish *(small effort, no new dependencies)*
+- [x] Add a `Panels · N` entry point directly on `ProjectDetailScreen`
+- [x] Rename and delete imported drawings **and scale zones**, plus garbage-collecting unreferenced PDFs
+- [x] Unify jam ratio between Conduit Fill (`D/d`) and Wire Pull Planner / `ProjectAnalysis` (`1.05 × D/d`), or explicitly label the 1.05 ovality allowance in both
+- [x] One-tap "Check on reel" from Material Takeoff / Pull Planner (prefills Reel Length with wire OD and needed footage)
+- [x] Include drawing measurement summaries in `ProjectText` exports
+- [x] Show clipboard copy feedback snackbar on Android API < 33
+- [x] Move `PlanSymbols.list()` / `remove()` off the main thread, normalize PDF rotation in `PlanExports.overlayMatrix`, and include extra pull/takeoff pages in `PanelPdf` page numbering
+- [x] Search and filter on `ProjectsScreen` (by name, note, panel, or circuit)
+- [x] CSV / spreadsheet export for material takeoffs and panel schedules
+- [x] Deep links from individual NEC notices into their Reference entries
+- [x] Clean up `scripts/download_*.py`: restore TLS verification (remove `CERT_NONE`), guard `extractall` against Zip Slip, and replace hardcoded machine paths
+
+### Tier 2 — Data Integrity, Sharing & Everyday Workflow *(medium effort, high daily utility)*
+- [x] Full `.backup.zip` export/restore carrying everything (all projects, original PDFs, imported SVG symbols, all settings, tool data, and recents) for complete device-to-device migration
+- [x] Flexible partial-detail inputs on panels/circuits (just a measurement, or conduit number + size, without requiring a full `Run`)
+- [x] Automatic recomputation of Voltage Drop and Conduit Fill on upstream edits, with out-of-spec warnings (Wire Pull Planner stays on-demand / flagged)
+- [x] Compact SMS-friendly share format for non-PDF projects and calculations; ZIP over email/share sheet when PDFs are included (no cloud relay)
+- [x] Printable panel schedule export: export directly from the panel schedule creator as a print-ready PDF or image (PNG) formatted for panel doors or job binders
+- [x] Store lightweight `(projectId, itemId)` in `DestinationCodec` instead of full `ProjectItem` JSON in `rememberSaveable`, and standardize `FileProjectStore` writes on `AtomicFile` / atomic moves
+- [x] Add unit test coverage for under-tested areas (`:feature:drawings`, `:feature:projects`, `BackupService`, `PlanSymbols`, `PlanFiles`)
+
+### Tier 3 — Core Electrical & Calculator Expansions *(medium effort, reuses existing engines)*
+- [x] Foot-Inch full calculation history/tape, memory (`M+`, `M−`, `MR`, `Ans`), parentheses, metric entry, `√`/`x²` right-triangle helper, and spacing/layout marks
+- [x] **Resistance → Wire Length**: enter a measured resistance (Ω / mΩ), conductor material (Cu / Al / CCA), wire size, and one-way or loop measurement to calculate wire length from NEC Table 8
+- [x] Box fill (NEC 314.16) and pull/junction box sizing (NEC 314.28), paired with Pull Planner pull points
+- [x] Named, reusable cable definitions feeding Conduit Fill, Wire Pull Planner, and Reel Length
+- [x] GEC & bonding jumpers (Table 250.66), across-the-line motor circuits (Art. 430), burial depth (Table 300.5), support spacing, and PVC thermal expansion
+- [x] Article 220 feeder and service load calculations with demand factors, plus Cu/Al and parallel-feeder what-if comparisons
+
+### Tier 4 — Drawings Takeoff Polish *(done)*
+- [x] Crisp high-zoom region tiling in `PlanCanvas` (reusing `PlanRendering.renderRegion`), avoiding per-frame allocations and byte-bounded LRU page-bitmap cache
+- [x] Undo/redo stack for drawing markups and measurements
+- [x] Loupe / magnifier overlay while snapping endpoints on plans (Center / Edge / Off + visual snap target labels)
+- [x] Multi-segment / polyline measurement on plans (summing chained legs + bend count straight into a Project Run) and saved editable open polylines / closed polygons with calibrated length, perimeter & area
+- [x] "View on plan" link back from a run to the route it came from (the drawing keeps each sent route; Takeoff totals flag routes whose plan length moved after recalibration and roll up devices, circuits, areas & paths)
+- [x] Symbol-first collapsible drawing toolbar, fixed status bar (`Revision`, `Scale`, `Snap`, `Pencil`), typed editor state, Adjust tool (move/resize handles, partial stroke & whole-stroke eraser), full architectural/engineering/metric presets, and PDF export covering marks, paths, routes, measurements & revisions
+- [x] Sheet navigation (title-block extraction, disk-cached indexing & full-text search, repeated-label recovery, favorites, recents, discipline filters, manual labels)
+- [x] Markup styles & electrical annotations (color palette, width/text size, opacity, dash patterns, arrowheads, fills, per-tool defaults, starter + custom symbol sets/favorites/recents, dimensions, revision clouds/callouts, offline photo pins, cross-sheet detail links)
+- [x] Revision identity & comparison (sheet revision tracking with Latest/Superseded provenance into Value Picker/Takeoff, full-screen pinch/pan revision overlay compare, single-sheet/crop/whole-set exports)
+- [x] Smooth zoom/convenience gestures (0.85×–24× pinch-to-zoom, fling inertia, double-tap zoom & link jump, fit-to-page & `< page/total >` pills, scroll-wheel zoom, 2/3-finger tap undo/redo) and Android stylus support (Pencil mode finger-pan, palm rejection, pressure smoothing, barrel button actions, tail eraser, hover preview)
+
+### Future Additions & Polish (Drawings & Platform)
+- [ ] Persist manual sheet labels (`SheetLabel`) on `PlanDrawing` for cross-device `.drawing.json` / `.project.zip` portability
+- [ ] Persist revision overlay alignment per sheet pair & export flattened revision-diff PDF/PNG
+- [ ] Batch / bulk revision assignment across imported addendum sets
+- [ ] On-device offline OCR for scanned PDFs (title-block auto-naming & searchable scan text, no Play Services)
+- [ ] Resize handles / bounding-box transform on `TEXT`, `SYMBOL`, `INK`, and `HIGHLIGHT` markups
+- [ ] Multipolygon / polygon-with-cutout (hole) area takeoff support
+- [ ] Sheet-size-aware default markup text/callout/stroke scaling (ARCH D/E vs Letter)
+- [ ] Shape snap / hold-to-straighten on freehand pen strokes
+- [ ] Markup layer/type/circuit/area visibility filters
+- [ ] Standalone shareable custom symbol pack import/export
+- [ ] Physical-tablet stylus QA & tuning (S Pen / USI 2.0 / Wacom EMR pressure curves, tilt, stylus quick-draw option)
+- [ ] Keyboard shortcuts for tablet/Chromebook workflows (`Ctrl+Z`/`Ctrl+Shift+Z`, zoom/fit, page step, tool hotkeys)
+- [ ] Instrumented Compose UI test suite (`androidTest`) for `DrawingEditor` live interactions + snap reference benchmark fixtures for `:core:plans` (`LineSnapReferenceTest`, `PlanLinesReferenceTest`)
+
+### Tier 5 — Optional Hardware, Vision & Context Integrations *(larger effort / optional permissions, off by default)*
+- [ ] Optional on-app-open nearby-project suggestion using Android's native `LocationManager` and coarse location only (`ACCESS_COARSE_LOCATION`, no precise GPS, no background geofencing, no Play Services)
+- [ ] Focused on-device OCR for pre-filling circuit labels from existing panel schedule photos (standardized A/B/C and L1/L2 phase mapping; no Play Services)
+- [ ] Bluetooth laser distance meter integration for length fields and exact two-point PDF plan calibration
+- [ ] Blueprint symbol detector (`ml/symbol-detector/`): keep isolated outside the Android build until a trained model is ready
 
 ## Idea backlog
 
-[plans/feature-ideas.md](plans/feature-ideas.md) holds a long list of possible additions, triaged
-into next, later and probably-not. It isn't committed work; ideas move into this roadmap when they
-are picked up.
+[plans/feature-ideas.md](plans/feature-ideas.md) holds the pruned future-work summary and explicit out-of-scope decisions. `docs/ROADMAP.md` is the authoritative plan.

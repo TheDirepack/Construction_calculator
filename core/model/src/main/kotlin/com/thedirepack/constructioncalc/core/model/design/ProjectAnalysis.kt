@@ -300,7 +300,7 @@ object ProjectAnalysis {
         // Nipples (≤ 24") aren't subject to count adjustment (310.15(C)(1)(b)).
         val ccc = (runs.filter { it.raceway?.nipple != true }.mapNotNull { runCcc[it.id] } + ownCcc).max()
         // Each run's own ambient (or the project default) plus its own rooftop adder; the hottest run governs.
-        val xhhw2 = spec.insulation == InsulationType.XHHW_2
+        val xhhw2 = AmbientCorrection.isRooftopExempt(spec.insulation)
         val ambient = if (runs.isEmpty()) project.design.ambientC else runs.maxOf { runAmbient(project, it, xhhw2) }
         val hottest = runs.maxByOrNull { runAmbient(project, it, xhhw2) }
         if (hottest?.raceway?.rooftop == true && !xhhw2) {
@@ -315,13 +315,14 @@ object ProjectAnalysis {
         val overrideLength = c.length?.toQuantity()?.value?.toDouble()
         val length = overrideLength ?: routeLength
         if (length == null && c.runIds.isNotEmpty()) notes += info("Set the length of every assigned run to check voltage drop.")
+        val inlineConduit = if (c.runIds.isEmpty()) c.conduitType?.let(::table9Conduit) else null
         val dropSegments = when {
             length == null -> emptyList()
             runs.size != c.runIds.size -> {
                 notes += info("An assigned run is missing. Check the route before calculating voltage drop.")
                 emptyList()
             }
-            runConduits.distinct().size <= 1 -> listOf(DropSegment(length, runConduits.firstOrNull() ?: Table9Conduit.PVC))
+            runConduits.distinct().size <= 1 -> listOf(DropSegment(length, runConduits.firstOrNull() ?: inlineConduit ?: Table9Conduit.PVC))
             routeLength == null || routeLength <= 0.0 -> {
                 notes += info("Set each run's length to check voltage drop through mixed raceways.")
                 emptyList()
@@ -388,6 +389,27 @@ object ProjectAnalysis {
             EquipmentGroundingConductor.sizeWithUpsize(breaker, spec.material, minimum, size)
         } else {
             null
+        }
+        // Lightweight inline conduit fill check when no full Run is assigned.
+        if (c.runIds.isEmpty() && c.conduitType != null && c.conduitSize != null && size != null) {
+            val inlineConduitSize = ConduitTable.find(c.conduitType, c.conduitSize)
+            if (inlineConduitSize == null) {
+                notes += warn("${c.conduitType.displayName} has no ${c.conduitSize.display} size in ${CodeRule.CONDUIT_DIMENSIONS.cite}.")
+            } else {
+                val mainCount = c.poles + if (c.neutral) 1 else 0
+                val groups = buildList {
+                    add(ConductorGroup(mainCount, FillConductor.Insulated(spec.insulation, size)))
+                    if (ground != null) add(ConductorGroup(1, FillConductor.Insulated(spec.insulation, ground)))
+                }
+                val fill = ConduitFill.analyze(inlineConduitSize, groups)
+                if (!fill.withinLimit) {
+                    val smallest = ConduitFill.minimumConduit(c.conduitType, groups)
+                    notes += warn(
+                        "Inline conduit ${inlineConduitSize.displayName} is over ${fill.limitPercent}% fill (${fmt(fill.percentFill)}%)." +
+                            (smallest?.let { " Smallest that fits: ${it.displayName}." } ?: ""),
+                    )
+                }
+            }
         }
         return CircuitDesign(panel, c, spec, load?.va, fromFed, amps, ccc, sizing, minimum, size, ground, length, vd?.first, vd?.second, notes)
     }
@@ -503,7 +525,7 @@ object ProjectAnalysis {
         val largestOd = entries.mapNotNull { InsulatedConductorArea.diameter(it.insulation, it.size) }.maxOrNull()
         if (conduit != null && !incomplete && total > 0 && largestOd != null) notes += PullAnalysis.fitNotes(conduit.internalDiameterIn, largestOd, total, units)
         val insulation = project.design.conductor
-        val ambient = runAmbient(project, run, insulation.insulation == InsulationType.XHHW_2)
+        val ambient = runAmbient(project, run, AmbientCorrection.isRooftopExempt(insulation.insulation))
         val ambientFactor = AmbientCorrection.factor(ambient, insulation.insulationRating)
         val adjustment = if (raceway?.nipple == true) 1.0 else ConductorCountAdjustment.factor(ccc)
         if (adjustment < 1.0) {

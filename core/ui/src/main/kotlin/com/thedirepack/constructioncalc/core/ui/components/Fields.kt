@@ -1,5 +1,14 @@
 package com.thedirepack.constructioncalc.core.ui.components
 
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.runtime.LaunchedEffect
 
 import com.thedirepack.constructioncalc.core.measure.Decimals
@@ -10,17 +19,13 @@ import com.thedirepack.constructioncalc.core.measure.Measure
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -32,7 +37,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -246,6 +250,10 @@ fun <T> ChoiceField(
     }
 }
 
+/**
+ * A tap-to-choose field drawn as a read-only outlined text field, so it lines up with
+ * [NumberField] and [UnitField] beside it (same height, border and floating label).
+ */
 @Composable
 private fun PickerField(
     label: String,
@@ -256,33 +264,26 @@ private fun PickerField(
     supportingText: String? = null,
     isError: Boolean = false,
 ) {
-    val colors = MaterialTheme.colorScheme
-    Column(modifier.fillMaxWidth()) {
-        OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-            Row(
-                Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (isError) colors.error else colors.onSurfaceVariant,
-                    )
-                    Text(fractionText(value), style = MaterialTheme.typography.bodyLarge)
-                }
-                trailingIcon()
-            }
-        }
-        if (supportingText != null) {
-            Text(
-                supportingText,
-                Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = if (isError) colors.error else colors.onSurfaceVariant,
-            )
-        }
+    // Taps on the read-only field open the choices; a trailing IconButton (clear) still gets its own taps.
+    val interaction = remember { MutableInteractionSource() }
+    val currentOnClick by rememberUpdatedState(onClick)
+    LaunchedEffect(interaction) {
+        interaction.interactions.collect { if (it is PressInteraction.Release) currentOnClick() }
     }
+    OutlinedTextField(
+        value = TextFieldValue(fractionText(value)),
+        onValueChange = {},
+        readOnly = true,
+        singleLine = true,
+        label = { Text(label) },
+        trailingIcon = trailingIcon,
+        isError = isError,
+        supportingText = supportingText?.let { { Text(it) } },
+        interactionSource = interaction,
+        modifier = modifier
+            .fillMaxWidth()
+            .semantics { role = Role.DropdownList; onClick { currentOnClick(); true } },
+    )
 }
 
 /** A row of 2–4 mutually exclusive options. */
@@ -306,7 +307,14 @@ fun <T> SegmentedChoice(
                     onClick = { onSelect(option) },
                     shape = SegmentedButtonDefaults.itemShape(i, options.size),
                     icon = {},
-                ) { Text(fractionText(optionLabel(option)), maxLines = 1) }
+                ) {
+                    Text(
+                        fractionText(optionLabel(option)),
+                        maxLines = 1,
+                        softWrap = false,
+                        autoSize = TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = MaterialTheme.typography.labelLarge.fontSize),
+                    )
+                }
             }
         }
     }

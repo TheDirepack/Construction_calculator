@@ -143,4 +143,46 @@ class CalcInputTest {
         val plus = CalcInput.reduce(start, Key.Op(Operator.ADD))
         assertEquals(listOf(Token.Value(q), Token.Op(Operator.ADD)), plus.state.tokens)
     }
+
+    @Test fun parenthesesSqrtSquareAndMetricKeys() {
+        // √(3'² + 4'²) = 5'
+        val keys = listOf(
+            Key.Sqrt,
+            Key.OpenParen,
+            Key.Char('3'), Key.Char('\''), Key.Square,
+            Key.Op(Operator.ADD),
+            Key.Char('4'), Key.Char('\''), Key.Square,
+            Key.CloseParen,
+            Key.Equals,
+        )
+        val finalState = keys.fold(CalcState()) { s, k -> CalcInput.reduce(s, k).state }
+        assertEquals(Quantity.feet(Rational.of(5)), finalState.answer)
+
+        // Implicit multiplication: 2(3+4) = 14
+        val mulState = listOf(
+            Key.Char('2'), Key.OpenParen, Key.Char('3'), Key.Op(Operator.ADD), Key.Char('4'), Key.CloseParen, Key.Equals,
+        ).fold(CalcState()) { s, k -> CalcInput.reduce(s, k).state }
+        assertEquals(Quantity.number(Rational.of(14)), mulState.answer)
+
+        // Unmatched close paren is rejected
+        assertFalse(CalcInput.reduce(press("5"), Key.CloseParen).accepted)
+
+        // Applying x² or √ directly to an existing answer
+        val ansState = press("5=")
+        val sqAns = CalcInput.reduce(ansState, Key.Square)
+        assertTrue(sqAns.accepted)
+        assertEquals(Quantity.number(Rational.of(25)), sqAns.state.result)
+        val sqrtAfterSq = CalcInput.reduce(CalcInput.reduce(sqAns.state, Key.Equals).state, Key.Sqrt)
+        assertTrue(sqrtAfterSq.accepted)
+        assertEquals(Quantity.number(Rational.of(5)), sqrtAfterSq.state.result)
+
+        // Metric entry alongside imperial via Key.Text
+        val metricPlusImperial = listOf(
+            Key.Char('1'), Key.Char('\''),
+            Key.Op(Operator.ADD),
+            Key.Char('2'), Key.Char('5'), Key.Char('.'), Key.Char('4'), Key.Text("mm"),
+            Key.Equals,
+        ).fold(CalcState()) { s, k -> CalcInput.reduce(s, k).state }
+        assertEquals(Quantity.inches(Rational.of(13)), metricPlusImperial.answer)
+    }
 }

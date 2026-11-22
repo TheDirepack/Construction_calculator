@@ -177,6 +177,9 @@ object PullFormulas {
     /** Conduit ovality allowance in bends for the jam ratio (IEEE 1185): 1.05 × D / d. */
     const val OVALITY = 1.05
 
+    /** How the jam ratio is written wherever it is shown, so every tool labels it the same way. */
+    const val OVALITY_LABEL = "1.05 × D/d"
+
     /** Jam ratio 1.05 D/d (IEEE 1185); jamming of three cables is possible from 2.8 to 3.2. */
     fun jamRatio(conduitId: Double, cableOd: Double): Double = OVALITY * conduitId / cableOd
 

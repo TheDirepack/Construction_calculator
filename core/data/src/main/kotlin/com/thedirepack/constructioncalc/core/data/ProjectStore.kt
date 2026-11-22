@@ -4,6 +4,9 @@ import android.content.Context
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /** Stores project metadata. Original drawing PDFs are kept separately by [PlanFiles]. */
 interface ProjectStore {
@@ -49,14 +52,20 @@ class FileProjectStore(private val dir: File) : ProjectStore {
 
     override fun save(project: Project) {
         dir.mkdirs()
-        // Write then rename, so a crash mid-write never corrupts the saved project.
+        // Write then atomically move, so a crash mid-write never corrupts the saved project.
         val target = fileFor(project.id)
         val temp = File(dir, "${project.id}.tmp")
         require(temp.canonicalFile.parentFile == dir.canonicalFile) { "Invalid project id." }
-        temp.writeText(ProjectCodec.encode(project))
-        if (!temp.renameTo(target)) {
-            target.delete()
-            temp.renameTo(target)
+        try {
+            temp.writeText(ProjectCodec.encode(project))
+            try {
+                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } catch (error: Throwable) {
+            temp.delete()
+            throw error
         }
     }
 

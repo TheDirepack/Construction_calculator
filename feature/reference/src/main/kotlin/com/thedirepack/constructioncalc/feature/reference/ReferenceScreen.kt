@@ -216,6 +216,7 @@ private fun Block(block: RefBlock, host: ToolHost, key: String) {
         }
         is RefBlock.Table -> TableView(block)
         is RefBlock.Choice -> ChoiceView(block, host, key)
+        is RefBlock.Calculator -> QuickCalculator(block.kind)
         is RefBlock.ToolLink -> OutlinedButton(onClick = { host.openTool(block.toolId, target = block.topic?.let { ToolTarget.OfTopic(it) }) }) {
             Text(block.label)
         }

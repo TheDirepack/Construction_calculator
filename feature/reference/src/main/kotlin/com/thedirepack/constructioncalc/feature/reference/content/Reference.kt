@@ -9,6 +9,7 @@ enum class RefSection(val label: String) {
     FORMULAS("Formula sheet"),
     CONDUCTORS("Conductors and ampacity"),
     PROTECTION("Overcurrent protection and grounding"),
+    LOADS("Load calculations"),
     RACEWAY("Conduit and raceway"),
     BENDING("Conduit bending"),
     MOTORS("Motors"),
@@ -63,6 +64,19 @@ sealed interface RefBlock {
 
     /** A button to another tool: open it, optionally at a topic (e.g. a formula to solve). */
     data class ToolLink(val label: String, val toolId: String, val topic: String? = null) : RefBlock
+
+    /** A small interactive calculator on the page; the math comes from `core:electrical`. */
+    data class Calculator(val kind: QuickCalc) : RefBlock
+}
+
+/** The quick calculators a Reference page can hold (see [RefBlock.Calculator]). */
+enum class QuickCalc(val title: String) {
+    BOX_FILL("Box fill"),
+    PULL_BOX("Pull box size"),
+    GEC("Grounding electrode conductor"),
+    MOTOR_CIRCUIT("Motor branch circuit"),
+    RACEWAY_SUPPORT("Support spacing"),
+    PVC_EXPANSION("PVC expansion"),
 }
 
 /** What a page is built for: the user's unit system (tables show mm, mm², Ω/km in metric). */

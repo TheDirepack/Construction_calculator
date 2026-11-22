@@ -1,5 +1,15 @@
 package com.thedirepack.constructioncalc.feature.drawings
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -11,13 +21,52 @@ import com.thedirepack.constructioncalc.core.ui.components.SettingsGroup
 import com.thedirepack.constructioncalc.core.ui.components.SwitchRow
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 
+internal enum class StylusBarrelAction(val label: String) {
+    ERASER("Erase"),
+    PAN("Pan sheet"),
+    OFF("Off"),
+}
+
+internal enum class SpanInputMode(val label: String, val shortLabel: String) {
+    POINTS_ON_RELEASE("Point A → B (at release)", "2-point"),
+    DRAG_ACROSS("Drag across", "Drag"),
+}
+
+internal val configurableSpanModes: List<DrawingMode> = listOf(
+    DrawingMode.Measure,
+    DrawingMode.Dimension,
+    DrawingMode.Reference,
+    DrawingMode.Callout,
+    DrawingMode.Arrow,
+    DrawingMode.Line,
+    DrawingMode.Rectangle,
+    DrawingMode.Cloud,
+    DrawingMode.CloudCallout,
+    DrawingMode.Zone,
+)
+
+internal fun defaultSpanInputMode(mode: DrawingMode): SpanInputMode = when (mode) {
+    DrawingMode.Measure, DrawingMode.Dimension, DrawingMode.Reference -> SpanInputMode.POINTS_ON_RELEASE
+    else -> SpanInputMode.DRAG_ACROSS
+}
+
 internal data class DrawingsPrefs(
     val snapMeasurements: Boolean = true,
     val snapCalibration: Boolean = true,
     val measurementTarget: SnapTarget = SnapTarget.CENTER,
     val calibrationTarget: SnapTarget = SnapTarget.EDGE,
     val showCalibrationLayer: Boolean = true,
-)
+    val stylusOnlyDraw: Boolean = false,
+    val stylusPressure: Boolean = true,
+    val stylusBarrelAction: StylusBarrelAction = StylusBarrelAction.ERASER,
+    val stylusHoverPreview: Boolean = true,
+    val twoFingerUndo: Boolean = true,
+    val eraserSizeDp: Int = 16,
+    val spanInputModes: Map<DrawingMode, SpanInputMode> = emptyMap(),
+) {
+    fun spanInputModeFor(mode: DrawingMode): SpanInputMode =
+        spanInputModes[mode] ?: defaultSpanInputMode(mode)
+}
 
 internal object DrawingsSettings {
     private const val KEY_SNAP_MEASURE = "snap_measurements"
@@ -25,23 +74,58 @@ internal object DrawingsSettings {
     private const val KEY_TARGET_MEASURE = "snap_target_measurements"
     private const val KEY_TARGET_CALIBRATION = "snap_target_calibration"
     private const val KEY_SHOW_CALIBRATION = "show_calibration_layer"
+    private const val KEY_STYLUS_ONLY_DRAW = "stylus_only_draw"
+    private const val KEY_STYLUS_PRESSURE = "stylus_pressure"
+    private const val KEY_STYLUS_BARREL = "stylus_barrel_action"
+    private const val KEY_STYLUS_HOVER = "stylus_hover_preview"
+    private const val KEY_TWO_FINGER_UNDO = "two_finger_undo"
+    private const val KEY_ERASER_SIZE_DP = "eraser_size_dp"
+    private const val KEY_SPAN_INPUT_PREFIX = "span_input_"
+    internal val eraserSizePresetsDp = listOf(8, 16, 28, 40)
 
-    fun read(store: ModuleSettings): DrawingsPrefs = DrawingsPrefs(
-        snapMeasurements = store.getBoolean(KEY_SNAP_MEASURE, true),
-        snapCalibration = store.getBoolean(KEY_SNAP_CALIBRATION, true),
-        measurementTarget = parseTarget(store.getString(KEY_TARGET_MEASURE, SnapTarget.CENTER.name), SnapTarget.CENTER),
-        calibrationTarget = parseTarget(store.getString(KEY_TARGET_CALIBRATION, SnapTarget.EDGE.name), SnapTarget.EDGE),
-        showCalibrationLayer = store.getBoolean(KEY_SHOW_CALIBRATION, true),
-    )
+    fun read(store: ModuleSettings): DrawingsPrefs {
+        val spanModes = configurableSpanModes.associateWith { mode ->
+            val fallback = defaultSpanInputMode(mode)
+            parseSpanInputMode(store.getString("$KEY_SPAN_INPUT_PREFIX${mode.name}", fallback.name), fallback)
+        }
+        return DrawingsPrefs(
+            snapMeasurements = store.getBoolean(KEY_SNAP_MEASURE, true),
+            snapCalibration = store.getBoolean(KEY_SNAP_CALIBRATION, true),
+            measurementTarget = parseTarget(store.getString(KEY_TARGET_MEASURE, SnapTarget.CENTER.name), SnapTarget.CENTER),
+            calibrationTarget = parseTarget(store.getString(KEY_TARGET_CALIBRATION, SnapTarget.EDGE.name), SnapTarget.EDGE),
+            showCalibrationLayer = store.getBoolean(KEY_SHOW_CALIBRATION, true),
+            stylusOnlyDraw = store.getBoolean(KEY_STYLUS_ONLY_DRAW, false),
+            stylusPressure = store.getBoolean(KEY_STYLUS_PRESSURE, true),
+            stylusBarrelAction = parseBarrelAction(store.getString(KEY_STYLUS_BARREL, StylusBarrelAction.ERASER.name)),
+            stylusHoverPreview = store.getBoolean(KEY_STYLUS_HOVER, true),
+            twoFingerUndo = store.getBoolean(KEY_TWO_FINGER_UNDO, true),
+            eraserSizeDp = store.getInt(KEY_ERASER_SIZE_DP, 16).coerceIn(6, 48),
+            spanInputModes = spanModes,
+        )
+    }
 
     fun setSnapMeasurements(store: ModuleSettings, enabled: Boolean) = store.setBoolean(KEY_SNAP_MEASURE, enabled)
     fun setSnapCalibration(store: ModuleSettings, enabled: Boolean) = store.setBoolean(KEY_SNAP_CALIBRATION, enabled)
     fun setMeasurementTarget(store: ModuleSettings, target: SnapTarget) = store.setString(KEY_TARGET_MEASURE, target.name)
     fun setCalibrationTarget(store: ModuleSettings, target: SnapTarget) = store.setString(KEY_TARGET_CALIBRATION, target.name)
     fun setShowCalibrationLayer(store: ModuleSettings, visible: Boolean) = store.setBoolean(KEY_SHOW_CALIBRATION, visible)
+    fun setStylusOnlyDraw(store: ModuleSettings, enabled: Boolean) = store.setBoolean(KEY_STYLUS_ONLY_DRAW, enabled)
+    fun setStylusPressure(store: ModuleSettings, enabled: Boolean) = store.setBoolean(KEY_STYLUS_PRESSURE, enabled)
+    fun setStylusBarrelAction(store: ModuleSettings, action: StylusBarrelAction) = store.setString(KEY_STYLUS_BARREL, action.name)
+    fun setStylusHoverPreview(store: ModuleSettings, enabled: Boolean) = store.setBoolean(KEY_STYLUS_HOVER, enabled)
+    fun setTwoFingerUndo(store: ModuleSettings, enabled: Boolean) = store.setBoolean(KEY_TWO_FINGER_UNDO, enabled)
+    fun setEraserSizeDp(store: ModuleSettings, sizeDp: Int) = store.setInt(KEY_ERASER_SIZE_DP, sizeDp.coerceIn(6, 48))
+    fun setSpanInputMode(store: ModuleSettings, mode: DrawingMode, inputMode: SpanInputMode) =
+        store.setString("$KEY_SPAN_INPUT_PREFIX${mode.name}", inputMode.name)
 
     private fun parseTarget(value: String, fallback: SnapTarget): SnapTarget =
         SnapTarget.entries.firstOrNull { it.name == value } ?: fallback
+
+    private fun parseBarrelAction(value: String): StylusBarrelAction =
+        StylusBarrelAction.entries.firstOrNull { it.name == value } ?: StylusBarrelAction.ERASER
+
+    private fun parseSpanInputMode(value: String, fallback: SpanInputMode): SpanInputMode =
+        SpanInputMode.entries.firstOrNull { it.name == value } ?: fallback
 }
 
 @Composable
@@ -89,5 +173,78 @@ internal fun DrawingsSettingsScreen() {
             subtitle = "Nearest edge defaults for dimension lines and wall faces.",
         )
     }
+    SettingsGroup("Stylus & gestures") {
+        SwitchRow(
+            title = "Pencil mode (finger pans)",
+            checked = prefs.stylusOnlyDraw,
+            onCheckedChange = { DrawingsSettings.setStylusOnlyDraw(store, it) },
+            subtitle = "Draw and mark with a stylus while a single finger pans the sheet. Palm rejection is always active.",
+        )
+        SwitchRow(
+            title = "Pressure-sensitive ink",
+            checked = prefs.stylusPressure,
+            onCheckedChange = { DrawingsSettings.setStylusPressure(store, it) },
+            subtitle = "Vary pen stroke width with stylus tip pressure.",
+        )
+        ChoiceRow(
+            title = "Stylus barrel button",
+            options = StylusBarrelAction.entries,
+            selected = prefs.stylusBarrelAction,
+            onSelect = { DrawingsSettings.setStylusBarrelAction(store, it) },
+            optionLabel = { it.label },
+        )
+        SwitchRow(
+            title = "Stylus hover preview",
+            checked = prefs.stylusHoverPreview,
+            onCheckedChange = { DrawingsSettings.setStylusHoverPreview(store, it) },
+            subtitle = "Show brush size, eraser ring, and snap targets while hovering a stylus.",
+        )
+        SwitchRow(
+            title = "Two-finger tap to undo",
+            checked = prefs.twoFingerUndo,
+            onCheckedChange = { DrawingsSettings.setTwoFingerUndo(store, it) },
+            subtitle = "Quick two-finger tap undoes; three-finger tap redoes.",
+        )
+        ChoiceRow(
+            title = "Eraser size",
+            options = DrawingsSettings.eraserSizePresetsDp,
+            selected = prefs.eraserSizeDp,
+            onSelect = { DrawingsSettings.setEraserSizeDp(store, it) },
+            optionLabel = { "${it}dp" },
+            subtitle = "Current eraser radius: ${prefs.eraserSizeDp} dp (fine-tune anytime from the Eraser bar).",
+        )
+    }
+    SettingsGroup("Tool placement (Drag vs 2-point)") {
+        Text(
+            "Choose whether each tool selects Point A then Point B on release (with magnifier loupe), or draws directly when you drag across.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+        )
+        for (tool in configurableSpanModes) {
+            ChoiceRow(
+                title = tool.title,
+                options = SpanInputMode.entries,
+                selected = prefs.spanInputModeFor(tool),
+                onSelect = { DrawingsSettings.setSpanInputMode(store, tool, it) },
+                optionLabel = { it.label },
+            )
+        }
+    }
     SymbolSettings()
+}
+
+
+@Composable
+internal fun DrawingSettingsDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Drawing settings") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                DrawingsSettingsScreen()
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }

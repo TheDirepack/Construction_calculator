@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.core.model
 
+import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.LengthStyle
 import com.thedirepack.constructioncalc.core.measure.MeasureFormat
 import com.thedirepack.constructioncalc.core.measure.Measure
@@ -57,6 +58,11 @@ object ProjectText {
                 appendLine()
                 appendLine("PANELS")
                 design.panels.forEach { pd -> append(renderPanel(project, pd, design)) }
+            }
+            if (project.drawings.isNotEmpty()) {
+                appendLine()
+                appendLine("DRAWINGS")
+                project.drawings.forEach { drawing -> append(renderDrawing(drawing, length)) }
             }
             design?.let { d ->
                 val takeoff = MaterialTakeoffs.of(project, d)
@@ -132,6 +138,27 @@ object ProjectText {
         }
         appendLine("  " + pd.phaseVa.entries.joinToString(" · ") { (ph, va) -> "${ph.name} ${Wire.va(va)} (${Wire.amps(pd.phaseAmps.getValue(ph))})" } + " · total ${Wire.va(pd.totalVa)}")
         (pd.conflicts + pd.notes.filter { it.isWarning }.map { it.text }).forEach { appendLine("  ⚠ $it") }
+    }
+
+    private fun renderDrawing(drawing: PlanDrawing, length: (Quantity) -> String): String = buildString {
+        val count = drawing.measurements.size
+        val measured = drawing.measurements.map { m -> m to drawing.length(m) }
+        val calibrated = measured.mapNotNull { it.second }
+        val total = if (calibrated.isNotEmpty()) {
+            Quantity.inches(calibrated.fold(Rational.ZERO) { acc, q -> acc + q.value })
+        } else {
+            null
+        }
+        val summary = buildList {
+            add(if (count == 0) "no measurements" else "$count measurement${if (count == 1) "" else "s"}")
+            total?.let { add("total ${length(it)}") }
+        }.joinToString(" · ")
+        appendLine("■ ${drawing.name} — $summary")
+        measured.forEach { (m, q) ->
+            val zoneName = m.zoneId?.let { id -> drawing.zones.firstOrNull { it.id == id }?.name }
+            val place = drawing.sheetSource(m.page).label + (zoneName?.let { " ($it)" } ?: "")
+            appendLine("  $place: ${q?.let(length) ?: "uncalibrated"}")
+        }
     }
 
     /** A run length given in feet: `120 ft`, or `37 m`. */

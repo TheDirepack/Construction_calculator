@@ -61,6 +61,7 @@ data class ResultValue(
     val kind: ValueKind,
     val exact: String? = null,
     val text: String,
+    val planSource: PlanSheetSource? = null,
 ) {
     val rational: Rational? get() = exact?.let { runCatching { Rational.parse(it) }.getOrNull() }
 

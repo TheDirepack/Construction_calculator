@@ -5,13 +5,15 @@ import ssl
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
 headers = {'User-Agent': 'ConstructionCalcBot/1.0 (https://github.com/thedirepack/construction-calculator; info@constructioncalc.org)'}
 
-dest_dir = '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/1_blueprints/wikimedia_us_drawings'
+BLUEPRINTS_ROOT = Path(
+    os.environ.get('BLUEPRINTS_ROOT', Path(__file__).resolve().parent.parent / 'blueprints_and_libraries')
+)
+dest_dir = str(BLUEPRINTS_ROOT / '1_blueprints/wikimedia_us_drawings')
 os.makedirs(dest_dir, exist_ok=True)
 
 api_url = 'https://commons.wikimedia.org/w/api.php?' + urllib.parse.urlencode({

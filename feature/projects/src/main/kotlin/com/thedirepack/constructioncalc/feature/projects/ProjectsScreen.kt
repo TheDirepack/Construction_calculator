@@ -24,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,8 +39,11 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thedirepack.constructioncalc.core.data.BackupSections
+import com.thedirepack.constructioncalc.core.model.AppFile
+import com.thedirepack.constructioncalc.core.model.AppFileCodec
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.ui.R
+import com.thedirepack.constructioncalc.core.ui.components.ImportFileDialog
 import com.thedirepack.constructioncalc.core.ui.components.TextInputDialog
 import com.thedirepack.constructioncalc.core.ui.components.rememberBackupExporter
 import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
@@ -70,6 +74,9 @@ private fun ProjectListScreen(projects: List<Project>, host: ToolHost, onOpen: (
     val services = LocalAppServices.current
     val settings = rememberAppSettings()
     var creating by remember { mutableStateOf(false) }
+    var importingText by remember { mutableStateOf(false) }
+    var pendingTextImport by remember { mutableStateOf<AppFile?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
 
     var menu by remember { mutableStateOf(false) }
     val openFile = host::openFile
@@ -88,12 +95,16 @@ private fun ProjectListScreen(projects: List<Project>, host: ToolHost, onOpen: (
             IconButton(onClick = openFile) {
                 Icon(painterResource(R.drawable.ic_file_open), contentDescription = "Import a project or backup file")
             }
-            if (projects.isNotEmpty()) {
-                Box {
-                    IconButton(onClick = { menu = true }) {
-                        Icon(painterResource(R.drawable.ic_more_vert), contentDescription = "More")
-                    }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            Box {
+                IconButton(onClick = { menu = true }) {
+                    Icon(painterResource(R.drawable.ic_more_vert), contentDescription = "More")
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("Import from text…") }, onClick = {
+                        menu = false
+                        importingText = true
+                    })
+                    if (projects.isNotEmpty()) {
                         DropdownMenuItem(text = { Text("Share all projects") }, onClick = {
                             menu = false
                             exporter.share(BackupSections.PROJECTS_ONLY, "Construction Calc projects")
@@ -131,55 +142,86 @@ private fun ProjectListScreen(projects: List<Project>, host: ToolHost, onOpen: (
                 OutlinedButton(onClick = openFile) { Text("Open a project or backup file") }
             }
         } else {
-            val (archived, current) = projects.partition { it.archived }
-            LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 96.dp)) {
-                if (current.isEmpty()) {
-                    item {
-                        Text(
-                            "No open projects. Create one, or unarchive one below.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(24.dp),
-                        )
-                    }
-                }
-                items(current, key = { it.id }) { project ->
-                    ProjectRow(
-                        project,
-                        active = project.id == settings.activeProjectId,
-                        onClick = { onOpen(project.id) },
-                        onShare = { share(project) },
-                        onArchiveChange = { setArchived(project, it) },
-                    )
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
-                }
-                if (archived.isNotEmpty()) {
-                    item(key = "archive-header") {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { showArchive = !showArchive }
-                                .padding(horizontal = 24.dp, vertical = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                "Archive (${archived.size})",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(if (showArchive) "Hide ▴" else "Show ▾", style = MaterialTheme.typography.labelLarge)
+            val filtered = remember(projects, query) { filterProjects(projects, query) }
+            val isSearching = query.isNotBlank()
+            val (archived, current) = filtered.partition { it.archived }
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search projects, panels, circuits, runs…") },
+                    singleLine = true,
+                    trailingIcon = if (query.isNotEmpty()) {
+                        {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(painterResource(R.drawable.ic_close), contentDescription = "Clear search")
+                            }
                         }
-                    }
-                    if (showArchive) {
-                        items(archived, key = { it.id }) { project ->
+                    } else null,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
+                    if (isSearching && filtered.isEmpty()) {
+                        item(key = "no-matches") {
+                            Text(
+                                "No projects match “${query.trim()}”.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(24.dp),
+                            )
+                        }
+                    } else {
+                        if (current.isEmpty() && !isSearching) {
+                            item {
+                                Text(
+                                    "No open projects. Create one, or unarchive one below.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(24.dp),
+                                )
+                            }
+                        }
+                        items(current, key = { it.id }) { project ->
                             ProjectRow(
                                 project,
-                                active = false,
+                                active = project.id == settings.activeProjectId,
                                 onClick = { onOpen(project.id) },
                                 onShare = { share(project) },
                                 onArchiveChange = { setArchived(project, it) },
                             )
                             HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                        }
+                        if (archived.isNotEmpty()) {
+                            item(key = "archive-header") {
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable { showArchive = !showArchive }
+                                        .padding(horizontal = 24.dp, vertical = 16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        "Archive (${archived.size})",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Text(
+                                        if (showArchive || isSearching) "Hide ▴" else "Show ▾",
+                                        style = MaterialTheme.typography.labelLarge,
+                                    )
+                                }
+                            }
+                            if (showArchive || isSearching) {
+                                items(archived, key = { it.id }) { project ->
+                                    ProjectRow(
+                                        project,
+                                        active = false,
+                                        onClick = { onOpen(project.id) },
+                                        onShare = { share(project) },
+                                        onArchiveChange = { setArchived(project, it) },
+                                    )
+                                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                                }
+                            }
                         }
                     }
                 }
@@ -199,6 +241,35 @@ private fun ProjectListScreen(projects: List<Project>, host: ToolHost, onOpen: (
                 onOpen(project.id)
             },
             onDismiss = { creating = false },
+        )
+    }
+
+    if (importingText) {
+        TextInputDialog(
+            title = "Import from text",
+            initial = "",
+            confirmLabel = "Import",
+            label = "Paste compact share text (CC1:…) or JSON",
+            singleLine = false,
+            onConfirm = { pasted ->
+                importingText = false
+                runCatching { AppFileCodec.decode(pasted) }
+                    .onSuccess { pendingTextImport = it }
+                    .onFailure { host.showMessage(it.message ?: "Couldn't read that shared text") }
+            },
+            onDismiss = { importingText = false },
+        )
+    }
+
+    pendingTextImport?.let { file ->
+        ImportFileDialog(
+            file = file,
+            onFinished = { msg, projectId ->
+                pendingTextImport = null
+                host.showMessage(msg)
+                if (projectId != null) onOpen(projectId)
+            },
+            onDismiss = { pendingTextImport = null },
         )
     }
 }

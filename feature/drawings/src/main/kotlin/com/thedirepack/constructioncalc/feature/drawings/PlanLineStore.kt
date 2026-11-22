@@ -54,7 +54,7 @@ internal class PlanLineStore(private val context: Context) {
                     return@withContext cached
                 }
         }
-        val built = buildLineMap(file, pageIndex)
+        val built = PdfWork.lineMap { buildLineMap(file, pageIndex) }
         saveCache(cacheFile, built)
         putMemory(key, built)
         built

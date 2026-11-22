@@ -21,7 +21,6 @@ enum class ToolCategory(val label: String) {
     MEASURE("Measure & layout"),
     ELECTRICAL("Electrical"),
     REFERENCE("Reference"),
-    WATER("Well & water"),
 }
 
 /**

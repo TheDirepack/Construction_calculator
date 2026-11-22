@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -203,11 +204,14 @@ private fun FractionKey(n: Int, d: Int, onKey: (Key) -> Unit, modifier: Modifier
             .semantics { contentDescription = "$n over $d inch" },
     ) {
         Box(contentAlignment = Alignment.Center) {
+            // Shrinks to fit so 15/16 never clips to "15/1" on narrow phones or at large font sizes.
             Text(
                 fractionText("$n/$d"),
-                fontSize = 22.sp,
                 fontWeight = if (d == 2) FontWeight.Bold else FontWeight.Medium,
                 maxLines = 1,
+                softWrap = false,
+                autoSize = TextAutoSize.StepBased(minFontSize = 11.sp, maxFontSize = 22.sp),
+                modifier = Modifier.padding(horizontal = 2.dp),
             )
         }
     }

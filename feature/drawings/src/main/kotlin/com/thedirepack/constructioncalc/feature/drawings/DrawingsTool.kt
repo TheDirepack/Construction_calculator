@@ -1,9 +1,16 @@
 package com.thedirepack.constructioncalc.feature.drawings
 
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
+import androidx.compose.ui.res.painterResource
+import android.content.Context
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,17 +20,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,24 +33,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.saveable.listSaver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.thedirepack.constructioncalc.core.data.PlanExports
 import com.thedirepack.constructioncalc.core.data.PlanFiles
+import com.thedirepack.constructioncalc.core.data.PlanPhotos
+import com.thedirepack.constructioncalc.core.data.PlanSymbols
+import com.thedirepack.constructioncalc.core.data.ToolBackup
 import com.thedirepack.constructioncalc.core.data.activeTarget
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.model.PathSegment
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
-import com.thedirepack.constructioncalc.core.model.PlanMark
-import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanMeasurement
-import com.thedirepack.constructioncalc.core.model.PlanPoint
-import com.thedirepack.constructioncalc.core.model.PlanReference
-import com.thedirepack.constructioncalc.core.model.PlanZone
+import com.thedirepack.constructioncalc.core.model.PlanRunRoute
+import com.thedirepack.constructioncalc.core.model.PlanSheetSource
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.ResultValue
+import com.thedirepack.constructioncalc.core.model.Run
+import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.model.newId
-import com.thedirepack.constructioncalc.core.plans.LineMap
-import com.thedirepack.constructioncalc.core.plans.SnapTarget
-import com.thedirepack.constructioncalc.core.ui.R
+import com.thedirepack.constructioncalc.core.model.planRouteFor
+import com.thedirepack.constructioncalc.core.model.withRunPath
+import com.thedirepack.constructioncalc.core.model.withRunRoute
+import com.thedirepack.constructioncalc.core.ui.R as CoreR
 import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
 import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
@@ -60,8 +65,6 @@ import com.thedirepack.constructioncalc.core.ui.tool.ToolModule
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
 
 object DrawingsTool : ToolModule {
     const val ID = "drawings"
@@ -69,8 +72,10 @@ object DrawingsTool : ToolModule {
     override val title = "Drawings"
     override val summary = "PDF plans, measurements and markups"
     override val category = ToolCategory.PROJECTS
-    override val icon = R.drawable.ic_straighten
+    override val icon = CoreR.drawable.ic_straighten
     override val hasSettings = true
+
+    override fun backup(context: Context): ToolBackup = PlanSymbols(context.applicationContext).backup
 
     @Composable
     override fun Content(host: ToolHost) = DrawingsScreen(host)
@@ -79,20 +84,38 @@ object DrawingsTool : ToolModule {
     override fun SettingsContent() = DrawingsSettingsScreen()
 }
 
+private data class DetailJumpTarget(val drawingId: String, val page: Int)
+
+private val DetailJumpSaver = listSaver<DetailJumpTarget?, Any>(
+    save = { target -> if (target == null) emptyList() else listOf(target.drawingId, target.page) },
+    restore = { saved -> if (saved.size == 2) DetailJumpTarget(saved[0] as String, saved[1] as Int) else null },
+)
+
 @Composable
 private fun DrawingsScreen(host: ToolHost) {
     val context = LocalContext.current
     val files = remember(context) { PlanFiles(context.applicationContext) }
+    val photos = remember(context) { PlanPhotos(context.applicationContext) }
     val services = LocalAppServices.current
     val projects by services.projects.projects.collectAsStateWithLifecycle()
     val appSettings = rememberAppSettings()
     val project = host.target?.projectId?.let { id -> projects.firstOrNull { it.id == id } }
         ?: appSettings.activeTarget(projects)?.project
-    var activeDrawingId by rememberSaveable(project?.id) { mutableStateOf<String?>(null) }
+    // Opened from a run ("View on plan"): start on the drawing and route the run was traced from.
+    val runTarget = host.target as? ToolTarget.OfRun
+    val runRoute = remember(project?.id, runTarget) {
+        runTarget?.let { target -> project?.takeIf { it.id == target.projectId }?.planRouteFor(target.runId) }
+    }
+    var activeDrawingId by rememberSaveable(project?.id) { mutableStateOf(runRoute?.first?.id) }
+    var returnTarget by rememberSaveable(project?.id, stateSaver = DetailJumpSaver) { mutableStateOf<DetailJumpTarget?>(null) }
+    var pendingJumpPage by rememberSaveable(project?.id) { mutableStateOf<Int?>(null) }
+    var jumpSerial by rememberSaveable(project?.id) { mutableStateOf(0) }
     val drawing = project?.drawings?.firstOrNull { it.id == activeDrawingId }
+    val focusRouteId = runRoute?.takeIf { it.first.id == drawing?.id }?.second?.id
     val file = drawing?.let { files.file(it.sha256) }
     val scope = rememberCoroutineScope()
     var importing by remember { mutableStateOf(false) }
+
     fun importDrawing(uri: Uri?, asJson: Boolean) {
         val projectId = project?.id
         if (uri != null && projectId != null) {
@@ -100,9 +123,15 @@ private fun DrawingsScreen(host: ToolHost) {
             scope.launch {
                 try {
                     val source = if (asJson) files.importDrawingJson(uri) else files.import(uri)
-                    val attached = if (services.projects.get(projectId)?.drawings?.any { it.id == source.id } == true) {
-                        source.copy(id = newId())
-                    } else source
+                    val existing = services.projects.get(projectId)?.drawings.orEmpty()
+                    // The same PDF again (same bytes): open the copy already in the project.
+                    val duplicate = if (asJson) null else existing.firstOrNull { it.sha256 == source.sha256 }
+                    if (duplicate != null) {
+                        activeDrawingId = duplicate.id
+                        host.showMessage("This PDF is already in the project as “${duplicate.name}”.")
+                        return@launch
+                    }
+                    val attached = if (existing.any { it.id == source.id }) source.copy(id = newId()) else source
                     val result = services.projects.edit(projectId) { current, now ->
                         current.copy(drawings = current.drawings + attached, updatedAt = now)
                     }
@@ -129,26 +158,135 @@ private fun DrawingsScreen(host: ToolHost) {
         if (result == null || result.archived) host.showMessage("The project is unavailable for editing.")
     }
 
-    fun publish(measurement: PlanMeasurement, quantity: Quantity, name: String) {
+    fun renameDrawing(target: PlanDrawing, newName: String) {
+        if (project == null || newName.isBlank()) return
+        val result = services.projects.edit(project.id) { current, now ->
+            current.copy(
+                drawings = current.drawings.map { if (it.id == target.id) it.copy(name = newName) else it },
+                updatedAt = now,
+            )
+        }
+        if (result == null || result.archived) host.showMessage("The project is unavailable for editing.")
+    }
+
+    fun deleteDrawing(target: PlanDrawing) {
+        if (project == null) return
+        val result = services.projects.edit(project.id) { current, now ->
+            current.copy(drawings = current.drawings.filterNot { it.id == target.id }, updatedAt = now)
+        }
+        if (result == null || result.archived) {
+            host.showMessage("The project is unavailable for editing.")
+            return
+        }
+        if (activeDrawingId == target.id) {
+            activeDrawingId = null
+            returnTarget = null
+        }
+        // Garbage-collect unreferenced PDFs and field photos across all projects.
+        val remainingProjects = services.projects.projects.value
+        val stillReferenced = remainingProjects.any { p ->
+            p.drawings.any { it.sha256 == target.sha256 }
+        }
+        val referencedPhotos = remainingProjects.flatMap { p ->
+            p.drawings.flatMap { it.referencedPhotoHashes() }
+        }.toSet()
+        scope.launch(Dispatchers.IO) {
+            if (!stillReferenced) runCatching { files.file(target.sha256).delete() }
+            runCatching { photos.garbageCollect(referencedPhotos) }
+        }
+        host.showMessage("Deleted “${target.name}”.")
+    }
+
+    fun sendRouteToRun(runId: String?, newRunName: String?, segments: List<PathSegment>, traced: TracedRoute) {
+        if (project == null || drawing == null) return
+        var targetRunName = ""
+        val result = services.projects.edit(project.id) { current, now ->
+            val (updated, targetId) = when {
+                newRunName != null -> {
+                    val created = Run(name = newRunName)
+                    targetRunName = created.name
+                    current.addRun(created, now).withRunPath(created.id, segments, now) to created.id
+                }
+                runId != null -> {
+                    targetRunName = current.run(runId)?.name ?: "Run"
+                    current.withRunPath(runId, segments, now) to runId
+                }
+                else -> return@edit current
+            }
+            // Keep the run's link back to this trace; a run has one plan source, so drop older ones.
+            val route = PlanRunRoute(runId = targetId, page = traced.page, points = traced.points, sentInches = traced.horizontalInches, circuitTag = traced.circuitTag)
+            updated.copy(
+                drawings = updated.drawings.map { d ->
+                    if (d.id == drawing.id) d.withRunRoute(route)
+                    else d.copy(routes = d.routes.filterNot { it.runId == targetId })
+                },
+            )
+        }
+        if (result == null || result.archived) {
+            host.showMessage("The project is unavailable for editing.")
+        } else {
+            host.showMessage("Route sent to “$targetRunName”.")
+        }
+    }
+
+    fun publish(measurement: PlanMeasurement, quantity: Quantity, source: PlanSheetSource) {
         host.publish(
-            listOf(ResultValue.of(measurement.id, "Plan distance", quantity, "≈ " + appSettings.format(quantity))),
-            context = name,
+            listOf(ResultValue.of(measurement.id, "Plan distance", quantity, "≈ " + appSettings.format(quantity))
+                .copy(planSource = source)),
+            context = "${drawing?.name} · ${source.label}",
             immediate = true,
         )
     }
 
+    if (project != null && drawing != null && file != null) {
+        val returnLabel = returnTarget?.let { back ->
+            val srcDrawing = project.drawings.firstOrNull { it.id == back.drawingId }
+            val sheetName = srcDrawing?.sheetRevisions?.get(back.page)?.sheetId ?: "Page ${back.page + 1}"
+            if (back.drawingId == drawing.id || srcDrawing == null) sheetName else "${srcDrawing.name} · $sheetName"
+        }
+        BackHandler {
+            returnTarget = null
+            if (focusRouteId != null) host.back() else activeDrawingId = null
+        }
+        DrawingEditor(
+            project = project,
+            drawing = drawing,
+            file = file,
+            editable = !project.archived,
+            focusRouteId = focusRouteId,
+            jumpPageRequest = pendingJumpPage?.let { it to jumpSerial },
+            returnLabel = returnLabel,
+            onReturnToSheet = returnTarget?.let { back ->
+                {
+                    returnTarget = null
+                    activeDrawingId = back.drawingId
+                    pendingJumpPage = back.page
+                    jumpSerial++
+                }
+            },
+            onJumpToSheet = { targetDrawingId, targetPage, fromPage ->
+                returnTarget = DetailJumpTarget(drawing.id, fromPage)
+                activeDrawingId = targetDrawingId
+                pendingJumpPage = targetPage
+                jumpSerial++
+            },
+            onChange = { updateDrawing(it) },
+            onSendRouteToRun = { id, name, segs, route -> sendRouteToRun(id, name, segs, route) },
+            onPublish = { m, q, s -> publish(m, q, s) },
+            host = host,
+            modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing),
+        )
+        return
+    }
+
     ToolScaffold(
-        title = if (drawing == null) "Drawings" else drawing.name,
+        title = "Drawings",
         host = host,
-        onBack = when {
-            drawing != null -> { { activeDrawingId = null } }
-            host.target != null -> host::back
-            else -> null
-        },
-        subtitle = if (host.target != null || drawing != null) project?.name else null,
+        onBack = if (host.target != null) host::back else null,
+        subtitle = if (host.target != null) project?.name else null,
         actions = {
-            if (drawing != null || project == null) {
-                TextButton(onClick = host::openSettings) { Text("Settings") }
+            IconButton(onClick = host::openSettings) {
+                Icon(painterResource(R.drawable.ic_plan_settings), "Drawing settings")
             }
         },
     ) { padding ->
@@ -157,22 +295,17 @@ private fun DrawingsScreen(host: ToolHost) {
                 Text("Choose a project to store your drawings.")
                 TextButton(onClick = { host.openProject(null) }) { Text("Open projects") }
             }
-            drawing == null || file == null -> DrawingList(
-                project, importing,
+            else -> DrawingList(
+                project = project,
+                importing = importing,
                 onImport = { importPdf.launch(arrayOf("application/pdf")) },
                 onImportJson = { importJson.launch(arrayOf("application/json", "application/octet-stream")) },
                 onDrawing = { activeDrawingId = it },
+                onRename = { d, name -> renameDrawing(d, name) },
+                onDelete = { deleteDrawing(it) },
                 modifier = Modifier.padding(padding),
             )
-            else -> DrawingEditor(
-                drawing = drawing,
-                file = file,
-                editable = !project.archived,
-                onChange = ::updateDrawing,
-                publish = { measurement, value -> publish(measurement, value, drawing.name) },
-                host = host,
-                modifier = Modifier.padding(padding),
-            )
+
         }
     }
 }
@@ -184,391 +317,63 @@ private fun DrawingList(
     onImport: () -> Unit,
     onImportJson: () -> Unit,
     onDrawing: (String) -> Unit,
+    onRename: (PlanDrawing, String) -> Unit,
+    onDelete: (PlanDrawing) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var renaming by remember { mutableStateOf<PlanDrawing?>(null) }
+    var deleting by remember { mutableStateOf<PlanDrawing?>(null) }
+
     Column(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Button(onClick = onImport, enabled = !project.archived && !importing) {
-            Text(if (importing) "Importing drawing…" else "Import PDF")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = onImport, enabled = !project.archived && !importing) {
+                Text(if (importing) "Importing drawing…" else "Import PDF")
+            }
+            TextButton(onClick = onImportJson, enabled = !project.archived && !importing) { Text("Import drawing JSON") }
         }
-        TextButton(onClick = onImportJson, enabled = !project.archived && !importing) { Text("Import drawing JSON") }
         if (project.drawings.isEmpty()) Text("No PDFs in this project.")
         if (project.archived) Text("Archived project")
         for (drawing in project.drawings) {
-            TextButton(onClick = { onDrawing(drawing.id) }, modifier = Modifier.fillMaxWidth()) {
-                Text(drawing.name)
-            }
-        }
-    }
-}
-
-private data class Span(val first: PlanPoint, val second: PlanPoint)
-
-private data class PendingReference(val zone: PlanZone?, val span: Span)
-
-@Composable
-private fun DrawingEditor(
-    drawing: PlanDrawing,
-    file: File,
-    editable: Boolean,
-    onChange: ((PlanDrawing) -> PlanDrawing) -> Unit,
-    publish: (PlanMeasurement, Quantity) -> Unit,
-    host: ToolHost,
-    modifier: Modifier = Modifier,
-) {
-    val context = LocalContext.current
-    val settings = rememberAppSettings()
-    val (prefs, prefsStore) = rememberDrawingsPrefs()
-    val lineStore = remember(context) { PlanLineStore(context.applicationContext) }
-    val scope = rememberCoroutineScope()
-    val pageCount by produceState<Int?>(null, file) {
-        value = try {
-            withContext(Dispatchers.IO) { pdfPageCount(file) }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            0
-        }
-    }
-    var page by rememberSaveable(drawing.id) { mutableStateOf(0) }
-    var pageSize by remember(drawing.id, page) { mutableStateOf<PageSize?>(null) }
-    var mode by remember(drawing.id) { mutableStateOf(DrawingMode.Navigate) }
-    var selectedZoneId by remember(drawing.id, page) { mutableStateOf<String?>(null) }
-    var pending by remember(drawing.id, page, mode) { mutableStateOf<PlanPoint?>(null) }
-    var newZone by remember(drawing.id, page) { mutableStateOf<Span?>(null) }
-    var pendingReference by remember(drawing.id, page) { mutableStateOf<PendingReference?>(null) }
-    var labelPoint by remember(drawing.id, page) { mutableStateOf<PlanPoint?>(null) }
-    var symbolPoint by remember(drawing.id, page) { mutableStateOf<PlanPoint?>(null) }
-    var showOptions by remember { mutableStateOf(false) }
-    var showCalibration by remember { mutableStateOf(false) }
-    var showItems by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-
-    // Pre-computed line map for the active page (built once in the background and cached).
-    val lineMap by produceState<LineMap?>(null, drawing.sha256, file, page) {
-        value = null
-        value = try {
-            lineStore.getOrBuild(drawing.sha256, file, page)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    val snapEnabled = when (mode) {
-        DrawingMode.Reference -> prefs.snapCalibration
-        DrawingMode.Measure -> prefs.snapMeasurements
-        else -> false
-    }
-    val snapTarget = when (mode) {
-        DrawingMode.Reference -> prefs.calibrationTarget
-        DrawingMode.Measure -> prefs.measurementTarget
-        else -> SnapTarget.CENTER
-    }
-
-    val pageZones = remember(drawing.zones, page) { drawing.zones.filter { it.page == page } }
-    val zone = pageZones.firstOrNull { it.id == selectedZoneId } ?: pageZones.firstOrNull()
-    val marks = remember(drawing.marks, page) { drawing.marks.filter { it.page == page } }
-    val measurements = remember(drawing.measurements, page) { drawing.measurements.filter { it.page == page } }
-    val docFit = remember(drawing.calibration, page) { drawing.calibration.fit(page) }
-    val fittedMeasurements = remember(drawing, measurements) {
-        measurements.map { measurement -> measurement to drawing.length(measurement) }
-    }
-    val calibrationLines = remember(drawing.calibration, pageZones, page, prefs.showCalibrationLayer, settings) {
-        if (!prefs.showCalibrationLayer) emptyList()
-        else {
-            val docRefs = drawing.calibration.references.filter { it.page == page }.map { ref ->
-                CanvasLine(ref.first, ref.second, settings.format(ref.length.toQuantity()), isReference = true)
-            }
-            val zoneRefs = pageZones.flatMap { z ->
-                z.references.map { ref ->
-                    CanvasLine(ref.first, ref.second, settings.format(ref.length.toQuantity()), isReference = true)
-                }
-            }
-            docRefs + zoneRefs
-        }
-    }
-    val displayedLines = fittedMeasurements.map { (measurement, length) ->
-        CanvasLine(measurement.first, measurement.second, length?.let { "≈ " + settings.format(it) } ?: "Uncalibrated")
-    } + calibrationLines
-
-    fun addMark(mark: PlanMark) {
-        onChange { it.copy(marks = it.marks + mark) }
-    }
-
-    fun applySpan(first: PlanPoint, second: PlanPoint) {
-        pending = null
-        if (first == second) return
-        when (mode) {
-            DrawingMode.Zone -> {
-                if (first.x == second.x || first.y == second.y) {
-                    host.showMessage("An override zone needs a width and height.")
-                    return
-                }
-                val temporary = PlanZone(name = "Scale zone", page = page, first = first, second = second)
-                if (pageZones.any { it.overlaps(temporary) }) {
-                    host.showMessage("Override scale zones cannot overlap.")
-                } else newZone = Span(first, second)
-            }
-            DrawingMode.Reference -> {
-                if (drawing.crossesZoneBoundary(page, first, second)) {
-                    host.showMessage("Keep a calibration dimension either inside one override zone or outside all zones.")
-                    return
-                }
-                val containing = drawing.zoneContaining(page, first, second)
-                if (containing != null) selectedZoneId = containing.id
-                pendingReference = PendingReference(containing, Span(first, second))
-            }
-            DrawingMode.Measure -> {
-                if (drawing.crossesZoneBoundary(page, first, second)) {
-                    host.showMessage("Split measurements at override zone boundaries.")
-                    return
-                }
-                val containing = drawing.zoneContaining(page, first, second)
-                val fit = drawing.calibrationFor(page, first, second)
-                if (fit == null) {
-                    host.showMessage(
-                        if (containing != null) "Calibrate “${containing.name}” before measuring inside it."
-                        else "Calibrate the sheet (or pick a preset scale) before measuring.",
-                    )
-                    return
-                }
-                val saved = PlanMeasurement(page = page, zoneId = containing?.id, first = first, second = second)
-                onChange { it.copy(measurements = it.measurements + saved) }
-                if (containing != null) selectedZoneId = containing.id
-                publish(saved, fit.distance(first, second))
-            }
-            DrawingMode.Arrow, DrawingMode.Line, DrawingMode.Rectangle -> {
-                val kind = when (mode) {
-                    DrawingMode.Arrow -> PlanMarkKind.ARROW
-                    DrawingMode.Rectangle -> PlanMarkKind.RECTANGLE
-                    else -> PlanMarkKind.LINE
-                }
-                if (kind != PlanMarkKind.RECTANGLE || first.x != second.x && first.y != second.y) {
-                    addMark(PlanMark(page = page, kind = kind, points = listOf(first, second)))
-                }
-            }
-            else -> Unit
-        }
-    }
-
-    fun tap(point: PlanPoint) {
-        when (mode) {
-            DrawingMode.Text -> labelPoint = point
-            DrawingMode.Symbol -> symbolPoint = point
-            else -> {
-                val first = pending
-                if (first == null) pending = point else applySpan(first, point)
-            }
-        }
-    }
-
-    fun writeExport(uri: Uri?, pdf: Boolean) {
-        if (uri == null) return
-        busy = true
-        scope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    context.contentResolver.openOutputStream(uri, "wt")?.use { stream ->
-                        if (pdf) PlanExports.writePdf(context, drawing, stream, { quantity -> settings.format(quantity) })
-                        else PlanExports.writeJson(drawing, stream)
-                    } ?: error("Could not open the export destination.")
-                }
-                host.showMessage(if (pdf) "Annotated PDF saved." else "Drawing JSON saved.")
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                host.showMessage(error.message ?: "Could not save the drawing.")
-            } finally {
-                busy = false
-            }
-        }
-    }
-    val pdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { writeExport(it, true) }
-    val json = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { writeExport(it, false) }
-    val baseName = drawing.name.substringBeforeLast('.').ifBlank { "Drawing" }
-    val count = pageCount
-    Column(modifier.fillMaxSize()) {
-        if (count == null) {
-            CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally).padding(12.dp))
-            return@Column
-        }
-        if (count <= 0) {
-            Text("This drawing could not be opened. Check that its source PDF is available.", Modifier.padding(16.dp))
-            return@Column
-        }
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            TextButton(onClick = { page-- }, enabled = page > 0) { Text("Prev") }
-            Text("${page + 1}/$count")
-            TextButton(onClick = { page++ }, enabled = page + 1 < count) { Text("Next") }
-            TextButton(onClick = { showCalibration = true }) {
-                Text(if (docFit != null) "Scale ✓" else "Scale")
-            }
-            FilterChip(
-                selected = prefs.showCalibrationLayer,
-                onClick = { DrawingsSettings.setShowCalibrationLayer(prefsStore, !prefs.showCalibrationLayer) },
-                label = { Text("Cal layer") },
-            )
-            if (mode == DrawingMode.Reference || mode == DrawingMode.Measure) {
-                FilterChip(
-                    selected = snapEnabled,
-                    onClick = {
-                        if (mode == DrawingMode.Reference) DrawingsSettings.setSnapCalibration(prefsStore, !prefs.snapCalibration)
-                        else DrawingsSettings.setSnapMeasurements(prefsStore, !prefs.snapMeasurements)
-                    },
-                    label = {
-                        Text(
-                            if (!snapEnabled) "Snap: Off"
-                            else if (lineMap == null) "Snap: …"
-                            else "Snap: ${if (snapTarget == SnapTarget.EDGE) "Edge" else "Center"}",
-                        )
-                    },
-                )
-            }
-            TextButton(onClick = { showOptions = true }, enabled = !busy) { Text(if (busy) "Saving…" else "More") }
-            DropdownMenu(expanded = showOptions, onDismissRequest = { showOptions = false }) {
-                DropdownMenuItem(text = { Text("Export annotated PDF") }, onClick = {
-                    showOptions = false
-                    pdf.launch("$baseName annotated.pdf")
-                })
-                DropdownMenuItem(text = { Text("Export drawing JSON") }, onClick = {
-                    showOptions = false
-                    json.launch("$baseName.drawing.json")
-                })
-                DropdownMenuItem(text = { Text("Measurements and markups") }, onClick = {
-                    showOptions = false
-                    showItems = true
-                })
-                DropdownMenuItem(text = { Text("Snapping & symbol settings") }, onClick = {
-                    showOptions = false
-                    host.openSettings()
-                })
-            }
-        }
-        if (editable) {
             Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                DrawingMode.entries.forEach { tool ->
-                    FilterChip(mode == tool, onClick = { mode = tool }, label = { Text(tool.title) })
+                TextButton(onClick = { onDrawing(drawing.id) }, modifier = Modifier.weight(1f)) {
+                    Text(drawing.name, modifier = Modifier.fillMaxWidth())
+                }
+                if (!project.archived) {
+                    TextButton(onClick = { renaming = drawing }) { Text("Rename") }
+                    TextButton(onClick = { deleting = drawing }) { Text("Delete") }
                 }
             }
         }
-        Text(
-            if (pending == null) mode.hint else "Tap the second point.",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-        )
-        PlanCanvas(
-            file = file,
-            pageIndex = page,
-            mode = if (editable) mode else DrawingMode.Navigate,
-            zones = pageZones,
-            selectedZone = zone?.id,
-            lines = displayedLines,
-            marks = marks,
-            pending = pending,
-            lineMap = lineMap,
-            snapEnabled = snapEnabled,
-            snapTarget = snapTarget,
-            onPageSize = { pageSize = it },
-            onPlace = ::tap,
-            onLine = ::applySpan,
-            onInk = { points ->
-                addMark(
-                    PlanMark(
-                        page = page,
-                        kind = if (mode == DrawingMode.Highlight) PlanMarkKind.HIGHLIGHT else PlanMarkKind.INK,
-                        points = points.map { it.point },
-                        pressures = points.map { it.pressure },
-                        width = if (mode == DrawingMode.Highlight) 11.0 else 1.8,
-                    ),
-                )
+    }
+
+    renaming?.let { target ->
+        RenameDialog(
+            title = "Rename drawing",
+            label = "Drawing name",
+            initialName = target.name,
+            maxLength = 240,
+            onDismiss = { renaming = null },
+            onConfirm = { updated ->
+                onRename(target, updated)
+                renaming = null
             },
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        )
-        fittedMeasurements.lastOrNull { it.second != null }?.let { (measurement, value) ->
-            val length = requireNotNull(value)
-            TextButton(onClick = { publish(measurement, length) }) {
-                Text("≈ ${settings.format(length)} · Use measurement")
-            }
-        }
-    }
-    newZone?.let { span ->
-        ZoneDialog(defaultName = "Zone ${drawing.zones.size + 1}", pageSize = pageSize, onDismiss = { newZone = null }) { name, preset ->
-            val saved = PlanZone(name = name, page = page, first = span.first, second = span.second, preset = preset)
-            onChange { it.copy(zones = it.zones + saved) }
-            selectedZoneId = saved.id
-            newZone = null
-            mode = if (preset == null) DrawingMode.Reference else DrawingMode.Measure
-        }
-    }
-    pendingReference?.let { target ->
-        val title = target.zone?.name ?: "Document calibration (Page ${page + 1})"
-        val hasFit = target.zone?.let { it.fit() != null } ?: (docFit != null)
-        ReferenceDialog(title, hasFit = hasFit, onDismiss = { pendingReference = null }) { length, check ->
-            val ref = PlanReference(target.span.first, target.span.second, length, check, page = page)
-            if (target.zone != null) {
-                onChange { current ->
-                    current.copy(zones = current.zones.map {
-                        if (it.id == target.zone.id) it.copy(references = it.references + ref) else it
-                    })
-                }
-            } else {
-                onChange { current ->
-                    current.copy(calibration = current.calibration.copy(references = current.calibration.references + ref))
-                }
-            }
-            pendingReference = null
-        }
-    }
-    if (showCalibration) {
-        CalibrationDialog(
-            calibration = drawing.calibration,
-            page = page,
-            pageSize = pageSize,
-            pageZones = pageZones,
-            editable = editable,
-            onCalibrationChange = { updated -> onChange { it.copy(calibration = updated) } },
-            onZoneChange = { updated -> onChange { c -> c.copy(zones = c.zones.map { if (it.id == updated.id) updated else it }) } },
-            onZoneDelete = { id -> onChange { c -> c.copy(zones = c.zones.filterNot { it.id == id }) } },
-            onDismiss = { showCalibration = false },
         )
     }
-    labelPoint?.let { point ->
-        TextMarkupDialog(onDismiss = { labelPoint = null }) { text ->
-            addMark(PlanMark(page = page, kind = PlanMarkKind.TEXT, points = listOf(point), text = text, width = 13.0))
-            labelPoint = null
-        }
-    }
-    symbolPoint?.let { point ->
-        SymbolDialog(onDismiss = { symbolPoint = null }, openSettings = {
-            symbolPoint = null
-            host.openSettings()
-        }) { symbol ->
-            addMark(PlanMark(page = page, kind = PlanMarkKind.SYMBOL, points = listOf(point), svg = symbol.svg, width = 36.0))
-            symbolPoint = null
-        }
-    }
-    if (showItems) {
-        PageItemsDialog(
-            zone = zone,
-            measurements = fittedMeasurements,
-            marks = marks,
-            editable = editable,
-            publish = publish,
-            onZoneChange = { updated -> onChange { current -> current.copy(zones = current.zones.map { if (it.id == updated.id) updated else it }) } },
-            onMeasureDelete = { id -> onChange { it.copy(measurements = it.measurements.filterNot { m -> m.id == id }) } },
-            onMarkDelete = { id -> onChange { it.copy(marks = it.marks.filterNot { m -> m.id == id }) } },
-            onDismiss = { showItems = false },
+    deleting?.let { target ->
+        ConfirmDeleteDialog(
+            title = "Delete drawing?",
+            message = "Remove “${target.name}” and its measurements, zones, and markups from this project?",
+            onDismiss = { deleting = null },
+            onConfirm = {
+                onDelete(target)
+                deleting = null
+            },
         )
     }
 }

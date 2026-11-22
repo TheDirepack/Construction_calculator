@@ -10,56 +10,14 @@ Each source gets a SOURCE.json manifest; downloads are resumable.
 import os
 import re
 import json
-import ssl
 import time
 import urllib.parse
 import urllib.request
 import urllib.error
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-ROOT = '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/4_archives'
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
-H = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                   '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+from dl_common import BLUEPRINTS_ROOT, read, save, slug
 
-
-def read(url, timeout=120):
-    last = None
-    for attempt in range(5):
-        try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=H), timeout=timeout, context=ctx) as r:
-                return r.read()
-        except Exception as e:  # noqa: BLE001
-            last = e
-            time.sleep(4 * (attempt + 1))
-    raise last
-
-
-def save(url, path, timeout=300):
-    if os.path.exists(path) and os.path.getsize(path) > 0:
-        return os.path.getsize(path)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    for attempt in range(6):
-        try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=H), timeout=timeout, context=ctx) as r, \
-                    open(path + '.part', 'wb') as f:
-                while True:
-                    chunk = r.read(1024 * 256)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-            os.replace(path + '.part', path)
-            return os.path.getsize(path)
-        except Exception:  # noqa: BLE001
-            time.sleep(5 * (attempt + 1))
-    return 0
-
-
-def slug(text, limit=60):
-    text = re.sub(r'[^A-Za-z0-9]+', '_', text or '').strip('_').lower()
-    return text[:limit] or 'item'
+ROOT = str(BLUEPRINTS_ROOT / '4_archives')
 
 
 # ---------------------------------------------------------------- Olmsted NPS

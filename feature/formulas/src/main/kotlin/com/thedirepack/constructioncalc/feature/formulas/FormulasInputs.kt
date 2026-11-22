@@ -1,5 +1,9 @@
 package com.thedirepack.constructioncalc.feature.formulas
 
+import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
+import com.thedirepack.constructioncalc.core.electrical.ConductorSize
+import com.thedirepack.constructioncalc.core.electrical.ResistanceUnit
+import com.thedirepack.constructioncalc.core.electrical.Stranding
 import com.thedirepack.constructioncalc.core.electrical.formula.Formula
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaCatalog
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaQuantity
@@ -20,6 +24,13 @@ val Variable.shownUnits: List<FormulaUnit>
 fun Variable.defaultUnitIn(system: UnitSystem): Int =
     if (quantity == FormulaQuantity.LENGTH && system == UnitSystem.METRIC) shownUnits.indexOfFirst { it.label == "m" } else defaultUnit
 
+/** Which calculator is active in the Formulas tool. */
+@Serializable
+enum class FormulasMode(val label: String) {
+    SOLVER("Formulas"),
+    RESISTANCE_LENGTH("Wire length (Ω)"),
+}
+
 /**
  * What the person typed, saved with an item. Values are kept as typed (in the unit picked for each
  * variable); blank variables are the ones to solve for.
@@ -32,8 +43,19 @@ data class FormulaInputs(
     val formulaId: String = FormulaCatalog.default.id,
     val values: Map<String, String> = emptyMap(),
     val units: Map<String, Int> = emptyMap(),
+    val mode: FormulasMode = FormulasMode.SOLVER,
+    // Resistance -> Wire Length calculator fields
+    val measuredResistance: String = "",
+    val resistanceUnit: ResistanceUnit = ResistanceUnit.OHM,
+    val wireMaterial: ConductorMaterial = ConductorMaterial.COPPER,
+    val wireSize: String = ConductorSize.AWG_12.label,
+    val wireStranding: Stranding = Stranding.STRANDED,
+    val wireAmbientC: String = "20",
+    val wireRoundTrip: Boolean = false,
 ) {
     val formula: Formula get() = FormulaCatalog.find(formulaId) ?: FormulaCatalog.default
+
+    val conductorSize: ConductorSize get() = ConductorSize.fromLabel(wireSize) ?: ConductorSize.AWG_12
 
     /** The picked unit, or the variable's default in [system] when none was picked. */
     fun unitIndex(variableId: String, system: UnitSystem = UnitSystem.IMPERIAL): Int {
@@ -72,15 +94,23 @@ data class FormulaInputs(
     }
 
     /** Switches formula, starting from its default values (e.g. 60 Hz). */
-    fun withFormula(formula: Formula) = FormulaInputs(formula.id, defaults(formula))
+    fun withFormula(formula: Formula) = copy(formulaId = formula.id, values = defaults(formula), units = emptyMap())
 
-    fun cleared() = FormulaInputs(formulaId, defaults(formula))
+    fun cleared() = if (mode == FormulasMode.RESISTANCE_LENGTH) {
+        copy(measuredResistance = "", wireAmbientC = "20", wireRoundTrip = false)
+    } else {
+        copy(values = defaults(formula), units = emptyMap())
+    }
 
     companion object {
+        const val RESISTANCE_LENGTH_TOPIC = "resistance-length"
+
         fun defaults(formula: Formula): Map<String, String> =
             formula.variables.mapNotNull { v -> v.default?.let { v.id to Decimals.trim(it, 6) } }.toMap()
 
         fun start(formula: Formula = FormulaCatalog.default) = FormulaInputs(formula.id, defaults(formula))
+
+        fun startResistanceLength() = FormulaInputs(mode = FormulasMode.RESISTANCE_LENGTH)
     }
 }
 

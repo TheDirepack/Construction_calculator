@@ -110,4 +110,46 @@ class ReferenceCatalogTest {
     fun codeEntriesNameTheEdition() {
         assertEquals("NEC 2023 · Table 310.16", ReferenceCatalog.find("nec-ampacity")!!.source.label)
     }
+
+    @Test
+    fun everyQuickCalculatorIsOnAPage() {
+        val used = ReferenceCatalog.all.flatMap { expand(it.blocks()) }.filterIsInstance<RefBlock.Calculator>().map { it.kind }.toSet()
+        assertEquals(com.thedirepack.constructioncalc.feature.reference.content.QuickCalc.entries.toSet(), used)
+    }
+
+    @Test
+    fun noticeDeepLinksPointAtRealEntries() {
+        // Ids that Conduit Fill, the Wire Pull Planner and Formulas link their notices to.
+        listOf(
+            "nec-fill-percent", "nec-conduit-dimensions", "nec-conductor-dimensions", "nec-adjustment", "nec-ambient",
+            "nec-bend-radius", "nec-conductor-properties", "nec-box-fill", "nec-pull-box", "nec-gec", "nec-motor-circuit",
+            "nec-burial-depth", "nec-raceway-support", "nec-pvc-expansion", "wire-length-from-resistance",
+        ).forEach { assertTrue(it, ReferenceCatalog.find(it) != null) }
+    }
+
+    @Test
+    fun boxFillTablesMatchTheBook() {
+        val t = tables(ReferenceCatalog.find("nec-box-fill")!!)
+        assertEquals(listOf("12 AWG", "2.25"), t[0].rows.first { it[0] == "12 AWG" })
+        assertEquals(listOf("6 AWG", "5"), t[0].rows.first { it[0] == "6 AWG" })
+        assertEquals("30.3", t[1].rows.first { it[0] == "4 × 2-1/8 square" }[1])
+        assertEquals("18", t[1].rows.first { it[0] == "3 × 2 × 3-1/2 device" }[1])
+    }
+
+    @Test
+    fun gecAndBurialTablesMatchTheBook() {
+        val gec = tables(ReferenceCatalog.find("nec-gec")!!).single()
+        assertEquals(listOf("Over 3/0 through 350 kcmil", "Over 250 through 500 kcmil", "2 AWG", "1/0 AWG"), gec.rows[3])
+        val burial = tables(ReferenceCatalog.find("nec-burial-depth")!!).single()
+        assertEquals(listOf("24", "6", "18", "12", "6"), burial.rows.first().drop(1))
+        val metric = tables(ReferenceCatalog.find("nec-burial-depth")!!, RefContext.METRIC).single()
+        assertEquals(listOf("600", "150", "450", "300", "150"), metric.rows.first().drop(1))
+        assertTrue(ReferenceCatalog.find("nec-burial-depth")!!.source.label.contains("300.5(A)"))
+    }
+
+    @Test
+    fun pvcExpansionTableFollowsTheRate() {
+        val t = tables(ReferenceCatalog.find("nec-pvc-expansion")!!).single()
+        assertEquals(listOf("100", "4.06"), t.rows.first { it[0] == "100" })
+    }
 }

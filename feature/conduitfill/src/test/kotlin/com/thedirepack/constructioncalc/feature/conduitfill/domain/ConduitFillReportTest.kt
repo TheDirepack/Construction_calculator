@@ -119,11 +119,15 @@ class ConduitFillReportTest {
     }
 
     @Test fun jamWarningOnlyInRangeAndOnlyForThree() {
-        val risky = ConduitFillReport.build(request(TradeSize.S_1_1_4, 3 to thhn(ConductorSize.AWG_1)))!!
+        // 1.05 × D/d, the same ratio as the Wire Pull Planner: 1.05 × 1.380 / 0.486 (1/0 THHN) = 2.98.
+        val risky = ConduitFillReport.build(request(TradeSize.S_1_1_4, 3 to thhn(ConductorSize.AWG_1_0)))!!
         assertNotNull(risky.jam)
-        assertTrue(risky.has("Jam ratio 3.09", ReportSeverity.WARNING))
+        assertTrue(risky.has("Jam ratio 2.98", ReportSeverity.WARNING))
+        assertTrue(risky.has("1.05 × D/d", ReportSeverity.WARNING))
+        assertEquals("nec-fill-percent", risky.notices.first { it.severity == ReportSeverity.WARNING }.refId)
+        // 1.05 × 1.380 / 0.384 (2 AWG THHN) = 3.77: outside the jam range.
         val fine = ConduitFillReport.build(request(TradeSize.S_1_1_4, 3 to thhn(ConductorSize.AWG_2)))!!
-        assertTrue(fine.has("Jam ratio 3.59", ReportSeverity.INFO))
+        assertTrue(fine.has("Jam ratio 3.77", ReportSeverity.INFO))
         assertTrue(fine.notices.none { it.severity == ReportSeverity.WARNING })
         val four = ConduitFillReport.build(request(TradeSize.S_1_1_4, 4 to thhn(ConductorSize.AWG_1)))!!
         assertNull(four.jam)
@@ -151,7 +155,7 @@ class ConduitFillReportTest {
         val report = ConduitFillReport.build(request(TradeSize.S_3_4, 3 to thhn(ConductorSize.AWG_12)))!!
         assertTrue(report.has("NEC 2023 Chapter 9 Table 4"))
         assertTrue(report.has("Equipment grounding conductors"))
-        assertTrue(report.has("Not covered"))
+        assertTrue(report.has("Named cables aren't derated"))
     }
 
     private val metric = AppSettings(unitSystem = UnitSystem.METRIC)

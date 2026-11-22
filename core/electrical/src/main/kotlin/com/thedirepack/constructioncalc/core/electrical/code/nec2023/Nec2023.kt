@@ -16,7 +16,8 @@ import com.thedirepack.constructioncalc.core.electrical.code.ElectricalCode
  * - [Nec2023Protection]: 240.6(A), 240.4(D), Table 250.122;
  * - [Nec2023Raceways]: Chapter 9 Tables 2 and 4, and each raceway's article;
  * - [Nec2023Motors]: Tables 430.248, 430.250, 430.52(C)(1);
- * - [Nec2023General]: Table 110.26(A)(1).
+ * - [Nec2023General]: Table 110.26(A)(1);
+ * - [Nec2023LoadCalculations]: Article 220 Tables 220.45, 220.47, 220.54, 220.55, 220.82.
  *
  * Moving to a new edition: copy this package (e.g. `nec2026`), check every line against the new
  * book and point [com.thedirepack.constructioncalc.core.electrical.code.Code.book] at it.
@@ -49,10 +50,37 @@ object Nec2023 : ElectricalCode {
         SMALL_CONDUCTOR_14_CCA to "240.4(D)(3)",
         STANDARD_OCPD to "240.6(A)",
 
+        // Article 220, checked on printed pages 70-95 to 70-98 (2023 renumbered 220.42/220.44).
+        LIGHTING_DEMAND to "Table 220.45",
+        RECEPTACLE_DEMAND to "Table 220.47",
+        SMALL_APPLIANCE_LAUNDRY to "220.52",
+        DWELLING_APPLIANCE_DEMAND to "220.53",
+        DRYER_DEMAND to "Table 220.54",
+        RANGE_DEMAND to "Table 220.55",
+        FEEDER_MOTOR_LOAD to "220.50(A)",
+        NONCOINCIDENT_LOADS to "220.60",
+        OPTIONAL_DWELLING to "220.82",
+        OPTIONAL_DWELLING_GENERAL to "220.82(B)",
+        OPTIONAL_DWELLING_HVAC to "220.82(C)",
+
         EGC_SIZE to "Table 250.122",
         EGC_INCREASED to "250.122(B)",
         EGC_IDENTIFICATION to "250.119",
         EGC_MULTIPLE_CIRCUITS to "250.122(C)",
+        GEC_SIZE to "Table 250.66",
+        GEC_GROUND_ROD_MAX to "250.66(A)",
+        GEC_CONCRETE_ENCASED_MAX to "250.66(B)",
+        SUPPLY_SIDE_BONDING to "Table 250.102(C)(1)",
+
+        BOX_FILL to "314.16",
+        METAL_BOX_VOLUMES to "Table 314.16(A)",
+        BOX_VOLUME_ALLOWANCE to "Table 314.16(B)",
+        PULL_BOX_STRAIGHT to "314.28(A)(1)",
+        PULL_BOX_ANGLE to "314.28(A)(2)",
+
+        BURIAL_DEPTH to "Table 300.5(A)",
+        RACEWAY_SUPPORT to "300.11",
+        PVC_EXPANSION to "Table 352.44",
 
         MINIMUM_CONDUCTOR_SIZE to "310.3(A)",
         CONDUCTOR_INSULATION to "310.4",
@@ -115,14 +143,23 @@ object Nec2023 : ElectricalCode {
     override val fuseOnlyRatings = Nec2023Protection.fuseOnlyRatings
     override val smallConductorLimits = Nec2023Protection.smallConductorLimits
     override val equipmentGroundingConductors = Nec2023Protection.equipmentGroundingConductors
+    override val groundingElectrodeConductors = Nec2023Protection.groundingElectrodeConductors
+
+    override val boxVolumeAllowances = Nec2023Boxes.volumeAllowances
+    override val metalBoxVolumes = Nec2023Boxes.standardMetalBoxes
 
     override val conduitDimensions = Nec2023Raceways.conduitDimensions
     override val bendRadius = Nec2023Raceways.bendRadius
     override val raceways = Nec2023Raceways.raceways
+    override val burialDepths = Nec2023RacewayInstall.burialDepths
+    override val racewaySupport = Nec2023RacewayInstall.racewaySupport
+    override val pvcThermalExpansion = Nec2023RacewayInstall.pvcThermalExpansion
 
     override val motorFullLoadCurrent = Nec2023Motors.fullLoadCurrent
     override val motorFullLoadVoltages = Nec2023Motors.fullLoadVoltages
     override val motorBranchProtection = Nec2023Motors.branchProtection
 
     override val workingSpace = Nec2023General.workingSpace
+
+    override val loadCalculation = Nec2023LoadCalculations.values
 }

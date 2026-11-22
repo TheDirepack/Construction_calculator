@@ -11,6 +11,7 @@ import com.thedirepack.constructioncalc.core.electrical.JamCheck
 import com.thedirepack.constructioncalc.core.electrical.ConductorGroup
 import com.thedirepack.constructioncalc.core.electrical.FillConductor
 import com.thedirepack.constructioncalc.core.electrical.ConduitSize
+import com.thedirepack.constructioncalc.core.electrical.PullFormulas
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ValueKind
@@ -26,7 +27,17 @@ import java.util.Locale
 /** How serious a [ReportNotice] is. The screen maps these to its own notice styles. */
 enum class ReportSeverity { INFO, WARNING, ERROR }
 
-data class ReportNotice(val text: String, val severity: ReportSeverity = ReportSeverity.INFO)
+/** [refId] is the Reference entry the notice is about; the screen opens it when the notice is tapped. */
+data class ReportNotice(val text: String, val severity: ReportSeverity = ReportSeverity.INFO, val refId: String? = null)
+
+/** Reference entry ids the notices link to (stable ids from the Reference tool). */
+object FillRefs {
+    const val FILL_LIMITS = "nec-fill-percent"
+    const val CONDUIT_DIMENSIONS = "nec-conduit-dimensions"
+    const val CONDUCTOR_DIMENSIONS = "nec-conductor-dimensions"
+    const val ADJUSTMENT = "nec-adjustment"
+    const val AMBIENT = "nec-ambient"
+}
 
 /** Everything the screen needs to calculate: valid, already-resolved inputs. */
 data class FillRequest(
@@ -96,6 +107,7 @@ data class ConduitFillReport(
                             "Over the limit: ${fmt(a.percentFill, 1)}% fill against the ${a.limitPercent}% maximum " +
                                 "(${a.conductorCount} conductors${if (request.nipple) ", nipple" else ""}). $fix",
                             ReportSeverity.ERROR,
+                            FillRefs.FILL_LIMITS,
                         ),
                     )
                 } else if (a.permittedByNote7) {
@@ -103,6 +115,7 @@ data class ConduitFillReport(
                         ReportNotice(
                             "Fill is ${fmt(a.percentFill, 1)}%, a hair over ${a.limitPercent}%, but allowed: " +
                                 "${CodeRule.FILL_ROUNDING.cite} rounds a count up when the decimal is ${codeNumber(Code.book.values.note7RoundUpFraction)} or more and all conductors are the same size.",
+                            refId = FillRefs.FILL_LIMITS,
                         ),
                     )
                 }
@@ -115,20 +128,31 @@ data class ConduitFillReport(
                     if (jam.inJamRange) {
                         add(
                             ReportNotice(
-                                "Jam ratio $r (conduit inside diameter / $of outside diameter) is between ${codeNumber(ConduitFill.JAM_LOW)} and ${codeNumber(ConduitFill.JAM_HIGH)}. " +
+                                "Jam ratio $r (${PullFormulas.OVALITY_LABEL}: conduit inside diameter D over $of outside diameter d, plus 5% for bend ovality) is between ${codeNumber(ConduitFill.JAM_LOW)} and ${codeNumber(ConduitFill.JAM_HIGH)}. " +
                                     "Three conductors can jam when pulled, so consider another size or an offset pull plan (${CodeRule.JAM_RATIO.cite}).",
                                 ReportSeverity.WARNING,
+                                FillRefs.FILL_LIMITS,
                             ),
                         )
                     } else {
-                        add(ReportNotice("Jam ratio $r for three conductors, outside the ${codeNumber(ConduitFill.JAM_LOW)}–${codeNumber(ConduitFill.JAM_HIGH)} range where jamming can occur."))
+                        add(ReportNotice("Jam ratio $r (${PullFormulas.OVALITY_LABEL}) for three conductors, outside the ${codeNumber(ConduitFill.JAM_LOW)}–${codeNumber(ConduitFill.JAM_HIGH)} range where jamming can occur.", refId = FillRefs.FILL_LIMITS))
                     }
+                }
+                val cables = active.map { it.spec }.filterIsInstance<FillConductor.Custom>()
+                if (cables.isNotEmpty()) {
+                    add(
+                        ReportNotice(
+                            "Named cables use their own outside diameter and area (${cables.joinToString { it.name }}), not the NEC tables. " +
+                                "Each counts as one conductor for the fill limit; derating below covers only the table conductors.",
+                        ),
+                    )
                 }
                 if (request.nipple) {
                     add(
                         ReportNotice(
                             "Nipple fill (${codePercentValue(Code.book.values.fillNipplePercent, spaced = false)}) applies only to nipples ${Code.book.values.let { codeLength(it.nippleMaxLengthIn, it.nippleMaxLengthMm, settings.unitSystem) }} or shorter between boxes, cabinets or similar " +
                                 "enclosures. ${CodeRule.FILL_NIPPLES.cite} also waives the ${CodeRule.CONDUCTOR_COUNT_ADJUSTMENT.cite} adjustment factors for them.",
+                            refId = FillRefs.FILL_LIMITS,
                         ),
                     )
                 }
@@ -136,18 +160,20 @@ data class ConduitFillReport(
                     ReportNotice(
                         "Areas: ${Code.label} ${CodeRule.CONDUIT_DIMENSIONS.cite} (conduit), ${CodeRule.CONDUCTOR_DIMENSIONS.cite} (insulated wire, approximate), ${CodeRule.CONDUCTOR_PROPERTIES.cite} (bare wire) and the " +
                             "${CodeRule.FILL_PERCENT.cite} limits. Check the edition your jurisdiction has adopted.",
+                        refId = FillRefs.CONDUCTOR_DIMENSIONS,
                     ),
                 )
                 add(
                     ReportNotice(
                         "Equipment grounding conductors, bare or insulated, count toward fill (${CodeRule.FILL_GROUNDING_CONDUCTORS.cite}). Compact conductors " +
-                            "(${CodeRule.COMPACT_CONDUCTOR_DIMENSIONS.cite}), multiconductor cables and fixture wires aren't included: use their actual dimensions.",
+                            "(${CodeRule.COMPACT_CONDUCTOR_DIMENSIONS.cite}), multiconductor cables and fixture wires aren't included: add them as named cables with their actual dimensions.",
+                        refId = FillRefs.FILL_LIMITS,
                     ),
                 )
                 add(
                     ReportNotice(
-                        "Not covered: conductor derating for more than 3 current-carrying conductors or ambient temperature " +
-                            "(${CodeRule.AMPACITY.cite}), ampacity, pull length and bends, or box fill.",
+                        "With an ambient temperature entered, derating covers the insulated building-wire groups: ambient correction and more than 3 current-carrying " +
+                            "conductors (${CodeRule.AMPACITY.cite}). Named cables aren't derated here. Pull length, bends and box fill are in their own tools.",
                     ),
                 )
             }

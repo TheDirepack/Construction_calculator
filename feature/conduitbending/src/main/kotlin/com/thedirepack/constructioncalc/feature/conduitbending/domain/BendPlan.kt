@@ -115,7 +115,7 @@ object BendPlanner {
         add(ratio("multiplier", "Multiplier (1 ÷ sin ${angleText(o.angleDeg)})", o.multiplier))
         add(len("shrink", "Shrink", o.shrink))
         o.field?.let {
-            add(len("shrink_field", "Shrink, field constant (${f.perUnit(it.shrinkPerInch)})", o.fieldShrink!!))
+            add(len("shrink_field", "Shrink, field constant (${f.perUnit(it.shrinkPerInch, "offset depth")})", o.fieldShrink!!))
         }
         add(angle("angle", "Bend angle", o.angleDeg))
     }
@@ -176,7 +176,7 @@ object BendPlanner {
         val figures = listOf(
             len("outer_from_center", "Outer marks from center", s.outerDistance),
             ratio("multiplier", "Multiplier (outer marks ÷ height)", s.multiplier),
-            len("shrink", "Shrink to the center mark (${r.format.perUnit(s.shrinkPerInch)})", s.shrink),
+            len("shrink", "Shrink to the center mark (${r.format.perUnit(s.shrinkPerInch, "height")})", s.shrink),
             len("shrink_ideal", "Total shrink, whole saddle (geometry)", s.idealShrink),
             angle("center_angle", "Center bend", s.centerAngleDeg),
             angle("outer_angle", "Outer bends", s.outerAngleDeg),
@@ -190,7 +190,7 @@ object BendPlanner {
             if (s.nearMark != null && s.nearMark.signum < 0) {
                 add(Issue(Severity.ERROR, "The obstruction is too close to the end of the stick: the near outer mark would fall ${r.format.dist(-s.nearMark)} before the end. Start with a longer piece or reverse the stick."))
             }
-            add(Issue(Severity.INFO, "Outer marks use the usual field multiplier (2.5 for 45°/22.5°, 2 for 60°/30°), bent at the center angle and half that angle either side. The field shrink (${r.format.perUnit(s.shrinkPerInch)} of height) is what the conduit loses up to the center bend; the whole saddle loses about twice that."))
+            add(Issue(Severity.INFO, "Outer marks use the usual field multiplier (2.5 for 45°/22.5°, 2 for 60°/30°), bent at the center angle and half that angle either side. The field shrink (${r.format.perUnit(s.shrinkPerInch, "height")}) is what the conduit loses up to the center bend; the whole saddle loses about twice that."))
             if (r.distance != null) add(Issue(Severity.INFO, "Center mark = distance to the obstruction's center + the shrink."))
         }
         return BendPlan(BendType.SADDLE_3, figures, marks, r.distance != null, issues, center + 2 * s.outerAngleDeg)
@@ -293,9 +293,9 @@ internal fun Double.fmt(): String = com.thedirepack.constructioncalc.core.measur
 internal fun LengthFormat.dist(v: Rational): String =
     if (isMetric) MeasureFormat.primary(Quantity.inches(v), this) else v.toDouble().fmt() + "\""
 
-/** A field constant (a ratio of shrink to depth): `1/4" per inch` or `0.25 mm per mm`. */
-internal fun LengthFormat.perUnit(ratio: Rational): String =
-    if (isMetric) "${ratio.toDouble().fmt()} mm per mm" else "$ratio\" per inch"
+/** A field constant (shrink per unit of [of]): `1/4" per inch of depth` or `0.25 mm per mm of depth`. */
+internal fun LengthFormat.perUnit(ratio: Rational, of: String): String =
+    if (isMetric) "${ratio.toDouble().fmt()} mm per mm of $of" else "$ratio\" per inch of $of"
 
 /** A trade size as written in this system. */
 internal fun LengthFormat.trade(size: TradeSize): String =

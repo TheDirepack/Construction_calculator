@@ -32,6 +32,8 @@ contract for building a tool.
                      (design/: ProjectAnalysis, PullAnalysis, MaterialTakeoff, Wire, PublishedValues), ResultValue
                      (the unit of exchange between tools), ToolTarget, the project and backup file
                      formats (plain JSON), text export (ProjectText, including the design).
+:core:plans          Pure Kotlin. Pre-computed vector/raster line maps, snapping, and 2D calibration
+                     math for PDF drawings.
 :core:data           Android. AppServices: SettingsRepository (app-wide plus per-tool settings),
                      ProjectRepository (one JSON file per project), RecentResultsRepository, BackupService,
                      ProjectSharing (share sheet and file picker, no permissions).

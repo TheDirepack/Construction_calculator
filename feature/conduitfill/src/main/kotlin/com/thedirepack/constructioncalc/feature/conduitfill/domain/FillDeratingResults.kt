@@ -14,7 +14,7 @@ fun DeratingResult.toResults(): List<ResultValue> = buildList {
             "derate_ccc", "Current-carrying conductors",
             ValueKind.NUMBER,
             currentCarrying.toDouble(),
-            "$currentCarrying (×${Decimals.trim(adjustmentFactor)})",
+            "$currentCarrying · adjustment factor ×${Decimals.trim(adjustmentFactor)}",
         ),
     )
     rows.forEachIndexed { i, row ->

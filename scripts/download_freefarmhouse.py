@@ -2,13 +2,15 @@ import os
 import urllib.request
 import urllib.parse
 import ssl
+from pathlib import Path
 
 ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
 
-dest_dir = '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries/1_blueprints/freefarmhouse'
+BLUEPRINTS_ROOT = Path(
+    os.environ.get('BLUEPRINTS_ROOT', Path(__file__).resolve().parent.parent / 'blueprints_and_libraries')
+)
+dest_dir = str(BLUEPRINTS_ROOT / '1_blueprints/freefarmhouse')
 os.makedirs(dest_dir, exist_ok=True)
 
 base_url = 'https://www.freefarmhouse.com/uploads/b/244cd9c0-4894-11ea-8aad-9b21e8eb84db/'

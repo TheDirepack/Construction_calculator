@@ -16,11 +16,15 @@ import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.electrical.ConductorGroup
 import com.thedirepack.constructioncalc.core.electrical.FillConductor
+import com.thedirepack.constructioncalc.core.electrical.NamedCable
 import com.thedirepack.constructioncalc.feature.conduitfill.domain.FillRequest
 import kotlinx.serialization.Serializable
 
 /** Insulation code for a bare conductor (Table 8); every other code is an [InsulationType.code]. */
 const val BARE_CODE = "BARE"
+
+/** "Insulation" code for a named cable with its own measured dimensions (see [ConductorGroupInput.cableName]). */
+const val CABLE_CODE = "CABLE"
 
 /** One row of conductors as typed: [count] of the same wire. Stored as text so a half-typed field survives. */
 @Serializable
@@ -32,7 +36,33 @@ data class ConductorGroupInput(
     val size: String = ConductorSize.AWG_12.label,
     /** Counts toward the current-carrying total for derating (grounds and bare conductors never do). */
     val currentCarrying: Boolean = true,
-)
+    /** [CABLE_CODE] groups: the named cable's name, outside diameter (in.) and area (in²), copied when picked. */
+    val cableName: String = "",
+    val cableOdIn: Double? = null,
+    val cableAreaSqIn: Double? = null,
+) {
+    val isCable: Boolean get() = insulation == CABLE_CODE
+
+    /** The conductor this group describes, or null when the tables (or the cable data) don't give its size. */
+    fun spec(): FillConductor? = if (isCable) {
+        val od = cableOdIn
+        val area = cableAreaSqIn ?: od?.let(NamedCable::circularArea)
+        if (od != null && area != null && cableName.isNotBlank() && od > 0 && area > 0) FillConductor.Custom(cableName, od, area) else null
+    } else {
+        conductorSpec(insulation, size)
+    }
+
+    companion object {
+        fun of(cable: NamedCable, count: String = "1") = ConductorGroupInput(
+            count = count,
+            insulation = CABLE_CODE,
+            currentCarrying = false,
+            cableName = cable.name,
+            cableOdIn = cable.diameterIn,
+            cableAreaSqIn = cable.areaSqIn,
+        )
+    }
+}
 
 /** What a saved Conduit Fill item stores. Every field has a default so a partly filled item still decodes. */
 @Serializable
@@ -61,6 +91,7 @@ data class ConduitFillInputs(
 ) {
     /** Derating inputs, or null while the ambient temperature isn't a number. */
     fun deratingGroups(): List<DeratingGroup> = groups.mapNotNull { g ->
+        if (g.isCable) return@mapNotNull null // a named cable has no Table 310.16 row to derate
         val count = g.count.trim().toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
         val size = ConductorSize.fromLabel(g.size) ?: return@mapNotNull null
         val insulation = if (g.insulation == BARE_CODE) null else InsulationType.fromCode(g.insulation) ?: return@mapNotNull null
@@ -126,8 +157,10 @@ fun ConduitFillInputs.toRequest(): ParsedFill {
             return@forEachIndexed
         }
         if (count == 0) return@forEachIndexed
-        val spec = conductorSpec(g.insulation, g.size)
-        if (spec == null) {
+        val spec = g.spec()
+        if (spec == null && g.isCable) {
+            problems += "Group ${index + 1}: the cable \"${g.cableName}\" needs a name and an outside diameter above zero."
+        } else if (spec == null) {
             problems += "Group ${index + 1}: ${g.size} isn't listed for ${InsulationType.fromCode(g.insulation)?.label ?: "that conductor"} in the NEC tables."
         } else {
             groups += ConductorGroup(count, spec)

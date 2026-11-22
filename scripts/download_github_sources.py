@@ -11,8 +11,12 @@ import shutil
 import zipfile
 import urllib.request
 import urllib.error
+from pathlib import Path
 
-ROOT = '/home/max/.t3/projects/construction-calculator/blueprints_and_libraries'
+BLUEPRINTS_ROOT = Path(
+    os.environ.get('BLUEPRINTS_ROOT', Path(__file__).resolve().parent.parent / 'blueprints_and_libraries')
+)
+ROOT = str(BLUEPRINTS_ROOT)
 H = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                    '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
 FORCE = '--force' in sys.argv
@@ -46,6 +50,15 @@ def fetch(url, dest, timeout=300):
         shutil.copyfileobj(r, f, length=1024 * 256)
 
 
+def safe_extractall(zip_file, dest_dir):
+    dest_root = os.path.realpath(dest_dir)
+    for member in zip_file.infolist():
+        member_path = os.path.realpath(os.path.join(dest_root, member.filename))
+        if member_path != dest_root and not member_path.startswith(dest_root + os.sep):
+            raise ValueError(f'Unsafe zip member path: {member.filename}')
+    zip_file.extractall(dest_root)
+
+
 def main():
     for repo, branch, rel, category, desc in SOURCES:
         target = os.path.join(ROOT, rel)
@@ -65,7 +78,7 @@ def main():
         print(f'  got {size/1024/1024:.1f} MB, extracting', flush=True)
         try:
             with zipfile.ZipFile(zip_path) as z:
-                z.extractall(target)
+                safe_extractall(z, target)
         except Exception as e:  # noqa: BLE001
             print(f'FAIL extract {repo}: {e}', flush=True)
             continue
