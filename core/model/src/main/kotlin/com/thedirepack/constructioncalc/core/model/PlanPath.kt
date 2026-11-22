@@ -75,7 +75,7 @@ fun PlanDrawing.measurePath(path: PlanPath): PlanPathMeasurement {
     val pageZones = zones.filter { it.page == path.page }
     val containing = pageZones.filter { candidate -> path.points.all(candidate::contains) }
     val zone = containing.singleOrNull()
-    if (pageZones.any { other -> (zone == null || other.overlaps(zone)) && path.intersects(other) }) {
+    if (pageZones.any { other -> (zone == null || other != zone && other.overlaps(zone)) && path.intersects(other) }) {
         return PlanPathMeasurement.CrossesZones
     }
     val fit = (if (zone == null) calibration.fit(path.page) else zone.fit())

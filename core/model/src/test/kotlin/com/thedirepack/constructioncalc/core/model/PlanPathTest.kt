@@ -103,5 +103,5 @@ class PlanPathTest {
 
     private fun point(x: Int, y: Int) = PlanPoint(x.toDouble(), y.toDouble())
 
-    private fun scale(inches: Int) = Quantity.inches(Rational.of(inches)).stored()
+    private fun scale(inches: Long) = Quantity.inches(Rational.of(inches)).stored()
 }
