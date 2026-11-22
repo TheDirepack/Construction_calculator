@@ -209,6 +209,11 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
                     if dev.get('likely_title_block_artifact'):
                         counts['skipped_title_block'] += 1
                         continue
+                    if dev.get('placement') == 'text_label_proxy' or (
+                        dev.get('confidence') == 'low' and dev.get('symbol_bbox_pts') is None and dev.get('symbol_bbox') is None
+                    ):
+                        counts['skipped_text_proxy'] += 1
+                        continue
                     box_pts = extract_bbox_pts(dev)
                     if box_pts is None:
                         counts['missing_bbox'] += 1

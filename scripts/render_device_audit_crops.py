@@ -8,19 +8,19 @@ import pymupdf
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 B=ROOT/'blueprints_and_libraries'
 MAP={
- '1_blueprints/rinker_hall/EXTRACTED_DEVICES.json':('1_blueprints/rinker_hall/electrical',{'E102P':'E102P_electrical_first_floor_power_plan.pdf','E103L':'E103L_electrical_second_and_third_floor_lighting.pdf','E103P':'E103P_electrical_second_and_third_floor_power_plan.pdf'}),
- '1_blueprints/new_downloads_202611b/C2_DEVICES.json':('1_blueprints/new_downloads_202611b',None),
- '1_blueprints/new_downloads_202611b/Washington_DEVICES.json':('1_blueprints/new_downloads_202611b',None),
- '1_blueprints/new_downloads_202611b/UNT_Willis_DEVICES.json':('1_blueprints/new_downloads_202611b',None),
- '1_blueprints/new_downloads_202611d/Fire_Admin_DEVICES.json':('1_blueprints/new_downloads_202611d',None),
- '4_archives/state_dot_samples/caltrans/Caltrans_DEVICES.json':('4_archives/state_dot_samples/caltrans',None),
+ '1_blueprints/standardized_device_jsons_v3/Rinker_Hall_EXTRACTED_DEVICES.json':('1_blueprints/rinker_hall/electrical',{'E102P':'E102P_electrical_first_floor_power_plan.pdf','E103L':'E103L_electrical_second_and_third_floor_lighting.pdf','E103P':'E103P_electrical_second_and_third_floor_power_plan.pdf'}),
+ '1_blueprints/standardized_device_jsons_v3/C2_Drawings_DEVICES.json':('1_blueprints/new_downloads_202611b',None),
+ '1_blueprints/standardized_device_jsons_v3/Washington_DEVICES.json':('1_blueprints/new_downloads_202611b',None),
+ '1_blueprints/standardized_device_jsons_v3/UNT_Willis_DEVICES.json':('1_blueprints/new_downloads_202611b',None),
+ '1_blueprints/standardized_device_jsons_v3/Fire_Admin_DEVICES.json':('1_blueprints/new_downloads_202611d',None),
+ '1_blueprints/standardized_device_jsons_v3/Caltrans_DEVICES.json':('4_archives/state_dot_samples/caltrans',None),
 }
-PDF={'1_blueprints/new_downloads_202611b/C2_DEVICES.json':'C2_Drawings.pdf','1_blueprints/new_downloads_202611b/Washington_DEVICES.json':'WashingtonDrawings (1).pdf','1_blueprints/new_downloads_202611d/Fire_Admin_DEVICES.json':'Biid-2024-00316-CC-Fire-Admin-Bldg-Drawings-002.pdf','4_archives/state_dot_samples/caltrans/Caltrans_DEVICES.json':'Caltrans_2022_Standard_Plans_97_sheets.pdf'}
+PDF={'1_blueprints/standardized_device_jsons_v3/C2_Drawings_DEVICES.json':'C2_Drawings.pdf','1_blueprints/standardized_device_jsons_v3/Washington_DEVICES.json':'WashingtonDrawings (1).pdf','1_blueprints/standardized_device_jsons_v3/Fire_Admin_DEVICES.json':'Biid-2024-00316-CC-Fire-Admin-Bldg-Drawings-002.pdf','1_blueprints/standardized_device_jsons_v3/Caltrans_DEVICES.json':'Caltrans_2022_Standard_Plans_97_sheets.pdf'}
 def box(d,x):
  for k in ('symbol_graphic_bbox','symbol_bbox','symbol_bbox_bl','bounding_box'):
   v=x.get(k)
   if isinstance(v,dict):return [v['x1'],v['y1'],v['x2'],v['y2']],True
-  if isinstance(v,list) and len(v)==4:return v, k.endswith('_bl') or d.get('coordinate_origin')=='bottom-left' or 'bottom-left' in str(d.get('units',''))
+  if isinstance(v,list) and len(v)==4:return v, k.endswith('_bl') or d.get('coordinate_origin')=='bottom-left' or d.get('coordinate_system',{}).get('origin')=='bottom_left' or 'bottom-left' in str(d.get('units',''))
  if x.get('bbox_pts'):return x['bbox_pts'],True
  if x.get('symbol_bbox_pts'):return x['symbol_bbox_pts'],True
  if x.get('text_bbox'):return x['text_bbox'],True
@@ -30,7 +30,7 @@ for rel,(subdir,sheetmap) in MAP.items():
  d=json.loads((B/rel).read_text()); docpdf=PDF.get(rel)
  for i,x in enumerate(d.get('devices',[])):
   if args.limit and n>=args.limit:break
-  bx,bl=box(d,x); rid=x.get('instance_id',x.get('device_id',i+1)); page=int(x.get('page',1))
+  bx,bl=box(d,x); rid=x.get('instance_id',x.get('device_id',x.get('id',i+1))); page=int(x.get('pdf_page',x.get('page',1)))
   if rel.endswith('EXTRACTED_DEVICES.json'):
    sheet=x.get('sheet'); docpath=B/'1_blueprints/rinker_hall/electrical'/sheetmap.get(sheet,'')
   else: docpath=B/subdir/docpdf if docpdf else None

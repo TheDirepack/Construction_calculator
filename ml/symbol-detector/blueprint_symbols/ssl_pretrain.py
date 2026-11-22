@@ -73,7 +73,8 @@ def sample_random_crop(image: np.ndarray, size: int, rng: np.random.Generator) -
 
     best_crop = None
     best_ink = -1.0
-    for _ in range(4):
+    allow_sparse = bool(rng.random() < 0.05)
+    for _ in range(6):
         scale = float(np.exp(rng.uniform(math.log(lo), math.log(hi))))
         span = int(round(size * scale))
         span = max(64, min(span, max(h, w)))
@@ -102,7 +103,7 @@ def sample_random_crop(image: np.ndarray, size: int, rng: np.random.Generator) -
 
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         ink_frac = float((gray < 190).mean())
-        if ink_frac >= 0.008:
+        if allow_sparse or ink_frac >= 0.015:
             return crop
         if ink_frac > best_ink:
             best_ink = ink_frac

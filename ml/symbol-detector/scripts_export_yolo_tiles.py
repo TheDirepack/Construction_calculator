@@ -75,9 +75,16 @@ def _img(rec):
     return img
 
 
+def _ink_fraction(bgr: np.ndarray, threshold: int = 190) -> float:
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr
+    return float((gray < threshold).mean())
+
+
 def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
         stress_val=False,stress_test=False,allow_unverified_completeness=False,
-        train_variants=3, eval_variants=None, train_negative_fraction=.20) -> dict:
+        train_variants=3, eval_variants=None, train_negative_fraction=.12,
+        blank_ink_threshold=.015, blank_negative_fraction=.02,
+        eval_empty_keep_fraction=.25, eval_blank_keep_fraction=.02) -> dict:
     mf=json.loads(manifest.read_text())
     validate_manifest_sources(mf)
     splits=mf.get('splits',{})
@@ -119,19 +126,22 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
         if info['ignore_boxes']:
             count['train_skipped_ignore_regions']+=1
             continue
-        if not targets:
-            # Fully annotated symbol-free tiles are necessary hard negatives.
-            # Never promote unknown/unmapped tiles to negative background.
-            neg_seed=int.from_bytes(hashlib.sha256(f'{seed}/negative/{i}'.encode()).digest()[:8],'big')
-            if np.random.default_rng(neg_seed).random() >= train_negative_fraction:
-                count['train_skipped_empty']+=1
-                continue
-            count['train_accepted_negative_bases']+=1
         image=cv2.cvtColor(rgb,cv2.COLOR_RGB2BGR)
+        is_empty=not targets
+        is_blank=is_empty and _ink_fraction(image) < blank_ink_threshold
+        if is_empty:
+            # Fully annotated symbol-free tiles are necessary hard negatives, but
+            # mostly-white tiles with no/few lines are strongly devalued and get fewer variants.
+            neg_seed=int.from_bytes(hashlib.sha256(f'{seed}/negative/{i}'.encode()).digest()[:8],'big')
+            keep_p=blank_negative_fraction if is_blank else train_negative_fraction
+            if np.random.default_rng(neg_seed).random() >= keep_p:
+                count['train_skipped_blank' if is_blank else 'train_skipped_empty']+=1
+                continue
+            count['train_accepted_blank_negatives' if is_blank else 'train_accepted_negative_bases']+=1
         # Multiple *independent* variants of the SAME crop. Source group stays
-        # unchanged. Every base contributes a clean control; additional variants
-        # include low-res without JPEG/noise and then compound deterioration.
-        for variant_index in range(train_variants):
+        # unchanged. Positive tiles get all variants; negative tiles get fewer.
+        n_variants = 1 if is_blank else (min(2, train_variants) if is_empty else train_variants)
+        for variant_index in range(n_variants):
             variant_name=TRAIN_VARIANTS[min(variant_index,len(TRAIN_VARIANTS)-1)]
             variant_seed=int.from_bytes(hashlib.sha256(f'{seed}/train/{i}/{variant_index}'.encode()).digest()[:8],'big')
             if variant_index >= len(TRAIN_VARIANTS):
@@ -163,9 +173,15 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
                 # Overlapping validation tiles can duplicate detections; they
                 # cannot substitute for fused full-page evaluation.
                 observed.update(represented & expected)
-                if not targets:
-                    count[f'{split}_empty_complete_tiles']+=1
                 patch=sample_tile(image,tile)
+                if not targets:
+                    is_blank=_ink_fraction(patch) < blank_ink_threshold
+                    ev_seed=int.from_bytes(hashlib.sha256(f'{seed}/{split}_empty/{ri}/{ti}'.encode()).digest()[:8],'big')
+                    keep_p=eval_blank_keep_fraction if is_blank else eval_empty_keep_fraction
+                    if np.random.default_rng(ev_seed).random() >= keep_p:
+                        count[f'{split}_skipped_blank_empty' if is_blank else f'{split}_skipped_empty']+=1
+                        continue
+                    count[f'{split}_empty_complete_tiles']+=1
                 name=f'{split}_{ri:05d}_{ti:06d}'
                 _save_sample(out,split,name,patch,targets,counters=count)
                 meta.append({'sample':name,'source':str(rec.image),'group':rec.group,
