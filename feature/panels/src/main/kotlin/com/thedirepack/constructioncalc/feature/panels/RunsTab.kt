@@ -68,7 +68,6 @@ import com.thedirepack.constructioncalc.core.model.design.Wire
 import com.thedirepack.constructioncalc.feature.panels.domain.allCircuits
 import com.thedirepack.constructioncalc.feature.panels.domain.assignRun
 import com.thedirepack.constructioncalc.feature.panels.domain.circuitLabel
-import com.thedirepack.constructioncalc.feature.panels.domain.deleteRunAndUnassign
 import com.thedirepack.constructioncalc.feature.panels.domain.designRuns
 
 private sealed interface RunPrompt {
@@ -143,7 +142,7 @@ internal fun RunsTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
                 if (p.run.items.isNotEmpty()) " and deletes its ${plural(p.run.items.size, "saved item")}." else ".",
             "Delete",
             onConfirm = {
-                ctx.edit { project, now -> project.deleteRunAndUnassign(p.run.id, now) }
+                ctx.edit { project, now -> project.removeRun(p.run.id, now) }
                 prompt = null
             },
             onDismiss = { prompt = null },

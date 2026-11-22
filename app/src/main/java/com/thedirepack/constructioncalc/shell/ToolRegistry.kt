@@ -14,7 +14,6 @@ import com.thedirepack.constructioncalc.feature.reellength.ReelLengthTool
 import com.thedirepack.constructioncalc.feature.reference.ReferenceTool
 import com.thedirepack.constructioncalc.feature.vfdsizing.VfdSizingTool
 import com.thedirepack.constructioncalc.feature.voltagedrop.VoltageDropTool
-import com.thedirepack.constructioncalc.feature.wellpump.WellPumpTool
 
 /** Every tool in the app, in drawer order within each category. */
 object ToolRegistry {
@@ -32,7 +31,6 @@ object ToolRegistry {
         FormulasTool,
         ReferenceTool,
         ConversionsTool,
-        WellPumpTool,
     )
 
     val default: ToolModule = FootInchTool

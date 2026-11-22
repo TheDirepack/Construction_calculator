@@ -56,7 +56,6 @@ dependencies {
     implementation(project(":feature:vfdsizing"))
     implementation(project(":feature:formulas"))
     implementation(project(":feature:reference"))
-    implementation(project(":feature:wellpump"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
