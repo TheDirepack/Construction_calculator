@@ -36,7 +36,8 @@ from PIL import Image
 from transformers import Sam3Model, Sam3Processor
 from transformers.models.sam3.modeling_sam3 import box_cxcywh_to_xyxy, inverse_sigmoid
 
-from blueprint_symbols.neca_svg_compositor import NecaGlyph, NecaSymbolBank
+from blueprint_symbols.neca_prompt_catalog import (SamNecaPrompt, list_neca_prompt_specs,
+    choose_neca_prompts, load_neca_sam_prompts)
 from blueprint_symbols.proposal_fusion import merge_sam_proposals
 
 
@@ -121,7 +122,7 @@ def should_scan_page(page: pymupdf.Page, p0: int, n_pages: int, *, min_page_pts:
 
 
 def deduplicate_svg_prompts(
-    glyphs: list[NecaGlyph],
+    glyphs: list[SamNecaPrompt],
     geo_feats: torch.Tensor,
     geo_masks: torch.Tensor,
     *,
@@ -200,7 +201,7 @@ def _paste_glyph(canvas_rgb: np.ndarray, alpha: np.ndarray, cx: int, cy: int, ta
 def preencode_svg_prompts(
     model: Sam3Model,
     processor: Sam3Processor,
-    glyphs: list[NecaGlyph],
+    glyphs: list[SamNecaPrompt],
     *,
     device: str = 'cuda',
     dtype: torch.dtype = torch.float16,
@@ -280,7 +281,7 @@ def detect_page_sam3(
     model: Sam3Model,
     processor: Sam3Processor,
     page_rgb: np.ndarray,
-    glyphs: list[NecaGlyph],
+    glyphs: list[SamNecaPrompt],
     geo_feats: torch.Tensor,
     geo_masks: torch.Tensor,
     blank_text_feat: torch.Tensor,
@@ -396,6 +397,8 @@ def detect_page_sam3(
                             'symbol_id': g.symbol_id,
                             'neca_code': g.code,
                             'neca_name': g.name,
+                            'category': g.category,
+                            'subcategory': g.subcategory,
                         })
 
     return nms_detections(raw_dets, iou_thr=0.50)
@@ -425,8 +428,14 @@ def main() -> None:
     ap.add_argument('--svg-batch', type=int, default=12)
     ap.add_argument('--prompt-allowlist', type=Path, default=None,
                     help='Optional JSON list of reviewed standalone NECA symbol IDs to use as prompts')
-    ap.add_argument('--include-luminaire-modifiers', action='store_true',
-                    help='Include mounting/orientation/extended/emergency modifiers as standalone exemplars (off by default)')
+    ap.add_argument('--prompts-per-subcategory', type=int, default=2)
+    ap.add_argument('--prompts-per-category', type=int, default=16)
+    ap.add_argument('--max-prompts', type=int, default=192,
+                    help='Balanced maximum number of exemplar queries per image tile; 0 disables cap')
+    ap.add_argument('--allow-raster-traces', action='store_true',
+                    help='Include raster-traced symbols (default: native vector exemplars only)')
+    ap.add_argument('--catalog-only', action='store_true',
+                    help='Audit selected NECA categories and prompts, then exit without loading a model/GPU')
     ap.add_argument('--score-thr', type=float, default=0.55)
     ap.add_argument('--svg-dedup-sim', type=float, default=0.90,
                     help='Cosine similarity threshold in SAM3 prompt space to deduplicate near-identical SVG variants (1.0 disables)')
@@ -434,8 +443,39 @@ def main() -> None:
     ap.add_argument('--limit-pdfs', type=int, default=0)
     args = ap.parse_args()
 
+    specs, catalog_report = list_neca_prompt_specs(
+        args.neca_dir.resolve(), allow_raster_traces=args.allow_raster_traces)
+    allowlist = None
+    if args.prompt_allowlist:
+        ids = json.loads(args.prompt_allowlist.read_text())
+        if not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids):
+            ap.error('--prompt-allowlist must be a nonempty JSON array of NECA IDs')
+        allowlist = set(ids)
+    try:
+        selected = choose_neca_prompts(
+            specs, per_subcategory=args.prompts_per_subcategory,
+            per_category=args.prompts_per_category, total=args.max_prompts,
+            allowlist=allowlist)
+    except ValueError as exc:
+        ap.error(str(exc))
+    chosen_counts = dict(Counter(g.category for g in selected))
+    catalog_summary = {
+        **catalog_report,
+        'selected': len(selected),
+        'selected_by_category': chosen_counts,
+        'selected_subcategories': len({(g.category, g.subcategory) for g in selected}),
+        'prompt_budgets': {
+            'per_subcategory': args.prompts_per_subcategory,
+            'per_category': args.prompts_per_category,
+            'total': args.max_prompts,
+        },
+        'selected_ids': [g.symbol_id for g in selected],
+    }
+    print(json.dumps(catalog_summary, indent=2), flush=True)
+    if args.catalog_only:
+        return
     if not torch.cuda.is_available():
-        raise SystemExit('CUDA GPU not available; refusing slow CPU SAM 3.1 scan')
+        raise SystemExit('CUDA GPU not available; use --catalog-only for CPU preflight')
 
     dtype = torch.float16
     print(f'Loading {args.model_id} in {dtype} on {torch.cuda.get_device_name(0)}...', flush=True)
@@ -444,23 +484,10 @@ def main() -> None:
     processor = Sam3Processor.from_pretrained(args.model_id)
     print(f'Model loaded in {time.time() - t0:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
 
-    bank = NecaSymbolBank(args.neca_dir.resolve(), render_height=96)
-    glyphs: list[NecaGlyph] = [g for cls in bank.active_classes for g in bank.by_class[cls]]
-    if not args.include_luminaire_modifiers:
-        glyphs = [g for g in glyphs if not (
-            g.section.startswith('Luminaires - ') and g.section.endswith('Modifiers')
-        )]
-    if args.prompt_allowlist:
-        ids = json.loads(args.prompt_allowlist.read_text())
-        if not isinstance(ids, list) or not ids or not all(isinstance(v, str) for v in ids):
-            ap.error('--prompt-allowlist must contain a nonempty JSON array of NECA symbol IDs')
-        absent = set(ids) - {g.symbol_id for g in glyphs}
-        if absent:
-            ap.error(f'allowlisted prompts were not loaded or excluded: {sorted(absent)[:12]}')
-        glyphs = [g for g in glyphs if g.symbol_id in set(ids)]
+    glyphs = load_neca_sam_prompts(selected, args.neca_dir.resolve(), render_height=96)
     if not glyphs:
-        ap.error('no eligible NECA visual exemplars remain')
-    print(f'Pre-encoding {len(glyphs)} NECA 100-2013 SVG visual prompts ({bank.summary()})...', flush=True)
+        ap.error('no NECA prompt SVG rendered successfully')
+    print(f'Rendered only {len(glyphs)} selected NECA exemplars before pre-encoding...', flush=True)
     t_enc = time.time()
     geo_feats, geo_masks, blank_tf, blank_tm = preencode_svg_prompts(
         model, processor, glyphs, device='cuda', dtype=dtype, target_px=44,
@@ -470,7 +497,7 @@ def main() -> None:
         glyphs, geo_feats, geo_masks = deduplicate_svg_prompts(
             glyphs, geo_feats, geo_masks, sim_threshold=args.svg_dedup_sim,
         )
-        dedup_counts = dict(Counter(g.canonical_class for g in glyphs))
+        dedup_counts = dict(Counter(g.category for g in glyphs))
         print(
             f'Deduplicated SVGs in SAM3 prompt space (sim>={args.svg_dedup_sim}): '
             f'{orig_n} -> {len(glyphs)} distinct prototypes ({dedup_counts})',
@@ -561,6 +588,8 @@ def main() -> None:
                         'neca_symbol_id': d['symbol_id'],
                         'neca_code': d['neca_code'],
                         'neca_name': d['neca_name'],
+                        'category': d['category'],
+                        'subcategory': d['subcategory'],
                         'score': round(d['score'], 4),
                         'alternative_labels': d.get('alternative_labels', []),
                         'same_region_prompt_hits': d.get('same_region_prompt_hits', 1),
@@ -592,7 +621,8 @@ def main() -> None:
             'score_threshold': args.score_thr,
             'annotations_are_exhaustive': False,
             'verified_ground_truth': False,
-            'prompt_selection': 'allowlisted' if args.prompt_allowlist else 'eligible_neca',
+            'prompt_selection': 'allowlisted' if args.prompt_allowlist else 'hierarchical_neca',
+            'prompt_catalog': {**catalog_summary, 'active_after_render_and_dedup': len(glyphs)},
             'coordinate_system': {
                 'origin': 'bottom_left',
                 'units': 'PDF_points',
