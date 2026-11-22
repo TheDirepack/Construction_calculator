@@ -89,10 +89,31 @@ DEVICE_TAXONOMY_V7: dict[str, list[str]] = {
     'plumbing_fixture': ['sink', 'water_closet', 'floor_drain', 'floor_cleanout', 'valve', 'fixture_other'],
 }
 
+def merge_review_taxonomy(provisional: dict) -> dict[str, list[str]]:
+    """Extend the stable v7 choices with NECA-derived fine-grained classes.
+
+    The extension comes from source metadata before VLM review. A VLM must
+    not invent an arbitrary type simply because it resembles the glyph.
+    """
+    base = {name: set(subtypes) for name, subtypes in DEVICE_TAXONOMY_V7.items()}
+    for dtype, subtypes in provisional.get('prompt_taxonomy', {}).items():
+        if not isinstance(dtype, str) or not re.fullmatch(r'[a-z0-9_]+', dtype):
+            raise ValueError('invalid extended taxonomy type')
+        if not isinstance(subtypes, list):
+            raise ValueError('invalid extended taxonomy subtypes')
+        for sub in subtypes:
+            if not isinstance(sub, str) or not re.fullmatch(r'[a-z0-9_]+', sub):
+                raise ValueError('invalid extended taxonomy subtype')
+            base.setdefault(dtype, set()).add(sub)
+    return {key: sorted(values) for key, values in sorted(base.items())}
+
+
 REFINEMENT_INSTRUCTIONS = (
     "Nothing is approved merely because it appears in the batch. Set review_status to "
     "accepted/rejected/uncertain, and keep=true ONLY after explicit visual review. "
     "Unreviewed or uncertain detections are excluded from output. "
+    "When SAM includes NECA category/subcategory, preserve that hierarchy; "
+    "use the expanded taxonomy for fine-grained device_type/subtype choices. "
     "Each numbered cell (#01..#NN) shows a zoomed crop around one provisional detection "
     "(red box) on a 0..1000 coordinate grid (origin at top-left of the image area below the "
     "header bar; light grid lines at 250, 500, 750). For every item in `items`: "
@@ -551,6 +572,8 @@ def cmd_render(args: argparse.Namespace) -> None:
                         'provisional_subtype': dev.get('subtype', 'unspecified'),
                         'neca_name': dev.get('neca_name'),
                         'neca_symbol_id': dev.get('neca_symbol_id'),
+                        'provisional_category': dev.get('category'),
+                        'provisional_subcategory': dev.get('subcategory'),
                         'alternative_labels': dev.get('alternative_labels', []),
                         'needs_class_review': dev.get('needs_class_review', False),
                         'same_region_prompt_hits': dev.get('same_region_prompt_hits', 1),
@@ -564,6 +587,8 @@ def cmd_render(args: argparse.Namespace) -> None:
                         'keep': None,
                         'refined_device_type': None,
                         'refined_subtype': None,
+                        'refined_category': None,
+                        'refined_subcategory': None,
                         'attributes': {},
                         'refined_bbox_cell': bbox_cell,
                         'on_wall': None,
@@ -580,8 +605,9 @@ def cmd_render(args: argparse.Namespace) -> None:
 
                 batch_payload = {
                     'schema': 'blueprint_device_refinement_batch_v2',
-                    'taxonomy_version': '7.0',
-                    'taxonomy': DEVICE_TAXONOMY_V7,
+                    'taxonomy_version': '7.0+neca' if payload.get('prompt_taxonomy') else '7.0',
+                    'taxonomy': merge_review_taxonomy(payload),
+                    'category_taxonomy': payload.get('prompt_category_taxonomy', {}),
                     'source_file': payload.get('source_file'),
                     'source_pdf_relative': payload.get('source_pdf_relative'),
                     'source_pdf_absolute': payload.get('source_pdf_absolute'),
@@ -704,7 +730,7 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
 
     for batch in sorted(batch_payloads, key=lambda b: int(b.get('batch_index', 0))):
         for item in batch.get('items', []):
-            decision = review_decision(item, DEVICE_TAXONOMY_V7, coord_max=COORD_MAX)
+            decision = review_decision(item, batch.get('taxonomy', DEVICE_TAXONOMY_V7), coord_max=COORD_MAX)
             if decision == 'rejected':
                 removed_count += 1
                 continue
@@ -737,6 +763,8 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
                 'provisional_subtype': item.get('provisional_subtype'),
                 'score': item.get('score'),
                 'neca_symbol_id': item.get('neca_symbol_id'),
+                'category': item.get('refined_category') or item.get('provisional_category'),
+                'subcategory': item.get('refined_subcategory') or item.get('provisional_subcategory'),
                 'alternative_labels': item.get('alternative_labels', []),
                 'symbol_bbox': bbox_bl,
                 'symbol_center': [cx, cy],
