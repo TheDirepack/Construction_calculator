@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.feature.reellength
 
+import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Dimension
 import com.thedirepack.constructioncalc.core.measure.Quantity
@@ -81,7 +82,7 @@ fun ReelLengthInputs.parse(): ParsedReel {
     val w = inches(traverse, "Traverse")
     val x = if (mode == ReelMode.REMAINING) inches(distance, "Distance from flange edge") else inches(clearance, "Clearance")
     val od = inches(cableDiameter, "Cable diameter")
-    val packing = if (packingFactor.isBlank()) 1.0 else parseNumber(packingFactor)
+    val packing = if (packingFactor.isBlank()) 1.0 else Decimals.parse(packingFactor)
 
     if (packing == null) return ParsedReel(null, missing, listOf("Packing factor isn't a number."))
     if (depth != null && (depth <= 0 || (f != null && depth >= f / 2))) {
@@ -92,6 +93,3 @@ fun ReelLengthInputs.parse(): ParsedReel {
     val problems = ReelLength.problems(request)
     return ParsedReel(if (problems.isEmpty()) request else null, emptyList(), problems)
 }
-
-/** Accepts what people type; see [com.thedirepack.constructioncalc.core.measure.Decimals.parse]. */
-internal fun parseNumber(text: String): Double? = com.thedirepack.constructioncalc.core.measure.Decimals.parse(text)

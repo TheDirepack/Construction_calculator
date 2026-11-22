@@ -31,6 +31,8 @@ import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaCatalog
 import com.thedirepack.constructioncalc.core.electrical.formula.Variable
 import com.thedirepack.constructioncalc.core.measure.Measure
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
+import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.model.ToolInputs
 import com.thedirepack.constructioncalc.core.model.ToolTarget
 import com.thedirepack.constructioncalc.core.model.ValueKind
@@ -238,13 +240,13 @@ private fun ResistanceLengthContent(
             value = inputs.wireAmbientC,
             onValueChange = { t -> vm.update { it.copy(wireAmbientC = t) } },
             pickKinds = setOf(ValueKind.TEMPERATURE),
-            supportingText = "Corrects from NEC ${CodeRule.CONDUCTOR_PROPERTIES.cite} 75 °C basis.",
+            supportingText = "Corrects from the ${Measure.TEMPERATURE.format(Code.book.values.resistanceReferenceC, UnitSystem.METRIC, 0)} basis of NEC ${CodeRule.CONDUCTOR_PROPERTIES.cite}.",
         )
     }
 
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = { vm.update { it.cleared() } }) { Text("Clear") }
-        TextButton(onClick = { host.openReference("nec-conductor-properties") }) { Text("Table 8 reference") }
+        TextButton(onClick = { host.openReference("nec-conductor-properties") }) { Text("${CodeRule.CONDUCTOR_PROPERTIES.cite} reference") }
     }
 
     ResultCard(

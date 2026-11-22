@@ -1,6 +1,7 @@
 package com.thedirepack.constructioncalc.core.electrical.code.nec2023
 
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
+import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import com.thedirepack.constructioncalc.core.electrical.code.CodeValues
 
 /**
@@ -12,6 +13,9 @@ internal object Nec2023Values {
         ambientBasisC = 30.0, // Table 310.16 heading and Table 310.15(B)(1)(1), 70-185/70-187
         rooftopAdderC = 33.0, // 310.15(B)(2): 33 °C (60 °F)
         rooftopAdderF = 60.0,
+        rooftopMaxHeightIn = 0.75, // 310.15(B)(2): less than 19 mm (3/4 in.) above the roof
+        rooftopMaxHeightMm = 19.0,
+        rooftopExemptInsulation = setOf(InsulationType.XHHW_2), // 310.15(B)(2) Exception
         continuousLoadFactor = 1.25, // 210.19(A)(1), 210.20(A), 215.2(A)(1), 215.3: 125 percent
         nextSizeUpMaxAmps = 800, // 240.4(B)
         minimumSizeCopper = ConductorSize.AWG_14, // 310.3(A), 70-177

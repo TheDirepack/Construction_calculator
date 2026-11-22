@@ -300,7 +300,7 @@ object ProjectAnalysis {
         // Nipples (≤ 24") aren't subject to count adjustment (310.15(C)(1)(b)).
         val ccc = (runs.filter { it.raceway?.nipple != true }.mapNotNull { runCcc[it.id] } + ownCcc).max()
         // Each run's own ambient (or the project default) plus its own rooftop adder; the hottest run governs.
-        val xhhw2 = spec.insulation == InsulationType.XHHW_2
+        val xhhw2 = AmbientCorrection.isRooftopExempt(spec.insulation)
         val ambient = if (runs.isEmpty()) project.design.ambientC else runs.maxOf { runAmbient(project, it, xhhw2) }
         val hottest = runs.maxByOrNull { runAmbient(project, it, xhhw2) }
         if (hottest?.raceway?.rooftop == true && !xhhw2) {
@@ -525,7 +525,7 @@ object ProjectAnalysis {
         val largestOd = entries.mapNotNull { InsulatedConductorArea.diameter(it.insulation, it.size) }.maxOrNull()
         if (conduit != null && !incomplete && total > 0 && largestOd != null) notes += PullAnalysis.fitNotes(conduit.internalDiameterIn, largestOd, total, units)
         val insulation = project.design.conductor
-        val ambient = runAmbient(project, run, insulation.insulation == InsulationType.XHHW_2)
+        val ambient = runAmbient(project, run, AmbientCorrection.isRooftopExempt(insulation.insulation))
         val ambientFactor = AmbientCorrection.factor(ambient, insulation.insulationRating)
         val adjustment = if (raceway?.nipple == true) 1.0 else ConductorCountAdjustment.factor(ccc)
         if (adjustment < 1.0) {

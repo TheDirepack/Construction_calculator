@@ -31,7 +31,7 @@ enum class MetricLengthUnit(val symbol: String, val millimeters: Int) {
 
 /** Which unit metric lengths are shown in. */
 enum class MetricDisplay(val label: String) {
-    AUTO("Auto (mm, m from 1 m)"),
+    AUTO("Auto"),
     MILLIMETERS("mm"),
     CENTIMETERS("cm"),
     METERS("m"),

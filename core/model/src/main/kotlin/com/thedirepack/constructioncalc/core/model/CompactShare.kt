@@ -105,14 +105,18 @@ object CompactShare {
     private fun isBase64UrlChar(c: Char): Boolean =
         c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' || c == '-' || c == '_'
 
+    /** Compresses [json]; refuses anything [decode] would refuse, so every share can be read back. */
     private fun compress(json: String): String {
+        val bytes = json.encodeToByteArray()
+        if (bytes.size > MAX_DECOMPRESSED_BYTES) throw ProjectFormatException(TOO_LARGE)
         val out = ByteArrayOutputStream()
-        GZIPOutputStream(out).use { gzip ->
-            gzip.write(json.encodeToByteArray())
-        }
+        GZIPOutputStream(out).use { gzip -> gzip.write(bytes) }
         val encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(out.toByteArray())
+        if (encoded.length > MAX_ENCODED_CHARS) throw ProjectFormatException(TOO_LARGE)
         return PREFIX + encoded
     }
+
+    private const val TOO_LARGE = "This is too large to share as compact text. Save it to a file instead."
 
     private fun decompressBounded(compressed: ByteArray): String {
         val out = ByteArrayOutputStream()

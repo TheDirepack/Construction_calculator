@@ -29,26 +29,21 @@ class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
     var state by mutableStateOf(CalcState())
         private set
 
-    /** Stored memory register (`M+`, `M−`, `MR`, `MC`). Null when empty/zero. */
-    var memory by mutableStateOf<Quantity?>(null)
-        private set
-
-    var memoryPreferInches by mutableStateOf<Boolean?>(null)
+    /** Stored memory register (`M+`, `M−`, `MR`, `MC`). Null when empty (a zero total clears it). */
+    var memory by mutableStateOf<Register?>(null)
         private set
 
     /** Most recent completed answer for the `Ans` key. */
-    var lastAnswer by mutableStateOf<Quantity?>(null)
-        private set
-
-    var lastAnswerPreferInches by mutableStateOf<Boolean?>(null)
+    var lastAnswer by mutableStateOf<Register?>(null)
         private set
 
     private var restoredItemId: String? = null
 
-    val hasMemory: Boolean get() = memory != null && !memory!!.value.isZero
+    val hasMemory: Boolean get() = memory != null
 
-    val effectiveAns: Quantity?
-        get() = lastAnswer ?: history.entries.value.firstOrNull()?.result?.toQuantity()
+    /** What `Ans` inserts: the last answer, else the newest tape entry. */
+    val effectiveAns: Register?
+        get() = lastAnswer ?: history.entries.value.firstOrNull()?.let { Register(it.result.toQuantity(), it.preferInches) }
 
     /** Applies a key. Returns the finished calculation when `=` succeeded. */
     fun onKey(key: Key, settings: AppSettings): CalcInput.Outcome {
@@ -56,8 +51,7 @@ class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
         state = outcome.state
         outcome.completed?.let { calc ->
             val inches = CalcInput.prefersInches(calc.expression)
-            lastAnswer = calc.result
-            lastAnswerPreferInches = inches
+            lastAnswer = Register(calc.result, inches)
             history.add(
                 HistoryEntry(
                     expression = formatExpression(calc.expression, settings),
@@ -77,8 +71,8 @@ class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
 
     private fun updateMemory(op: Operator): Boolean {
         val current = state.result ?: return false
-        val existing = memory
-        val updated = if (existing == null || existing.value.isZero) {
+        val existing = memory?.value
+        val updated = if (existing == null) {
             if (op == Operator.SUBTRACT) current.copy(value = -current.value) else current
         } else {
             try {
@@ -88,35 +82,27 @@ class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
                 return false
             }
         }
-        if (updated.value.isZero) {
-            memory = null
-            memoryPreferInches = null
-        } else {
-            memory = updated
-            memoryPreferInches = memoryPreferInches ?: preferInches()
-        }
+        memory = if (updated.value.isZero) null else Register(updated, memory?.preferInches ?: preferInches())
         return true
     }
 
     /** Inserts the stored memory value into the expression (`MR`). Returns true if accepted. */
     fun memoryRecall(): Boolean {
         val mem = memory ?: return false
-        return recallQuantity(mem, memoryPreferInches)
+        return recallQuantity(mem.value, mem.preferInches)
     }
 
     /** Clears the memory register (`MC`). Returns true if memory was non-empty. */
     fun memoryClear(): Boolean {
         if (memory == null) return false
         memory = null
-        memoryPreferInches = null
         return true
     }
 
     /** Inserts the most recent answer (`Ans`) into the expression. Returns true if accepted. */
     fun recallAns(): Boolean {
         val ans = effectiveAns ?: return false
-        val inches = if (lastAnswer != null) lastAnswerPreferInches else history.entries.value.firstOrNull()?.preferInches
-        return recallQuantity(ans, inches)
+        return recallQuantity(ans.value, ans.preferInches)
     }
 
     /** Inserts an exact [Quantity] (e.g. from Helpers or Tape) into the current expression. */
@@ -134,10 +120,7 @@ class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
         val tokens = inputs.tokens.map { it.toToken() }
         val answer = inputs.answer?.toQuantity()
         state = CalcState(tokens = tokens, answer = answer)
-        if (answer != null) {
-            lastAnswer = answer
-            lastAnswerPreferInches = inputs.preferInches
-        }
+        if (answer != null) lastAnswer = Register(answer, inputs.preferInches)
     }
 
     fun preferInches(): Boolean? = CalcInput.prefersInches(state.tokens)
@@ -174,3 +157,6 @@ class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
         }
     }
 }
+
+/** A remembered value (memory or `Ans`) with how it was entered, so it's shown the same way back. */
+data class Register(val value: Quantity, val preferInches: Boolean?)

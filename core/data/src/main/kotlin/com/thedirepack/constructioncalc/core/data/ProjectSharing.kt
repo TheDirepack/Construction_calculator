@@ -1,5 +1,7 @@
 package com.thedirepack.constructioncalc.core.data
 
+import java.util.zip.ZipInputStream
+import java.io.InputStream
 import com.thedirepack.constructioncalc.core.measure.MeasureFormat
 
 import com.thedirepack.constructioncalc.core.measure.LengthFormat
@@ -164,8 +166,9 @@ object ProjectSharing {
     @Throws(IOException::class, ProjectFormatException::class)
     fun readAppFile(context: Context, uri: Uri): AppFile {
         val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Can't open that file")
-        return PushbackInputStream(input, 64).use { stream ->
-            val header = ByteArray(64)
+        return PushbackInputStream(input, 4).use { stream ->
+            // A ZIP starts with the local file header signature PK\u0003\u0004.
+            val header = ByteArray(4)
             var count = 0
             while (count < header.size) {
                 val chunk = stream.read(header, count, header.size - count)
@@ -177,23 +180,15 @@ object ProjectSharing {
                 header[0] == 0x50.toByte() && header[1] == 0x4b.toByte() &&
                 header[2] == 3.toByte() && header[3] == 4.toByte()
             if (isZip) {
-                val firstEntryName = readFirstZipEntryName(header, count)
                 val files = PlanFiles(context)
                 val staged = mutableListOf<PlanFiles.StagedPdf>()
+                val stage = { pdf: InputStream, hash: String -> staged += files.stage(pdf, expectedHash = hash, validatePdf = true); Unit }
                 try {
-                    val result = when (firstEntryName) {
-                        BackupArchive.BACKUP -> {
-                            val backup = BackupArchive.read(stream) { pdf, hash ->
-                                staged += files.stage(pdf, expectedHash = hash, validatePdf = true)
-                            }
-                            AppFile.Backup(backup)
-                        }
-                        else -> {
-                            val project = ProjectArchive.read(stream) { pdf, hash ->
-                                staged += files.stage(pdf, expectedHash = hash, validatePdf = true)
-                            }
-                            AppFile.SingleProject(project)
-                        }
+                    // The first entry names the kind of archive: backup.json or project.json.
+                    val result = ZipInputStream(stream).use { zip ->
+                        val first = zip.nextEntry?.name
+                        if (first == BackupArchive.zip.document) AppFile.Backup(BackupArchive.readOpen(zip, first, stage))
+                        else AppFile.SingleProject(ProjectArchive.readOpen(zip, first, stage))
                     }
                     staged.forEach(files::commit)
                     result
@@ -205,13 +200,6 @@ object ProjectSharing {
                 AppFileCodec.decode(stream.readBounded(PlanFiles.MAX_JSON_BYTES).decodeToString())
             }
         }
-    }
-
-    private fun readFirstZipEntryName(header: ByteArray, count: Int): String? {
-        if (count < 30) return null
-        val nameLen = (header[26].toInt() and 0xff) or ((header[27].toInt() and 0xff) shl 8)
-        if (nameLen <= 0 || 30 + nameLen > count) return null
-        return header.copyOfRange(30, 30 + nameLen).decodeToString()
     }
 
     /** Reads a project from a picked or received file. */

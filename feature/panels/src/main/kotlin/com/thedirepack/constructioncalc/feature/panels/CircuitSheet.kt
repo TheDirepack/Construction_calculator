@@ -1,5 +1,9 @@
 package com.thedirepack.constructioncalc.feature.panels
 
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.runtime.produceState
 import com.thedirepack.constructioncalc.core.electrical.code.codePercent
 import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.ui.show
@@ -135,12 +139,18 @@ internal fun CircuitSheet(
 
     val vaValue = loadText.toDecimalOrNull()?.let { if (loadUnit == LoadUnit.VA) it else LoadMath.va(panel.system, draft.poles, it) }
     val effective = draft.copy(loadVa = if (draft.kind == CircuitKind.LOAD) vaValue else null)
-    val design: CircuitDesign? = remember(ctx.project, panelId, effective, settings.unitSystem) {
-        ProjectAnalysis.analyze(ctx.project.upsertCircuit(panelId, effective, 0L), settings.unitSystem).circuits[effective.id]
+    // The whole-project analysis (shared runs, feeders) is heavy: run it off the main thread, a beat
+    // after typing stops, and cancel a draft's analysis as soon as the next keystroke supersedes it.
+    // The last result stays on screen meanwhile.
+    val design: CircuitDesign? by produceState<CircuitDesign?>(null, ctx.project, panelId, effective, settings.unitSystem) {
+        if (value != null) delay(150)
+        value = withContext(Dispatchers.Default) {
+            ProjectAnalysis.analyze(ctx.project.upsertCircuit(panelId, effective, 0L), settings.unitSystem).circuits[effective.id]
+        }
     }
     LaunchedEffect(design) {
-        if (design != null) {
-            val values = PublishedValues.circuit(design, length)
+        design?.let { d ->
+            val values = PublishedValues.circuit(d, length)
             if (values.isNotEmpty()) ctx.host.publish(values, context = "${panel.name} circuit ${effective.slots.joinToString(",")}")
         }
     }

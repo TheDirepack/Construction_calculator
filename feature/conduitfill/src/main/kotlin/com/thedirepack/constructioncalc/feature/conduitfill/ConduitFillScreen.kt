@@ -323,7 +323,7 @@ private fun DeratingSection(inputs: ConduitFillInputs, vm: ConduitFillViewModel,
         )
         ToggleRow(
             title = "Rooftop, in sunlight",
-            detail = "Less than 3/4 in. above the roof: ${AmbientCorrection.rooftopAdderText(settings.unitSystem)} (${CodeRule.ROOFTOP_ADDER.cite}); XHHW-2 is exempt",
+            detail = AmbientCorrection.rooftopConditionText(settings.unitSystem),
             checked = inputs.rooftop,
             onCheckedChange = vm::setRooftop,
         )

@@ -1,5 +1,6 @@
 package com.thedirepack.constructioncalc.core.electrical
 
+import com.thedirepack.constructioncalc.core.electrical.code.codeLength
 import com.thedirepack.constructioncalc.core.electrical.code.AmbientBand
 import com.thedirepack.constructioncalc.core.electrical.code.Code
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
@@ -45,8 +46,20 @@ object AmbientCorrection {
         return "+${Decimals.trim(shown, 1)} ${Measure.TEMPERATURE.unit(units).symbol}"
     }
 
-    fun effectiveAmbient(ambientC: Double, rooftopUnder3_4In: Boolean, xhhw2: Boolean): Double =
-        if (rooftopUnder3_4In && !xhhw2) ambientC + ROOFTOP_ADDER_C else ambientC
+    /** True when [insulation] is exempt from the rooftop adder (XHHW-2 in NEC 2023). */
+    fun isRooftopExempt(insulation: InsulationType?): Boolean = insulation in Code.book.values.rooftopExemptInsulation
+
+    /** The rooftop condition as the code states it, e.g. `Less than 3/4 in. above the roof: +60 °F (310.15(B)(2)); XHHW-2 is exempt`. */
+    fun rooftopConditionText(units: UnitSystem = UnitSystem.IMPERIAL): String {
+        val v = Code.book.values
+        val height = codeLength(v.rooftopMaxHeightIn, v.rooftopMaxHeightMm, units)
+        val exempt = v.rooftopExemptInsulation.joinToString(", ") { it.code }
+        return "Less than $height above the roof: ${rooftopAdderText(units)} (${CodeRule.ROOFTOP_ADDER.cite})" +
+            if (exempt.isEmpty()) "" else "; $exempt is exempt"
+    }
+
+    fun effectiveAmbient(ambientC: Double, rooftopUnder3_4In: Boolean, exempt: Boolean): Double =
+        if (rooftopUnder3_4In && !exempt) ambientC + ROOFTOP_ADDER_C else ambientC
 }
 
 /**

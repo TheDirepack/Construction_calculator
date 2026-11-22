@@ -34,7 +34,7 @@ internal object PanelPng {
             canvas.drawColor(Color.WHITE)
             canvas.save()
             canvas.scale(SCALE, SCALE)
-            PanelPdf.drawPanel(canvas, project, design, panel, header, date, pageNumber, pageCount)
+            PanelPdf.drawPanel(canvas, project, design, panel, header, date, pageNumber, pageCount, overflowHint = "all are in the shared text")
             canvas.restore()
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
         } finally {

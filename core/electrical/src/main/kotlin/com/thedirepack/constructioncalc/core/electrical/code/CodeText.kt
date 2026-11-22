@@ -29,6 +29,13 @@ fun codeLength(inches: Number, mm: Number, units: UnitSystem): String {
         val v = mm.toDouble()
         return if (v >= 1000.0) "${Decimals.trim(v / 1000.0, 2)} m" else "${codeNumber(v)} mm"
     }
+    val d = inches.toDouble()
+    if (d < 60 && d != kotlin.math.floor(d)) {
+        // Fractional inches as the code prints them: 3/4 in., 1-1/2 in.
+        val whole = kotlin.math.floor(d).toInt()
+        val frac = com.thedirepack.constructioncalc.core.math.Rational.of(java.math.BigDecimal.valueOf(d - whole))
+        return if (whole == 0) "$frac in." else "$whole-$frac in."
+    }
     val total = inches.toInt()
     if (total < 60) return "$total in."
     val feet = total / 12

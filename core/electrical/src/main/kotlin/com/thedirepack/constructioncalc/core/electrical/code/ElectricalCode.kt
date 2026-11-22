@@ -253,6 +253,12 @@ data class CodeValues(
      * printed value is stored rather than converted.
      */
     val rooftopAdderF: Double,
+    /** [CodeRule.ROOFTOP_ADDER]: the adder applies below this height above the roof, inches. */
+    val rooftopMaxHeightIn: Double,
+    /** [CodeRule.ROOFTOP_ADDER]: the same height as the code prints it, mm. */
+    val rooftopMaxHeightMm: Double,
+    /** [CodeRule.ROOFTOP_ADDER] exception: insulation types the adder doesn't apply to. */
+    val rooftopExemptInsulation: Set<InsulationType>,
     /** [CodeRule.BRANCH_CONDUCTOR_CONTINUOUS], [CodeRule.FEEDER_CONDUCTOR_CONTINUOUS]: continuous load multiplier (1.25). */
     val continuousLoadFactor: Double,
     /** [CodeRule.NEXT_SIZE_UP]: the next higher standard rating is allowed up to this many amperes. */

@@ -155,7 +155,7 @@ class ConduitFillReportTest {
         val report = ConduitFillReport.build(request(TradeSize.S_3_4, 3 to thhn(ConductorSize.AWG_12)))!!
         assertTrue(report.has("NEC 2023 Chapter 9 Table 4"))
         assertTrue(report.has("Equipment grounding conductors"))
-        assertTrue(report.has("Not covered"))
+        assertTrue(report.has("Named cables aren't derated"))
     }
 
     private val metric = AppSettings(unitSystem = UnitSystem.METRIC)

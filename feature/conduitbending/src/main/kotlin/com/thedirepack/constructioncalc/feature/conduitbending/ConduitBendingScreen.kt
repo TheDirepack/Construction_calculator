@@ -126,6 +126,7 @@ fun ConduitBendingScreen(host: ToolHost) {
             }
 
             BendDiagram(inputs.bendType, inputs.backToBack && inputs.bendType == BendType.STUB_UP)
+            KeyFigures(plan, settings)
 
             BendInputs(inputs, vm::update)
 
@@ -323,3 +324,28 @@ private fun BendPlan.summary(settings: AppSettings): String {
     return "${type.label}: ${head.label.lowercase()} ${head.text}"
 }
 
+/**
+ * The two numbers a bender needs first (e.g. distance between marks and shrink), right under the
+ * diagram, so they show without scrolling past the inputs. The full result card stays below.
+ */
+@Composable
+private fun KeyFigures(plan: BendPlan, settings: AppSettings) {
+    if (!plan.hasResults) return
+    val key = plan.figures.filter { it.kind == FigureKind.LENGTH }.take(2)
+    if (key.isEmpty()) return
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            key.forEach { f ->
+                Column(Modifier.weight(1f)) {
+                    Text(f.label.substringBefore(" ("), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                    Text(
+                        fractionText(settings.format(Quantity.inches(f.value))),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+            }
+        }
+    }
+}

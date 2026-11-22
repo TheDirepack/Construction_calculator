@@ -59,6 +59,21 @@ class BackupArchiveTest {
         assertArrayEquals("pdf-b-bytes".encodeToByteArray(), restoredPdfs.getValue(hashB))
     }
 
+    @Test fun backupThatExportsAlsoImportsWhenManyReferencedPdfsAreMissing() {
+        // 600 referenced drawings (over the 500-PDF limit) but only one available: export packs one
+        // PDF, so import must count PDFs received, not hashes referenced, or the backup can't be restored.
+        val fileA = temp.newFile("many-a.pdf").apply { writeBytes("a".encodeToByteArray()) }
+        val missing = (0 until 600).map { i -> PlanDrawing(name = "M$i.pdf", sha256 = i.toString().padStart(64, '0')) }
+        val big = backup.copy(projects = listOf(project1, Project.create("Lots", 40L).copy(drawings = missing)))
+        val out = ByteArrayOutputStream()
+        BackupArchive.write(out, big) { hash -> if (hash == hashA) fileA else File(temp.root, "nope.pdf") }
+
+        val restoredPdfs = mutableListOf<String>()
+        val restored = BackupArchive.read(out.toByteArray().inputStream()) { pdf, hash -> pdf.readBytes(); restoredPdfs += hash }
+        assertEquals(big, restored)
+        assertEquals(listOf(hashA), restoredPdfs)
+    }
+
     @Test fun skipsUnavailablePdfsGracefully() {
         val fileA = temp.newFile("a2.pdf").apply { writeBytes("only-a".encodeToByteArray()) }
         val backupWithMissing = backup.copy(

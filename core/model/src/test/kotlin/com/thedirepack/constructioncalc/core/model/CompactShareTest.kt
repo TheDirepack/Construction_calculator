@@ -65,4 +65,13 @@ class CompactShareTest {
             }
         }
     }
+
+    @Test fun refusesToEncodeWhatItCouldNotDecode() {
+        // A note of random text compresses poorly: well over the encoded-size limit.
+        val rng = java.util.Random(1)
+        val noise = String(CharArray(700_000) { ('!' + rng.nextInt(90)) })
+        val huge = Project.create("Huge", 1L).copy(note = noise)
+        val error = assertThrows(ProjectFormatException::class.java) { CompactShare.encode(huge) }
+        assertTrue(error.message!!.contains("too large"))
+    }
 }
