@@ -28,7 +28,12 @@ def merge_sam_proposals(detections: list[dict], *, iou_threshold: float = .50,
     """
     if not 0 < iou_threshold <= 1 or max_alternatives < 1:
         raise ValueError('invalid consolidation parameters')
-    sorted_dets = sorted(detections, key=lambda d: -float(d['score']))
+    # A coarse exemplar establishes only a FAMILY. If a colocated fine
+    # variant passes the gating/score checks, it outranks the coarse generic
+    # label irrespective of the raw cross-prompt score (not calibrated).
+    sorted_dets = sorted(
+        detections, key=lambda d: (d.get('stage') != 'fine', -float(d['score']))
+    )
     selected: list[dict] = []
     for d in sorted_dets:
         box = d.get('box_px')
@@ -51,7 +56,14 @@ def merge_sam_proposals(detections: list[dict], *, iou_threshold: float = .50,
             continue
         best['same_region_prompt_hits'] += 1
         key = (d['device_type'], d.get('subtype'))
-        if key not in best['_label_scores']:
+        # Do not report a generic family proposal as a competing subtype
+        # when a fine result identifies the same family in the same region.
+        coarse_same_family = (
+            d.get('stage') == 'coarse'
+            and d['device_type'] == best['device_type']
+            and best.get('stage') == 'fine'
+        )
+        if key not in best['_label_scores'] and not coarse_same_family:
             best['_label_scores'][key] = float(d['score'])
             best['alternative_labels'].append({
                 'device_type': d['device_type'], 'subtype': d.get('subtype'),
@@ -62,6 +74,7 @@ def merge_sam_proposals(detections: list[dict], *, iou_threshold: float = .50,
     for cluster in selected:
         cluster.pop('_label_scores')
         cluster['alternative_labels'] = cluster['alternative_labels'][:max_alternatives]
-        cluster['needs_class_review'] = bool(cluster['alternative_labels'])
+        cluster['needs_class_review'] = bool(cluster['alternative_labels']) or cluster.get('stage') == 'coarse'
+        cluster['family_only'] = cluster.get('stage') == 'coarse'
         cluster['verified_ground_truth'] = False
     return selected
