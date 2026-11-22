@@ -26,7 +26,7 @@ internal class PdfZip(
     private val maxPhotos: Int = 500,
 ) {
     fun write(out: OutputStream, json: ByteArray, hashes: Collection<String>, fileForHash: (String) -> File) =
-        write(out, json, hashes, fileForHash, emptyList()) { File("") }
+        write(out, json, hashes, fileForHash, emptyList(), { File("") })
 
     /**
      * Writes [json], each available PDF for [hashes], and any available photos for [photoHashes].
@@ -39,6 +39,7 @@ internal class PdfZip(
         fileForHash: (String) -> File,
         photoHashes: Collection<String>,
         photoFileForHash: (String) -> File,
+        requireAllMedia: Boolean = false,
     ) {
         if (json.size > PlanFiles.MAX_JSON_BYTES) throw IOException("This $label document is too large.")
         val files = hashes.distinct().associateWith(fileForHash)
@@ -46,6 +47,9 @@ internal class PdfZip(
         val available = files.filterValues { it.isFile }
         if (available.size > maxPdfs) throw IOException("This $label has too many drawings to export.")
         val availablePhotos = photoHashes.distinct().associateWith(photoFileForHash).filterValues { it.isFile }
+        if (requireAllMedia && (available.size != files.size || availablePhotos.size != photoHashes.distinct().size)) {
+            throw IOException("Backup media changed during export. Review the missing files and try again.")
+        }
         if (availablePhotos.size > maxPhotos) throw IOException("This $label has too many photos to export.")
         val totalMediaBytes = available.values.sumOf { it.length() } + availablePhotos.values.sumOf { it.length() }
         if (totalMediaBytes > maxTotalBytes) throw IOException("This $label archive is too large.")

@@ -9,6 +9,7 @@ import com.thedirepack.constructioncalc.feature.vfdsizing.domain.LoadType
 import com.thedirepack.constructioncalc.feature.vfdsizing.domain.RatingUnit
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -38,6 +39,17 @@ class VfdSizingInputsTest {
     @Test fun badNumbersAreProblems() {
         assertTrue(VfdSizingInputs(nameplateFla = "abc").parse().problems.isNotEmpty())
         assertNull(VfdSizingInputs(unit = RatingUnit.KW, kw = "-3").parse().request)
+    }
+
+    @Test fun blankDriveInputHintIdentifiesTheEstimateAndConductorFactor() {
+        val singlePhase = driveInputCurrentHint(AcPhases.SINGLE)
+        val threePhase = driveInputCurrentHint(AcPhases.THREE)
+        assertTrue(singlePhase.contains("2 × table motor FLC"))
+        assertFalse(threePhase.contains("2 ×"))
+        for (hint in listOf(singlePhase, threePhase)) {
+            assertTrue(hint.contains("drive nameplate"))
+            assertTrue(hint.contains("125 % of that estimate for conductor ampacity"))
+        }
     }
 
     @Test fun outputPublishesTypedResults() {

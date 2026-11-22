@@ -10,7 +10,6 @@ import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.Stranding
 import com.thedirepack.constructioncalc.core.electrical.Table9Conduit
 import kotlinx.serialization.Serializable
-import kotlin.math.floor
 import kotlin.math.sqrt
 
 /** How the conductor impedance per 1000 ft is found. */
@@ -153,7 +152,4 @@ object VoltageDrop {
         val anySize = supportedSizes(request.material, request.method).first()
         return problems(request.copy(size = anySize))
     }
-
-    /** Rounds down to a 1/64 inch step, so a stated maximum never exceeds the true limit. */
-    fun floorToSixtyFourths(inches: Double): Long = floor(inches * 64 + 1e-9).toLong()
 }

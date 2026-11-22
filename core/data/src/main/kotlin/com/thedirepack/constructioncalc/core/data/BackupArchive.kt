@@ -21,14 +21,43 @@ internal object BackupArchive {
         backup: BackupDocument,
         fileForHash: (String) -> File,
         photoFileForHash: (String) -> File,
-    ) = zip.write(
-        out = out,
-        json = AppFileCodec.encodeBackup(backup).encodeToByteArray(),
-        hashes = hashes(backup),
-        fileForHash = fileForHash,
-        photoHashes = photoHashes(backup),
-        photoFileForHash = photoFileForHash,
-    )
+    ) {
+        val pdfs = hashes(backup).distinct().associateWith(fileForHash).filterValues { it.isFile }
+        val photos = photoHashes(backup).distinct().associateWith(photoFileForHash).filterValues { it.isFile }
+        val missing = missingMedia(backup, pdfs::containsKey, photos::containsKey)
+        if (missing.isNotEmpty() && !backup.incompleteMedia) {
+            throw IOException("Backup media is missing. Review the missing files and try again.")
+        }
+        zip.write(
+            out = out,
+            json = AppFileCodec.encodeBackup(backup.copy(incompleteMedia = missing.isNotEmpty())).encodeToByteArray(),
+            hashes = pdfs.keys,
+            fileForHash = pdfs::getValue,
+            photoHashes = photos.keys,
+            photoFileForHash = photos::getValue,
+            requireAllMedia = true,
+        )
+    }
+
+    fun missingMedia(
+        backup: BackupDocument,
+        hasPdf: (String) -> Boolean,
+        hasPhoto: (String) -> Boolean,
+    ): List<String> = buildList {
+        for (project in backup.projects) {
+            for (drawing in project.drawings) {
+                val title = "${project.name} / ${drawing.name}"
+                if (!hasPdf(drawing.sha256)) add("$title (original PDF)")
+                for (pin in drawing.marks) {
+                    val hash = pin.photoSha256 ?: continue
+                    if (!hasPhoto(hash)) {
+                        val caption = pin.text.trim().take(80).ifEmpty { "Photo pin" }
+                        add("$title (page ${pin.page.toLong() + 1}, $caption)")
+                    }
+                }
+            }
+        }
+    }
 
     fun read(input: InputStream, storePdf: (InputStream, String) -> Unit): BackupDocument =
         read(input, storePdf) { _, _ -> }

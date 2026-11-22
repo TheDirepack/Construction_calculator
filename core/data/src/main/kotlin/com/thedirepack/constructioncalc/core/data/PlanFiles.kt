@@ -55,9 +55,11 @@ class PlanFiles(private val context: Context) {
     suspend fun importDrawingJson(uri: Uri): PlanDrawing = withContext(Dispatchers.IO) {
         val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Couldn't open drawing JSON.")
         val drawing = input.use { DrawingJson.decode(it.readBounded(MAX_JSON_BYTES).decodeToString()) }
-        if (!file(drawing.sha256).isFile) {
+        val source = file(drawing.sha256)
+        if (!source.isFile) {
             throw IOException("Import the matching original PDF before opening this drawing JSON.")
         }
+        DrawingJson.validatePages(drawing, validate(source))
         drawing
     }
 
@@ -100,7 +102,7 @@ class PlanFiles(private val context: Context) {
         return staged.sha256
     }
 
-    private fun validate(file: File) {
+    private fun validate(file: File): Int {
         val head = file.inputStream().use { it.readNBytesCompat(PDF_HEADER_WINDOW) }
         pdfHeaderProblem(head)?.let { throw IOException(it) }
         val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
@@ -113,7 +115,7 @@ class PlanFiles(private val context: Context) {
             descriptor.close()
             throw IOException("Couldn't read this PDF. It may be damaged or incomplete.", error)
         }
-        renderer.use {
+        return renderer.use {
             if (it.pageCount !in 1..MAX_PAGES) throw IOException("This PDF must have between 1 and $MAX_PAGES pages.")
             // Some damaged files open but fail on their first page; catch that now, not in the editor.
             try {
@@ -121,6 +123,7 @@ class PlanFiles(private val context: Context) {
             } catch (error: Exception) {
                 throw IOException("Couldn't read the first page of this PDF. It may be damaged.", error)
             }
+            it.pageCount
         }
     }
 
@@ -169,6 +172,30 @@ internal object DrawingJson {
             put("version", JsonPrimitive(1))
             put("drawing", ProjectCodec.json.encodeToJsonElement(PlanDrawing.serializer(), drawing))
         })
+
+    /** Detail links to other drawings refer to those PDFs, not the current document. */
+    fun validatePages(drawing: PlanDrawing, pageCount: Int) {
+        fun check(page: Int, label: String) {
+            if (page !in 0 until pageCount) throw IOException("$label refers to missing PDF page ${page.toLong() + 1}.")
+        }
+
+        drawing.marks.forEach { mark ->
+            check(mark.page, "A markup")
+            if (mark.targetDrawingId == null || mark.targetDrawingId == drawing.id) {
+                mark.targetPage?.let { check(it, "A detail link") }
+            }
+        }
+        drawing.measurements.forEach { check(it.page, "A measurement") }
+        drawing.routes.forEach { check(it.page, "A run route") }
+        drawing.paths.forEach { check(it.page, "A path") }
+        drawing.zones.forEach { zone ->
+            check(zone.page, "A scale zone")
+            zone.references.forEach { check(it.page, "A scale zone reference") }
+        }
+        drawing.calibration.references.forEach { check(it.page, "A calibration reference") }
+        drawing.calibration.pageModes.keys.forEach { check(it, "A calibration mode") }
+        drawing.sheetRevisions.keys.forEach { check(it, "A sheet revision") }
+    }
 
     fun decode(content: String): PlanDrawing {
         val parts = Json.parseToJsonElement(content).jsonObject

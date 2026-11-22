@@ -113,7 +113,7 @@ internal fun TakeoffDialog(
                         Text(group.circuit, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 4.dp))
                         group.symbols.forEach { TotalRow("  ${it.name}", it.count.toString()) }
                         group.routes.forEach { entry ->
-                            val runName = project.runs.firstOrNull { it.id == entry.route.runId }?.name ?: "Run (deleted)"
+                            val runName = project.drawingRunName(entry.route.runId)
                             val lengthText = entry.current?.let { "≈ ${settings.format(it)}" } ?: "Uncalibrated"
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text("  Route · $runName ($lengthText)", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
@@ -128,7 +128,7 @@ internal fun TakeoffDialog(
                 if (takeoff.routes.isNotEmpty()) {
                     Section("Routes sent to runs")
                     takeoff.routes.forEach { entry ->
-                        val runName = project.runs.firstOrNull { it.id == entry.route.runId }?.name ?: "Run (deleted)"
+                        val runName = project.drawingRunName(entry.route.runId)
                         val source = drawing.sheetSource(entry.route.page)
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {

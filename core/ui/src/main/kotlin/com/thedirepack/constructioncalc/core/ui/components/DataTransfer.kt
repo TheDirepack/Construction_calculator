@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -35,6 +36,7 @@ import com.thedirepack.constructioncalc.core.model.ProjectMergeMode
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 import com.thedirepack.constructioncalc.core.ui.tool.LocalTools
 import com.thedirepack.constructioncalc.core.ui.tool.titleOf
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -86,6 +88,17 @@ class BackupExporter internal constructor(
     val saveToFile: (sections: BackupSections, label: String) -> Unit,
 )
 
+private data class BackupExportRequest(
+    val backup: BackupDocument,
+    val label: String,
+    val share: Boolean,
+)
+
+private fun List<String>.backupMediaDetails(): String = buildString {
+    take(5).forEach { appendLine("• $it") }
+    if (size > 5) append("…and ${size - 5} more.")
+}.trimEnd()
+
 @Composable
 fun rememberBackupExporter(onMessage: (String) -> Unit): BackupExporter {
     val context = LocalContext.current
@@ -93,54 +106,89 @@ fun rememberBackupExporter(onMessage: (String) -> Unit): BackupExporter {
     val tools = LocalTools.current
     val scope = rememberCoroutineScope()
     var pending by remember { mutableStateOf<BackupDocument?>(null) }
+    var incompleteRequest by remember { mutableStateOf<BackupExportRequest?>(null) }
+    var missingMedia by remember { mutableStateOf<List<String>>(emptyList()) }
     val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(ProjectSharing.ZIP_MIME_TYPE)) { uri ->
         val backup = pending
         pending = null
         if (uri == null || backup == null) return@rememberLauncherForActivityResult
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { ProjectSharing.writeBackup(context, uri, backup) } }
-                .onSuccess { onMessage("Saved") }
+                .onSuccess { onMessage(if (backup.incompleteMedia) "Incomplete backup saved" else "Backup saved") }
                 .onFailure { onMessage(it.message ?: "Couldn't save the file") }
         }
     }
-    return remember(services, tools) {
-        BackupExporter(
-            share = { sections, label ->
-                scope.launch {
-                    val intent = runCatching {
-                        withContext(Dispatchers.IO) {
-                            val backup = services.backup.create(sections)
-                            val name = ProjectSharing.backupFileName(services.clock(), label)
-                            ProjectSharing.shareBackupIntent(context, backup, name, tools::titleOf)
-                        }
-                    }.getOrElse {
-                        onMessage(it.message ?: "Couldn't create the backup")
-                        return@launch
-                    }
-                    try {
-                        context.startActivity(intent)
-                    } catch (_: ActivityNotFoundException) {
-                        onMessage("No app available to share with")
-                    }
+
+    suspend fun export(request: BackupExportRequest) {
+        val label = if (request.backup.incompleteMedia) "${request.label} (incomplete)" else request.label
+        val name = ProjectSharing.backupFileName(services.clock(), label)
+        if (request.share) {
+            val intent = withContext(Dispatchers.IO) {
+                ProjectSharing.shareBackupIntent(context, request.backup, name, tools::titleOf)
+            }
+            try {
+                context.startActivity(intent)
+            } catch (_: ActivityNotFoundException) {
+                onMessage("No app available to share with")
+            }
+        } else {
+            pending = request.backup
+            saver.launch(name)
+        }
+    }
+
+    fun prepare(sections: BackupSections, label: String, share: Boolean) {
+        scope.launch {
+            try {
+                val (backup, missing) = withContext(Dispatchers.IO) {
+                    val backup = services.backup.create(sections)
+                    backup to ProjectSharing.missingBackupMedia(context, backup)
                 }
+                val request = BackupExportRequest(backup, label, share)
+                if (missing.isEmpty()) {
+                    export(request)
+                } else {
+                    missingMedia = missing
+                    incompleteRequest = request
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                onMessage(failure.message ?: "Couldn't create the backup")
+            }
+        }
+    }
+
+    incompleteRequest?.let { request ->
+        AlertDialog(
+            onDismissRequest = { incompleteRequest = null },
+            title = { Text("Backup media is missing") },
+            text = {
+                Text("This backup will be marked incomplete. It can restore the available data. These files are missing:\n\n${missingMedia.backupMediaDetails()}")
             },
-            saveToFile = { sections, label ->
-                scope.launch {
-                    val prepared = runCatching {
-                        withContext(Dispatchers.IO) {
-                            val name = ProjectSharing.backupFileName(services.clock(), label)
-                            name to services.backup.create(sections)
+            confirmButton = {
+                TextButton(onClick = {
+                    incompleteRequest = null
+                    scope.launch {
+                        try {
+                            export(request.copy(backup = request.backup.copy(incompleteMedia = true)))
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            onMessage(failure.message ?: "Couldn't create the backup")
                         }
-                    }.getOrElse {
-                        onMessage(it.message ?: "Couldn't create the backup")
-                        return@launch
                     }
-                    pending = prepared.second
-                    saver.launch(prepared.first)
-                }
+                }) { Text(if (request.share) "Share incomplete backup" else "Save incomplete backup") }
+            },
+            dismissButton = {
+                TextButton(onClick = { incompleteRequest = null }) { Text("Cancel") }
             },
         )
     }
+    return BackupExporter(
+        share = { sections, label -> prepare(sections, label, share = true) },
+        saveToFile = { sections, label -> prepare(sections, label, share = false) },
+    )
 }
 
 /**
@@ -208,23 +256,40 @@ private fun ImportProjectDialog(project: Project, onFinished: (String, String?) 
 
 @Composable
 private fun RestoreBackupDialog(backup: BackupDocument, onFinished: (String, String?) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
     val services = LocalAppServices.current
     val tools = LocalTools.current
+    val scope = rememberCoroutineScope()
     var projects by remember { mutableStateOf(backup.projects.isNotEmpty()) }
     var settings by remember { mutableStateOf(backup.hasSettings) }
     var toolData by remember { mutableStateOf(backup.toolData.isNotEmpty()) }
     var recents by remember { mutableStateOf(backup.recents.isNotEmpty()) }
     var mode by remember { mutableStateOf(ProjectMergeMode.MERGE) }
     var error by remember { mutableStateOf<String?>(null) }
+    var restoring by remember { mutableStateOf(false) }
+    val missingMedia by produceState<List<String>?>(null, context, backup) {
+        value = withContext(Dispatchers.IO) { ProjectSharing.missingBackupMedia(context, backup) }
+    }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!restoring) onDismiss() },
         title = { Text("Restore backup") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 backup.exportedAt?.let { Text("Made ${formatDate(it)}", style = MaterialTheme.typography.bodyMedium) }
                 if (backup.projects.isNotEmpty()) {
                     CheckRow("${backup.projects.size} projects (${backup.projects.sumOf { it.itemCount }} items)", projects) { projects = it }
+                }
+                if (projects) {
+                    val missing = missingMedia.orEmpty()
+                    if (backup.incompleteMedia || missing.isNotEmpty()) {
+                        Text(
+                            if (missing.isEmpty()) "This backup was exported with missing media."
+                            else "These drawing files or photo pins are unavailable on this device:\n${missing.backupMediaDetails()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
                 if (backup.hasSettings) CheckRow("Settings (app and tools)", settings) { settings = it }
                 if (backup.toolData.isNotEmpty()) {
@@ -240,7 +305,7 @@ private fun RestoreBackupDialog(backup: BackupDocument, onFinished: (String, Str
                 Text(
                     when (mode) {
                         ProjectMergeMode.MERGE -> "Adds what's new and updates projects where the backup is newer. Nothing is deleted."
-                        ProjectMergeMode.REPLACE -> "Deletes the projects (and chosen data) on this device first, then restores the backup."
+                        ProjectMergeMode.REPLACE -> "Replaces the projects and selected data on this device with the backup."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = if (mode == ProjectMergeMode.REPLACE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -250,16 +315,28 @@ private fun RestoreBackupDialog(backup: BackupDocument, onFinished: (String, Str
         },
         confirmButton = {
             TextButton(
-                enabled = projects || settings || toolData || recents,
+                enabled = !restoring && (!projects || missingMedia != null) && (projects || settings || toolData || recents),
                 onClick = {
-                    runCatching {
-                        services.backup.restore(backup, BackupSections(projects, settings, toolData, recents), mode)
-                    }.onSuccess { onFinished(it.toString(), null) }
-                        .onFailure { error = it.message ?: "The backup could not be restored." }
+                    val sections = BackupSections(projects, settings, toolData, recents)
+                    val selectedMode = mode
+                    restoring = true
+                    error = null
+                    scope.launch {
+                        try {
+                            val report = services.backup.restore(backup, sections, selectedMode)
+                            onFinished(report.toString(), null)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            error = failure.message ?: "The backup could not be restored."
+                        } finally {
+                            restoring = false
+                        }
+                    }
                 },
-            ) { Text("Restore") }
+            ) { Text(if (restoring) "Restoring…" else "Restore") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !restoring) { Text("Cancel") } },
     )
 }
 

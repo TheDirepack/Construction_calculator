@@ -8,6 +8,7 @@ import com.thedirepack.constructioncalc.core.model.RecentResult
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -18,6 +19,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 class BackupServiceTest {
     private class MemoryProjectStore : ProjectStore {
@@ -25,6 +27,12 @@ class BackupServiceTest {
         override fun loadAll() = map.values.toList()
         override fun save(project: Project) { map[project.id] = project }
         override fun delete(projectId: String) { map.remove(projectId) }
+        var failBatch = false
+        override fun writeBatch(upserts: List<Project>, removals: Set<String>) {
+            if (failBatch) throw IOException("Disk full")
+            removals.forEach(::delete)
+            upserts.forEach(::save)
+        }
     }
 
     private class FakeSettingsPort(
@@ -82,7 +90,8 @@ class BackupServiceTest {
         val footBackup2 = FakeToolBackup()
         val service2 = BackupService(settings2, projects2, recents2, mapOf("foot-inch" to footBackup2), clock = { 6_000L })
 
-        val report = service2.restore(doc, BackupSections.ALL, ProjectMergeMode.REPLACE)
+        val report = runBlocking { service2.restore(doc, BackupSections.ALL, ProjectMergeMode.REPLACE) }
+        assertEquals(mapOf(p1.id to p1), store2.map)
         assertEquals(listOf(p1.id), projects2.projects.value.map { it.id })
         // Active project pointed to "Old Local", which was replaced -> cleared
         assertNull(settings2.activeId)
@@ -97,7 +106,7 @@ class BackupServiceTest {
         val projects = ProjectRepository(store, CoroutineScope(Dispatchers.Unconfined), clock = { 100L })
         val localOld = Project.create("A", now = 100L)
         val localNewer = Project.create("B", now = 500L)
-        projects.putAll(listOf(localOld, localNewer))
+        runBlocking { projects.restore(listOf(localOld, localNewer), ProjectMergeMode.MERGE) }
 
         val incomingNewerA = localOld.renamed("A updated", now = 300L)
         val incomingOlderB = localNewer.renamed("B stale", now = 200L)
@@ -107,11 +116,13 @@ class BackupServiceTest {
         val recents = FakeRecentsPort()
         val service = BackupService(settings, projects, recents, emptyMap(), clock = { 1_000L })
 
-        val report = service.restore(
-            BackupDocument(projects = listOf(incomingNewerA, incomingOlderB, incomingC)),
-            BackupSections.PROJECTS_ONLY,
-            ProjectMergeMode.MERGE,
-        )
+        val report = runBlocking {
+            service.restore(
+                BackupDocument(projects = listOf(incomingNewerA, incomingOlderB, incomingC)),
+                BackupSections.PROJECTS_ONLY,
+                ProjectMergeMode.MERGE,
+            )
+        }
 
         val byId = projects.projects.value.associateBy { it.id }
         assertEquals("A updated", byId[localOld.id]?.name)
@@ -133,8 +144,31 @@ class BackupServiceTest {
         )
 
         assertThrows(ProjectFormatException::class.java) {
-            service.restore(badBackup, BackupSections.ALL, ProjectMergeMode.REPLACE)
+            runBlocking { service.restore(badBackup, BackupSections.ALL, ProjectMergeMode.REPLACE) }
         }
         assertEquals(listOf(kept.id), projects.projects.value.map { it.id })
+    }
+
+    @Test fun failedReplaceLeavesTheOldProjectAndReportsTheError() {
+        val store = MemoryProjectStore()
+        val projects = ProjectRepository(store, CoroutineScope(Dispatchers.Unconfined), clock = { 100L })
+        val kept = projects.create("Keep Me")
+        val service = BackupService(FakeSettingsPort(), projects, FakeRecentsPort(), emptyMap(), clock = { 100L })
+        val restored = Project.create("Incoming", now = 200L)
+        val backup = BackupDocument(projects = listOf(restored))
+        runBlocking { projects.flush() }
+        store.failBatch = true
+
+        val error = assertThrows(IOException::class.java) {
+            runBlocking { service.restore(backup, BackupSections.PROJECTS_ONLY, ProjectMergeMode.REPLACE) }
+        }
+        assertEquals("Disk full", error.message)
+        assertEquals(listOf(kept), projects.projects.value)
+        assertEquals(mapOf(kept.id to kept), store.map)
+
+        store.failBatch = false
+        runBlocking { service.restore(backup, BackupSections.PROJECTS_ONLY, ProjectMergeMode.REPLACE) }
+        assertEquals(listOf(restored), projects.projects.value)
+        assertEquals(mapOf(restored.id to restored), store.map)
     }
 }

@@ -11,6 +11,7 @@ import com.thedirepack.constructioncalc.core.model.PlanMeasurement
 import com.thedirepack.constructioncalc.core.model.PlanPoint
 import com.thedirepack.constructioncalc.core.model.PlanReference
 import com.thedirepack.constructioncalc.core.model.PlanZone
+import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.stored
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -31,6 +32,13 @@ class EditorActionsTest {
         calibration = PlanCalibrationLayer(preset = inches(1)),
         zones = listOf(zone),
     )
+
+    @Test fun planRoutesDisplayAndExportTheDeletedRunLabel() {
+        val project = Project.create("Project", now = 1L)
+        val run = project.runs.single()
+        assertEquals(run.name, project.drawingRunName(run.id))
+        assertEquals("Run (deleted)", project.removeRun(run.id, now = 2L).drawingRunName(run.id))
+    }
 
     @Test fun pageAndToolChangesResetTheOperationAndDialogInOnePlace() {
         val busy = EditorSession(page = 0, mode = DrawingMode.Route, op = EditOp.Tracing(listOf(p(1.0, 1.0))), dialog = EditorDialog.Takeoff, selectedZoneId = "z")

@@ -122,7 +122,7 @@ fun VfdSizingScreen(host: ToolHost) {
                     { t -> vm.update { it.copy(driveInputAmps = t) } },
                     unit = "A",
                     pickKinds = setOf(ValueKind.CURRENT),
-                    supportingText = "From the drive's nameplate. Blank: ${codePercent(Code.book.values.driveInputConductorFactor)} of motor FLC is used",
+                    supportingText = driveInputCurrentHint(inputs.supplyPhase),
                 )
             }
 
@@ -146,4 +146,11 @@ fun VfdSizingScreen(host: ToolHost) {
             ResultCard(results, notices = output.notices)
         }
     }
+}
+
+
+internal fun driveInputCurrentHint(phase: AcPhases): String {
+    val estimate = if (phase == AcPhases.SINGLE) "${VfdSizing.SINGLE_PHASE_INPUT_ESTIMATE_FACTOR.toInt()} × table motor FLC" else "table motor FLC"
+    val factor = codePercent(Code.book.values.driveInputConductorFactor)
+    return "Use the drive nameplate rating. If blank, estimates input current as $estimate, then uses $factor of that estimate for conductor ampacity."
 }

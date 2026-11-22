@@ -8,6 +8,7 @@ import com.thedirepack.constructioncalc.core.electrical.ConductorResistance
 import com.thedirepack.constructioncalc.core.electrical.ConductorImpedance
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.measure.Units
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.ui.components.Notice
@@ -136,7 +137,20 @@ private fun decimalResult(key: String, label: String, kind: ValueKind, value: Do
     )
 
 private fun maxLengthResult(result: VoltageDropResult, settings: AppSettings): ResultValue {
-    val steps = VoltageDrop.floorToSixtyFourths(result.maxLengthFeet * 12)
-    val inches = Rational.of(steps, 64)
-    return ResultValue.of("max_length", "Max one-way length", Quantity.inches(inches), settings.format(Quantity.inches(inches)))
+    val label = "Max one-way length"
+    if (!result.maxLengthFeet.isFinite()) return ResultValue.text("max_length", label, "—")
+    val inches = Rational.of(result.maxLengthFeet) * Rational.of(12)
+    val stored = Quantity.inches(floorToIncrement(inches, Rational.of(1, 64)))
+    val displayIncrement = if (settings.isMetric) {
+        Rational.of(settings.metricResolution.tenthsOfMm.toLong(), 10) / Units.MM_PER_INCH
+    } else {
+        Rational.of(1, settings.precision.denominator.toLong())
+    }
+    val display = Quantity.inches(floorToIncrement(inches, displayIncrement))
+    return ResultValue.of("max_length", label, stored, settings.format(display))
+}
+
+private fun floorToIncrement(nonnegative: Rational, increment: Rational): Rational {
+    val steps = nonnegative / increment
+    return Rational.of(steps.numerator / steps.denominator) * increment
 }

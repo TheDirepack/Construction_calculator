@@ -9,6 +9,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 /**
  * Tests for FileProjectStore atomic write-and-replace, delete, and directory resilience.
@@ -89,5 +91,49 @@ class FileProjectStoreTest {
         // Set aside, it no longer loads or reports.
         store.loadAll()
         assertEquals(emptyList<String>(), store.damaged())
+    }
+
+    @Test
+    fun interruptedRestoreRollsBackAddedRemovedAndOverwrittenProjectsOnLoad() {
+        val dir = tempFolder.newFolder("interrupted_restore")
+        val store = FileProjectStore(dir)
+        val old = Project.create("Original", now = 1L)
+        val removed = Project.create("Removed", now = 2L)
+        val added = Project.create("Added", now = 3L)
+        store.save(old.renamed("Partial restore", now = 10L))
+        store.save(added)
+
+        val journal = File(dir, ".restore-undo.zip")
+        ZipOutputStream(journal.outputStream()).use { zip ->
+            for (project in listOf(old, removed)) {
+                zip.putNextEntry(ZipEntry("${project.id}.json"))
+                zip.write(ProjectCodec.encode(project).encodeToByteArray())
+                zip.closeEntry()
+            }
+            zip.putNextEntry(ZipEntry("${added.id}.absent"))
+            zip.closeEntry()
+        }
+
+        val reopened = FileProjectStore(dir)
+        assertEquals(setOf(old, removed), reopened.loadAll().toSet())
+        assertFalse(journal.exists())
+        assertEquals(setOf(old, removed), reopened.loadAll().toSet())
+    }
+
+    @Test
+    fun committedBatchSurvivesReopening() {
+        val dir = tempFolder.newFolder("committed_restore")
+        val store = FileProjectStore(dir)
+        val old = Project.create("Original", now = 1L)
+        val removed = Project.create("Removed", now = 2L)
+        val added = Project.create("Added", now = 3L)
+        val changed = old.renamed("Updated", now = 4L)
+        store.save(old)
+        store.save(removed)
+
+        store.writeBatch(listOf(changed, added), setOf(removed.id))
+
+        assertEquals(setOf(changed, added), FileProjectStore(dir).loadAll().toSet())
+        assertFalse(File(dir, ".restore-undo.zip").exists())
     }
 }

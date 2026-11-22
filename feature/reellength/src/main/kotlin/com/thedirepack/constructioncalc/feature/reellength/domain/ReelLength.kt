@@ -19,6 +19,7 @@ data class ReelRequest(
     val topClearance: Double,
     /** Multiplies the length to allow for loose winding or cable that doesn't pack tightly. */
     val packingFactor: Double = 1.0,
+    val capacity: Boolean = false,
 )
 
 data class ReelResult(
@@ -68,6 +69,11 @@ object ReelLength {
             add("Flange diameter must be larger than the drum diameter.")
         } else if (r.drumDiameter > 0 && r.topClearance >= 0 && r.flangeDiameter - 2 * r.topClearance <= r.drumDiameter) {
             add("The distance from the flange edge is too large: there is no room for cable above the drum.")
+        }
+        val depth = woundDepth(r)
+        // Subtracting converted diameters can put an exact fit a few floating-point bits below one layer.
+        if (r.capacity && depth > 0 && r.cableDiameter - depth > 2 * Math.ulp(r.flangeDiameter)) {
+            add("There is not enough room for one cable layer at this clearance.")
         }
         if (r.traverse > 0 && r.cableDiameter > r.traverse) add("The cable is wider than the traverse.")
     }

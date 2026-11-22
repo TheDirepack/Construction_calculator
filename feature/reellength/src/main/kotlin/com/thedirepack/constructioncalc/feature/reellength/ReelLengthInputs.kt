@@ -89,7 +89,7 @@ fun ReelLengthInputs.parse(): ParsedReel {
         return ParsedReel(null, missing, listOf("The depth to the bare core must be above zero and less than the flange radius."))
     }
     if (missing.isNotEmpty()) return ParsedReel(null, missing, emptyList())
-    val request = ReelRequest(f!!, d!!, w!!, od!!, x!!, packing)
+    val request = ReelRequest(f!!, d!!, w!!, od!!, x!!, packing, capacity = mode == ReelMode.CAPACITY)
     val problems = ReelLength.problems(request)
     return ParsedReel(if (problems.isEmpty()) request else null, emptyList(), problems)
 }

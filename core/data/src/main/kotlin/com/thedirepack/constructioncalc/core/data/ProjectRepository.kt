@@ -2,10 +2,13 @@ package com.thedirepack.constructioncalc.core.data
 
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.ProjectItem
+import com.thedirepack.constructioncalc.core.model.ProjectMerge
+import com.thedirepack.constructioncalc.core.model.ProjectMergeMode
 import com.thedirepack.constructioncalc.core.model.Run
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +17,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * All projects, kept in memory and written through to [store]. Every edit goes through [edit],
@@ -47,10 +51,12 @@ class ProjectRepository(
 
     init {
         scope.launch(io) {
-            val all = store.loadAll()
-            _damaged.value = store.damaged()
-            state.update { current -> (current + all).distinctBy { it.id }.sortedByDescending { it.updatedAt } }
-            _loaded.value = true
+            writeLock.withLock {
+                val all = store.loadAll()
+                _damaged.value = store.damaged()
+                state.update { current -> (current + all).distinctBy { it.id }.sortedByDescending { it.updatedAt } }
+                _loaded.value = true
+            }
         }
     }
 
@@ -114,14 +120,40 @@ class ProjectRepository(
     /** Writes [project] as-is, replacing any project with the same id (e.g. "Replace mine" on import). */
     fun replace(project: Project) = put(project)
 
-    /** Writes several projects as-is (backup restore). */
-    fun putAll(projects: List<Project>) = projects.forEach(::put)
+    /** Commits a backup as one store transaction before publishing the restored projects. */
+    internal suspend fun restore(incoming: List<Project>, mode: ProjectMergeMode): ProjectMerge.Plan {
+        loaded.first { it }
+        return withContext(io + NonCancellable) {
+            writeLock.withLock {
+                val before = state.value
+                val plan = when (mode) {
+                    ProjectMergeMode.MERGE -> ProjectMerge.plan(before, incoming)
+                    ProjectMergeMode.REPLACE -> ProjectMerge.Plan(incoming, incoming.size, 0, 0)
+                }
+                val upserts = plan.toWrite.associateBy { it.id }
+                val removals = if (mode == ProjectMergeMode.REPLACE) {
+                    before.mapTo(mutableSetOf()) { it.id } - upserts.keys
+                } else {
+                    emptySet()
+                }
+                store.writeBatch(upserts.values.toList(), removals)
 
-    /** Deletes every project (backup restore with "Replace all"). */
-    fun deleteAll() {
-        val ids = state.value.map { it.id }
-        state.value = emptyList()
-        ids.forEach(::sync)
+                // An edit made during the I/O already has a sync job queued. Keep that newer
+                // in-memory state so the job can persist the edit when it acquires the same lock.
+                val original = before.associateBy { it.id }
+                state.update { current ->
+                    val latest = current.associateBy { it.id }.toMutableMap()
+                    for (id in removals) {
+                        if (latest[id] == original[id]) latest.remove(id)
+                    }
+                    for ((id, restored) in upserts) {
+                        if (latest[id] == original[id]) latest[id] = restored
+                    }
+                    latest.values.sortedByDescending { it.updatedAt }
+                }
+                plan
+            }
+        }
     }
 
     /** Convenience for the common "Save to project" flow. Returns the saved item, or null if the target is gone or archived. */

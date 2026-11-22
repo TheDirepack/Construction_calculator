@@ -3,6 +3,7 @@ package com.thedirepack.constructioncalc.feature.reellength
 import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.measure.Units
 import com.thedirepack.constructioncalc.core.model.ToolInputs
 import com.thedirepack.constructioncalc.core.model.ValueKind
 import com.thedirepack.constructioncalc.core.model.stored
@@ -10,6 +11,7 @@ import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
@@ -42,6 +44,28 @@ class ReelLengthInputsTest {
         assertEquals(2.0, capacity.parse().request!!.topClearance, 0.0)
         val length = reelLengthOutput(capacity, AppSettings()).results.first { it.key == "length" }.rational!!.toDouble()
         assertEquals(PI * 199.5 * 12, length, 1e-3)
+    }
+
+    @Test fun capacityRequiresEnoughClearanceForOneLayer() {
+        val tightClearance = Quantity.inches(Rational.of(19, 4)).stored()
+        val capacity = filled.copy(
+            mode = ReelMode.CAPACITY, flange = inches(20), drum = inches(10), traverse = inches(10),
+            clearance = tightClearance, distance = tightClearance,
+        )
+        assertNull(capacity.parse().request)
+        assertTrue(capacity.parse().problems.single().contains("one cable layer"))
+        assertNotNull(capacity.copy(clearance = inches(4)).parse().request)
+        assertNotNull(capacity.copy(mode = ReelMode.REMAINING).parse().request)
+    }
+
+    @Test fun anExactMetricLayerFitsDespiteUnitConversionRounding() {
+        fun millimeters(mm: Long) = Quantity.inches(Rational.of(mm) / Units.MM_PER_INCH).stored()
+        val capacity = filled.copy(
+            mode = ReelMode.CAPACITY,
+            flange = millimeters(100), drum = millimeters(80), traverse = millimeters(40),
+            cableDiameter = millimeters(5), clearance = millimeters(5),
+        )
+        assertNotNull(capacity.parse().request)
     }
 
     @Test fun drumCircumferenceAndDiameterYieldTheSameEstimateAndSurviveSave() {
