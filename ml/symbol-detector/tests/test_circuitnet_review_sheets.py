@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from scripts_circuitnet_review_sheets import (
     apply_batch_updates_to_devices,
@@ -63,8 +64,11 @@ def test_apply_batch_updates_converts_refinements_and_drops_false_positives() ->
                 'score': 0.91,
                 'crop_pdf_rect_bl': crop_bl,
                 'provisional_bbox_cell': [400.0, 400.0, 600.0, 600.0],
+                'review_status': 'accepted',
                 'keep': True,
-                'refined_device_type': 'duplex_receptacle',
+                'refined_device_type': 'receptacle',
+                'refined_subtype': 'duplex',
+                'attributes': {},
                 'refined_bbox_cell': [420.0, 400.0, 580.0, 600.0],
                 'on_wall': True,
                 'wall_contact_cell': [500.0, 600.0],  # bottom edge of box -> y_bl = 240.0
@@ -77,6 +81,7 @@ def test_apply_batch_updates_converts_refinements_and_drops_false_positives() ->
                 'score': 0.36,
                 'crop_pdf_rect_bl': crop_bl,
                 'provisional_bbox_cell': [400.0, 400.0, 600.0, 600.0],
+                'review_status': 'rejected',
                 'keep': False,
             },
             {
@@ -87,8 +92,11 @@ def test_apply_batch_updates_converts_refinements_and_drops_false_positives() ->
                 'score': 0.88,
                 'crop_pdf_rect_bl': crop_bl,
                 'provisional_bbox_cell': [400.0, 400.0, 600.0, 600.0],
+                'review_status': 'accepted',
                 'keep': True,
-                'refined_device_type': 'luminaire',
+                'refined_device_type': 'light_fixture',
+                'refined_subtype': 'other',
+                'attributes': {},
                 'refined_bbox_cell': [400.0, 400.0, 600.0, 600.0],
                 'on_wall': False,
                 'wall_contact_cell': [500.0, 500.0],
@@ -100,17 +108,56 @@ def test_apply_batch_updates_converts_refinements_and_drops_false_positives() ->
     assert refined['summary'] == {
         'kept_devices': 2,
         'removed_false_positives': 1,
+        'skipped_unreviewed': 0,
         'wall_mounted': 1,
         'free_space_center': 1,
     }
     d0, d1 = refined['devices']
-    assert d0['device_type'] == 'duplex_receptacle'
+    assert d0['device_type'] == 'receptacle'
     assert d0['symbol_bbox'] == [142.0, 240.0, 158.0, 260.0]
     assert d0['symbol_center'] == [150.0, 250.0]
     assert d0['wall_connection_point'] == [150.0, 240.0]
     assert d0['target_vector_pts'] == [0.0, -10.0]
 
-    assert d1['device_type'] == 'luminaire'
+    assert d1['device_type'] == 'light_fixture'
     assert d1['on_wall'] is False
     assert d1['wall_connection_point'] == [150.0, 250.0]
     assert d1['target_vector_pts'] == [0.0, 0.0]
+
+def test_review_gate_rejects_legacy_default_true_and_uncertain_items() -> None:
+    batch = {
+        'batch_index': 1,
+        'items': [
+            {'device_index': 0, 'pdf_page': 1, 'keep': True},  # legacy unreviewed default
+            {'device_index': 1, 'pdf_page': 1, 'review_status': 'uncertain', 'keep': None},
+            {'device_index': 2, 'pdf_page': 1, 'review_status': 'rejected', 'keep': False},
+        ],
+    }
+    result = apply_batch_updates_to_devices([batch])
+    assert result['devices'] == []
+    assert result['summary']['skipped_unreviewed'] == 2
+    assert result['summary']['removed_false_positives'] == 1
+    assert result['verified_ground_truth'] is False
+    assert result['exhaustive_families'] == []
+
+
+def test_review_gate_refuses_invalid_accepted_geometry_and_labels() -> None:
+    from blueprint_symbols.review_gate import review_decision
+    item = {
+        'review_status': 'accepted', 'keep': True, 'device_index': 1,
+        'pdf_page': 2, 'refined_device_type': 'receptacle',
+        'refined_subtype': 'duplex', 'refined_bbox_cell': [400, 400, 600, 600],
+        'crop_pdf_rect_bl': [100, 100, 200, 200], 'on_wall': False,
+        'attributes': {},
+    }
+    assert review_decision(item, {'receptacle': ['duplex']}) == 'accepted'
+    for changes in [
+        {'review_status': 'accepted', 'keep': None},
+        {'refined_subtype': 'invented'},
+        {'refined_bbox_cell': [800, 400, 200, 600]},
+        {'refined_bbox_cell': [float('nan'), 400, 600, 600]},
+        {'on_wall': None},
+        {'on_wall': True, 'wall_contact_cell': [1001, 50]},
+    ]:
+        with pytest.raises(ValueError):
+            review_decision({**item, **changes}, {'receptacle': ['duplex']})
