@@ -139,7 +139,7 @@ def test_native_pdf_dataset_spans_many_pages_and_keeps_clean_alignment(tmp_path)
         pages.add(info["pdf_crop"]["pdf_page_index"])
         clip_rects.add(tuple(info["pdf_crop"]["clip_rect_pt"]))
     assert len(pages) == 24
-    assert len(clip_rects) == 24
+    assert len(clip_rects) == 96  # 24 source regions × 4 independent PDF DPIs
 
 
 def test_pretraining_manifest_reads_native_pages_without_reserved_leakage(tmp_path):
