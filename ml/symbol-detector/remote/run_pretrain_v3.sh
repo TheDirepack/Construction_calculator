@@ -27,6 +27,24 @@ echo "=== INCREMENTAL BLUEPRINT SOURCE INGEST ==="
   --roles class_maps/page_roles.json --workers 5
 "$PY" scripts_curate_pool.py "$WORK/pool"
 
+echo "=== TRAIN-SPLIT CAD/DRAWING LAYOUT BACKGROUNDS ==="
+LAYOUT_DIR="$WORK/pool/background_layouts"
+if [[ -d "$DATA/5_datasets" ]] && ! find "$LAYOUT_DIR" -maxdepth 1 -name '*.json' -print -quit 2>/dev/null | grep -q .; then
+  mkdir -p "$LAYOUT_DIR"
+  "$PY" adapters/render_layouts.py "$DATA/5_datasets" "$LAYOUT_DIR" \
+    --train-only --limit 1500 --seed 11
+fi
+
+# Reuse only known FloorPlanCAD training rasters. Do not infer a train/test
+# split from an unverified arbitrary FloorPlanCAD folder.
+FPCAD_ARGS=()
+FPCAD_TRAIN_DIR="${FPCAD_TRAIN_DIR:-$WORK/pretrain_v1/floorplancad_train_pngs}"
+if [[ -d "$FPCAD_TRAIN_DIR" ]]; then
+  FPCAD_ARGS=(--fpcad-train-dir "$FPCAD_TRAIN_DIR")
+else
+  echo "No verified FloorPlanCAD train directory; skipping optional FloorPlanCAD bucket"
+fi
+
 echo "=== BUILD DEVICE-POSITIVE CROP REFERENCES (NOT EXHAUSTIVE LABELS) ==="
 if [[ ! -f "$LABELS/.complete" ]]; then
   "$PY" adapters/import_standardized_devices.py "$DATA" "$LABELS" --dpi 200
@@ -38,6 +56,7 @@ mkdir -p "$OUT"
 exec "$PY" scripts_pretrain_ssl.py \
   --data-root "$DATA" \
   --work-root "$WORK" \
+  "${FPCAD_ARGS[@]}" \
   --labeled-annotations "$LABELS/*.json" \
   --neca-dir "$NECA" \
   --out "$OUT" \
