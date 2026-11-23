@@ -159,7 +159,7 @@ def _print_damage(alpha: np.ndarray, rng: np.random.Generator, power: float, mod
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius, radius))
         heavier = bool(rng.integers(2))
         morphed = cv2.dilate(out, kernel) if heavier else cv2.erode(out, kernel)
-        blend = float(rng.uniform(.12, .72) * min(power, 1.5))
+        blend = float(rng.uniform(.30, .92) * min(power, 1.5))
         out = cv2.addWeighted(out, 1. - blend, morphed, blend, 0)
     elif mode == "stroke_gain":
         kernel = cv2.getStructuringElement(
