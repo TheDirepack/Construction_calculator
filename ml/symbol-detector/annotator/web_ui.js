@@ -551,7 +551,7 @@ async function api(path, options = {}) {
   return data;
 }
 async function loadPage(page, force = false) {
-  if (state.busy || page < 0 || page >= state.pageCount && state.doc) return;
+  if (state.busy || state.drag || page < 0 || page >= state.pageCount && state.doc) return;
   if (state.dirty && !force &&
       !window.confirm("Discard unsaved annotations on this page? Click Cancel, then Save.")) return;
   state.busy = true; refreshControls();
@@ -585,6 +585,10 @@ async function loadPage(page, force = false) {
   }
 }
 async function savePage() {
+  if (state.drag) {
+    notify("Finish drawing or moving the box before saving.", "warning");
+    return false;
+  }
   if (!state.doc || !state.dirty || state.busy) return true;
   state.busy = true; refreshControls();
   try {
