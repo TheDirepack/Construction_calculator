@@ -380,6 +380,14 @@ def apply_runtime_corruptions(
         fill = np.clip(paper[None, None, :] + rng.normal(0, 4, x.shape), 0, 255).astype(np.uint8)
         x = np.where(mask[:, :, None] > .5, fill, x)
 
+    # Independent Bernoulli choices can all miss on a light sample. Keep
+    # the explicit clean_fraction as the only intentionally unchanged path.
+    if not operations:
+        sigma = max(0.8, 1.8 * strength)
+        x = np.clip(x.astype(np.float32) + rng.normal(0, sigma, x.shape),
+                    0, 255).astype(np.uint8)
+        operations.append("sensor_noise")
+
     meta = {"severity": severity, "operations": operations}
     return (x, mask, meta) if return_metadata else (x, mask)
 
