@@ -136,6 +136,40 @@ def build_pretrain_manifests(
         except Exception:
             pass
 
+    from scripts_index_real_pdfs import reserved_sources
+    reserved_file = work_root / "heldout_real_pdfs.json"
+    reserved_paths, reserved_groups = reserved_sources(
+        reserved_file if reserved_file.is_file() else None, data_root.resolve()
+    )
+
+    # Direct PDF page catalog: all eligible pages, no 24 MP intermediates.
+    # Exclude reserved/locked groups *before* either SSL training or validation.
+    pdf_index_file = work_root / "pdf_page_index" / "index.json"
+    indexed_pdf_paths: set[str] = set()
+    pdf_train: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    pdf_val: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    if pdf_index_file.is_file():
+        index = json.loads(pdf_index_file.read_text())
+        if index.get("format_version") != 1:
+            raise ValueError("Unsupported direct PDF page index version")
+        if Path(index.get("data_root", "")).resolve() != data_root.resolve():
+            raise ValueError("PDF index was built against a different data_root")
+        for rel, info in sorted(index.get("documents", {}).items()):
+            gid = str(info.get("project_family_id", "")).strip()
+            source = str((data_root / rel).resolve())
+            if not gid or gid in reserved_groups or source in reserved_paths:
+                continue
+            if gid in locked_eval_groups:
+                continue
+            pages = info.get("pages", [])
+            if not pages:
+                continue
+            # Source PDF is the unit of train/validation isolation. Never split
+            # different pages from the same original PDF across partitions.
+            target = pdf_val if group_is_holdout(gid, val_fraction=pool_val_fraction) else pdf_train
+            target[gid].extend(pages)
+            indexed_pdf_paths.add(source)
+
     train_buckets: dict[str, dict[str, Any]] = {}
     val_buckets: dict[str, dict[str, Any]] = {}
     audit: dict[str, Any] = {
@@ -143,6 +177,11 @@ def build_pretrain_manifests(
         'included_counts': defaultdict(int),
         'val_monitor_counts': defaultdict(int),
         'locked_eval_groups_count': len(locked_eval_groups),
+        'explicit_reserved_pdf_groups_count': len(reserved_groups),
+        'explicit_reserved_pdf_paths_count': len(reserved_paths),
+        'direct_pdf_sources': len(indexed_pdf_paths),
+        'direct_pdf_pages_train': sum(len(p) for p in pdf_train.values()),
+        'direct_pdf_pages_val_monitor': sum(len(p) for p in pdf_val.values()),
     }
 
     # 1. Real construction drawings & curated pool (deduplicated by image_sha256)
@@ -180,6 +219,15 @@ def build_pretrain_manifests(
                 continue
             gid = str(doc.get('project_family_id') or jpath.stem)
             src_path = str((doc.get('pool') or {}).get('source_path') or jpath.name)
+            source_file = str((data_root / src_path).resolve())
+            if gid in reserved_groups or source_file in reserved_paths:
+                audit['excluded_counts']['explicit_reserved_raster_source'] += 1
+                continue
+            if source_file in indexed_pdf_paths:
+                # Prefer fresh PDF-native crops, avoid doubling the same page
+                # via its stale/capped raster representation.
+                audit['excluded_counts']['replaced_by_direct_pdf'] += 1
+                continue
             is_real = _is_real_construction(gid, src_path) or role == 'label_queue'
             # Locked detector val/test projects must never influence even SSL
             # checkpoint selection. They are excluded rather than moved to SSL val.
@@ -204,10 +252,24 @@ def build_pretrain_manifests(
                     other_tr[gid].append(str(img_path))
                     audit['included_counts']['pool_other_background'] += 1
 
+    if pdf_train:
+        train_buckets['real_pdf_pages'] = {'weight': 0.62, 'groups': dict(pdf_train)}
+        audit['included_counts']['direct_pdf_pages'] = sum(
+            len(v) for v in pdf_train.values()
+        )
+    if pdf_val:
+        val_buckets['real_pdf_pages'] = {'weight': 0.62, 'groups': dict(pdf_val)}
+        audit['val_monitor_counts']['direct_pdf_pages'] = sum(
+            len(v) for v in pdf_val.values()
+        )
     if real_tr:
-        train_buckets['real_construction_drawings'] = {'weight': 0.55, 'groups': dict(real_tr)}
+        train_buckets['real_construction_drawings'] = {
+            'weight': 0.30 if pdf_train else 0.55, 'groups': dict(real_tr)
+        }
     if real_va:
-        val_buckets['real_construction_drawings'] = {'weight': 0.55, 'groups': dict(real_va)}
+        val_buckets['real_construction_drawings'] = {
+            'weight': 0.30 if pdf_val else 0.55, 'groups': dict(real_va)
+        }
     if other_tr:
         train_buckets['pool_other_background'] = {'weight': 0.08, 'groups': dict(other_tr)}
     if other_va:
@@ -298,7 +360,7 @@ def build_pretrain_manifests(
             audit['excluded_counts']['unverified_labeled_group'] += 1
             continue
         gid = str(doc.get('project_family_id') or '').strip()
-        if not gid or gid in locked_eval_groups:
+        if not gid or gid in locked_eval_groups or gid in reserved_groups:
             audit['excluded_counts']['labeled_locked_or_missing_group'] += 1
             continue
         imgpath = (jpath.parent / str(doc.get('image_path', ''))).resolve()
