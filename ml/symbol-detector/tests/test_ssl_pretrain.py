@@ -388,3 +388,42 @@ def test_mask_visibility_guard_rejects_nonfinite_symbol_boxes():
             clean_fraction=0.0,
             protected_boxes=[[float("nan"), 1., 8., 8.]],
         )
+
+
+def test_bloom_contrast_are_input_only_and_can_mix_with_other_damage():
+    """New optical degradation does not change the SSL clean target."""
+    source = _fake_blueprint(144, 144)
+    original = source.copy()
+    seen = set()
+    mixed = 0
+    examples = []
+    for seed in range(128):
+        degraded, mask, metadata = apply_runtime_corruptions(
+            source, np.random.default_rng(seed),
+            clean_fraction=0., mask_prob=0., return_metadata=True,
+        )
+        assert degraded.dtype == source.dtype
+        assert degraded.shape == source.shape
+        assert not mask.any()
+        ops = metadata["operations"]
+        seen.update(ops)
+        if "optical_highlight_bloom" in ops:
+            examples.append(degraded)
+            mixed += (
+                any("contrast" in name for name in ops) and
+                any(name in ops for name in
+                    ("illumination", "gamma_curve", "gaussian_blur",
+                     "sensor_noise", "resampling"))
+            )
+    assert np.array_equal(source, original)
+    assert len(examples) >= 5
+    assert mixed > 0
+    assert "optical_contrast_gain" in seen
+    assert len({a.tobytes() for a in examples}) >= 5
+    clean, mask, meta = apply_runtime_corruptions(
+        source, np.random.default_rng(0),
+        clean_fraction=1., mask_prob=0., return_metadata=True,
+    )
+    assert meta["operations"] == []
+    assert np.array_equal(clean, source)
+    assert not mask.any()
