@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from blueprint_symbols.dataset_manifest import build_manifest
+from blueprint_symbols.raster_training import read_records
 from blueprint_symbols.partial_supervision import read_supervision
 from scripts_export_yolo_tiles import run
 
@@ -37,7 +38,8 @@ def mixed_source_manifest(tmp_path: Path):
                            'verified_real_negative' if i==3 else
                            'real_verified_positive' if i==1 else
                            'synthetic_verified'),
-            'exhaustive_families':([] if i==0 else ['receptacle']),
+            'exhaustive_families':([] if i in (0,3) else ['receptacle']),
+            'verified_no_symbols':i==3,
             'instances':instances,
         }
         label_path=tmp_path/f'drawing_{i}.json'
@@ -48,6 +50,30 @@ def mixed_source_manifest(tmp_path: Path):
     out=tmp_path/'manifest.json'
     out.write_text(json.dumps(mf))
     return out,mf
+
+
+def test_verified_negative_attestation_is_class_complete(tmp_path):
+    _, manifest = mixed_source_manifest(tmp_path)
+    negative = next(row for row in manifest["source_images"] if row["verified_no_symbols"])
+    assert negative["exhaustive_families"] == ["receptacle"]
+    record = read_records([negative["annotation"]], classes=manifest["class_ids"])[0]
+    assert record.verified_no_symbols is True
+    assert record.exhaustive_families == frozenset({"receptacle"})
+    # Partial real symbols remain unknown background, despite being present in the JSON.
+    partial = next(row for row in manifest["source_images"] if row["project_group"] == "building-0")
+    assert partial["verified_no_symbols"] is False
+    assert not read_records([partial["annotation"]], classes=manifest["class_ids"])[0].exhaustive_families
+
+
+def test_forged_page_negative_with_active_symbols_fails(tmp_path):
+    mixed_source_manifest(tmp_path)
+    annotation = tmp_path / "drawing_1.json"
+    raw = json.loads(annotation.read_text())
+    raw["verified_no_symbols"] = True
+    annotation.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="verified_no_symbols page contains active annotations"):
+        build_manifest([tmp_path / f"drawing_{i}.json" for i in range(5)],
+                       val_fraction=.2, test_fraction=.2, allow_partial_training=True)
 
 
 def test_partial_real_group_always_training_and_heldout_complete(tmp_path):
