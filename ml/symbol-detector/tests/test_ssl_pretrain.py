@@ -147,6 +147,8 @@ def test_run_fingerprint_stable_and_detects_changed_configuration():
         symbol_min_px=12.0, symbol_max_px=80.0,
         symbol_augment_probability=1.0, procedural_fraction=0.25,
         clean_fraction=0.2, labeled_focus_probability=0.65,
+        symbol_chaos_probability=0.88, symbol_chaos_strength=1.0,
+        placement_chaos=0.85,
         neca_dir=None,
     )
     train = {"buckets": {"a": {"groups": {"project_a": ["a.png"]}}}}
@@ -277,3 +279,29 @@ def test_neca_source_fingerprint_tracks_actual_svg_strokes(tmp_path):
     }))
     with pytest.raises(ValueError, match="escapes"):
         neca_source_fingerprint(root)
+
+
+
+def test_new_warp_controls_change_resume_fingerprint():
+    import argparse
+    from scripts_pretrain_ssl import run_fingerprint
+
+    args = argparse.Namespace(
+        imgsz=512, batch=4, epochs=2, items_per_epoch=128, val_items=32,
+        optimizer="MuSGD", lr=.005, workers=0, pool_val_fraction=.1, seed=99,
+        max_symbols=16, symbol_min_px=12., symbol_max_px=80.,
+        symbol_augment_probability=1., procedural_fraction=.25,
+        clean_fraction=.2, labeled_focus_probability=.65,
+        symbol_chaos_probability=.88, symbol_chaos_strength=1.,
+        placement_chaos=.85, neca_dir=None,
+    )
+    manifest = {"buckets": {"real": {"groups": {"building": ["a.png"]}}}}
+    reference = run_fingerprint(manifest, {"buckets": {}}, args)
+    args.symbol_chaos_probability = .40
+    assert run_fingerprint(manifest, {"buckets": {}}, args) != reference
+    args.symbol_chaos_probability = .88
+    args.symbol_chaos_strength = 1.8
+    assert run_fingerprint(manifest, {"buckets": {}}, args) != reference
+    args.symbol_chaos_strength = 1.
+    args.placement_chaos = .20
+    assert run_fingerprint(manifest, {"buckets": {}}, args) != reference
