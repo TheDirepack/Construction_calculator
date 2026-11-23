@@ -30,7 +30,8 @@ def tile_origins(length: int, tile_size: int, overlap: int) -> list[int]:
 
 def owns_tile_center(box: list[float], *, tile_x: int, tile_y: int,
                      tile_size: int, overlap: int,
-                     image_width: int, image_height: int) -> bool:
+                     image_width: int, image_height: int,
+                     tile_width: int | None = None) -> bool:
     """Assign each detection center to a unique tile in the overlap grid.
 
     Adjacent tile cores meet in the middle of their overlap. Border tiles
@@ -39,13 +40,17 @@ def owns_tile_center(box: list[float], *, tile_x: int, tile_y: int,
     """
     if tile_size <= overlap or overlap < 0:
         raise ValueError('invalid tile overlap')
+    if tile_width is None:
+        tile_width = tile_size
+    if tile_width <= overlap:
+        raise ValueError('invalid target tile width')
     cx = .5 * (box[0] + box[2])
     cy = .5 * (box[1] + box[3])
     half = overlap / 2.0
     min_x = tile_x + (half if tile_x else 0.0)
     min_y = tile_y + (half if tile_y else 0.0)
-    max_x = min(image_width, tile_x + tile_size -
-                (half if tile_x + tile_size < image_width else 0.0))
+    max_x = min(image_width, tile_x + tile_width -
+                (half if tile_x + tile_width < image_width else 0.0))
     max_y = min(image_height, tile_y + tile_size -
                 (half if tile_y + tile_size < image_height else 0.0))
     return min_x <= cx < max_x and min_y <= cy < max_y
@@ -113,6 +118,7 @@ def filter_sam_detections(
     minimum_box_size: float = 10.0,
     max_per_family: int = 0,
     max_total: int = 0,
+    tile_width: int | None = None,
     stats: Counter | None = None,
 ) -> list[dict[str, Any]]:
     """Pure postprocessing; no GPU/network dependence."""
@@ -124,6 +130,7 @@ def filter_sam_detections(
         if use_owner and not owns_tile_center(
             box, tile_x=tile_x, tile_y=tile_y, tile_size=tile_size,
             overlap=overlap, image_width=w, image_height=h,
+            tile_width=tile_width,
         ):
             reason = 'tile_overlap_duplicate'
         else:
