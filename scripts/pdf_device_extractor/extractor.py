@@ -665,7 +665,10 @@ class PDFDeviceExtractor:
         labels = self._find_device_labels(words)
 
         # ---- legend (for classification context) -------------------------
-        legend_entries = self.extract_legend()
+        # legend_entries is pre-computed once in extract_all() and passed in;
+        # do NOT recompute it here (that made extraction O(pages^2)).
+        if legend_entries is None:
+            legend_entries = self.extract_legend()
 
         # ---- match labels to nearest symbol cluster ----------------------
         devices: List[Dict[str, Any]] = []
@@ -702,6 +705,12 @@ class PDFDeviceExtractor:
                 sym_center = [round(best_sym["cx"], 2), round(best_sym["cy"], 2)]
                 num_drawings = best_sym.get("num_parts", 0)
                 attach_dist = round(best_dist, 2)
+
+            # Skip text-only labels with no associated symbol graphic. A label
+            # matched to a keyword in general notes / schedules / title blocks
+            # but with no nearby symbol is an unverified artifact, not a device.
+            if sym_bbox is None:
+                continue
 
             # ---- wall connection point & distance ------------------------
             scx, scy = sym_center if sym_center else (lx, ly)
@@ -925,7 +934,7 @@ class PDFDeviceExtractor:
         device_id = 1
 
         for page_num in range(1, self.total_pages + 1):
-            page_devices = self.extract_devices_from_page(page_num)
+            page_devices = self.extract_devices_from_page(page_num, legend_entries=legend_entries)
             if not page_devices:
                 continue
             pages_with_devices.append(page_num)
