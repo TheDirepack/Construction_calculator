@@ -172,7 +172,7 @@ def scanned_page_rates(
     *known* false-box lower bound is available, not a complete false-box rate.
     """
     if not proposal_files:
-        raise ValueError('no source proposal JSONs supplied for page-rate evaluation')
+        raise ValueError('no matching source proposal JSONs supplied for page-rate evaluation')
     by_name: dict[str, dict] = {}
     for path in proposal_files:
         if path.name in by_name:
