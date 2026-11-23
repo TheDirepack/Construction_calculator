@@ -594,11 +594,20 @@ class Yolo26P2SSLModel(nn.Module):
 
 
 class BlueprintSSLLoss(nn.Module):
-    """Ink- and mask-weighted L1 + Sobel edge gradient loss for line-art blueprints."""
+    """Ink-balanced, masked L1 + Sobel edge restoration loss.
 
-    def __init__(self, mask_weight: float = 2.5, ink_weight: float = 4.0, edge_weight: float = 0.5) -> None:
+    Thin electrical lines are often <2% of a drawing crop. Multiplying their
+    per-pixel weight by four still leaves almost all reconstruction loss on
+    white paper. Normalize ink and paper losses separately, then give ink
+    a stable fraction regardless of how sparse the drawing is.
+    """
+
+    def __init__(self, mask_weight: float = 2.5, ink_weight: float = 2.0, edge_weight: float = 0.5) -> None:
         super().__init__()
+        if mask_weight < 0 or ink_weight <= 0 or edge_weight < 0:
+            raise ValueError("SSL loss weights must be nonnegative (ink_weight > 0)")
         self.mask_weight = float(mask_weight)
+        # Ratio between mean ink error and mean paper error (2 = 2:1).
         self.ink_weight = float(ink_weight)
         self.edge_weight = float(edge_weight)
         kx = torch.tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]]).view(1, 1, 3, 3)
@@ -618,13 +627,27 @@ class BlueprintSSLLoss(nn.Module):
         target: torch.Tensor,
         mask: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        # Ink pixels are dark regions on the clean target
+        # Weight masked regions without allowing empty paper to drown out
+        # the few real symbol strokes. Keep channel-sum error to preserve the
+        # previous L1 scale relative to the Sobel edge term.
         lum = target.mean(dim=1, keepdim=True)
         ink = (lum < 0.80).float()
-        weights = 1.0 + self.mask_weight * mask + self.ink_weight * ink
+        weights = 1.0 + self.mask_weight * mask
 
-        pixel_l1 = (pred - target).abs()
-        weighted_l1 = (pixel_l1 * weights).sum() / weights.sum().clamp_min(1.0)
+        pixel_l1 = (pred - target).abs().sum(dim=1, keepdim=True)
+        ink_mass = weights * ink
+        paper_mass = weights * (1.0 - ink)
+        axes = (1, 2, 3)
+        ink_den = ink_mass.sum(dim=axes)
+        paper_den = paper_mass.sum(dim=axes)
+        ink_l1 = (pixel_l1 * ink_mass).sum(dim=axes) / ink_den.clamp_min(1.0)
+        paper_l1 = (pixel_l1 * paper_mass).sum(dim=axes) / paper_den.clamp_min(1.0)
+        ink_share = self.ink_weight / (1.0 + self.ink_weight)
+        balanced_l1 = ink_share * ink_l1 + (1.0 - ink_share) * paper_l1
+        # A genuinely all-white or all-ink crop must not lose loss scale.
+        balanced_l1 = torch.where(ink_den == 0, paper_l1, balanced_l1)
+        balanced_l1 = torch.where(paper_den == 0, ink_l1, balanced_l1)
+        weighted_l1 = balanced_l1.mean()
 
         px, py = self._edges(pred)
         tx, ty = self._edges(target)
