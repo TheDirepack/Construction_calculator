@@ -131,7 +131,7 @@ def _print_damage(alpha: np.ndarray, rng: np.random.Generator, power: float, mod
     out = alpha.copy()
     if mode == "stroke_gain":
         kernel = cv2.getStructuringElement(
-            rng.choice([cv2.MORPH_ELLIPSE, cv2.MORPH_RECT, cv2.MORPH_CROSS]),
+            int(rng.choice([cv2.MORPH_ELLIPSE, cv2.MORPH_RECT, cv2.MORPH_CROSS])),
             (3, 3),
         )
         out = cv2.dilate(out, kernel) if rng.random() < .5 else cv2.erode(out, kernel)
@@ -184,7 +184,7 @@ def distort_symbol_alpha(
         raise ValueError("invalid symbol chaos parameters")
     if min(alpha.shape) < 3:
         return alpha.copy(), {"severity": "unchanged", "operations": [], "rejected": 0}
-    if rng.random() >= probability:
+    if probability == 0 or strength == 0 or rng.random() >= probability:
         return alpha.copy(), {"severity": "unchanged", "operations": [], "rejected": 0}
 
     profile = str(rng.choice(("subtle", "moderate", "heavy", "extreme"),
