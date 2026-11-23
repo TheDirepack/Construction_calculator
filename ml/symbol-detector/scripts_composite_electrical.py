@@ -115,9 +115,18 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
                    canonical_classes: bool = False,
                    symbol_chaos_probability: float = 0.0,
                    symbol_chaos_strength: float = 1.0,
-                   placement_chaos: float = 0.0) -> tuple[np.ndarray, list[dict]]:
+                   placement_chaos: float = 0.0,
+                   drawing_dpi: float | None = None,
+                   match_local_ink: bool = False,
+                   ink_reference: np.ndarray | None = None) -> tuple[np.ndarray, list[dict]]:
     from blueprint_symbols.symbol_chaos import distort_symbol_alpha, sample_free_origin
+    from blueprint_symbols.ink_style import local_drawing_ink_bgr
 
+    if drawing_dpi is not None and not 100 <= drawing_dpi <= 400:
+        raise ValueError("drawing_dpi must be in [100,400]")
+    reference = image if ink_reference is None else ink_reference
+    if reference.shape != image.shape or reference.dtype != image.dtype:
+        raise ValueError("ink_reference must match input drawing shape/dtype")
     if not 0 <= placement_chaos <= 1:
         raise ValueError("placement_chaos must be in [0,1]")
     page = image.copy()
@@ -229,7 +238,11 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
         roi = page[y:y + gh, x:x + gw].astype(np.float32)
         a = alpha[:, :, None]
         # Ink darkens paper (multiply), in the page's own ink colour, so photos stay tinted.
-        ink_col = np.clip(ink_bgr + rng.normal(0, 8, 3), 0, 200).astype(np.float32)
+        ink_col = (
+            np.asarray(local_drawing_ink_bgr(reference, box), dtype=np.float32)
+            if match_local_ink else
+            np.clip(ink_bgr + rng.normal(0, 8, 3), 0, 200).astype(np.float32)
+        )
         inked = roi * (1 - a) + np.minimum(roi, ink_col) * a
         page[y:y + gh, x:x + gw] = np.clip(inked, 0, 255).astype(np.uint8)
         occupied.append(box)
@@ -268,7 +281,9 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
             'symbol_chaos': chaos_details,
             'source': {'kind': 'synthetic_composite', 'label_method': ('warped_bbox_only' if chaos_details["operations"]
                                         else 'known_placement_transform'),
-                       'glyph_scale': scale, 'placement_mode': 'wall_touching' if want_wall else placement_mode},
+                       'glyph_scale': scale, 'drawing_dpi': drawing_dpi,
+                       'ink_color_bgr': [int(round(v)) for v in ink_col],
+                       'placement_mode': 'wall_touching' if want_wall else placement_mode},
         })
     return page, placed
 
