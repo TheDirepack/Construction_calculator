@@ -244,9 +244,16 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
             target_vec = [0.0, 0.0]
 
         out_family = CANONICAL_ELECTRICAL_MAP[family] if canonical_classes else family
-        out_anchors = {k: {'xy': [x + px, y + py], 'visible': True, 'annotated': True}
+        # A nonlinear glyph warp does not preserve the old analytic anchor
+        # coordinates. Keep approximate points for illustration but mark
+        # them unannotated to avoid supervised keypoint label pollution.
+        precise_anchors = not bool(chaos_details["operations"])
+        out_anchors = {k: {'xy': [x + px, y + py], 'visible': True,
+                           'annotated': precise_anchors}
                        for k, (px, py) in pts.items()}
-        out_anchors['wall_connection_point'] = {'xy': target_xy, 'visible': True, 'annotated': True}
+        out_anchors['wall_connection_point'] = {
+            'xy': target_xy, 'visible': True, 'annotated': precise_anchors,
+        }
 
         placed.append({
             'instance_id': f'elec_{tag}_{len(placed):03d}',
@@ -259,7 +266,8 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
             'anchors': out_anchors,
             'rotation_degrees_image': angle,
             'symbol_chaos': chaos_details,
-            'source': {'kind': 'synthetic_composite', 'label_method': 'known_placement_transform',
+            'source': {'kind': 'synthetic_composite', 'label_method': ('warped_bbox_only' if chaos_details["operations"]
+                                        else 'known_placement_transform'),
                        'glyph_scale': scale, 'placement_mode': 'wall_touching' if want_wall else placement_mode},
         })
     return page, placed
