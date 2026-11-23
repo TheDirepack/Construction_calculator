@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import json
+import time
 from pathlib import Path
 
 import cv2
@@ -46,8 +47,11 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
     )
     output.mkdir(parents=True, exist_ok=True)
     rows = []
+    generation_ms = []
     for i in range(samples):
+        started = time.perf_counter()
         degraded, clean, mask, meta = dataset[i]
+        generation_ms.append((time.perf_counter() - started) * 1000.0)
         pre_page = meta.pop("pre_page_bgr")
         def as_bgr(tensor):
             rgb = (tensor.permute(1, 2, 0).numpy() * 255.0).round()
@@ -138,6 +142,9 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         "pdf_crop_dpi_min": min(pdf_dpis) if pdf_dpis else None,
         "pdf_crop_dpi_max": max(pdf_dpis) if pdf_dpis else None,
         "samples": samples,
+        "sample_generation_median_ms": round(float(np.median(generation_ms)), 3),
+        "sample_generation_p95_ms": round(float(np.percentile(generation_ms, 95)), 3),
+        "sample_generation_total_seconds": round(sum(generation_ms) / 1000., 3),
         "full_clean_views": full_clean_count,
         "full_clean_fraction_observed": round(full_clean_count / samples, 4),
         "placed_by_family": dict(sorted(families.items())),
