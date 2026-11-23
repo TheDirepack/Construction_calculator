@@ -210,6 +210,19 @@ LRU caches hold at most 32 rendered PDF crops and 24 MiB of base raster
 crops, with independent copies returned to augmentations. No full-page
 pre-rendering or on-disk cache is required.
 
+For visual validation on a real PDF, use the QA-only command:
+```bash
+python scripts_audit_real_pdf_crops.py /path/to/electrical.pdf \\
+  --pages 33 34 --samples-per-page 4 --repeat-region-dpis 4 \\
+  --max-symbols 8 --out work/real_pdf_multi_dpi_qa
+```
+The four side-by-side image pairs for each page share one physical PDF
+anchor, but their source clips are independently rasterized at different
+randomized 100–400 DPI scales. `--dpi-epoch 1` redraws new random scales
+without changing the anchor. The JSON report stores each actual DPI, source
+clip, source anchor and composited symbol DPI. QA runs are **not** training
+labels and do not alter the reserved PDF evaluation collection.
+
 Tuning: `SSL_CROP_REUSE_VIEWS`, `SSL_CROP_BANK_SIZE`, and
 `SSL_FRESH_CROP_PROBABILITY` control those distributions; the corresponding
 CLI flags are `--crop-reuse-views`, `--crop-bank-size`, and
