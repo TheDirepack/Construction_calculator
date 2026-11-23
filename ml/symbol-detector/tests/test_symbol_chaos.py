@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from blueprint_symbols.symbol_chaos import distort_symbol_alpha, sample_free_origin
-from blueprint_symbols.scan_chaos import add_scan_chaos
+from blueprint_symbols.scan_chaos import add_scan_chaos, add_optical_tone_mix
 from blueprint_symbols.neca_svg_compositor import composite_neca_page
 from scripts_composite_electrical import composite_page
 
@@ -205,3 +205,75 @@ def test_fractional_symbol_line_width_changes_without_losing_identity():
     assert changed > 90
     assert rejected < 30
     assert thicker > 0 and thinner > 0
+
+
+def test_optical_bloom_contrast_mix_is_variable_and_immutable():
+    """Bloom, gain/curve contrast, and local contrast can co-occur."""
+    src = _drawing(192)
+    before = src.copy()
+    seen = set()
+    mixtures = 0
+    bloom_outputs = []
+    for seed in range(96):
+        a, ops = add_optical_tone_mix(
+            src, np.random.default_rng(seed), strength=1.2,
+        )
+        b, same_ops = add_optical_tone_mix(
+            src, np.random.default_rng(seed), strength=1.2,
+        )
+        assert ops == same_ops and np.array_equal(a, b)
+        assert a.dtype == src.dtype and a.shape == src.shape
+        assert not np.array_equal(a, src)
+        seen.update(ops)
+        mixtures += (
+            "optical_highlight_bloom" in ops and
+            any(name.startswith("optical_contrast") or
+                name == "optical_local_contrast" for name in ops)
+        )
+        if "optical_highlight_bloom" in ops:
+            bloom_outputs.append(a)
+    assert np.array_equal(src, before)
+    assert mixtures >= 8
+    assert len(bloom_outputs) >= 20
+    assert {
+        "optical_highlight_bloom", "optical_contrast_gain",
+        "optical_contrast_curve", "optical_local_contrast",
+        "optical_ink_halation",
+    }.issubset(seen)
+    assert len({arr.tobytes() for arr in bloom_outputs}) > 10
+
+
+def test_optical_zero_strength_probability_and_invalid_parameters():
+    src = _drawing(96)
+    for kwargs in ({"strength": 0}, {"probability": 0}):
+        out, ops = add_optical_tone_mix(
+            src, np.random.default_rng(99), **kwargs
+        )
+        assert not ops and np.array_equal(out, src)
+        assert out is not src
+    for kwargs in ({"strength": -1}, {"strength": float("nan")},
+                   {"strength": 2.1}, {"probability": -0.1},
+                   {"probability": 1.2}, {"probability": float("inf")}):
+        with pytest.raises(ValueError):
+            add_optical_tone_mix(src, np.random.default_rng(3), **kwargs)
+    with pytest.raises(ValueError):
+        add_optical_tone_mix(src.astype(np.float32), np.random.default_rng(3))
+
+
+def test_scan_chaos_can_mix_bloom_and_contrast_in_same_view():
+    src = _drawing(128)
+    seen = set()
+    joint = 0
+    for seed in range(120):
+        output, ops = add_scan_chaos(
+            src, np.random.default_rng(seed), strength=1.,
+        )
+        assert output.shape == src.shape
+        seen.update(ops)
+        joint += (
+            "optical_highlight_bloom" in ops and
+            any("contrast" in name for name in ops)
+        )
+    assert joint > 0
+    assert "optical_highlight_bloom" in seen
+    assert "optical_contrast_gain" in seen
