@@ -689,7 +689,7 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise SystemExit('CUDA GPU not available; use --catalog-only for CPU preflight')
 
-    dtype = torch.float16
+    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     print(f'Loading {args.model_id} in {dtype} on {torch.cuda.get_device_name(0)}...', flush=True)
     t0 = time.time()
     model = Sam3Model.from_pretrained(args.model_id, dtype=dtype).to('cuda').eval()
@@ -809,6 +809,7 @@ def main() -> None:
         reference_digest.update(hashlib.sha256(ref.alpha.tobytes()).digest())
     run_config = {
         'model_id': args.model_id,
+        'inference_dtype': str(dtype),
         'model_resolved_revision': getattr(model.config, '_commit_hash', None),
         'model_config_hash': hashlib.sha256(
             model.config.to_json_string().encode('utf-8')
