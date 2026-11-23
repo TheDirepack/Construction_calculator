@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -61,7 +62,11 @@ def render_pdf_page(pdf_path: Path, page_index: int, dpi: int = 150,
 
     output = Path(cache_dir).resolve() if cache_dir else Path.cwd() / ".annotator_cache"
     output.mkdir(parents=True, exist_ok=True)
-    source_digest = hashlib.sha256(pdf_path.read_bytes()).hexdigest()[:12]
+    digest = hashlib.sha256()
+    with pdf_path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    source_digest = digest.hexdigest()[:12]
     safe_stem = "".join(c if c.isalnum() or c in "_-" else "_" for c in pdf_path.stem)[:48]
     img_path = output / f"{safe_stem}_{source_digest}_p{page_index + 1:04d}_{dpi}dpi.png"
     if not cv2.imwrite(str(img_path), img):
@@ -124,7 +129,8 @@ def main():
         parser.error("Provide either --pdf or --edit")
 
     # Load image for snapping / preview
-    img_full_path = (Path(args.edit).parent / sheet.image_path) if args.edit else Path(sheet.image_path)
+    origin_dir = args.edit.parent if args.edit else args.output.parent
+    img_full_path = (origin_dir / sheet.image_path).resolve()
     if not img_full_path.exists() and args.pdf:
         _, img_full_path = render_pdf_page(
             args.pdf, args.page, cache_dir=args.output.parent / "images"
@@ -134,6 +140,10 @@ def main():
     if img is not None and (img.shape[1], img.shape[0]) != (
             sheet.image_width, sheet.image_height):
         raise ValueError("Rendered image dimensions differ from annotation sheet")
+    if img is not None and sheet.image_sha256:
+        observed = hashlib.sha256(img_full_path.read_bytes()).hexdigest()
+        if observed != sheet.image_sha256:
+            raise ValueError("Image checksum differs from the annotated raster")
 
     # Load walls if provided
     walls = []
@@ -191,7 +201,11 @@ def main():
             inst.snap = snap
             print(f"  Instance {inst.instance_id}: snap kind={snap.get('kind')}, note={snap.get('note')}")
 
-    # Save output
+    # Existing annotation files may be saved to another folder. Rebase
+    # the image reference so a new JSON never points at the wrong raster.
+    if img_full_path.is_file():
+        sheet.image_path = os.path.relpath(img_full_path, args.output.parent.resolve())
+    # Save output atomically (Sheet.save handles interrupted writes).
     sheet.save(args.output)
     print(f"Successfully saved updated annotations to {args.output.resolve()}")
 
