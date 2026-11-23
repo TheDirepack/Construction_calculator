@@ -23,7 +23,7 @@ from typing import Any
 
 
 # High-recall *positive risk* hints. Not a proof of object presence or absence.
-SHEET_FILENAME_RISK = re.compile(r"^(?:E|EL|EP|ED|ES|FA|FP|T|M|P)[._-]?\\d+(?:[._-]\\d+)?[A-Z]?$", re.I)
+SHEET_FILENAME_RISK = re.compile(r"^(?:E|EL|EP|ED|ES|FA|FP|T|M|P)[._-]?\d+(?:[._-]\d+)?[A-Z]?$", re.I)
 
 SYMBOL_RISK = re.compile(
     r"\b(?:electrical|lighting|luminaire|receptacles?|outlets?|"
