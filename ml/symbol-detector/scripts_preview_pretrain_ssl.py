@@ -23,13 +23,20 @@ from blueprint_symbols.ssl_pretrain import BlueprintSSLDataset
 
 def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
             samples: int = 32, seed: int = 2026, size: int = 512,
-            max_symbols: int = 16) -> dict:
+            max_symbols: int = 16,
+            symbol_chaos_probability: float = .88,
+            symbol_chaos_strength: float = 1.0,
+            placement_chaos: float = .85,
+            clean_fraction: float = .20) -> dict:
     if samples < 1 or samples > 10000:
         raise ValueError("samples must be 1..10000")
     manifest = json.loads(manifest_path.read_text())
     dataset = BlueprintSSLDataset(
         manifest, size=size, items_per_epoch=samples, seed=seed,
         neca_dir=neca_dir, max_symbols=max_symbols, return_metadata=True,
+        symbol_chaos_probability=symbol_chaos_probability,
+        symbol_chaos_strength=symbol_chaos_strength,
+        placement_chaos=placement_chaos, clean_fraction=clean_fraction,
     )
     output.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -116,10 +123,18 @@ def main():
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--size", type=int, default=512)
     parser.add_argument("--max-symbols", type=int, default=16)
+    parser.add_argument("--symbol-chaos-probability", type=float, default=.88)
+    parser.add_argument("--symbol-chaos-strength", type=float, default=1.)
+    parser.add_argument("--placement-chaos", type=float, default=.85)
+    parser.add_argument("--clean-fraction", type=float, default=.20)
     args = parser.parse_args()
     result = preview(args.manifest, args.out, neca_dir=args.neca_dir,
                      samples=args.samples, seed=args.seed, size=args.size,
-                     max_symbols=args.max_symbols)
+                     max_symbols=args.max_symbols,
+                     symbol_chaos_probability=args.symbol_chaos_probability,
+                     symbol_chaos_strength=args.symbol_chaos_strength,
+                     placement_chaos=args.placement_chaos,
+                     clean_fraction=args.clean_fraction)
     print(json.dumps({k: v for k, v in result.items() if k != "rows"}, indent=2))
 
 
