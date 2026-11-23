@@ -134,7 +134,27 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         for row in pdf_views
     }
     pdf_dpis = [row["pdf_crop"]["effective_dpi"] for row in pdf_views]
+    dpi_bins = ((100, 150), (150, 200), (200, 250),
+                (250, 300), (300, 350), (350, 400))
+    dpi_hist = {
+        f"{lo}-{hi}": sum(
+            lo <= dpi < hi or (hi == 400 and dpi == hi)
+            for dpi in pdf_dpis
+        )
+        for lo, hi in dpi_bins
+    }
+    dpi_symbol_mismatches = sum(
+        abs(glyph.get("drawing_dpi", -1) - row["pdf_crop"]["effective_dpi"]) > .01
+        for row in pdf_views
+        for glyph in row["symbol_stats"].get("placements", [])
+    )
     report = {
+        "pdf_dpi_histogram": dpi_hist,
+        "pdf_symbol_dpi_mismatch_count": dpi_symbol_mismatches,
+        "matched_symbol_color_variants": len({
+            tuple(g["ink_color_bgr"]) for g in placements
+            if g.get("ink_color_bgr") is not None
+        }),
         "pdf_native_views": len(pdf_views),
         "pdf_unique_sources": len({row["source"] for row in pdf_views}),
         "pdf_unique_pages": len(pdf_page_ids),
