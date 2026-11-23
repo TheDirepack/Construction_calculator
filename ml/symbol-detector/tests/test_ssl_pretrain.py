@@ -177,3 +177,28 @@ def test_ssl_train_validation_isolation_guard_rejects_overlaps(tmp_path):
 
     val = {"buckets": {"other": {"groups": {"different_project": [image_b]}}}}
     assert_ssl_partition_isolation(train, val) is None
+
+
+def test_pretrain_rejects_no_steps_and_invalid_degradation_settings():
+    import argparse
+    from scripts_pretrain_ssl import validate_pretrain_settings
+
+    args = argparse.Namespace(
+        batch=4, epochs=60, items_per_epoch=8192, val_items=512,
+        workers=2, imgsz=512, pool_val_fraction=.10, lr=0.005,
+        max_symbols=16, symbol_min_px=12.0, symbol_max_px=80.0,
+        symbol_augment_probability=1.0, procedural_fraction=0.25,
+        clean_fraction=0.2, labeled_focus_probability=0.65,
+    )
+    validate_pretrain_settings(args)
+    args.items_per_epoch = 2
+    with pytest.raises(ValueError, match="items-per-epoch"):
+        validate_pretrain_settings(args)
+    args.items_per_epoch = 8192
+    args.clean_fraction = float("nan")
+    with pytest.raises(ValueError, match="clean_fraction"):
+        validate_pretrain_settings(args)
+    args.clean_fraction = 0.2
+    args.symbol_min_px = 90
+    with pytest.raises(ValueError, match="symbol size"):
+        validate_pretrain_settings(args)
