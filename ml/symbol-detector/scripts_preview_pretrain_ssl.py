@@ -105,8 +105,11 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         {glyph.symbol_id for glyphs in dataset.neca_bank.by_class.values() for glyph in glyphs}
         if dataset.neca_bank else set()
     )
+    full_clean_count = sum(bool(row.get("full_clean_view")) for row in rows)
     report = {
         "samples": samples,
+        "full_clean_views": full_clean_count,
+        "full_clean_fraction_observed": round(full_clean_count / samples, 4),
         "placed_by_family": dict(sorted(families.items())),
         "symbol_warp_operations": dict(sorted(warp_operations.items())),
         "page_warp_operations": dict(sorted(page_operations.items())),
