@@ -7,6 +7,8 @@ attach to the same switch. Symbols are only candidate attributes; no new boxes.
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
+import hashlib
+import os
 
 import cv2
 import numpy as np
@@ -54,17 +56,35 @@ def split_switch_suffix(alpha: np.ndarray) -> tuple[np.ndarray, int, int] | None
 
 def build_switch_suffix_templates(
     root: Path, *, render_height: int = 128,
+    cache_dir: Path | None = None,
 ) -> list[SuffixTemplate]:
     """Read the user-provided local NECA SVGs (not a hosted image service)."""
     from blueprint_symbols.neca_svg_compositor import _rasterize_svg_alpha
     refs = []
+    if cache_dir is not None:
+        cache_dir = Path(cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
     for code, (key, value) in SWITCH_SUFFIX_ATTRIBUTES.items():
         for notation in ('letter_s', 'dollar'):
             sid = f'NECA_4_{code}__{notation}'
             path = Path(root) / 'svg' / f'{sid}.svg'
             if not path.is_file():
                 continue
-            alpha = _rasterize_svg_alpha(path, render_height=render_height)
+            cached = None
+            if cache_dir is not None:
+                digest = hashlib.sha256(
+                    b'neca-suffix-v1/' + str(render_height).encode() +
+                    b'/' + path.read_bytes()
+                ).hexdigest()
+                cached = cache_dir / f'{digest}.png'
+            alpha = cv2.imread(str(cached), cv2.IMREAD_GRAYSCALE) if (
+                cached is not None and cached.is_file()) else None
+            if alpha is None:
+                alpha = _rasterize_svg_alpha(path, render_height=render_height)
+                if alpha is not None and cached is not None:
+                    temp = cached.with_name(f'{cached.stem}.{os.getpid()}.tmp.png')
+                    if cv2.imwrite(str(temp), alpha):
+                        temp.replace(cached)
             split = split_switch_suffix(alpha)
             if split is None:
                 continue
