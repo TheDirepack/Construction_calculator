@@ -192,8 +192,10 @@ across multiple independent SSL views (default 4, configurable 1–32).
 Crucially, each PDF view chooses its **own randomized real rendering DPI**
 within 100–400. The four default views use independently randomized DPI
 values from different subranges to cover the full range, centered on the
-same source location in PDF coordinates. The visible physical extent changes
-with DPI; the background is not a duplicated 512px raster. Inserted symbols
+same source location in PDF coordinates. On subsequent epochs, each source
+region receives **new random DPI values**, not a permanently fixed set of
+four. The visible physical extent changes with DPI; the background is not
+a duplicated 512px raster. Inserted symbols
 receive that view's exact DPI and are independently randomized along with
 rotations, warps, masks, scan noise, and clean/degraded branches. Raster-only
 scans without trustworthy source DPI continue to reuse pixels without
