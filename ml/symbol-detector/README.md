@@ -144,6 +144,76 @@ A changed image or annotation requires a deliberate new dataset snapshot; v8 wil
 
 The four training variants are: (1) original-resampled clean crop, (2) low-resolution-only crop, (3) randomly combined damage, and (4) optional contrast-cleaned crop. Change `--train-variants` to 3 for lower storage. Real scans/photos remain necessary: simulated damage alone is not real-world evaluation. Held-out stress includes downsample ratios 75%, 50%, 25%, independent blur/JPEG, stroke thinning/thickening, cleaned contrast, and compound degradation. Stroke morphology uses centered odd-size kernels to avoid intentional half-pixel shifts.
 
+## 3a. Mixed real, synthetic and partially annotated phase-two training
+
+The supervised dataset can combine normalized annotation JSON from:
+- fully reviewed real pages with positive symbols (exhaustive_families covers
+  every active class);
+- completely reviewed real negative pages (instances=[]; verified exhaustive
+  for every active class);
+- synthetically inserted devices on independently verified symbol-free
+  architectural backgrounds (only known placements are positives);
+- verified symbol-free source crops without inserted devices;
+- **partially annotated real pages**, where existing labeled positives are
+  trusted, but unlabeled regions may contain more devices.
+
+**Never infer label completeness from the absence of a bounding box.**
+For a partially annotated source, exhaustive_families must list *only* target
+classes proven to be exhaustively labeled over that source raster. An empty
+list is valid: known boxes still train, but missing detections are not
+punished as background. Uncertain/review-required candidate boxes are not
+positive truth. Existing manual label tool output may be partial.
+
+For example: one real page with manually confirmed receptacle boxes but
+other unlabeled receptacles has exhaustive_families=[]. A distinct fully
+reviewed wall-only page with no target devices may declare
+exhaustive_families=["receptacle","switch_sensor",...] and instances=[].
+Do not make completeness claims solely because a sheet is called
+"architectural" or "negative" in its file name.
+
+```bash
+python scripts_prepare_training_data.py \
+  --annotations 'normalized/real_verified/**/*.json' \
+                'normalized/real_partials/**/*.json' \
+                'generated/wall_phase2/wall_*.json' \
+  --output prepared/phase2_mixed \
+  --allow-partial-training \
+  --train-tiles-per-page 32 --train-variants 4
+
+python scripts_train_ultralytics.py prepared/phase2_mixed/yolo/data.yaml \
+  --weights work/blueprint_ssl_backbone.pt --batch 14
+# add --run only on the CUDA training machine after preflight
+```
+
+When --allow-partial-training is set:
+1. Original projects with *any* partially annotated page are forced into
+   train. Validation and locked test require independently verified fully
+   annotated source projects, including verified empty real pages.
+2. The exporter emits normal YOLO positive labels **plus**
+   yolo/phase2_supervision.json, mapping every train tile to class IDs for
+   which negative/background labels are independently verified.
+3. scripts_train_ultralytics.py detects this sidecar and automatically uses
+   the tested Ultralytics 8.4.216 YOLO26 class-masked loss (both one-to-many
+   and one-to-one heads). Assigned verified positive scores always train.
+   Unknown background anchors/classes have **zero negative gradient**.
+4. Incomplete tiles containing neither a verified positive nor any
+   exhaustive class are skipped. Real/synthetic negatives and confirmed
+   positives continue to train normally.
+5. YOLO geometric mosaic/mixup/cutmix are not permitted in this mode,
+   because they would invalidate image-level supervision masks. Existing
+   coordinate-preserving pre-export degradations remain enabled.
+
+The per-class mask is *image-level*. Region-level verification inside an
+incomplete class is not yet exploited as negative supervision; this
+conservative choice protects unlabeled devices from false-negative gradients.
+Fully annotated negative pages and synthetic exact-placement pages provide
+the needed hard-negative signal.
+
+The generated mixed dataset is still **not sufficient evidence** of detector
+precision/recall. Evaluate on fully audited independent real projects and
+full-page fused detections; keep incomplete real pages for training or
+unlabeled/qualitative tests rather than numerical mAP.
+
 ## 3b. Phase-two supervised wall-only positives and hard negatives
 
 Verified wall-only drawings provide separate *detector* supervision: some
