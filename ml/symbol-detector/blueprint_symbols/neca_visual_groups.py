@@ -49,8 +49,11 @@ def classify_neca_artwork(entry: dict, alternative_parents: set[str] | None = No
         role, group, reason = 'excluded', f'non_device.{root}', 'not_placed_device'
     elif section in MODIFIER_SECTIONS:
         role, group, reason = 'modifier', f'lighting_modifier.{parent}', 'attached_non_device_mark'
-    elif section == 'Raceways - Boxes and Busways' and not any(
-            x in entry.get('name', '').lower() for x in ('box', 'pole', 'handhole')):
+    elif section == 'Raceways - Boxes and Busways' and (
+            any(x in entry.get('name', '').lower()
+                for x in ('busway', 'cabletray', 'cable tray', 'wireway'))
+            or not any(x in entry.get('name', '').lower()
+                       for x in ('box', 'pole', 'handhole'))):
         role, reason = 'excluded', 'routing_assembly'
     elif section == 'Annex A - Alternate Fire Safety' and (
             '__basic' in sid or 'basic shape' in entry.get('name','').lower()):
