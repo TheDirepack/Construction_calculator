@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Phase 2 v2: Clean real *DEVICES.json (text proxies filtered) + wall-touching &
 # free-space composited electrical symbols onto real architectural sheets,
-# trained with YOLO26n-P2 MuSGD warm-started from Phase 1 SSL v2 backbone.
+# trained with YOLO26n-P2 MuSGD using our own freshly trained SSL v3 backbone.
 set -euo pipefail
 
 BASE="$HOME/Projects/blueprint-symbols"
 CODE="$BASE/code"
 DATA="$BASE/data/blueprints_and_libraries"
 POOL="$BASE/work/pool"
-WORK="$BASE/work/phase2_v2"
-PRETRAIN_WEIGHTS="$BASE/work/pretrain_v2/best_yolo26n_p2_backbone.pt"
+WORK="$BASE/work/phase2_v3"
+PRETRAIN_WEIGHTS="${PRETRAIN_WEIGHTS:-$BASE/work/pretrain_v3/best_yolo26n_p2_backbone.pt}"
 PY="$BASE/.venv/bin/python"
 
 export PYTHONPATH="$CODE"
@@ -43,6 +43,14 @@ if [[ ! -d "$WORK/composited_neca" ]]; then
 fi
 
 echo "=== [3/5] PREPARE BUILDING-ISOLATED YOLO DATASET (REAL + NECA COMPOSITED) ==="
+# *DEVICES.json is POSITIVE-ONLY, not exhaustively annotated. A supervised
+# detector can learn missed symbols as negatives. Fail closed by default;
+# allow incomplete annotations for an explicitly exploratory run only.
+COMPLETENESS_ARGS=()
+if [[ "${PHASE2_ALLOW_UNVERIFIED:-0}" == "1" ]]; then
+  echo "WARNING: EXPLORATORY ONLY: missing real device labels may become false negatives" >&2
+  COMPLETENESS_ARGS=(--allow-unverified-completeness)
+fi
 if [[ ! -f "$WORK/prepared/yolo/data.yaml" ]]; then
   rm -rf "$WORK/prepared"
   $PY scripts_prepare_training_data.py \
@@ -54,7 +62,7 @@ if [[ ! -f "$WORK/prepared/yolo/data.yaml" ]]; then
     --test-fraction 0.14 \
     --eval-scales 1,2,4,8,16 \
     --eval-overlap 256 \
-    --allow-unverified-completeness
+    "${COMPLETENESS_ARGS[@]}"
 fi
 
 echo "=== [4/5] VERIFY EXPORT & PREFLIGHT ==="
@@ -64,7 +72,12 @@ if [[ ! -f "$WORK/prepared/verified.ok" ]]; then
   touch "$WORK/prepared/verified.ok"
 fi
 
-echo "=== [5/5] TRAIN YOLO26N-P2 (MuSGD, WARM-STARTED FROM PHASE 1 SSL BACKBONE) ==="
+echo "=== [5/5] VERIFY SSL BACKBONE TRANSFER, THEN TRAIN YOLO26N-P2 ==="
+if [[ ! -f "$PRETRAIN_WEIGHTS" ]]; then
+  echo "Missing fresh SSL checkpoint: $PRETRAIN_WEIGHTS" >&2
+  exit 1
+fi
+$PY scripts_verify_ssl_transfer.py "$PRETRAIN_WEIGHTS" --classes 6
 exec $PY scripts_train_ultralytics.py "$WORK/prepared/yolo/data.yaml" \
   --weights "$PRETRAIN_WEIGHTS" \
   --imgsz 512 \
@@ -78,6 +91,6 @@ exec $PY scripts_train_ultralytics.py "$WORK/prepared/yolo/data.yaml" \
   --translate 0.05 \
   --workers 2 \
   --project "$WORK/runs" \
-  --name phase2_mixed_musgd \
+  --name phase2_mixed_ssl_v3 \
   --exist-ok \
   --run

@@ -1,6 +1,6 @@
 # Blueprint symbol detection — data preparation and audit v8
 
-**Status:** Implements the dataset pipeline and a scratch-initialized YOLO26n-P2 **training launcher**. It has **not trained a model**. Only the rough-location detector is in scope: no OCR, keypoint model, or snapping-refinement training.
+**Status:** Includes a scratch-initialized YOLO26n-P2 detector launcher, a documented two-epoch detector smoke test, and a runnable blueprint-only self-supervised pre-training trainer. The new multi-symbol SSL configuration has not been GPU-validated. Only the rough-location detector is in scope: no OCR, keypoint model, or snapping-refinement training.
 
 This is **blueprint-only** training data. Generic COCO/Objects365/YOLO images and general-purpose pretrained model weights are *not* used. Public construction datasets may *provide COCO-format annotations*: that format is merely an import format. The final output uses YOLO detection labels to train your model.
 
@@ -24,7 +24,8 @@ Validation/test drawings → full-coverage overlapping tiles and independent str
   → Android LiteRT / iOS Core ML export and NPU tests in a later phase
 
 Optional: training + verified non-held-out unlabeled sources
-          → lazy, paired clean/degraded image views for blueprint-only SSL pretraining
+          → lazy blueprint-only SSL pretraining on clean and randomly degraded
+            views with 0..16 inserted vector/procedural symbols
 Optional: specialist YOLO teacher → untrusted candidate labels for REVIEW ONLY
 ```
 
@@ -153,7 +154,111 @@ python scripts_prepare_ssl_manifest.py prepared/blueprints/source_manifest.json 
     --preview-dir prepared/ssl_preview
 ```
 
-`verified_unlabeled.json` is an array of objects containing `image_path`, `project_family_id`, and `source_group_verified: true`. Image paths may be relative to that JSON. The dataset class is `blueprint_symbols.ssl_data.SSLViewDataset`; call `set_epoch()` if/when implementing your own SSL trainer. The SSL objective, decoder, and pretrained backbone transfer are **not implemented**; do not claim two-stage training is ready to run just because paired inputs exist.
+`verified_unlabeled.json` is an array of objects containing `image_path`, `project_family_id`, and `source_group_verified: true`. Image paths may be relative to that JSON. The dataset class is `blueprint_symbols.ssl_data.SSLViewDataset`; call `set_epoch()` if/when implementing your own SSL trainer. That command is a legacy **paired-input preview**, not a trainer. The active runnable SSL trainer is `scripts_pretrain_ssl.py` (below). Its actual GPU behavior and improvement over scratch-only detector training must be measured; a pre-training loss alone is not evidence of detection quality.
+
+## 4a. Current mixed-source SSL pre-training (fresh random initialization)
+
+The implementation in `blueprint_symbols/ssl_pretrain.py` wraps a randomly
+initialized YOLO26n-P2 backbone and neck with a reconstruction decoder. It
+uses real construction drawings, CAD-derived layouts, optionally verified
+device-box annotations for crop targeting, NECA 100 vector SVG glyphs, and
+procedural electrical glyphs. None requires COCO or ImageNet weights.
+
+**Data sampling:** Balance by source bucket and original project group; random
+crops are mixed with device-centered crops when verified bounding boxes exist.
+Device boxes are *positive hints*, not evidence that all other symbols have
+been labeled. Avoid incorporating a reserved detector evaluation project into
+either SSL training or SSL checkpoint selection.
+
+**Symbol augmentation:** When enabled, each selected crop receives a uniformly
+sampled *requested* count of 0–16 new symbols (actual placements may be lower
+in cluttered regions). SVG and procedural symbols are randomly scaled, rotated,
+wall-adjacent or freestanding. They are inserted **before degradation** and
+thus appear in both the uncorrupted target and degraded model input. Existing
+symbols on original drawings are retained. The eligible NECA SVG bank contains
+the verified device sections, not routing arrows or standalone modifiers.
+The prior procedural glyph families supply additional variation.
+
+**Pre-training objective:** Mask-aware line-art restoration using separately
+normalized dark-ink and background losses, combined 2:1 by default, plus
+a Sobel edge term. A 1%-ink drawing no longer gets a nearly all-white
+reconstruction objective. This is a **learning-signal correction**, not
+evidence that downstream object detection has improved.
+
+**Degradation:** 20% true clean-view target by default; other views independently
+sample light, moderate, heavy, and rare extreme corruption. Categories include
+illumination/paper tint and gradients, Gaussian/motion blur, sharpening,
+median/box filtering, thresholding/CLAHE, downsample/upsample aliasing, toner
+morphology, ink dropout/dust, scanner streaks, Gaussian noise, bit-depth
+banding, JPEG/WebP artifacts and optional masked blocks. Angles/flips are
+applied to *both* target and input before corruption.
+
+For the remote 6 GB NVIDIA machine, start a **new** experiment (no prior
+weights and no automatic resume):
+
+```bash
+bash remote/run_pretrain_v3.sh
+```
+
+For a **short CUDA smoke test**, use a separate output directory rather
+than overwriting the full experiment:
+
+```bash
+SSL_OUT="$HOME/Projects/blueprint-symbols/work/pretrain_smoke_v3" \
+SSL_EPOCHS=1 SSL_ITEMS_PER_EPOCH=24 SSL_VAL_ITEMS=12 SSL_BATCH=2 \
+  bash remote/run_pretrain_v3.sh
+```
+
+An interrupted, otherwise unchanged run can be resumed with
+`SSL_RESUME=1 bash remote/run_pretrain_v3.sh`. Different dataset
+manifests, model objectives, and training options deliberately fail
+resume fingerprint checks. The runner regenerates the device-positive
+annotation index on each invocation so newly annotated pages are eligible.
+
+This runner imports existing device annotations as *positive-only crop hints*,
+loads the NECA SVG library, and generates 0..16 symbols per augmented crop.
+CLI tuning flags: `--clean-fraction`, `--max-symbols`,
+`--symbol-min-px`, `--symbol-max-px`,
+`--symbol-augment-probability`, `--procedural-fraction`,
+`--labeled-focus-probability`, `--labeled-annotations`, `--neca-dir`.
+The proposed batch size of 4 is conservative and **not yet profiled** for
+the reconstruction decoder. Existing checkpoints refuse accidental overwrite;
+use `--resume` explicitly after a compatible interruption.
+
+Before running a long GPU job, inspect what the generator actually creates.
+After a manifest has been produced, run:
+
+```bash
+python scripts_preview_pretrain_ssl.py ../work/pretrain_v3/train_manifest.json \
+  --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
+  --out ../work/pretrain_v3/previews --samples 32
+```
+
+Each preview shows the clean target beside its degraded/masked input.
+`preview_report.json` counts **requested versus actually placed** symbols,
+including shortfalls on crowded pages, zero-symbol examples, symbols by
+family/variant, eligible NECA vocabulary coverage, and observed degradation
+severities/categories. A separate `sample_NNNN_overlay.png` draws boxes only
+around inserted symbols. Visually inspect symbol fidelity and near-invisible
+cases before increasing severity.
+
+For the second-stage supervised detector, **preflight actual weight transfer**
+rather than trusting that `model.load_state_dict` before `model.train` worked.
+Ultralytics recreates the training model. The launcher now loads SSL weights
+in the subclassed `DetectionTrainer.get_model` and checks all backbone and
+neck tensors. The six-class Phase 2 launcher defaults to `pretrain_v3` and
+checks a real YOLO26n-P2 model without GPU training first:
+
+```bash
+python scripts_verify_ssl_transfer.py \
+  ../work/pretrain_v3/best_yolo26n_p2_backbone.pt --classes 6
+```
+
+The clean/augmented SSL generator does not change supervised YOLO exports.
+Random initial weights are used for SSL itself; only our own SSL checkpoint
+is eligible for detector initialization. Actual GPU pretraining, downstream
+detector accuracy improvement, and target-phone deployment still require
+measurements.
 
 ## 5. Optional: specialist teachers, held-out scoring, and training
 
@@ -196,7 +301,7 @@ This is a planned machine-side inference step, not device NPU benchmarking. The 
 
 ## Validation status and limitations
 
-- 65 tests passed in v8 before final packaging; covers source import fixtures, rarity-safe source splits, image and label preflight, drop detection in held-out tiles, paired degradation, annotation completeness attestation, and teacher mapping. Tests are **synthetic fixtures**, not measured drawing-set accuracy.
+- v8 previously reported 65 passing tests for the original data prep. New SSL augmentation tests have been added but are **not yet executed** in this review. Existing tests use synthetic fixtures, not measured drawing-set accuracy.
 - Existing older experimental precision/keypoint scripts remain in this prototype but are **not part of the v1 training path**. Do not run them for this task.
 - Not tested: actual FloorPlanCAD/ArchCAD/CubiCasa dataset releases at scale, model training, trained-detector inference, teacher checkpoint weights, 6 GB GPU memory, mobile conversion, NPU latency, real-world symbol recall, and subpixel snapping precision.
 - **A 20px symbol may not contain enough information to resolve its exact class in severe scans.** Report accuracy by observed symbol size, source collection, and damage level. Preserve failure cases rather than treating unknowns as correctly recognized.

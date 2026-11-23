@@ -285,7 +285,8 @@ def _rasterize_svg_alpha(svg_path: Path, render_height: int = 128) -> np.ndarray
 class NecaSymbolBank:
     """Loads and caches NECA 100-2013 vector SVG device symbols grouped by canonical class."""
 
-    def __init__(self, library_root: Path, *, render_height: int = 128) -> None:
+    def __init__(self, library_root: Path, *, render_height: int = 128,
+                 include_modifiers: bool = True) -> None:
         self.library_root = Path(library_root)
         meta_path = self.library_root / 'symbols.json'
         if not meta_path.is_file():
@@ -296,7 +297,7 @@ class NecaSymbolBank:
         for entry in meta.get('symbols', []):
             sec = entry.get('section', '')
             cls = NECA_SECTION_TO_CLASS.get(sec)
-            if cls is None:
+            if cls is None or (not include_modifiers and 'modifier' in sec.lower()):
                 continue
             # For Raceways - Boxes and Busways, keep only actual box/pole devices (skip busways/trays)
             if sec == 'Raceways - Boxes and Busways':
