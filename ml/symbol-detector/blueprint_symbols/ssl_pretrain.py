@@ -540,9 +540,47 @@ class BlueprintSSLDataset(Dataset):
         self._raster_cache_bytes = 0
         self._raster_cache_budget = 96 * (1 << 20)  # per worker, not per rank
         self._pdf_sampler = None
+        self._source_burst = 2
+        self._source_plan: np.ndarray | None = None
+        self.set_epoch(0)
+
+    def _build_source_plan(self, epoch: int) -> np.ndarray:
+        """Randomized source-local pairs for low-memory PDF I/O.
+
+        Two consecutive samples use the same page, but choose independent
+        positions/scales/noise. This halves document opens and page-thumbnail
+        renders without making one PDF dominate a full optimizer batch:
+        seven source pairs contribute to the effective batch of fourteen.
+        Each project's page list cycles without replacement within an epoch.
+        """
+        rng = np.random.default_rng(
+            np.random.SeedSequence([self.seed, epoch, 0x5A2CE])
+        )
+        count = self.items_per_epoch
+        plan = np.zeros((count, 3), dtype=np.int32)
+        cursors: dict[tuple[int, int], int] = {}
+        permutations: dict[tuple[int, int], np.ndarray] = {}
+        for offset in range(0, count, self._source_burst):
+            b = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
+            name = self.bucket_names[b]
+            g = int(rng.choice(len(self.bucket_groups[name]),
+                               p=self.bucket_group_probs[name]))
+            key = (b, g)
+            if key not in permutations:
+                entries = len(self.bucket_groups[name][g])
+                permutations[key] = rng.permutation(entries)
+                cursors[key] = int(rng.integers(entries))
+            order = permutations[key]
+            idx = int(order[cursors[key] % len(order)])
+            cursors[key] += 1
+            plan[offset:min(count, offset + self._source_burst)] = (b, g, idx)
+        return plan
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
+        self._source_plan = self._build_source_plan(
+            0 if self.deterministic_eval else self.epoch
+        )
 
     def __len__(self) -> int:
         return self.items_per_epoch
@@ -572,13 +610,21 @@ class BlueprintSSLDataset(Dataset):
         pdf_crop_meta = None
         path = ""
         b_idx = 0
-        for _ in range(8):
-            b_idx = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
+        for attempt in range(8):
+            if attempt == 0 and self._source_plan is not None:
+                b_idx, group_idx, entry_idx = map(
+                    int, self._source_plan[index]
+                )
+            else:
+                b_idx = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
+                name = self.bucket_names[b_idx]
+                groups = self.bucket_groups[name]
+                group_idx = int(rng.choice(len(groups), p=self.bucket_group_probs[name]))
+                entry_idx = int(rng.integers(len(groups[group_idx])))
             name = self.bucket_names[b_idx]
             groups = self.bucket_groups[name]
-            group_idx = int(rng.choice(len(groups), p=self.bucket_group_probs[name]))
             group = groups[group_idx]
-            entry = group[int(rng.integers(len(group)))]
+            entry = group[entry_idx]
             path = entry["image_path"] if isinstance(entry, dict) else entry
             if isinstance(entry, dict) and "pdf_page_index" in entry:
                 # Clip-render at the final needed scale; never load a 24MP
