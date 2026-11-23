@@ -120,3 +120,34 @@ def test_full_dataset_keeps_page_input_target_alignment(tmp_path):
         assert meta["page_chaos"]["box_count"] == 0
         ops.update(meta["page_chaos"]["operations"])
     assert ops
+
+
+def test_warp_reject_reasons_and_symbol_ink_retained_at_high_strength():
+    """Guard against symbol-sized blank regions passing area-only validation."""
+    page = drawing()
+    for seed in range(90):
+        distorted, boxes, report = warp_whole_page(
+            page, np.random.default_rng(seed), boxes=BOXES,
+            probability=1.0, strength=2.0,
+        )
+        assert report["rejected"] == sum(report["rejection_reasons"].values())
+        assert all(isinstance(name, str) and count >= 1
+                   for name, count in report["rejection_reasons"].items())
+        assert len(boxes) == len(BOXES)
+        for original_box, box in zip(BOXES, boxes):
+            ox0, oy0, ox1, oy1 = map(int, original_box)
+            baseline = int((cv2.cvtColor(
+                page[oy0:oy1, ox0:ox1], cv2.COLOR_BGR2GRAY) < 190).sum())
+            x0, y0, x1, y1 = map(int, box)
+            warped_ink = int((cv2.cvtColor(
+                distorted[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY) < 190).sum())
+            if baseline >= 6:
+                assert warped_ink >= max(1, int(baseline * .28))
+
+
+def test_reject_invalid_nonfinite_page_controls():
+    source = drawing()
+    for field in ("probability", "strength"):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with pytest.raises(ValueError):
+                warp_whole_page(source, np.random.default_rng(7), **{field: value})
