@@ -247,6 +247,39 @@ class PdfCropSampler:
             x, y, ink = candidates[int(rng.choice(len(candidates), p=weights))]
             placement = "ink_mixed"
 
+        # Independent 100–400 DPI rasterizations of one stable source region.
+        # Select the physical site above using the region seed, not this view's
+        # DPI; then expand/contract its field of view around that same point.
+        # A stratified random DPI per view covers the full range without
+        # locking a region to one fixed zoom for the entire training run.
+        region_anchor = None
+        if dpi_variant is not None:
+            bin_index = (dpi_variant + int(crop_seed % dpi_variants)) % dpi_variants
+            lo = dpi_min + (400.0 - dpi_min) * bin_index / dpi_variants
+            hi = dpi_min + (400.0 - dpi_min) * (bin_index + 1) / dpi_variants
+            variant_seed = np.random.SeedSequence([
+                int(crop_seed & 0xffffffff),
+                int((crop_seed >> 32) & 0xffffffff),
+                dpi_variant, dpi_variants, 0xD91,
+            ])
+            dpi_rng = np.random.default_rng(variant_seed)
+            new_dpi = float(dpi_rng.uniform(lo, hi))
+            max_span = size * 72.0 / dpi_min
+            anchor_x = float(np.clip(x + span / 2.0,
+                                     max_span / 2.0, width - max_span / 2.0))
+            anchor_y = float(np.clip(y + span / 2.0,
+                                     max_span / 2.0, height - max_span / 2.0))
+            requested_dpi = new_dpi
+            span = size * 72.0 / requested_dpi
+            x, y = anchor_x - span / 2.0, anchor_y - span / 2.0
+            region_anchor = [round(anchor_x, 5), round(anchor_y, 5)]
+            profile = int(np.clip(
+                np.searchsorted((150, 225, 325), requested_dpi), 0, 3
+            ))
+            ink = self._ink_fraction(
+                integral, sw, sh, x, y, span, width, height
+            )
+
         import fitz
         clip = fitz.Rect(bounds.x0+x, bounds.y0+y,
                          bounds.x0+x+span, bounds.y0+y+span)
@@ -281,6 +314,9 @@ class PdfCropSampler:
             "bank_slot": crop_slot,
             "bank_size": bank_size,
             "bank_grid": list(grid) if grid is not None else None,
+            "dpi_variant": dpi_variant,
+            "dpi_variants": dpi_variants,
+            "region_anchor_pt": region_anchor,
             "clean_crop_seed": int(crop_seed) if crop_seed is not None else None,
             "clean_crop_cache_hit": False,
         }
