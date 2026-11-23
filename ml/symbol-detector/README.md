@@ -331,6 +331,14 @@ banding, JPEG/WebP artifacts and optional masked blocks. Extra whole-page
 photocopy/scan degradation includes gamma drift, local shadows and glare,
 fold creases, roller banding, moiré patterns, halftone dots, double-fed toner
 ghosts, toner bleed, feed scratches, local smears and asymmetric X/Y DPI loss.
+Bloom and contrast are now independently mixed: variable global contrast gain,
+toe/shoulder curves, local exposure-dependent contrast, localized light-scatter
+bloom and occasional dark-ink halation. These effects may co-occur with each
+other and with existing gamma, glare, photocopy, blur, noise and compression.
+Intensity and selection vary by corruption severity. They act only on the
+degraded SSL input, not the clean target or the source document; hard cases
+remain bounded by the existing original-line contrast rescue. This is a
+realism/robustness hypothesis, not a demonstrated accuracy gain.
 The input-only degradation stage retains a minimum line-contrast guard and
 caps MIM-block masking at 60% of every **known inserted symbol box** (unknown
 original devices cannot be protected this way). It does not reverse all
