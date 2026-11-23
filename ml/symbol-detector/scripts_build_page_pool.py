@@ -269,6 +269,8 @@ def main() -> None:
     p.add_argument('--dpi', type=int, default=150)
     p.add_argument('--max-mp', type=float, default=24.0)
     p.add_argument('--workers', type=int, default=6)
+    p.add_argument('--skip-pdfs', action='store_true',
+                   help='Skip expensive full-page PDF rasterization for PDF-native SSL crop indexing')
     a = p.parse_args()
     cfg = load_rules(a.roles)
     a.output.mkdir(parents=True, exist_ok=True)
@@ -283,6 +285,9 @@ def main() -> None:
         rel = f.relative_to(a.data_root).as_posix()
         ext = f.suffix.lower()
         if ext not in RASTER | VECTOR | NEEDS_CONVERSION | {'.svg'}:
+            continue
+        if a.skip_pdfs and ext == '.pdf':
+            counts['pdf_sources_native_index'] += 1
             continue
         rule = match_rule(rel, cfg)
         if rule is None:
