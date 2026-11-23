@@ -98,6 +98,7 @@ def filter_sam_detections(
     max_ink_fraction: float = 0.85,
     minimum_box_size: float = 10.0,
     max_per_family: int = 0,
+    max_total: int = 0,
     stats: Counter | None = None,
 ) -> list[dict[str, Any]]:
     """Pure postprocessing; no GPU/network dependence."""
@@ -121,6 +122,8 @@ def filter_sam_detections(
         family = str(d.get('device_type', 'unknown'))
         if reason is None and max_per_family and by_family[family] >= max_per_family:
             reason = 'family_hit_cap'
+        if reason is None and max_total and len(accepted) >= max_total:
+            reason = 'total_hit_cap'
         if reason:
             if stats is not None:
                 stats['filtered_' + reason] += 1
