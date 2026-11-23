@@ -65,3 +65,20 @@ def test_bad_precision_settings_fail_without_gpu():
                          tile_size=100, overlap=100,
                          image_width=1000, image_height=1000)
     assert evaluate_symbol_box(img, [float('nan'), 0, 10, 10]) == 'invalid_box'
+
+
+
+def test_global_tile_box_cap_is_independent_of_family_counts():
+    img = _dark_symbol_image()
+    proposals = [
+        {'device_type': 'switch', 'score': .95, 'box_px': [205, 195, 235, 225]},
+        {'device_type': 'receptacle', 'score': .94, 'box_px': [495, 195, 525, 225]},
+    ]
+    stats = Counter()
+    out = filter_sam_detections(
+        proposals, img, tile_x=0, tile_y=0,
+        tile_size=1008, overlap=128, max_total=1,
+        stats=stats,
+    )
+    assert len(out) == 1
+    assert stats['filtered_total_hit_cap'] == 1
