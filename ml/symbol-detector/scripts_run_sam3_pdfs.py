@@ -579,6 +579,8 @@ def main() -> None:
                     help='Height used when rasterizing individual NECA vectors before prompt encoding')
     ap.add_argument('--no-reference-quality', action='store_true',
                     help='Disable cluttered/filled reference glyph rejection for A/B comparison')
+    ap.add_argument('--no-core-crop', action='store_true',
+                    help='Disable automatic external circuit/schedule label cropping on known NECA device families')
     ap.add_argument('--no-prompt-cache', action='store_true',
                     help='Disable local raster and preencoded-geometry caches for debugging')
     ap.add_argument('--catalog-only', action='store_true',
@@ -702,6 +704,7 @@ def main() -> None:
         render_height=args.reference_render_height,
         cache_dir=None if args.no_prompt_cache else cache_root / 'raster',
         check_quality=not args.no_reference_quality,
+        trim_external_labels=not args.no_core_crop,
         reference_stats=reference_stats,
     )
     if not glyphs:
@@ -826,6 +829,7 @@ def main() -> None:
         'reference_render_height': args.reference_render_height,
         'reference_geometry_batch': args.reference_geometry_batch,
         'reference_quality': not args.no_reference_quality,
+        'trim_external_reference_labels': not args.no_core_crop,
         'prompt_feature_cache_schema': 2,
         'scan_mode': args.scan_mode,
         'visual_prototypes_per_group': args.visual_prototypes_per_group,
