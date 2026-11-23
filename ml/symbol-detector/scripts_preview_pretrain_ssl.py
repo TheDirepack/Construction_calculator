@@ -120,7 +120,23 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         if dataset.neca_bank else set()
     )
     full_clean_count = sum(bool(row.get("full_clean_view")) for row in rows)
+    pdf_views = [row for row in rows if row.get("pdf_crop") is not None]
+    pdf_page_ids = {
+        (row["source"], row["pdf_crop"]["pdf_page_index"]) for row in pdf_views
+    }
+    pdf_clips = {
+        (row["source"], row["pdf_crop"]["pdf_page_index"],
+         tuple(row["pdf_crop"]["clip_rect_pt"]))
+        for row in pdf_views
+    }
+    pdf_dpis = [row["pdf_crop"]["effective_dpi"] for row in pdf_views]
     report = {
+        "pdf_native_views": len(pdf_views),
+        "pdf_unique_sources": len({row["source"] for row in pdf_views}),
+        "pdf_unique_pages": len(pdf_page_ids),
+        "pdf_unique_clips": len(pdf_clips),
+        "pdf_crop_dpi_min": min(pdf_dpis) if pdf_dpis else None,
+        "pdf_crop_dpi_max": max(pdf_dpis) if pdf_dpis else None,
         "samples": samples,
         "full_clean_views": full_clean_count,
         "full_clean_fraction_observed": round(full_clean_count / samples, 4),
