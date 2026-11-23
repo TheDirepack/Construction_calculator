@@ -81,8 +81,9 @@ def index_pdf_pages(
     stats = {"indexed_pdfs": 0, "indexed_pages": 0, "reused_pdfs": 0,
              "excluded_reserved_pdfs": 0, "unmatched_pdf_files": 0,
              "failed_pdfs": 0, "empty_pages": 0, "max_pages_in_pdf": 0}
-    for path in sorted(root.rglob("*.pdf")):
-        if not path.is_file():
+    # Mixed-case file extensions are common in contractor drawing archives.
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() != ".pdf":
             continue
         rel_path = path.relative_to(root)
         rel = rel_path.as_posix()
