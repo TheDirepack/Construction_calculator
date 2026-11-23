@@ -164,6 +164,13 @@ def build_pretrain_manifests(
             pages = info.get("pages", [])
             if not pages:
                 continue
+            # Include the actual source size/mtime in the training fingerprint
+            # so a replaced PDF with unchanged page count cannot silently
+            # change the image distribution during checkpoint resume.
+            pages = [
+                {**item, "pdf_source_signature": info.get("signature")}
+                for item in pages
+            ]
             # Source PDF is the unit of train/validation isolation. Never split
             # different pages from the same original PDF across partitions.
             target = pdf_val if group_is_holdout(gid, val_fraction=pool_val_fraction) else pdf_train
