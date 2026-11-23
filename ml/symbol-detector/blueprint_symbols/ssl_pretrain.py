@@ -463,7 +463,7 @@ class BlueprintSSLDataset(Dataset):
         seed: int = 2026,
         deterministic_eval: bool = False,
         crop_reuse_views: int = 4,
-        crop_bank_size: int = 6,
+        crop_bank_size: int = 32,
         fresh_crop_probability: float = 0.20,
         neca_dir: str | Path | None = None,
         max_symbols: int = 16,
@@ -574,6 +574,7 @@ class BlueprintSSLDataset(Dataset):
         plan = np.zeros((count, 4), dtype=np.int32)
         cursors: dict[tuple[int, int], int] = {}
         permutations: dict[tuple[int, int], np.ndarray] = {}
+        page_visits: dict[tuple[int, int, int], int] = {}
         for offset in range(0, count, self._source_burst):
             b = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
             name = self.bucket_names[b]
@@ -587,12 +588,22 @@ class BlueprintSSLDataset(Dataset):
             order = permutations[key]
             idx = int(order[cursors[key] % len(order)])
             cursors[key] += 1
-            # Nonnegative slots repeat across epochs; negative ones are new
-            # crop sites whose seed includes the current epoch and burst.
+            # Each visited page cycles across the full spatial slot bank
+            # without replacement *within this epoch*. Epoch offset changes
+            # the starting slot; long pages do not keep revisiting a handful
+            # of randomly chosen regions while others are never sampled.
+            visit_key = (b, g, idx)
+            visit = page_visits.get(visit_key, 0)
+            page_visits[visit_key] = visit + 1
             if rng.random() < self.fresh_crop_probability:
+                # Fresh view is a new location outside the stable bank.
                 slot = -1 - offset
             else:
-                slot = int(rng.integers(self.crop_bank_size))
+                page_id = f"{self.seed}/{b}/{g}/{idx}"
+                start = int.from_bytes(
+                    hashlib.sha256(page_id.encode()).digest()[:4], "big"
+                ) % self.crop_bank_size
+                slot = (start + epoch + visit) % self.crop_bank_size
             plan[offset:min(count, offset + self._source_burst)] = (b, g, idx, slot)
         return plan
 
@@ -672,7 +683,9 @@ class BlueprintSSLDataset(Dataset):
                     self._pdf_sampler = PdfCropSampler()
                 try:
                     clean, pdf_crop_meta = self._pdf_sampler.sample(
-                        entry, self.size, crop_rng, crop_seed=crop_seed
+                        entry, self.size, crop_rng, crop_seed=crop_seed,
+                        crop_slot=crop_slot if crop_slot >= 0 else None,
+                        bank_size=self.crop_bank_size if crop_slot >= 0 else None,
                     )
                 except (OSError, ValueError, IndexError, RuntimeError):
                     continue
