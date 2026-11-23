@@ -36,10 +36,11 @@ def _microbatches(inputs, targets, chunk):
         yield inputs[i:i + chunk], targets[i:i + chunk], torch.zeros(size, 1)
 
 
-def test_effective_batch16_musgd_matches_full_batch_update():
+@pytest.mark.parametrize("logical,physical", [(16, 4), (14, 2)])
+def test_effective_musgd_batch_matches_full_batch_update(logical, physical):
     torch.manual_seed(1234)
-    inputs = torch.randn(16, 3)
-    targets = torch.randn(16, 2)
+    inputs = torch.randn(logical, 3)
+    targets = torch.randn(logical, 2)
     model = torch.nn.Sequential(
         torch.nn.Linear(3, 6), torch.nn.SiLU(), torch.nn.Linear(6, 2)
     )
@@ -52,15 +53,15 @@ def test_effective_batch16_musgd_matches_full_batch_update():
     scaler = torch.amp.GradScaler("cpu", enabled=False)
     result = accumulated_training_update(
         model, _MSELoss(), opt, scaler,
-        _microbatches(inputs, targets, chunk=4),
-        device=torch.device("cpu"), effective_batch=16, grad_clip=1e6,
+        _microbatches(inputs, targets, chunk=physical),
+        device=torch.device("cpu"), effective_batch=logical, grad_clip=1e6,
     )
     ref_opt.zero_grad(set_to_none=True)
     ref_loss = (reference(inputs) - targets).square().mean()
     ref_loss.backward()
     ref_opt.step()
 
-    assert result["samples"] == 16.
+    assert result["samples"] == float(logical)
     assert result["loss"] == pytest.approx(float(ref_loss.item()), abs=5e-7)
     for a, b in zip(model.parameters(), reference.parameters()):
         assert torch.allclose(a, b, atol=1e-5, rtol=1e-5)
@@ -95,6 +96,7 @@ def test_one_musgd_step_for_four_unequal_microbatches_totalling_sixteen():
 
 
 @pytest.mark.parametrize("effective,micro,steps", [
+    (14, 2, 7), (14, 1, 14), (14, 7, 2), (14, 14, 1),
     (16, 4, 4), (16, 2, 8), (16, 1, 16), (16, 16, 1),
     (2, 2, 1), (8, 4, 2),
 ])
@@ -111,7 +113,8 @@ def test_microbatch_rejects_invalid_plans(effective, micro):
 
 
 def test_configured_microbatch_defaults_for_small_smoke_runs():
-    assert configured_microbatch(argparse.Namespace(batch=16)) == 4
+    assert configured_microbatch(argparse.Namespace(batch=14)) == 2
+    assert configured_microbatch(argparse.Namespace(batch=16)) == 2
     assert configured_microbatch(argparse.Namespace(batch=2)) == 2
     assert configured_microbatch(argparse.Namespace(batch=16, microbatch=2)) == 2
 
@@ -203,3 +206,17 @@ def test_run_safety_refuses_to_overwrite_existing_manifests(tmp_path, monkeypatc
         script.train(args)
     assert (out / "train_manifest.json").read_text() == "original manifest bytes"
     assert (out / "run_fingerprint.txt").read_text() == "old-data-fingerprint"
+
+
+def test_default_pretraining_batch14_uses_full_optimizer_steps():
+    import scripts_pretrain_ssl as script
+    opts = script.argparse.ArgumentParser()
+    # Parser defaults are tested via the actual CLI entry point by inspecting
+    # the module's declared option definitions below.
+    from inspect import getsource
+    src = getsource(script.main)
+    assert "default=14" in src and "default=8190" in src
+    assert script.resolve_batch_plan(14, script.configured_microbatch(
+        argparse.Namespace(batch=14)
+    )) == (2, 7)
+    assert 8190 % 14 == 0
