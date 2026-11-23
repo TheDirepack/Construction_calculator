@@ -386,6 +386,7 @@ class BlueprintSSLDataset(Dataset):
         procedural_fraction: float = 0.25,
         clean_fraction: float = 0.20,
         labeled_focus_probability: float = 0.65,
+        return_metadata: bool = False,
     ) -> None:
         super().__init__()
         self.size = int(size)
@@ -402,6 +403,7 @@ class BlueprintSSLDataset(Dataset):
         self.procedural_fraction = float(procedural_fraction)
         self.clean_fraction = float(clean_fraction)
         self.labeled_focus_probability = float(labeled_focus_probability)
+        self.return_metadata = bool(return_metadata)
         self.neca_bank = None
         if neca_dir is not None:
             from .neca_svg_compositor import NecaSymbolBank
@@ -471,9 +473,11 @@ class BlueprintSSLDataset(Dataset):
             focus_probability=self.labeled_focus_probability,
         )
         clean = apply_geometric_variability(clean, rng)
+        symbol_stats = {"requested": 0, "placed": 0, "shortfall": 0,
+                        "neca": 0, "procedural": 0}
         if self.max_symbols > 0 and rng.random() < self.symbol_augment_probability:
             from .ssl_augmentation import compose_ssl_symbols
-            clean, _ = compose_ssl_symbols(
+            clean, symbol_stats = compose_ssl_symbols(
                 clean, rng, neca_bank=self.neca_bank,
                 max_symbols=self.max_symbols,
                 min_size_px=self.symbol_min_px,
@@ -491,6 +495,17 @@ class BlueprintSSLDataset(Dataset):
         clean_t = torch.from_numpy(clean_rgb).float().div_(255.0)
         deg_t = torch.from_numpy(deg_rgb).float().div_(255.0)
         mask_t = torch.from_numpy(mask).unsqueeze(0)
+        if self.return_metadata:
+            details = {
+                "source": str(path), "bucket": self.bucket_names[b_idx],
+                "symbol_stats": symbol_stats,
+                "mask_fraction": float(mask.mean()),
+                "mean_absolute_degradation": float(
+                    np.abs(degraded.astype(np.float32) - clean.astype(np.float32)).mean()
+                ),
+                "index": int(index), "epoch": int(ep),
+            }
+            return deg_t, clean_t, mask_t, details
         return deg_t, clean_t, mask_t
 
 
