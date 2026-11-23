@@ -187,11 +187,18 @@ views without overwhelming small projects.
 The remote SSL launcher now **skips full-page PDF rasterization** in the
 generic pool builder; other programs retain its previous behavior. Earlier
 pool PNGs from the same indexed PDF are skipped to prevent double weighting.
-The dataset now deliberately **replays one exact source crop across multiple
-independent SSL views** (default 4, configurable 1–32). Each page/image has a
-stable spatially stratified crop bank (default 32) so the same pixel region can recur in later
-epochs with completely new symbols, counts, orientations, warps, masks, scan
-noise and clean/degraded branches. About 20% of source bursts explore a new
+The dataset now deliberately **reuses the same physical source region**
+across multiple independent SSL views (default 4, configurable 1–32).
+Crucially, each PDF view chooses its **own randomized real rendering DPI**
+within 100–400. The four default views use independently randomized DPI
+values from different subranges to cover the full range, centered on the
+same source location in PDF coordinates. The visible physical extent changes
+with DPI; the background is not a duplicated 512px raster. Inserted symbols
+receive that view's exact DPI and are independently randomized along with
+rotations, warps, masks, scan noise, and clean/degraded branches. Raster-only
+scans without trustworthy source DPI continue to reuse pixels without
+inventing a PDF scale. Each page/image has a stable spatially stratified crop
+bank (default 32), reused on later epochs with fresh augmentations. About 20% of source bursts explore a new
 crop site instead of a bank slot. Source pages continue to cycle without
 replacement between bursts, and repeat visits cycle through spatial slots
 rather than randomly resampling the same slot while others are unvisited.
@@ -205,7 +212,8 @@ Tuning: `SSL_CROP_REUSE_VIEWS`, `SSL_CROP_BANK_SIZE`, and
 `SSL_FRESH_CROP_PROBABILITY` control those distributions; the corresponding
 CLI flags are `--crop-reuse-views`, `--crop-bank-size`, and
 `--fresh-crop-probability`. A larger repeat count trades unique pages per
-epoch for more randomized training views from each sampled location. Preview
+epoch for more real DPI variants and randomized augmentations per sampled
+location; it also increases the number of PDF renders per source burst. Preview
 reports unique clean crops, repeated views, bank grid coordinates and cache hits. Any change
 invalidates the run fingerprint.
 
