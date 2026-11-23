@@ -29,6 +29,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install "ultralytics==8.4.216"
       - name: Require torch (never silently skip SSL tests)
         run: python -c "import torch; print('torch', torch.__version__)"
       - name: Run SSL and compositor regressions
