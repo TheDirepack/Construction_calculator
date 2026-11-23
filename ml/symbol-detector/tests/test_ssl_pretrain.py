@@ -357,3 +357,34 @@ def test_no_clean_views_means_scans_and_page_warps_are_eligible(tmp_path):
         assert info["degradation"]["operations"]
         modes.update(info["page_chaos"]["operations"])
     assert modes
+
+
+def test_masked_reconstruction_does_not_erase_known_inserted_symbols():
+    """Masking half a label can teach reconstruction; erasing all cannot."""
+    sheet = _fake_blueprint(256, 256)
+    boxes = [[18., 20., 52., 56.], [100., 92., 132., 124.],
+             [175., 173., 202., 197.]]
+    rescued = 0
+    for seed in range(32):
+        degraded, mask, meta = apply_runtime_corruptions(
+            sheet, np.random.default_rng(seed), mask_prob=1.0,
+            clean_fraction=0.0, return_metadata=True,
+            protected_boxes=boxes,
+        )
+        assert degraded.shape == sheet.shape
+        assert 0 <= float(mask.mean()) <= .65
+        for x0, y0, x1, y1 in boxes:
+            fraction = float(mask[int(y0):int(y1), int(x0):int(x1)].mean())
+            assert fraction <= .6001
+        rescued += "masked_symbol_visibility_guard" in meta["operations"]
+    assert rescued > 0
+
+
+def test_mask_visibility_guard_rejects_nonfinite_symbol_boxes():
+    sheet = _fake_blueprint(128, 128)
+    with pytest.raises(ValueError, match="protected symbol bbox"):
+        apply_runtime_corruptions(
+            sheet, np.random.default_rng(42), mask_prob=1.0,
+            clean_fraction=0.0,
+            protected_boxes=[[float("nan"), 1., 8., 8.]],
+        )
