@@ -477,6 +477,7 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
     conf["source_sampling_policy"] = "paired_source_locality_permuted_pages_v1"
     conf["native_pdf_rendering"] = "uniform_physical_dpi_100_to_400_ink_anchored_v2"
     conf["neca_composition_policy"] = "standalone_figure_variants_v2"
+    conf["wall_alignment_policy"] = "raster_hough_tangent_alpha_contact_v1"
     conf["symbol_rendering_policy"] = "shared_200dpi_reference_and_local_ink_v1"
     conf["symbol_geometry_augmentation"] = "bounded_chaos_v1"
     conf["page_geometry_augmentation"] = "aligned_multiwarp_v2_ink_retention"
