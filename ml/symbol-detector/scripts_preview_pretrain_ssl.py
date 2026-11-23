@@ -62,6 +62,10 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
     requested = [r["symbol_stats"]["requested"] for r in rows]
     placements = [g for row in rows for g in row["symbol_stats"].get("placements", [])]
     families = Counter(g["symbol_family"] for g in placements)
+    severities = Counter(row["degradation"]["severity"] for row in rows)
+    degradation_categories = Counter(
+        operation for row in rows for operation in row["degradation"]["operations"]
+    )
     variants = {g["symbol_variant"] for g in placements}
     neca_variants = {g["symbol_variant"] for g in placements if g["generator"] == "neca_svg"}
     all_neca_ids = (
@@ -71,6 +75,8 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
     report = {
         "samples": samples,
         "placed_by_family": dict(sorted(families.items())),
+        "degradation_by_severity": dict(sorted(severities.items())),
+        "degradation_by_category": dict(sorted(degradation_categories.items())),
         "distinct_inserted_variants": len(variants),
         "eligible_neca_svg_variants": len(all_neca_ids),
         "neca_svg_variants_seen": len(neca_variants),
