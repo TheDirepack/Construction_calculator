@@ -325,6 +325,7 @@ def test_clean_fraction_bypasses_symbol_page_and_scan_damage(tmp_path):
     for index in range(len(dataset)):
         damaged, clean, mask, info = dataset[index]
         assert info["full_clean_view"] is True
+        assert info["geometric_variability_enabled"] is False
         assert torch.equal(clean, damaged)
         assert not bool(mask.any())
         assert info["page_chaos"]["operations"] == []
