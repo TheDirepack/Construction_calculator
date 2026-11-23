@@ -290,15 +290,15 @@ low-level geometry/DETR layers **and** a tiny randomly initialized vision
 model through the actual shared-canvas scanner; neither predicts meaningful
 electrical-device labels without pretrained weights. Validate detected true
 devices, false-positive counts, modifier attachment, and missed devices on
-manually audited real PDF pages before merging.
+manually audited real PDF pages before treating the optional scanner as production-quality.
 
-### Merge readiness / self-hosted acceptance
+### Self-hosted GPU acceptance before production use
 
-**Verified by GitHub CI (2026-11-22):** complete detector Python
-suite, 148 tests passing at the last fully verified shared-canvas revision.
-Includes grouping, template tags, real randomly initialized SAM3 vision,
-geometry, DETR and scoring components, page inference, OOM retries,
-annotation conversion and review gates. The runner also imported
+**CPU integration validation:** GitHub CI runs the complete detector
+suite, including grouping, switch template tags, a small randomly initialized
+SAM3 vision model, geometry, DETR/scoring, page inference, OOM retries,
+annotation conversion, review gates, and the newer SSL tests on the
+combined branch. The SAM-specific workflow also imports
 Transformers 5.20.1 and CPU PyTorch 2.6.0 / torchvision 0.21.0
 (including `torchvision.ops.roi_align`). This does not load the
 SAM 3.1 weights or establish actual visual precision.
@@ -338,7 +338,8 @@ python scripts_sam_precision_report.py \
   --out "$SAM_OUTPUT/review_precision.json"
 ```
 
-**Merge only after** a weighted same-image SAM 3.1 run finishes
+**Do not use these provisional detections as production-quality output until**
+a weighted same-image SAM 3.1 run finishes
 without an unsupported internal API, missing reference group, CUDA OOM,
 or invalid PDF coordinates. Inspect grouped contact sheets for actual
 devices, false positives, and modifier attachment. For a valid
