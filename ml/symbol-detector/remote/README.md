@@ -277,7 +277,10 @@ false-boxes-per-scanned-page rate; partial reviews yield only a lower bound.
 the candidate list and require a separate exhaustive human audit. A small or
 selectively reviewed sample should not be presented as general model
 precision. Review crop rendering now refuses ambiguous PDF filename matches
-and, for newly produced SAM outputs, mismatched source file size/mtime.
+and, for newly produced SAM outputs, mismatched **full-file PDF SHA256**.
+This catches timestamp-preserving edits and also permits identical PDFs
+copied to a different location. SHA256 requires one bounded-memory sequential
+read per source PDF before scanning and when preparing review crops.
 If a project PDF was replaced, regenerate detections before reviewing.
 
 **Still unverified:** actual pretrained SAM3.1 checkpoint inference,
