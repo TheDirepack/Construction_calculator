@@ -11,6 +11,7 @@
   "image_width": 4000,
   "image_height": 3000,
   "coordinate_system": "original_page_pixels_top_left_y_down",
+  "verified_no_symbols": false,
   "instances": [
     {
       "instance_id": "fixture_0001",
