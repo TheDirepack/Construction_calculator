@@ -233,3 +233,39 @@ def test_pdf_file_revision_changes_training_manifest_fingerprint(tmp_path):
     new_entries = updated[0]["buckets"].get("real_pdf_pages") or updated[1]["buckets"]["real_pdf_pages"]
     new_signature = next(iter(new_entries["groups"].values()))[0]["pdf_source_signature"]
     assert old_signature != new_signature
+
+
+
+def test_native_pdf_dataset_passes_sampled_dpi_into_synthetic_symbols(tmp_path):
+    path = tmp_path / "drawing_set.pdf"
+    make_pdf(path, 3)
+    manifest = {"buckets": {"real_pdf_pages": {
+        "groups": {"project": [
+            {"image_path": str(path), "source_pdf": str(path),
+             "pdf_page_index": idx}
+            for idx in range(3)
+        ]}
+    }}}
+    dataset = BlueprintSSLDataset(
+        manifest, size=256, items_per_epoch=16, seed=2026,
+        max_symbols=8, clean_fraction=1.0,
+        symbol_augment_probability=1.0, return_metadata=True,
+    )
+    all_dpis, symbols_seen = [], 0
+    for i in range(len(dataset)):
+        _, _, _, meta = dataset[i]
+        pdf_dpi = meta["pdf_crop"]["effective_dpi"]
+        all_dpis.append(pdf_dpi)
+        assert 100 <= pdf_dpi <= 400
+        assert meta["symbol_stats"]["drawing_dpi"] == pdf_dpi or (
+            meta["symbol_stats"]["requested"] == 0 and
+            "drawing_dpi" not in meta["symbol_stats"]
+        )
+        for item in meta["symbol_stats"].get("placements", []):
+            assert item["drawing_dpi"] == pdf_dpi
+            assert item["ink_color_bgr"] is not None
+            x0, y0, x1, y1 = item["bbox_xyxy"]
+            assert 0 <= x0 < x1 <= 256 and 0 <= y0 < y1 <= 256
+            symbols_seen += 1
+    assert symbols_seen > 0
+    assert min(all_dpis) < 175 and max(all_dpis) > 325
