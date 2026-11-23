@@ -3,9 +3,9 @@
 Rather than decoding a 24 MP page raster and discarding almost all pixels,
 keep a small low-resolution density thumbnail (for crop-site selection) and
 ask PyMuPDF to render ONLY a randomly selected page rectangle at the final
-training scale. Separate per-worker LRU caches bound both documents and
-thumbnails; no rendered 512px samples are stored, so each visit generates a
-new spatial/scale combination.
+training scale. Per-worker LRU caches bound documents, thumbnails, and
+replayed clean crops. Each crop can receive many independent augmentation
+views without repeatedly decoding the PDF.
 """
 from __future__ import annotations
 
@@ -20,20 +20,25 @@ import numpy as np
 class PdfCropSampler:
     def __init__(self, max_open_documents: int = 3,
                  max_cached_thumbnails: int = 96,
-                 thumbnail_long_side: int = 384):
-        if min(max_open_documents, max_cached_thumbnails, thumbnail_long_side) < 1:
+                 thumbnail_long_side: int = 384,
+                 max_cached_crops: int = 12):
+        if min(max_open_documents, max_cached_thumbnails, thumbnail_long_side,
+               max_cached_crops) < 1:
             raise ValueError("PDF cache limits must be positive")
         self.max_open_documents = int(max_open_documents)
         self.max_cached_thumbnails = int(max_cached_thumbnails)
         self.thumbnail_long_side = int(thumbnail_long_side)
+        self.max_cached_crops = int(max_cached_crops)
         self._docs = OrderedDict()
         self._thumbs = OrderedDict()
+        self._crops = OrderedDict()
 
     def close(self) -> None:
         for doc in self._docs.values():
             doc.close()
         self._docs.clear()
         self._thumbs.clear()
+        self._crops.clear()
 
     def _open(self, path: str):
         doc = self._docs.get(path)
@@ -91,12 +96,26 @@ class PdfCropSampler:
                  - integral[y1, x0] + integral[y0, x0])
         return float(count) / max(1, (x1 - x0) * (y1 - y0))
 
-    def sample(self, entry: dict, size: int, rng: np.random.Generator
-               ) -> tuple[np.ndarray, dict]:
+    def sample(self, entry: dict, size: int, rng: np.random.Generator,
+               *, crop_seed: int | None = None) -> tuple[np.ndarray, dict]:
+        """Clip-render from PDF; optionally replay an exact clean PDF region.
+
+        crop_seed controls *only* base crop selection. The caller must use
+        an independent RNG for symbols, warps, and degradation. Seedless
+        calls preserve the original fresh-random behavior.
+        """
         if size < 32:
             raise ValueError("PDF training crop must be at least 32 pixels")
         pdf_path = str(entry.get("source_pdf") or entry["image_path"])
         page_index = int(entry["pdf_page_index"])
+        key = (pdf_path, page_index, int(size), int(crop_seed)) if crop_seed is not None else None
+        if key is not None and key in self._crops:
+            self._crops.move_to_end(key)
+            saved_image, saved_meta = self._crops[key]
+            return saved_image.copy(), {**saved_meta, "clean_crop_cache_hit": True}
+        # Seeded replay must not consume the independent augmentation RNG.
+        if crop_seed is not None:
+            rng = np.random.default_rng(crop_seed)
         doc = self._open(pdf_path)
         if not 0 <= page_index < len(doc):
             raise IndexError(f"Invalid PDF page {page_index}: {pdf_path}")
@@ -174,7 +193,7 @@ class PdfCropSampler:
             bgr = cv2.resize(bgr, (size, size),
                              interpolation=(cv2.INTER_AREA if max(bgr.shape[:2]) > size
                                             else cv2.INTER_LINEAR))
-        return bgr, {
+        meta = {
             "pdf_page_index": page_index,
             "clip_rect_pt": [round(v, 3) for v in (x, y, x + span, y + span)],
             "effective_dpi": round(requested_dpi, 3),
@@ -186,4 +205,12 @@ class PdfCropSampler:
             "thumbnail_ink_threshold": ink_threshold,
             "ink_anchored_proposals": anchored_proposals,
             "sampling_policy": "adaptive_ink_guided_v2",
+            "clean_crop_seed": int(crop_seed) if crop_seed is not None else None,
+            "clean_crop_cache_hit": False,
         }
+        if key is not None:
+            # Return a distinct copy, so training cannot mutate cached pixels.
+            self._crops[key] = (bgr.copy(), meta.copy())
+            while len(self._crops) > self.max_cached_crops:
+                self._crops.popitem(last=False)
+        return bgr, meta
