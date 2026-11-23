@@ -45,7 +45,7 @@ from blueprint_symbols.switch_suffix_templates import (
 from blueprint_symbols.neca_modifier_attachment import attach_device_modifiers
 from blueprint_symbols.sam_precision import filter_sam_detections, tile_origins
 from blueprint_symbols.sam_shared_canvas import SharedCanvas, build_shared_canvas
-from blueprint_symbols.sam_resume import completed_sam_output, atomic_write_json
+from blueprint_symbols.sam_resume import completed_sam_output, atomic_write_json, file_sha256
 from blueprint_symbols.sam_precision_profile import (
     load_family_thresholds, threshold_for_family,
 )
@@ -1030,13 +1030,16 @@ def main() -> None:
     for idx, pdf_path in enumerate(pdfs, start=1):
         rel = str(pdf_path.relative_to(data_root))
         source_stat = pdf_path.stat()
-        source_fingerprint = f'{rel}/{source_stat.st_size}/{source_stat.st_mtime_ns}'
+        # Full content digest also detects same-size, timestamp-preserving edits.
+        source_pdf_sha256 = file_sha256(pdf_path)
+        source_fingerprint = f'{rel}/{source_stat.st_size}/{source_stat.st_mtime_ns}/{source_pdf_sha256}'
         short_hash = hashlib.sha256(source_fingerprint.encode('utf-8')).hexdigest()[:8]
         safe_stem = re.sub(r'[^a-zA-Z0-9._-]+', '_', pdf_path.stem)[:80]
         out_json = out_dir / f'{safe_stem}_{short_hash}_{run_config_hash}_SAM3.json'
         if completed_sam_output(
                 out_json, run_config_hash=run_config_hash,
-                source_pdf_relative=rel):
+                source_pdf_relative=rel,
+                source_pdf_sha256=source_pdf_sha256):
             continue
         if out_json.exists():
             print(f'[{idx}/{len(pdfs)}] Recomputing incomplete/stale output '
@@ -1175,6 +1178,7 @@ def main() -> None:
             'source_file': pdf_path.name,
             'source_pdf_relative': rel,
             'source_pdf_absolute': str(pdf_path),
+            'source_pdf_sha256': source_pdf_sha256,
             'source_pdf_stat': {
                 'size_bytes': source_stat.st_size,
                 'mtime_ns': source_stat.st_mtime_ns,
