@@ -11,6 +11,25 @@ import cv2
 
 EXCLUDED={'__unmapped__','unmapped','ignore','unknown_symbol','__ignore__'}
 
+
+def trusted_training_instance(instance: dict) -> bool:
+    """Accept legacy confirmed labels, but never promote explicit pending reviews.
+
+    Legacy CAD/synthetic sources have no review_status. In modern manual
+    annotations, a verification field is authoritative: absence of uncertainty
+    alone cannot turn a model proposal into a trusted detection target.
+    """
+    if instance.get('uncertain', False) is not False:
+        return False
+    if 'review_status' in instance:
+        return (instance['review_status'] == 'accepted' and
+                instance.get('review_source') == 'human' and
+                instance.get('verified_ground_truth') is True)
+    if 'verified_ground_truth' in instance and instance['verified_ground_truth'] is not True:
+        return False
+    return True
+
+
 def _sha(path:Path) -> str:
     digest=hashlib.sha256()
     with path.open('rb') as f:
@@ -38,10 +57,15 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
         g=data.get('project_family_id')
         if not isinstance(g,str) or not g.strip():
             raise ValueError(f'missing project group {path}')
-        if require_verified_groups and not data.get('source_group_verified',False):
+        if require_verified_groups and data.get('source_group_verified') is not True:
             raise ValueError(f'unverified project grouping {path}; supply a mapping to original drawing/project')
-        if data.get('calibration_verified') is False:
+        if 'calibration_verified' in data and data['calibration_verified'] is not True:
             raise ValueError(f'unverified CAD-to-raster alignment {path}; inspect overlay and re-export with --aligned-verified')
+        exhaustive = data.get('exhaustive_families', [])
+        if (not isinstance(exhaustive, list) or
+                any(not isinstance(name, str) or not name.strip() for name in exhaustive) or
+                len(set(exhaustive)) != len(exhaustive)):
+            raise ValueError(f'invalid exhaustive_families attestation: {path}')
         img=(path.parent/data['image_path']).resolve()
         if not img.is_file():raise FileNotFoundError(img)
         image=cv2.imread(str(img),cv2.IMREAD_UNCHANGED)
@@ -74,7 +98,7 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
         seen=set()
         for inst in data['instances']:
             cls=inst.get('symbol_family')
-            if cls not in EXCLUDED and cls and not inst.get('uncertain',False):
+            if cls not in EXCLUDED and cls and trusted_training_instance(inst):
                 counts[cls]+=1;group_counts[g][cls]+=1;seen.add(cls)
         docs.append({'annotation':str(path),'annotation_sha256':_sha(path),
                      'image':str(img),'image_sha256':digest,
