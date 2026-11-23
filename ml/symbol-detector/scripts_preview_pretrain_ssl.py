@@ -93,6 +93,20 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         operation for row in rows for operation in row["page_chaos"]["operations"]
     )
     page_severities = Counter(row["page_chaos"]["severity"] for row in rows)
+    page_rejection_reasons = Counter(
+        reason for row in rows
+        for reason, count in row["page_chaos"].get("rejection_reasons", {}).items()
+        for _ in range(count)
+    )
+    page_rejections = sum(row["page_chaos"]["rejected"] for row in rows)
+    retained_ink = [
+        row["page_chaos"]["min_symbol_ink_retention"] for row in rows
+        if row["page_chaos"].get("min_symbol_ink_retention") is not None
+    ]
+    retained_area = [
+        row["page_chaos"]["min_symbol_area_retention"] for row in rows
+        if row["page_chaos"].get("min_symbol_area_retention") is not None
+    ]
     warp_operations = Counter(
         operation for g in placements
         for operation in g.get("symbol_chaos", {}).get("operations", [])
@@ -114,6 +128,14 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         "symbol_warp_operations": dict(sorted(warp_operations.items())),
         "page_warp_operations": dict(sorted(page_operations.items())),
         "page_warp_severity": dict(sorted(page_severities.items())),
+        "page_warp_rejected_stages": page_rejections,
+        "page_warp_rejection_reasons": dict(sorted(page_rejection_reasons.items())),
+        "worst_inserted_symbol_ink_retention": (
+            round(min(retained_ink), 4) if retained_ink else None
+        ),
+        "worst_inserted_symbol_area_retention": (
+            round(min(retained_area), 4) if retained_area else None
+        ),
         "warped_symbols": warped_symbols,
         "placement_modes": dict(sorted(placement_modes.items())),
         "degradation_by_severity": dict(sorted(severities.items())),
