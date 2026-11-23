@@ -41,8 +41,12 @@ def local_drawing_ink_bgr(
         gray = cv2.cvtColor(pixels2, cv2.COLOR_BGR2GRAY).reshape(-1)
         # Background often has a tinted paper colour and scanner noise. An
         # adaptive contrast threshold detects pale grey/blue ink as well.
-        paper = float(np.percentile(gray, 85))
-        threshold = paper - max(11., min(32., (paper - float(np.percentile(gray, 10))) * .18))
+        paper = float(np.percentile(gray, 90))
+        # The 10th percentile is frequently still paper on sparse electrical
+        # sheets. Use a small noise floor so faint blue/grey plotted strokes
+        # (8-15 levels below paper) are eligible for colour matching too.
+        contrast = paper - float(np.percentile(gray, 2))
+        threshold = paper - max(5., min(32., contrast * .24))
         candidates = pixels[gray < threshold]
         if len(candidates) < min_samples:
             return None
