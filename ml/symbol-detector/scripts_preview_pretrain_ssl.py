@@ -49,7 +49,9 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         overlay = as_bgr(clean)
         for glyph in meta["symbol_stats"].get("placements", []):
             x0, y0, x1, y1 = [int(round(v)) for v in glyph["bbox_xyxy"]]
-            color = (30, 180, 30) if glyph["generator"] == "neca_svg" else (180, 60, 20)
+            has_warp = bool(glyph.get("symbol_chaos", {}).get("operations"))
+            color = ((30, 20, 220) if has_warp else (30, 180, 30)
+                     if glyph["generator"] == "neca_svg" else (180, 60, 20))
             cv2.rectangle(overlay, (x0, y0), (x1, y1), color, 1)
             cv2.putText(overlay, glyph["symbol_family"],
                         (max(0, x0), max(10, y0 - 3)),
@@ -66,6 +68,12 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
     degradation_categories = Counter(
         operation for row in rows for operation in row["degradation"]["operations"]
     )
+    warp_operations = Counter(
+        operation for g in placements
+        for operation in g.get("symbol_chaos", {}).get("operations", [])
+    )
+    placement_modes = Counter(g.get("placement_mode", "unknown") for g in placements)
+    warped_symbols = sum(bool(g.get("symbol_chaos", {}).get("operations")) for g in placements)
     variants = {g["symbol_variant"] for g in placements}
     neca_variants = {g["symbol_variant"] for g in placements if g["generator"] == "neca_svg"}
     all_neca_ids = (
@@ -75,6 +83,9 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
     report = {
         "samples": samples,
         "placed_by_family": dict(sorted(families.items())),
+        "symbol_warp_operations": dict(sorted(warp_operations.items())),
+        "warped_symbols": warped_symbols,
+        "placement_modes": dict(sorted(placement_modes.items())),
         "degradation_by_severity": dict(sorted(severities.items())),
         "degradation_by_category": dict(sorted(degradation_categories.items())),
         "distinct_inserted_variants": len(variants),
