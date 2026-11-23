@@ -239,6 +239,55 @@ real blueprint accuracy. Validate group coverage, reference quality losses,
 candidate precision and missed true devices on a small fully audited held-out
 drawing set before merging this draft PR.
 
+### Merge readiness / self-hosted acceptance
+
+**Verified by GitHub CI (2026-11-22):** the complete detector Python
+suite, with 129 passing tests as of the latest completed run, including
+grouping, template tags, model-free page inference, OOM retries,
+annotation conversion and review gates. The runner also imported
+Transformers 5.20.1 and CPU PyTorch 2.6.0 / torchvision 0.21.0
+(including `torchvision.ops.roi_align`). This does not load the
+SAM 3.1 weights or establish actual visual precision.
+
+Install on the **self-hosted** GPU host, using a
+CUDA-enabled, *version-matched* torch and torchvision from the official
+PyTorch selector, **before** installing detector dependencies:
+
+```bash
+cd ml/symbol-detector
+# Install torch and torchvision together for this GPU's CUDA/driver first.
+python -m pip install -r requirements-sam3.txt
+python -m pytest -q tests
+
+# Substitute local directories actually mounted on the host:
+python scripts_run_sam3_pdfs.py --catalog-only \
+  --neca-dir "$NECA_ROOT" --data-root "$BLUEPRINT_ROOT" \
+  --out "$SAM_OUTPUT" \
+  --visual-audit-out "$SAM_OUTPUT/neca_visual_groups.json"
+
+# One real PDF from a representative folder (local inference, no SaaS):
+python scripts_run_sam3_pdfs.py --scan-mode grouped \
+  --neca-dir "$NECA_ROOT" --data-root "$BLUEPRINT_ROOT" \
+  --subdirs "$DRAWING_SUBDIR" --out "$SAM_OUTPUT" --limit-pdfs 1
+
+# Inspect actual proposal boxes and VLM contact sheet:
+python scripts_circuitnet_review_sheets.py render \
+  --proposals-dir "$SAM_OUTPUT" --data-root "$BLUEPRINT_ROOT" \
+  --out "$SAM_OUTPUT/review" --limit-pdfs 1
+```
+
+**Merge only after** the weighted run finishes without an unsupported
+SAM internal API, missing visual group, CUDA OOM, or an invalid PDF
+coordinate; confirm that the resulting contact sheet contains genuine
+devices with acceptable false-positive volume and that switch suffixes
+land on the correct parent rather than generating separate devices.
+Compare the grouped run to the prior `--scan-mode flat` configuration
+on the same PDF before claiming any speed/precision improvement.
+The `--allow-missing-visual-groups` override is for diagnosis only:
+the default requires every selected coarse silhouette to survive
+reference screening. If there are no valid devices in the test PDF,
+that is not sufficient evidence of recall.
+
 ### Partially annotated real drawings
 
 Import real device annotations as `annotation_completeness=partial` with
