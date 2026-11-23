@@ -381,13 +381,24 @@ def apply_runtime_corruptions(
     # contrast before masked-image modeling. This is NOT an OCR/semantic
     # recognizability guarantee, but avoids completely bleached positives.
     orig_gray = cv2.cvtColor(clean_bgr, cv2.COLOR_BGR2GRAY)
-    original_ink = orig_gray < 185
+    # Fixed <185 misses pale cyan/gray construction linework. Estimate paper
+    # brightness from the *clean* source and protect relative line contrast.
+    paper_level = float(np.percentile(orig_gray, 90))
+    ink_depth = paper_level - float(np.percentile(orig_gray, 2))
+    ink_threshold = paper_level - max(6., min(32., ink_depth * .24))
+    original_ink = orig_gray < ink_threshold
     if int(original_ink.sum()) >= 32:
-        orig_contrast = float((255 - orig_gray[original_ink].astype(np.float32)).mean())
+        orig_contrast = float(
+            (paper_level - orig_gray[original_ink].astype(np.float32)).mean()
+        )
         current_gray = cv2.cvtColor(x, cv2.COLOR_BGR2GRAY)
-        current_contrast = float((255 - current_gray[original_ink].astype(np.float32)).mean())
-        if orig_contrast > 20 and current_contrast < orig_contrast * .22:
-            x = cv2.addWeighted(x, .62, clean_bgr, .38, 0)
+        new_paper_level = float(np.percentile(current_gray, 90))
+        current_contrast = float(
+            (new_paper_level -
+             current_gray[original_ink].astype(np.float32)).mean()
+        )
+        if orig_contrast > 8. and current_contrast < orig_contrast * .30:
+            x = cv2.addWeighted(x, .60, clean_bgr, .40, 0)
             operations.append("line_contrast_rescue")
 
     # Random masked reconstruction. The clean target includes the same
