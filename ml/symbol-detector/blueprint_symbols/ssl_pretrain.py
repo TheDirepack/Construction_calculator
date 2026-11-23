@@ -391,7 +391,7 @@ class BlueprintSSLDataset(Dataset):
         self.neca_bank = None
         if neca_dir is not None:
             from .neca_svg_compositor import NecaSymbolBank
-            self.neca_bank = NecaSymbolBank(Path(neca_dir))
+            self.neca_bank = NecaSymbolBank(Path(neca_dir), include_modifiers=False)
 
         self.bucket_names: list[str] = []
         self.bucket_weights: list[float] = []
