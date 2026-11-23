@@ -36,6 +36,7 @@ from blueprint_symbols.electrical_glyphs import DEFAULT_WEIGHTS, rotate_glyph, s
 from blueprint_symbols.wall_alignment import (
     detect_wall_sites, wall_rotation_degrees, snap_symbol_to_wall,
 )
+from blueprint_symbols.placement_policy import wall_placement_probability
 
 ELECTRICAL = tuple(DEFAULT_WEIGHTS)
 
@@ -138,7 +139,10 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
             max_dim = max(rgba.shape[:2])
             scale = min(scale, max(8.0, min(h, w) * .38) / max_dim)
 
-        want_wall = bool(wall_sites) and (rng.random() < wall_probability)
+        glyph_wall_probability = wall_placement_probability(
+            family, variant, wall_probability
+        )
+        want_wall = bool(wall_sites) and (rng.random() < glyph_wall_probability)
         chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
         placement_mode = "wall" if want_wall else "uniform"
         if want_wall:
@@ -265,7 +269,8 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
                        'ink_color_bgr': [int(round(v)) for v in ink_col],
                        'placement_mode': 'wall_aligned_raster' if want_wall else placement_mode,
                        'wall_angle_degrees_image': round(angle, 3) if want_wall else None,
-                       'wall_contact_method': 'raster_line_fit' if want_wall else None},
+                       'wall_contact_method': 'raster_line_fit' if want_wall else None,
+                       'wall_sampling_probability': round(glyph_wall_probability, 4)},
         })
     return page, placed
 
