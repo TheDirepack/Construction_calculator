@@ -4,6 +4,9 @@ Unlike the deterministic page-scanner mock, this test executes the exact
 Transformers 5.20.1 layers and tensor shapes used by self-hosted inference.
 It tests API compatibility, NOT semantic zero-shot detection quality.
 """
+import pytest
+pytest.importorskip("transformers", reason="SAM-only API tests need optional Transformers runtime")
+
 import torch
 
 from transformers import Sam3Config
