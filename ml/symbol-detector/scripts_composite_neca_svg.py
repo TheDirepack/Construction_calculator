@@ -1,4 +1,4 @@
-"""Composite NECA 100-2013 vector SVG devices onto clean blueprint pages (zero wall clipping).
+"""Composite NECA SVG symbols without inventing negative labels on unreviewed PDF pages.
 
     python scripts_composite_neca_svg.py \
         --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 
 from blueprint_symbols.neca_svg_compositor import CANONICAL_CLASSES, NecaSymbolBank, composite_neca_page
+from blueprint_symbols.composite_supervision import composite_supervision
 
 
 def draw_preview(image: np.ndarray, placed: list[dict], out_path: Path) -> None:
@@ -44,7 +45,7 @@ def draw_preview(image: np.ndarray, placed: list[dict], out_path: Path) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--neca-dir', type=Path, required=True, help='Path to NECA_100_Vector_Library folder')
-    p.add_argument('--backgrounds', nargs='+', required=True, help='Globs for clean non-electrical background page JSONs')
+    p.add_argument('--backgrounds', nargs='+', required=True, help='Globs for source page JSONs; unverified backgrounds remain positive-only')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--per-page', type=int, default=24)
     p.add_argument('--copies', type=int, default=1)
@@ -80,8 +81,10 @@ def main() -> None:
     total = wall_total = free_total = pages_written = 0
     for n, path in enumerate(paths):
         doc = json.loads(path.read_text())
-        if set(doc.get('exhaustive_families', [])) & set(CANONICAL_CLASSES):
-            continue
+        # Validate source attestations before creating derivative files. A
+        # partial/unknown background may still produce synthetic positives,
+        # but can NEVER produce class-wide background-negative labels.
+        composite_supervision(doc, [], generated_families=CANONICAL_CLASSES)
         src_img = (path.parent / doc['image_path']).resolve()
         image = cv2.imread(str(src_img), cv2.IMREAD_COLOR)
         if image is None:
@@ -106,13 +109,13 @@ def main() -> None:
             new_doc = dict(doc)
             new_doc.update({
                 'document_id': stem,
-                'source_type': 'clean_blueprint_with_neca_svg_devices',
+                'source_type': 'blueprint_with_neca_svg_devices',
                 'image_path': out_img.name,
                 'image_sha256': hashlib.sha256(out_img.read_bytes()).hexdigest(),
-                'exhaustive_families': list(CANONICAL_CLASSES),
-                'instances': placed,
+                **composite_supervision(doc, placed, generated_families=CANONICAL_CLASSES),
                 'composite': {
                     'background_annotation': str(path.resolve()),
+                    'supervision': 'complete' if doc.get('verified_no_symbols') is True else 'positive_only',
                     'symbol_library': 'NECA_100_2013_Vector_SVG',
                     'seed': seed,
                 },
