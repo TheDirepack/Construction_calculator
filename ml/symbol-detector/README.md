@@ -282,8 +282,10 @@ family/variant, eligible NECA vocabulary coverage, and observed degradation
 severities/categories, accepted/rejected whole-page warp modes,
 symbol-level warp categories and placement modes. A separate
 `sample_NNNN_overlay.png` marks inserted symbols in their new warped
-positions (red boxes for independently distorted symbols). Visually inspect symbol fidelity and near-invisible
-cases before increasing severity.
+positions (red boxes for independently distorted symbols).
+`sample_NNNN_geometry.png` separately shows the symbol-composited crop
+before and after whole-page warping. Review these alongside the clean/degraded
+scan pairs to spot illegible symbols and excessive page distortion.
 
 For the second-stage supervised detector, **preflight actual weight transfer**
 rather than trusting that `model.load_state_dict` before `model.train` worked.
