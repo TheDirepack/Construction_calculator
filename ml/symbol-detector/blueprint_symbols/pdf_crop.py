@@ -125,7 +125,9 @@ class PdfCropSampler:
     def sample(self, entry: dict, size: int, rng: np.random.Generator,
                *, crop_seed: int | None = None,
                crop_slot: int | None = None,
-               bank_size: int | None = None) -> tuple[np.ndarray, dict]:
+               bank_size: int | None = None,
+               dpi_variant: int | None = None,
+               dpi_variants: int | None = None) -> tuple[np.ndarray, dict]:
         """Clip-render from PDF; optionally replay an exact clean PDF region.
 
         crop_seed controls *only* base crop selection. The caller must use
@@ -134,6 +136,14 @@ class PdfCropSampler:
         """
         if size < 32:
             raise ValueError("PDF training crop must be at least 32 pixels")
+        if (dpi_variant is None) != (dpi_variants is None):
+            raise ValueError("dpi_variant and dpi_variants must be provided together")
+        if dpi_variant is not None and not (
+            isinstance(dpi_variants, int) and 1 <= dpi_variants <= 32
+            and isinstance(dpi_variant, int) and 0 <= dpi_variant < dpi_variants
+            and crop_seed is not None
+        ):
+            raise ValueError("invalid seeded multi-DPI variant")
         if (crop_slot is None) != (bank_size is None):
             raise ValueError("crop_slot and bank_size must be set together")
         if crop_slot is not None and not (
@@ -145,7 +155,8 @@ class PdfCropSampler:
         pdf_path = str(entry.get("source_pdf") or entry["image_path"])
         page_index = int(entry["pdf_page_index"])
         key = ((pdf_path, page_index, int(size), int(crop_seed),
-                crop_slot, bank_size) if crop_seed is not None else None)
+                crop_slot, bank_size, dpi_variant, dpi_variants)
+               if crop_seed is not None else None)
         if key is not None and key in self._crops:
             self._crops.move_to_end(key)
             saved_image, saved_meta = self._crops[key]
