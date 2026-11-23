@@ -3,22 +3,26 @@
 Annotation JSON is the *existing* dataset format (see dataset_annotation_example.json),
 extended in a backward-compatible way:
 
-  * axis-aligned boxes keep `bbox_xyxy`.
-  * rotated boxes add `bbox_rotated = {cx, cy, w, h, angle_deg}` where angle is the
-    in-plane rotation of the box about (cx, cy). `bbox_xyxy` is still written as the
-    tight axis-aligned hull so old readers keep working.
-  * `snap_vector` stores the extra (origin + direction) vector used to bias the
-    wall-snap search. Optional.
-  * `device_type` records the classified device family.
+* axis-aligned boxes keep `bbox_xyxy`.
+* rotated boxes add `bbox_rotated = {cx, cy, w, h, angle_deg}` where angle is the
+  in-plane rotation of the box about (cx, cy). `bbox_xyxy` is still written as the
+  tight axis-aligned hull so old readers keep working.
+* `snap_vector` stores the extra (origin + direction) vector used to bias the
+  wall-snap search. Optional.
+* `device_type` records the classified device family.
+* `device_attributes` optionally stores structured electrical/device attributes
+  (see blueprint_symbols/electrical_device_attributes.py).
 
 Every extension is additive; a file without them loads fine.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Any
 import math
 import json
+import os
+import tempfile
 
 
 FAMILY_DISCIPLINES: dict[str, str] = {
@@ -51,6 +55,85 @@ FAMILY_DISCIPLINES: dict[str, str] = {
     "alarm_device": "fire_protection",
     # other
     "unknown_symbol": "other",
+}
+
+
+# Curated subtypes aligned with blueprint_symbols/neca_prompt_catalog.py and
+# blueprint_symbols/electrical_device_attributes.py. Users can still enter any
+# project-specific custom subtype in the UI.
+FAMILY_VARIANT_SUGGESTIONS: dict[str, list[str]] = {
+    # Electrical
+    "receptacle": [
+        "duplex", "quad", "single", "gfci", "weatherproof", "duplex_receptacle_floor",
+        "duplex_receptacle_ceiling", "duplex_receptacle_emergency", "combination_floor_box",
+        "multioutlet_assembly", "special_purpose", "dedicated", "afci", "unspecified",
+    ],
+    "switch": [
+        "single_pole", "three_way", "four_way", "double_pole", "dimmer", "occupancy_sensor",
+        "vacancy_sensor", "timer", "low_voltage", "key_operated", "pilot_light",
+        "weatherproof", "motor_control", "double_throw", "unspecified",
+    ],
+    "luminaire": [
+        "downlight", "troffer_2x4", "troffer_2x2", "linear", "strip_luminaire", "exit_sign",
+        "emergency_battery_light", "wall_sconce", "wallpack", "pendant", "track_light",
+        "spotlight", "pole_luminaire", "unspecified",
+    ],
+    "fire_alarm_device": [
+        "smoke_detector", "heat_detector", "duct_smoke_detector", "horn_and_strobe",
+        "speaker_and_strobe", "strobe_unit", "horn_unit", "manual_pull_station",
+        "bell_and_strobe", "fire_alarm_control_panel", "annunciator_panel",
+        "beam_smoke_detector", "carbon_monoxide_detector", "tamper_switch",
+        "waterflow_switch", "door_holder", "unspecified",
+    ],
+    "data_outlet": [
+        "data_wall", "telephone_data_wall", "telephone_wall", "data_floor",
+        "telephone_data_floor", "fiber", "coax", "audio_visual", "wap", "unspecified",
+    ],
+    "telecom_device": [
+        "equipment_rack", "equipment_cabinet", "terminal_cabinet", "intercom",
+        "speaker", "camera", "card_reader", "nurse_call", "unspecified",
+    ],
+    "junction_box": [
+        "wall", "ceiling", "floor", "pull_box", "combination_floor_box",
+        "power_pole", "telecom_pole", "unspecified",
+    ],
+    "panelboard": [
+        "lighting_or_power_panel", "distribution_panel", "subpanel", "switchboard",
+        "mcc", "transfer_switch", "unspecified",
+    ],
+    "disconnect": [
+        "non_fused", "fused", "motor_rated", "weatherproof", "magnetic_motor_starter",
+        "vfd_asd", "unspecified",
+    ],
+    "circuit_breaker": ["single_pole", "two_pole", "three_pole", "gfci", "afci", "unspecified"],
+    "transformer": ["dry_type", "pad_mounted", "step_down", "step_up", "unspecified"],
+    "motor": ["single_phase", "three_phase", "fractional_hp", "motor_connection", "unspecified"],
+    "generator": ["standby", "emergency", "transfer_switch", "unspecified"],
+    "sensor": [
+        "occupancy_sensor", "vacancy_sensor", "daylight_sensor", "photocell",
+        "motion_detector", "flow_switch", "pressure_switch", "unspecified",
+    ],
+    "control_relay": ["lighting_relay", "contactor", "shunt_trip", "time_clock", "unspecified"],
+    "electrical_meter": ["kwh_meter", "submeter", "ct_cabinet", "unspecified"],
+    "grounding_symbol": ["ground_rod", "ground_bus", "bonding_jumper", "unspecified"],
+    "conduit_fitting": ["stub_up", "stub_down", "homerun", "flexible_connection", "unspecified"],
+    # Mechanical / HVAC / Plumbing / Fire Protection / Architectural
+    "diffuser": ["supply", "return", "exhaust", "linear_slot", "transfer", "unspecified"],
+    "grille": ["return", "exhaust", "supply", "transfer", "louver", "unspecified"],
+    "air_terminal": ["vav_box", "cav_box", "fan_powered", "unspecified"],
+    "damper": ["volume", "motorized", "backdraft", "fire_smoke", "unspecified"],
+    "fire_damper": ["fire", "smoke", "combination_fire_smoke", "unspecified"],
+    "fan": ["exhaust", "supply", "ceiling_fan", "wall_fan", "inline", "unspecified"],
+    "thermostat": ["wall_thermostat", "programmable", "humidistat", "unspecified"],
+    "valve": ["gate", "ball", "butterfly", "check", "balancing", "control", "prv", "unspecified"],
+    "pump": ["centrifugal", "circulator", "sump", "booster", "condensate", "unspecified"],
+    "sprinkler_head": ["pendent", "upright", "sidewall", "concealed", "dry_pendent", "unspecified"],
+    "alarm_device": ["horn_strobe", "bell", "waterflow", "tamper", "pull_station", "unspecified"],
+    "fire_protection_device": ["fire_extinguisher", "hose_cabinet", "fdc", "standpipe", "unspecified"],
+    "plumbing_fixture": ["water_closet", "lavatory", "sink", "urinal", "shower", "drinking_fountain", "unspecified"],
+    "drain": ["floor_drain", "roof_drain", "trench_drain", "cleanout", "unspecified"],
+    "door": ["single_swing", "double_swing", "sliding", "revolving", "overhead", "unspecified"],
+    "window": ["fixed", "casement", "sliding", "storefront", "unspecified"],
 }
 
 
@@ -123,9 +206,11 @@ class Instance:
     snap: dict | None = None
     snap_vector: SnapVector | None = None
     attributes_from_text: list = field(default_factory=list)
+    device_attributes: dict[str, Any] = field(default_factory=dict)
     is_truncated: bool = False
     is_occluded: bool = False
     uncertain: bool = False
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @property
     def discipline(self) -> str:
@@ -154,11 +239,21 @@ class Instance:
             d["snap"] = self.snap
         if self.snap_vector is not None:
             d["snap_vector"] = self.snap_vector.to_dict()
+        if self.device_attributes:
+            d["device_attributes"] = dict(self.device_attributes)
+        d.update(self.extra)
         return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Instance":
-        if "bbox_rotated" in d:
+        known = {
+            "instance_id", "symbol_family", "symbol_variant", "discipline",
+            "device_type", "bbox_xyxy", "bbox_rotated", "attributes_from_text",
+            "device_attributes", "rotation_degrees", "is_truncated", "is_occluded",
+            "uncertain", "anchors", "snap", "snap_vector",
+        }
+        extra = {k: v for k, v in d.items() if k not in known}
+        if "bbox_rotated" in d and d["bbox_rotated"] is not None:
             rb = d["bbox_rotated"]
             box = RotatedBox(float(rb["cx"]), float(rb["cy"]), float(rb["w"]),
                              float(rb["h"]), float(rb.get("angle_deg", 0.0)))
@@ -171,16 +266,18 @@ class Instance:
                             (float(s["direction"][0]), float(s["direction"][1])))
         return cls(
             instance_id=str(d["instance_id"]),
-            symbol_family=str(d.get("symbol_family", "unknown_symbol")),
+            symbol_family=str(d.get("symbol_family") or d.get("device_type") or "unknown_symbol"),
             symbol_variant=str(d.get("symbol_variant", "unspecified")),
             box=box,
             anchors=dict(d.get("anchors", {})),
             snap=d.get("snap"),
             snap_vector=sv,
             attributes_from_text=list(d.get("attributes_from_text", [])),
+            device_attributes=dict(d.get("device_attributes", {})),
             is_truncated=bool(d.get("is_truncated", False)),
             is_occluded=bool(d.get("is_occluded", False)),
             uncertain=bool(d.get("uncertain", False)),
+            extra=extra,
         )
 
 
@@ -204,7 +301,7 @@ class Sheet:
     @classmethod
     def load(cls, path) -> "Sheet":
         from pathlib import Path
-        d = json.loads(Path(path).read_text())
+        d = json.loads(Path(path).read_text(encoding="utf-8"))
         known = {"format_version", "source_id", "source_license", "project_family_id",
                  "document_id", "page_index", "source_type", "image_path",
                  "image_sha256", "image_width", "image_height", "coordinate_system",
@@ -247,4 +344,16 @@ class Sheet:
 
     def save(self, path) -> None:
         from pathlib import Path
-        Path(path).write_text(json.dumps(self.to_dict(), indent=2))
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        encoded = (json.dumps(self.to_dict(), ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        fd, temp = tempfile.mkstemp(prefix="." + path.name + ".", suffix=".tmp", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp, path)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)

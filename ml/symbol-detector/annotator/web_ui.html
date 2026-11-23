@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blueprint symbol labeler</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg:#0e151c; --panel:#17222c; --panel-2:#121c24; --line:#324351;
+      --text:#e8f0f4; --muted:#9fb4c0; --accent:#56b4db; --good:#5cd095;
+      --warn:#ffbe70; --danger:#e3737d; --legacy:#69c3d8;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:13.5px/1.4 system-ui, -apple-system, sans-serif; }
+    button,input,select,textarea { font:inherit; }
+    button { background:#243a4c; color:var(--text); border:1px solid #445f72; padding:6px 9px; border-radius:6px; cursor:pointer; white-space:nowrap; }
+    button:hover:not(:disabled) { background:#315069; }
+    button:disabled { opacity:.42; cursor:default; }
+    button[aria-pressed="true"], .primary { background:#166991; border-color:#5daed4; }
+    button.danger { background:#4a262d; border-color:#9e5360; }
+    button.danger:hover:not(:disabled) { background:#63313b; }
+    button.ghost { background:#182632; border-color:#384d5d; padding:4px 8px; font-size:12px; }
+    button.chip { background:#162430; border-color:#3e5566; padding:3px 8px; font-size:12px; border-radius:999px; }
+    button.chip[aria-pressed="true"] { background:#1b6285; border-color:#69bfe4; color:#fff; }
+    button.warn-pill { background:#4f3818; border-color:#c9903d; color:#ffe0b0; padding:3px 8px; font-size:11.5px; border-radius:999px; }
+    header { min-height:54px; display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:7px 12px; border-bottom:1px solid var(--line); background:#111a22; }
+    header strong { font-size:15px; margin-right:4px; letter-spacing:-.01em; }
+    header .spacer { flex:1; min-width:8px; }
+    .toolbar-group { display:flex; align-items:center; gap:4px; }
+    .page-number { min-width:80px; text-align:center; font-variant-numeric:tabular-nums; font-size:13px; }
+    #fileSwitcher { max-width:190px; padding:5px 8px; font-size:12.5px; }
+    #workspace { display:grid; grid-template-columns:minmax(300px,1fr) 400px; height:calc(100vh - 91px); min-height:360px; }
+    #viewport { position:relative; min-width:0; background:#0c1319; overflow:hidden; }
+    canvas { display:block; width:100%; height:100%; touch-action:none; cursor:default; }
+    #hud { position:absolute; bottom:12px; left:12px; display:flex; flex-wrap:wrap; gap:5px; align-items:center; background:rgba(14,21,28,.92); border:1px solid var(--line); border-radius:8px; padding:6px; }
+    #cursorCoords { font-variant-numeric:tabular-nums; font-size:11.5px; color:var(--muted); padding:0 4px; min-width:92px; }
+    #modeBanner { position:absolute; top:12px; left:12px; background:rgba(22,105,145,.94); border:1px solid #69bfe4; color:#fff; border-radius:7px; padding:6px 10px; font-size:12.5px; pointer-events:none; }
+    .top-banner { position:absolute; top:12px; right:12px; display:flex; align-items:center; gap:8px; border-radius:8px; padding:8px 10px; font-size:12.5px; }
+    .top-banner[hidden] { display:none; }
+    #conflictBanner { background:#4a262d; border:1px solid #d47986; color:#ffdfe2; }
+    #draftBanner { background:#1e3a4c; border:1px solid #56b4db; color:#e2f4ff; }
+    #inspector { overflow-y:auto; background:var(--panel); border-left:1px solid var(--line); padding:14px; }
+    h2 { font-size:15px; margin:0 0 10px; display:flex; align-items:center; justify-content:space-between; gap:6px; }
+    h3 { font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; margin:14px 0 7px; color:var(--muted); }
+    .small { font-size:12px; color:var(--muted); margin:4px 0; }
+    .row { display:flex; align-items:center; gap:6px; margin-bottom:8px; }
+    .row.wrap { flex-wrap:wrap; }
+    .row > label { flex:1; }
+    label.field { display:block; font-size:12px; color:var(--muted); margin:8px 0; }
+    label.field > input, label.field > select, label.field > textarea { margin-top:3px; }
+    input, select, textarea { background:#0f1a23; border:1px solid #485d6d; border-radius:6px; color:var(--text); padding:6px 8px; min-width:0; width:100%; }
+    input:focus, select:focus, textarea:focus { outline:2px solid var(--accent); outline-offset:1px; }
+    .coordgrid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+    .coordgrid label { font-size:11.5px; color:var(--muted); }
+    .coordgrid input { display:block; margin-top:3px; }
+    .checkbox-row { display:flex; flex-wrap:wrap; gap:12px; margin:8px 0; }
+    .checkbox { display:inline-flex; align-items:center; gap:6px; margin:0; font-size:13px; cursor:pointer; }
+    .checkbox input { width:auto; margin:0; }
+    .muted-box { background:var(--panel-2); border:1px solid #334857; border-radius:7px; padding:8px 10px; font-size:12px; color:var(--muted); margin:0 0 10px; }
+    #items { margin-top:6px; display:flex; flex-direction:column; gap:4px; max-height:20vh; overflow-y:auto; padding-right:2px; }
+    #items .item-row { display:flex; gap:4px; align-items:stretch; }
+    #items button.item-btn { flex:1; text-align:left; display:flex; gap:8px; align-items:center; justify-content:space-between; padding:6px 8px; background:#1b2c39; min-width:0; }
+    #items button.item-btn span.item-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #items button.item-btn.chosen { border-color:var(--accent); background:#204459; }
+    .tag { font-size:11px; color:#fff; background:#6e502f; padding:2px 6px; border-radius:5px; flex-shrink:0; }
+    .tag.accepted { background:#1f6c47; }
+    .tag.rejected { background:#7a2e38; }
+    .tag.legacy { background:#275a6e; }
+    .pill { display:inline-block; font-size:11px; padding:2px 7px; border-radius:999px; background:#203849; border:1px solid #416278; color:#c8e4f2; }
+    .section-card { background:var(--panel-2); border:1px solid #2f4352; border-radius:8px; padding:10px; margin:10px 0; }
+    .section-card summary { cursor:pointer; font-weight:600; font-size:13px; color:#d7e7f0; user-select:none; }
+    .section-card[open] summary { margin-bottom:8px; }
+    .chip-list { display:flex; flex-wrap:wrap; gap:5px; margin:6px 0; }
+    .attr-tag { display:inline-flex; align-items:center; gap:5px; background:#1d3444; border:1px solid #3f6076; border-radius:999px; padding:2px 8px; font-size:12px; }
+    .attr-tag button { background:transparent; border:0; padding:0 2px; color:#b8d0dc; font-size:13px; line-height:1; }
+    .attr-tag button:hover { color:#fff; background:transparent; }
+    .anchor-row { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:5px 0; border-bottom:1px solid #243542; font-size:12px; }
+    .anchor-row:last-child { border-bottom:0; }
+    #emptySelection { color:var(--muted); font-size:13px; margin:10px 0; }
+    #selectionDetails[hidden], [hidden] { display:none !important; }
+    footer { height:37px; padding:6px 14px; border-top:1px solid var(--line); background:#111a22; display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--muted); font-size:12px; }
+    .error { color:#ffb3ad; } .saved { color:var(--good); } .warning { color:var(--warn); }
+    .count { font-variant-numeric:tabular-nums; white-space:nowrap; }
+    #message { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    @media (max-width:860px) {
+      #workspace { grid-template-columns:1fr; grid-template-rows:minmax(42vh,1fr) minmax(260px,46vh); height:calc(100vh - 130px); }
+      #inspector { border-left:0; border-top:1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <strong>Symbol labels</strong>
+  <div class="toolbar-group">
+    <button id="prevPage" title="Previous page or JSON ([)">&lt;</button>
+    <span id="pageIndicator" class="page-number">Page -</span>
+    <button id="nextPage" title="Next page or JSON (])">&gt;</button>
+    <select id="fileSwitcher" hidden aria-label="Switch existing JSON file" title="Switch existing annotation JSON"></select>
+  </div>
+  <span class="spacer"></span>
+  <div class="toolbar-group">
+    <button id="selectTool" aria-pressed="true" title="Select / move / resize / rotate (V)">Select · V</button>
+    <button id="drawTool" aria-pressed="false" title="Draw axis-aligned box (B)">Box · B</button>
+    <button id="orientedTool" aria-pressed="false" title="Draw oriented/rotated box: drag axis, then click width (O)">Oriented · O</button>
+    <button id="anchorTool" aria-pressed="false" title="Place anchor point on selected box (K)">Anchor · K</button>
+    <button id="snapTool" aria-pressed="false" title="Draw extra wall-snap vector on selected box (G)">Snap · G</button>
+    <button id="panTool" aria-pressed="false" title="Pan drawing (hold Space)">Pan</button>
+  </div>
+  <div class="toolbar-group">
+    <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="redo" title="Redo (Ctrl+Y)">Redo</button>
+    <button id="importJsonBtn" class="ghost" title="Import boxes from an existing annotation JSON file">Import JSON</button>
+    <input id="importJsonFile" type="file" accept=".json,application/json" hidden>
+    <button id="downloadJsonBtn" class="ghost" title="Download current annotation JSON backup">Export JSON</button>
+    <button id="save" class="primary" title="Save this page (Ctrl+S)">Save</button>
+  </div>
+</header>
+<main id="workspace">
+  <section id="viewport" aria-label="Drawing canvas">
+    <canvas id="canvas" tabindex="0" aria-label="Blueprint image and bounding boxes"></canvas>
+    <div id="modeBanner" hidden></div>
+    <div id="conflictBanner" class="top-banner" hidden>
+      <span>File changed on disk.</span>
+      <button id="reloadFromDisk" class="ghost">Reload from disk</button>
+    </div>
+    <div id="draftBanner" class="top-banner" hidden>
+      <span>Unsaved local draft found.</span>
+      <button id="restoreDraftBtn" class="primary">Restore draft</button>
+      <button id="dismissDraftBtn" class="ghost">Dismiss</button>
+    </div>
+    <div id="hud">
+      <button id="fit" title="Fit image (0)">Fit</button>
+      <button id="zoomOut" title="Zoom out (-)">-</button>
+      <span id="zoomLabel" class="count">100%</span>
+      <button id="zoomIn" title="Zoom in (+)">+</button>
+      <button id="toggleLabels" class="ghost" aria-pressed="true" title="Toggle label text overlay (L)">Labels</button>
+      <button id="toggleLoupe" class="ghost" aria-pressed="true" title="Toggle 4x precision magnifier loupe (M)">Loupe · M</button>
+      <button id="toggleWalls" class="ghost" aria-pressed="true" hidden title="Toggle wall centerline guides">Walls</button>
+      <button id="cycleViewFilter" class="ghost" title="Cycle blueprint visibility filter: Normal / Dim / Invert (I)">View: Normal</button>
+      <span id="cursorCoords">x: -, y: -</span>
+    </div>
+  </section>
+  <aside id="inspector" aria-label="Annotation editor">
+    <h2>
+      <span>Manual review</span>
+      <span style="display:flex;gap:5px;align-items:center">
+        <button id="qualityBadge" class="warn-pill" hidden title="Jump to next geometry or label quality warning"></button>
+        <span id="fileBadge" class="pill" hidden></span>
+      </span>
+    </h2>
+    <p class="muted-box">Only <strong>individually verified</strong> boxes are confirmed positives. Unreviewed proposals remain uncertain. Pages stay <strong>positive-only</strong>.</p>
+    <div class="row wrap">
+      <span id="count" class="small count">0 labels</span>
+      <button id="nextPending" class="ghost" title="Jump to next unreviewed proposal (N)">Next pending · N</button>
+    </div>
+    <div class="row">
+      <input id="search" type="search" placeholder="Filter by class, variant, ID, text..." aria-label="Filter labels">
+      <select id="filter" style="max-width:112px" aria-label="Filter by review state">
+        <option value="all">All</option>
+        <option value="unreviewed">Pending</option>
+        <option value="accepted">Verified</option>
+        <option value="rejected">Rejected</option>
+      </select>
+    </div>
+    <div id="items" aria-label="Label list"></div>
+
+    <h3>Selected symbol</h3>
+    <p id="emptySelection">Select a box on the drawing, press B for an axis-aligned box, or press O to draw an oriented/rotated box.</p>
+    <div id="selectionDetails" hidden>
+      <div class="row">
+        <span id="selectedId" class="small" style="flex:1;overflow:hidden;text-overflow:ellipsis;"></span>
+        <span id="disciplineBadge" class="pill">electrical</span>
+      </div>
+      <div class="chip-list" id="quickClassBar" aria-label="Quick family hotkeys 1 to 6">
+        <button type="button" class="chip quick-family" data-family="receptacle" title="Hotkey 1">1 receptacle</button>
+        <button type="button" class="chip quick-family" data-family="switch" title="Hotkey 2">2 switch</button>
+        <button type="button" class="chip quick-family" data-family="luminaire" title="Hotkey 3">3 luminaire</button>
+        <button type="button" class="chip quick-family" data-family="fire_alarm_device" title="Hotkey 4">4 fire_alarm</button>
+        <button type="button" class="chip quick-family" data-family="data_outlet" title="Hotkey 5">5 data_outlet</button>
+        <button type="button" class="chip quick-family" data-family="junction_box" title="Hotkey 6">6 j-box</button>
+      </div>
+      <div class="chip-list" id="quickSubtypeBar" aria-label="Quick subtype chips (Shift+1 to Shift+6)"></div>
+      <div class="row wrap">
+        <button id="accept" class="primary" title="Verify selected box (A)">Verify · A</button>
+        <button id="unverify" class="ghost" title="Mark selected box back to pending">Unverify</button>
+        <button id="reject" class="danger" title="Reject selected detection (X)">Reject · X</button>
+        <button id="duplicate" class="ghost" title="Duplicate selected box (D) or Ctrl+C / Ctrl+V at cursor">Duplicate · D</button>
+        <button id="delete" class="ghost" title="Delete this box (Delete)">Delete</button>
+      </div>
+      <label class="field">Instance ID
+        <input id="instanceIdInput" maxlength="120" autocomplete="off">
+      </label>
+      <label class="field">Device family
+        <input id="family" list="families" autocomplete="off">
+      </label>
+      <datalist id="families"></datalist>
+      <label class="field">Variant / subtype
+        <input id="variant" list="variants" maxlength="160" autocomplete="off">
+      </label>
+      <datalist id="variants"></datalist>
+      <div class="coordgrid">
+        <label>X min <input id="x0" type="number" step="0.1"></label>
+        <label>Y min <input id="y0" type="number" step="0.1"></label>
+        <label>X max <input id="x1" type="number" step="0.1"></label>
+        <label>Y max <input id="y1" type="number" step="0.1"></label>
+      </div>
+      <label class="field">Rotation (degrees · Shift+drag handle snaps 15°)
+        <div class="row" style="margin:3px 0 0">
+          <input id="angle" type="number" min="-360" max="360" step="0.5">
+          <button type="button" class="ghost rot-step" data-delta="-90">-90°</button>
+          <button type="button" class="ghost rot-step" data-delta="-15">-15°</button>
+          <button type="button" class="ghost rot-step" data-abs="0">0°</button>
+          <button type="button" class="ghost rot-step" data-delta="15">+15°</button>
+          <button type="button" class="ghost rot-step" data-delta="90">+90°</button>
+        </div>
+      </label>
+      <div id="orientedDims" class="coordgrid" hidden>
+        <label>Oriented W <input id="rotW" type="number" min="2" step="0.5"></label>
+        <label>Oriented H <input id="rotH" type="number" min="2" step="0.5"></label>
+      </div>
+      <div class="checkbox-row">
+        <label class="checkbox"><input id="occluded" type="checkbox"> Occluded</label>
+        <label class="checkbox"><input id="truncated" type="checkbox"> Truncated</label>
+      </div>
+      <p id="proposalHint" class="small"></p>
+
+      <details class="section-card" id="anchorsSection" open>
+        <summary>Anchors &amp; extra snap vector</summary>
+        <div class="small" style="margin-bottom:6px">Place precise anchors or bias wall-snapping with an extra vector:</div>
+        <div class="row wrap">
+          <button type="button" id="placeCircleCenter" class="ghost" title="Primary anchor for circular electrical symbols (receptacles, etc.)">circle_center</button>
+          <button type="button" id="placeVisualCenter" class="ghost" title="Visual center for non-circular symbols">visual_center</button>
+          <button type="button" id="placeWallAttach" class="ghost" title="Exact point where symbol touches wall">wall_attachment</button>
+          <button type="button" id="autoCenterAnchor" class="ghost" title="Place center anchor at exact geometric box center">Auto-center</button>
+        </div>
+        <div class="row" style="margin-bottom:6px">
+          <input id="customAnchorName" placeholder="Custom anchor name">
+          <button type="button" id="placeCustomAnchor" class="ghost">Place</button>
+        </div>
+        <div id="anchorList"></div>
+        <hr style="border:0;border-top:1px solid #263846;margin:8px 0">
+        <div class="row wrap">
+          <button type="button" id="drawSnapVec" class="ghost" title="Drag on canvas from origin toward wall (Shift snaps 15°)">Draw vector · G</button>
+          <button type="button" id="autoSnapFromAngle" class="ghost" title="Create snap vector from box center along rotation angle">From angle</button>
+          <button type="button" id="autoSnapFromWallAnchor" class="ghost" title="Point snap vector from center toward wall_attachment anchor">Center → wall</button>
+        </div>
+        <div id="snapVectorActions" class="row wrap" hidden>
+          <button type="button" id="flipSnapVec" class="ghost">Flip 180°</button>
+          <button type="button" id="perpSnapVec" class="ghost">+90°</button>
+          <button type="button" id="alignBoxToVec" class="ghost" title="Rotate box to align with snap vector">Align box → vec</button>
+          <button type="button" id="testWallSnap" class="ghost" hidden>Test wall snap</button>
+          <button type="button" id="clearSnapVec" class="ghost">Clear</button>
+        </div>
+        <div id="snapVectorInfo" class="small"></div>
+        <div id="snapPreviewInfo" class="small"></div>
+      </details>
+
+      <details class="section-card" id="textAttrSection" open>
+        <summary>Text callouts (attributes_from_text)</summary>
+        <div id="textAttrList" class="chip-list"></div>
+        <div class="row" style="margin-bottom:0">
+          <input id="textAttrInput" placeholder="e.g. GFI, WP, 20A, S3, EM" aria-label="Add text attribute">
+          <button type="button" id="addTextAttr" class="ghost">Add</button>
+        </div>
+      </details>
+
+      <details class="section-card" id="deviceAttrSection">
+        <summary>Electrical &amp; device attributes</summary>
+        <div id="schemaFields"></div>
+        <div id="flagFields" class="checkbox-row"></div>
+        <div id="specFields" class="coordgrid"></div>
+        <div id="customAttrList" class="chip-list"></div>
+        <div class="row" style="margin-top:6px;margin-bottom:0">
+          <input id="customAttrKey" placeholder="Custom key">
+          <input id="customAttrVal" placeholder="Value">
+          <button type="button" id="addCustomAttr" class="ghost">Add</button>
+        </div>
+      </details>
+
+      <div id="modelEvidence" class="section-card" hidden>
+        <h3 style="margin-top:0">Model evidence (unverified)</h3>
+        <p id="modelSource" class="small"></p>
+        <div id="proposalAlternatives" class="row wrap" aria-label="Alternative model suggestions"></div>
+      </div>
+    </div>
+
+    <details class="section-card" id="sheetMetaSection">
+      <summary>Sheet metadata</summary>
+      <p id="sheetInfo" class="small"></p>
+      <label class="field">Source ID <input id="metaSourceId" maxlength="500"></label>
+      <label class="field">Project family ID <input id="metaProjectFamilyId" maxlength="500"></label>
+      <label class="field">Document ID <input id="metaDocumentId" maxlength="500"></label>
+      <label class="field">Notes <textarea id="metaNotes" rows="2" maxlength="500"></textarea></label>
+    </details>
+
+    <h3>Keyboard</h3>
+    <p class="small">1–6 family · Shift+1–6 subtype · B box · O oriented · V select · K anchor · G snap vector · M loupe · I view filter · Ctrl+C/V stamp at cursor · Arrows nudge (Shift=10px) · A verify · X reject · D duplicate · N next pending · L labels · Delete remove · Ctrl+Z/Y undo/redo · Ctrl+S save · [ / ] pages · 0 fit.</p>
+  </aside>
+</main>
+<footer>
+  <span id="message" role="status">Loading editor...</span>
+  <span id="dirty" class="warning">No changes</span>
+</footer>
+<script type="module" src="/web_ui.js"></script>
+</body>
+</html>
