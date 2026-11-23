@@ -1,6 +1,8 @@
-"""Explicit, scratch-only Ultralytics YOLO26n-P2 training launcher.
+"""Explicit, blueprint-only Ultralytics YOLO26n-P2 training launcher.
 
 No general-purpose pretrained weights or dataset are used or downloaded.
+With --weights, initialize from our own SSL backbone and verify every
+transferred tensor in the actual DetectionTrainer model.
 Default is PLAN ONLY. Training ONLY starts with --run, on user's own machine.
 
   python scripts_train_ultralytics.py prepared_yolo/data.yaml
@@ -93,12 +95,24 @@ def main():
     except ImportError:
         parser.error('Install Ultralytics on your own training machine')
     model = YOLO(config['architecture'])
+    ssl_trainer = None
     if args.weights:
-        ckpt = torch.load(args.weights, map_location='cpu', weights_only=False)
-        sd = ckpt.get('backbone_neck_state_dict', ckpt)
-        missing, unexpected = model.model.load_state_dict(sd, strict=False)
-        print(f'Loaded blueprint SSL weights from {args.weights}: '
-              f'{len(sd)} tensors, {len(missing)} missing (Detect head), {len(unexpected)} unexpected')
+        # Model.train() constructs a NEW DetectionModel. Loading a state dict
+        # into the YOLO(yaml) object here would silently discard those weights.
+        # Instead inject the verified SSL tensors into the actual training model
+        # during DetectionTrainer.get_model().
+        from ultralytics.models.yolo.detect import DetectionTrainer
+        from blueprint_symbols.ssl_transfer import read_ssl_backbone, install_ssl_backbone
+        ckpt = read_ssl_backbone(args.weights)
+
+        class SSLDetectionTrainer(DetectionTrainer):
+            def get_model(self, cfg=None, weights=None, verbose=True):
+                trained_model = super().get_model(cfg=cfg, weights=None, verbose=verbose)
+                report = install_ssl_backbone(trained_model, ckpt)
+                print(f'Verified SSL backbone transfer into actual YOLO trainer: {report}', flush=True)
+                return trained_model
+
+        ssl_trainer = SSLDetectionTrainer
     strides = [int(v) for v in model.model.stride]
     if 4 not in strides:
         parser.error(f'P2 stride-4 head is missing; found strides: {strides}')
@@ -113,7 +127,7 @@ def main():
         keywords['name'] = args.name
     if args.exist_ok:
         keywords['exist_ok'] = True
-    model.train(data=config['data'], **keywords)
+    model.train(data=config['data'], trainer=ssl_trainer, **keywords)
 
 
 if __name__ == '__main__':
