@@ -108,7 +108,7 @@ def compose_ssl_symbols(
             # already DPI-adjusted (which would double the scale).
             scale_range=(min_size_px / 40.0, max_size_px / 40.0),
             max_ink=0.16, tag="ssl",
-            stroke_match=(drawing_dpi is None),
+            stroke_match=True,  # already DPI-normalized in the compositor
             drawing_dpi=drawing_dpi, match_local_ink=True,
             ink_reference=clean,
             wall_fraction=wall_fraction, canonical_classes=True,
