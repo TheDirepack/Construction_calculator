@@ -84,6 +84,7 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
         stress_val=False,stress_test=False,allow_unverified_completeness=False,
         train_variants=3, eval_variants=None, train_negative_fraction=.12,
         blank_ink_threshold=.015, blank_negative_fraction=.02,
+        verified_wall_negative_fraction=.65, verified_wall_blank_fraction=.12,
         eval_empty_keep_fraction=.25, eval_blank_keep_fraction=.02) -> dict:
     mf=json.loads(manifest.read_text())
     validate_manifest_sources(mf)
@@ -95,7 +96,9 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
     classes=mf['class_ids']
     if sorted(classes.values()) != list(range(len(classes))):
         raise ValueError('class ids must be consecutive')
-    if samples < 1 or not 1 <= train_variants <= 12 or not scales or overlap < 0 or overlap >= 512 or not 0 <= train_negative_fraction <= 1:
+    if samples < 1 or not 1 <= train_variants <= 12 or not scales or overlap < 0 or overlap >= 512 or not 0 <= train_negative_fraction <= 1 or
+            not 0 <= verified_wall_negative_fraction <= 1 or
+            not 0 <= verified_wall_blank_fraction <= 1:
         raise ValueError('bad tiling options')
     # Do not trust missing unlabeled objects as negatives in YOLO detection loss.
     per_split={key:read_records(value) for key,value in splits.items()}
@@ -133,7 +136,13 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
             # Fully annotated symbol-free tiles are necessary hard negatives, but
             # mostly-white tiles with no/few lines are strongly devalued and get fewer variants.
             neg_seed=int.from_bytes(hashlib.sha256(f'{seed}/negative/{i}'.encode()).digest()[:8],'big')
-            keep_p=blank_negative_fraction if is_blank else train_negative_fraction
+            if info.get('verified_wall_background'):
+                # Empty crops from attested symbol-free sources are meaningful
+                # hard negatives; retain more without flooding on blank paper.
+                keep_p=(verified_wall_blank_fraction if is_blank
+                        else verified_wall_negative_fraction)
+            else:
+                keep_p=blank_negative_fraction if is_blank else train_negative_fraction
             if np.random.default_rng(neg_seed).random() >= keep_p:
                 count['train_skipped_blank' if is_blank else 'train_skipped_empty']+=1
                 continue
@@ -235,6 +244,8 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
             'evaluation_source_instance_coverage':evaluation_coverage,
             'train_variants_per_base':train_variants,
             'train_negative_fraction':train_negative_fraction,
+            'verified_wall_negative_fraction':verified_wall_negative_fraction,
+            'verified_wall_blank_fraction':verified_wall_blank_fraction,
             'evaluation_variants':list(eval_variants) if eval_variants is not None else list(EVAL_VARIANTS[1:])}
     (out/'export_report.json').write_text(json.dumps(report,indent=2))
     if count['train_images']==0 or count['val_images']==0 or count['test_images']==0:
@@ -248,6 +259,10 @@ def main():
     p.add_argument('--train-tiles-per-page',type=int,default=32)
     p.add_argument('--train-variants',type=int,default=3,help='clean + independently downsampled/damaged variants per crop')
     p.add_argument('--train-negative-fraction',type=float,default=.20,help='retain completely annotated symbol-free tiles')
+    p.add_argument('--verified-wall-negative-fraction',type=float,default=.65,
+                   help='retain nonblank empty tiles from verified wall-only backgrounds')
+    p.add_argument('--verified-wall-blank-fraction',type=float,default=.12,
+                   help='retain nearly blank empty tiles from verified wall-only backgrounds')
     p.add_argument('--eval-scales',default='1.0',help='comma-separated source pixels per model pixel')
     p.add_argument('--overlap',type=int,default=128)
     p.add_argument('--seed',type=int,default=2026)
@@ -259,6 +274,8 @@ def main():
                seed=args.seed,scales=tuple(float(s) for s in args.eval_scales.split(',')),
                overlap=args.overlap,stress_val=args.stress_val,stress_test=args.stress_test,
                allow_unverified_completeness=args.allow_unverified_completeness,
-               train_variants=args.train_variants,train_negative_fraction=args.train_negative_fraction)
+               train_variants=args.train_variants,train_negative_fraction=args.train_negative_fraction,
+               verified_wall_negative_fraction=args.verified_wall_negative_fraction,
+               verified_wall_blank_fraction=args.verified_wall_blank_fraction)
     print(json.dumps(report['counts'],indent=2))
 if __name__=='__main__':main()
