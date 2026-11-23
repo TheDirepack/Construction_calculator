@@ -131,6 +131,7 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
                 locked_manifest['split_groups']['test'])):
             raise ValueError('locked evaluation includes a partially annotated group')
     train_protected=sorted(partial_groups, key=groups.index)
+    remaining_classes.difference_update({c for g in train_protected for c in group_counts[g]})
     class_group_frequency={c:sum(bool(group_counts[g][c]) for g in groups) for c in counts}
     while remaining_classes:
         candidates=[g for g in groups if g not in train_protected]
