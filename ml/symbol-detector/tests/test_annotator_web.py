@@ -266,3 +266,39 @@ if (hitBox([10,10,50,50], 10, 10, 1, true)!=='nw')
     proc = subprocess.run([node, "--input-type=module", "--eval", script],
                           capture_output=True, text=True, timeout=10)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+
+def test_legacy_cli_uses_portable_raster_reference_and_revokes_old_coverage(tmp_path, monkeypatch):
+    from annotator.tool import main as cli
+    pdf = _pdf(tmp_path / "electrical.pdf", pages=1)
+    output = tmp_path / "labels" / "reviewed.json"
+    monkeypatch.setattr(sys, "argv", [
+        "annotator.tool", "--pdf", str(pdf), "--page", "0",
+        "--output", str(output),
+        "--add-box", "d1", "receptacle", "80", "100", "100", "120",
+    ])
+    cli()
+    assert output.is_file()
+    saved = json.loads(output.read_text())
+    image = (output.parent / saved["image_path"]).resolve()
+    assert image.is_file()
+    assert image.parent == output.parent / "images"
+    assert saved["image_sha256"] == hashlib.sha256(image.read_bytes()).hexdigest()
+    assert saved["annotation_scope"] == "positive_only"
+    assert saved["annotation_completeness_verified"] is False
+    saved["annotation_completeness_verified"] = True
+    saved["exhaustive_families"] = ["receptacle"]
+    output.write_text(json.dumps(saved))
+    copied = tmp_path / "different" / "edited.json"
+    monkeypatch.setattr(sys, "argv", [
+        "annotator.tool", "--edit", str(output), "--output", str(copied),
+        "--classify", "d1", "switch",
+    ])
+    cli()
+    result = json.loads(copied.read_text())
+    assert result["instances"][0]["symbol_family"] == "switch"
+    assert result["annotation_completeness_verified"] is False
+    assert result["exhaustive_families"] == []
+    assert (copied.parent / result["image_path"]).resolve() == image
+    assert not list(copied.parent.glob("*.tmp"))
