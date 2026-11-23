@@ -56,7 +56,7 @@ def test_negative_pdf_crops_keep_variable_dpi_without_adding_devices(tmp_path):
     pdf.save(source)
     pdf.close()
     entry = {"image_path": str(source), "source_pdf": str(source),
-             "pdf_page_index": 0, "negative_control_kind": "text_heavy"}
+             "pdf_page_index": 0, "suppress_synthetic_symbols": True}
     manifest = {"buckets": {"hard_negative_pdf": {
         "weight": 1., "groups": {"project": [entry]}
     }}}
@@ -72,6 +72,7 @@ def test_negative_pdf_crops_keep_variable_dpi_without_adding_devices(tmp_path):
         for i in range(8):
             degraded, clean, mask, meta = ds[i]
             assert meta["synthetic_suppressed"] is True
+            assert meta["negative_control_kind"] is None
             assert meta["symbol_stats"]["requested"] == 0
             assert meta["symbol_stats"]["placed"] == 0
             assert meta["detector_negative_verified"] is False
@@ -100,3 +101,28 @@ def test_negative_control_tag_is_explicit_and_fail_closed(tmp_path):
     )
     with pytest.raises(ValueError, match="unknown negative control kind"):
         _ = ds[0]
+
+
+def test_uncurated_random_pdf_cannot_be_certified_wall_only(tmp_path):
+    source = tmp_path / "might_have_devices_elsewhere.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=1000, height=800)
+    page.draw_line((50, 50), (900, 50), color=(0, 0, 0))
+    page.insert_text((750, 700), "S RECEPTACLE")
+    doc.save(source)
+    doc.close()
+    entry = {"source_pdf": str(source), "image_path": str(source),
+             "pdf_page_index": 0, "negative_control_kind": "walls_only"}
+    manifest = {"buckets": {"qa_neg": {
+        "groups": {"project": [entry]}
+    }}}
+    ds = BlueprintSSLDataset(
+        manifest, size=128, items_per_epoch=4,
+        max_symbols=16, return_metadata=True
+    )
+    try:
+        with pytest.raises(ValueError, match="exact raster crop"):
+            _ = ds[0]
+    finally:
+        if ds._pdf_sampler is not None:
+            ds._pdf_sampler.close()
