@@ -40,6 +40,10 @@ from blueprint_symbols.neca_prompt_catalog import (SamNecaPrompt, list_neca_prom
     choose_neca_prompts, load_neca_sam_prompts)
 from blueprint_symbols.proposal_fusion import merge_sam_proposals
 from blueprint_symbols.neca_visual_groups import choose_visual_base_prototypes, audit_neca_visual_groups
+from blueprint_symbols.switch_suffix_templates import (
+    build_switch_suffix_templates, search_switch_suffixes,
+)
+from blueprint_symbols.neca_modifier_attachment import attach_device_modifiers
 from blueprint_symbols.sam_precision import filter_sam_detections
 from blueprint_symbols.sam_precision_profile import (
     load_family_thresholds, threshold_for_family,
@@ -581,6 +585,12 @@ def main() -> None:
                     help='Write JSON classification for every NECA source SVG (including ignored/modifier entries)')
     ap.add_argument('--visual-prototypes-per-group', type=int, default=1,
                     help='Use one clean representative per visibly distinct base silhouette by default')
+    ap.add_argument('--no-switch-suffixes', action='store_true',
+                    help='Disable fast local suffix templates for S3/S4/SLV and other compound switches')
+    ap.add_argument('--switch-suffix-score', type=float, default=0.92,
+                    help='Minimum local glyph-template correlation for switch modifiers')
+    ap.add_argument('--switch-suffix-margin', type=float, default=0.06,
+                    help='Reject similar-scoring ambiguous suffix interpretations')
     ap.add_argument('--scan-mode', choices=['grouped', 'hierarchical', 'flat'], default='grouped',
                     help='Hierarchical shares each tile embedding across coarse-family and gated-subtype passes')
     ap.add_argument('--coarse-per-family', type=int, default=2)
@@ -765,6 +775,14 @@ def main() -> None:
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         ap.error(f'family threshold file invalid: {exc}')
 
+    switch_suffix_refs = []
+    if args.scan_mode == 'grouped' and not args.no_switch_suffixes and any(
+            g.device_type == 'switch' for g in glyphs):
+        switch_suffix_refs = build_switch_suffix_templates(
+            args.neca_dir.resolve(), render_height=128)
+        print(f'Loaded {len(switch_suffix_refs)} local NECA switch suffix templates',
+              flush=True)
+
     # Prompt/model changes must invalidate resume cache; otherwise revised
     # detectors silently read old labels and appear to run impossibly fast.
     # Only inference-affecting inputs belong in this fingerprint.
@@ -797,6 +815,14 @@ def main() -> None:
         'prompt_feature_cache_schema': 2,
         'scan_mode': args.scan_mode,
         'visual_prototypes_per_group': args.visual_prototypes_per_group,
+        'switch_suffix_refs': [t.symbol_id for t in switch_suffix_refs],
+        'switch_suffix_template_content_sha256': hashlib.sha256(
+            b''.join(hashlib.sha256(t.ink.tobytes()).digest()
+                     for t in switch_suffix_refs)
+        ).hexdigest() if switch_suffix_refs else None,
+        'switch_suffix_enabled': not args.no_switch_suffixes,
+        'switch_suffix_score': args.switch_suffix_score,
+        'switch_suffix_margin': args.switch_suffix_margin,
         'active_visual_groups': [g.visual_group for g in glyphs],
         'coarse_per_family': args.coarse_per_family,
         'fine_per_family': args.fine_per_family,
@@ -883,6 +909,17 @@ def main() -> None:
                     query_stats=pdf_query_stats,
                     device='cuda', dtype=dtype,
                 )
+                if switch_suffix_refs and dets:
+                    marks = search_switch_suffixes(
+                        rgb, dets, switch_suffix_refs,
+                        min_score=args.switch_suffix_score,
+                        min_margin=args.switch_suffix_margin,
+                    )
+                    dets, unmatched_marks = attach_device_modifiers(dets, marks)
+                    pdf_query_stats['switch_suffix_marks_found'] += len(marks)
+                    pdf_query_stats['switch_suffix_marks_unmatched'] += len(unmatched_marks)
+                    pdf_query_stats['switch_suffix_marks_attached'] += (
+                        len(marks) - len(unmatched_marks))
                 scanned_here += 1
                 total_pages += 1
                 print(
@@ -921,6 +958,10 @@ def main() -> None:
                         'needs_class_review': d.get('needs_class_review', False),
                         'detection_stage': d.get('stage', 'flat'),
                         'exemplar_subtype': d.get('exemplar_subtype'),
+                        'visual_group': d.get('visual_group'),
+                        'analytic_attributes': d.get('analytic_attributes', {}),
+                        'modifier_evidence': d.get('modifier_evidence', []),
+                        'modifier_conflicts': d.get('modifier_conflicts', []),
                         'verified_ground_truth': False,
                         'symbol_bbox': [bx0, by0, bx1, by1],
                         'symbol_center': [cx, cy],
@@ -948,7 +989,9 @@ def main() -> None:
             'score_threshold': args.score_thr,
             'annotations_are_exhaustive': False,
             'verified_ground_truth': False,
-            'prompt_selection': 'allowlisted' if args.prompt_allowlist else 'hierarchical_neca',
+            'prompt_selection': ('allowlisted' if args.prompt_allowlist
+                                 else 'visual_groups' if args.scan_mode == 'grouped'
+                                 else 'hierarchical_neca'),
             'prompt_catalog': {
                 **catalog_summary,
                 'active_after_render_and_dedup': len(glyphs),
