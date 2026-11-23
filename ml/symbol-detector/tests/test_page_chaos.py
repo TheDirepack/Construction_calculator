@@ -151,3 +151,17 @@ def test_reject_invalid_nonfinite_page_controls():
         for value in (float("nan"), float("inf"), float("-inf")):
             with pytest.raises(ValueError):
                 warp_whole_page(source, np.random.default_rng(7), **{field: value})
+
+
+def test_inverse_warp_jacobian_rejects_foldovers_not_just_ink_loss():
+    from blueprint_symbols.page_chaos import _locally_invertible_remap
+
+    y, x = np.mgrid[:128, :160].astype(np.float32)
+    assert _locally_invertible_remap(x, y)
+    assert not _locally_invertible_remap(160 - x, y)  # mirror reversal
+    # Piecewise compression on half a page can keep the same total ink count.
+    xs = x.copy()
+    xs[:, 52:106] = 52.0 + (xs[:, 52:106] - 52.0) * 0.03
+    xs[:, 106:] = xs[:, 106:] - 52.0
+    assert not _locally_invertible_remap(xs, y)
+    assert not _locally_invertible_remap(np.full_like(x, np.nan), y)
