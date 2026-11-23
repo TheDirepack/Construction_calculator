@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import math
 import time
@@ -85,6 +86,7 @@ def build_pretrain_manifests(
     fpcad_train_dir: Path | None = None,
     pool_val_fraction: float = 0.10,
     include_reserve: bool = False,
+    labeled_annotations: list[Path] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Discover all eligible blueprint training images and strictly exclude val/test plans."""
     pool_dir = work_root / 'pool'
@@ -148,7 +150,12 @@ def build_pretrain_manifests(
             gid = str(doc.get('project_family_id') or jpath.stem)
             src_path = str((doc.get('pool') or {}).get('source_path') or jpath.name)
             is_real = _is_real_construction(gid, src_path) or role == 'label_queue'
-            is_val = gid in locked_eval_groups or group_is_holdout(gid, val_fraction=pool_val_fraction)
+            # Locked detector val/test projects must never influence even SSL
+            # checkpoint selection. They are excluded rather than moved to SSL val.
+            if gid in locked_eval_groups:
+                audit['excluded_counts']['locked_detector_eval'] += 1
+                continue
+            is_val = group_is_holdout(gid, val_fraction=pool_val_fraction)
             if is_real:
                 if is_val:
                     real_va[gid].append(str(img_path))
@@ -245,6 +252,56 @@ def build_pretrain_manifests(
         if bl_groups:
             train_buckets['rendered_layouts_train'] = {'weight': 0.04, 'groups': bl_groups}
 
+    # 5. Real, verified positive device boxes guide SSL crop selection. This
+    # does NOT assert that all symbols have been labeled, and it never turns
+    # unannotated regions into supervised detection negatives.
+    labeled_tr: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    labeled_va: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for jpath in sorted(set(labeled_annotations or [])):
+        try:
+            doc = json.loads(jpath.read_text())
+        except (OSError, ValueError):
+            audit['excluded_counts']['invalid_labeled_json'] += 1
+            continue
+        if not doc.get('source_group_verified'):
+            audit['excluded_counts']['unverified_labeled_group'] += 1
+            continue
+        gid = str(doc.get('project_family_id') or '').strip()
+        if not gid or gid in locked_eval_groups:
+            audit['excluded_counts']['labeled_locked_or_missing_group'] += 1
+            continue
+        imgpath = (jpath.parent / str(doc.get('image_path', ''))).resolve()
+        if not imgpath.is_file():
+            audit['excluded_counts']['labeled_image_missing'] += 1
+            continue
+        boxes = []
+        w, h = doc.get('image_width', 0), doc.get('image_height', 0)
+        for inst in doc.get('instances', []):
+            if inst.get('uncertain') or inst.get('review_required'):
+                continue
+            box = inst.get('bbox_xyxy')
+            if not isinstance(box, list) or len(box) != 4:
+                continue
+            try:
+                x0, y0, x1, y1 = map(float, box)
+            except (ValueError, TypeError):
+                continue
+            if all(math.isfinite(v) for v in (x0, y0, x1, y1)) and 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h:
+                boxes.append([x0, y0, x1, y1])
+        if not boxes:
+            audit['excluded_counts']['labeled_no_usable_boxes'] += 1
+            continue
+        record = {'image_path': str(imgpath), 'boxes': boxes}
+        target = labeled_va if group_is_holdout(gid, val_fraction=pool_val_fraction) else labeled_tr
+        target[gid].append(record)
+        key = 'labeled_devices_train' if target is labeled_tr else 'labeled_devices_val'
+        audit['included_counts' if target is labeled_tr else 'val_monitor_counts'][key] += 1
+
+    if labeled_tr:
+        train_buckets['labeled_devices'] = {'weight': 0.24, 'groups': dict(labeled_tr)}
+    if labeled_va:
+        val_buckets['labeled_devices'] = {'weight': 0.24, 'groups': dict(labeled_va)}
+
     audit['excluded_counts'] = dict(audit['excluded_counts'])
     audit['included_counts'] = dict(audit['included_counts'])
     audit['val_monitor_counts'] = dict(audit['val_monitor_counts'])
@@ -328,6 +385,9 @@ def train(args: argparse.Namespace) -> None:
         args.work_root.resolve(),
         fpcad_train_dir=args.fpcad_train_dir.resolve() if args.fpcad_train_dir else None,
         pool_val_fraction=args.pool_val_fraction,
+        labeled_annotations=[
+            Path(f) for pattern in args.labeled_annotations for f in glob.glob(pattern, recursive=True)
+        ],
     )
     (out_dir / 'pretrain_audit.json').write_text(json.dumps(audit, indent=2))
     (out_dir / 'train_manifest.json').write_text(json.dumps(train_manifest))
@@ -341,15 +401,30 @@ def train(args: argparse.Namespace) -> None:
 
     if not torch.cuda.is_available():
         raise SystemExit('CUDA GPU unavailable; refusing CPU pretraining')
+    if args.init_weights and not args.init_weights.is_file():
+        raise FileNotFoundError(f'Initial weights do not exist: {args.init_weights}')
+    if args.neca_dir and not (args.neca_dir / 'symbols.json').is_file():
+        raise FileNotFoundError(f'NECA SVG bank missing symbols.json: {args.neca_dir}')
 
     device = torch.device('cuda:0')
 
+    data_opts = {
+        'neca_dir': args.neca_dir,
+        'max_symbols': args.max_symbols,
+        'symbol_min_px': args.symbol_min_px,
+        'symbol_max_px': args.symbol_max_px,
+        'symbol_augment_probability': args.symbol_augment_probability,
+        'procedural_fraction': args.procedural_fraction,
+        'clean_fraction': args.clean_fraction,
+        'labeled_focus_probability': args.labeled_focus_probability,
+    }
     train_ds = BlueprintSSLDataset(
-        train_manifest, size=args.imgsz, items_per_epoch=args.items_per_epoch, seed=args.seed
+        train_manifest, size=args.imgsz, items_per_epoch=args.items_per_epoch,
+        seed=args.seed, **data_opts,
     )
     val_ds = BlueprintSSLDataset(
         val_manifest, size=args.imgsz, items_per_epoch=args.val_items,
-        seed=args.seed + 9999, deterministic_eval=True,
+        seed=args.seed + 9999, deterministic_eval=True, **data_opts,
     ) if val_manifest['buckets'] else None
 
     train_loader = DataLoader(
@@ -526,6 +601,18 @@ def main() -> None:
     p.add_argument('--workers', type=int, default=2)
     p.add_argument('--pool-val-fraction', type=float, default=0.10)
     p.add_argument('--seed', type=int, default=2026)
+    p.add_argument('--labeled-annotations', action='append', default=[], metavar='GLOB',
+                   help='Verified positive device JSONs used for device-centered SSL crops')
+    p.add_argument('--neca-dir', type=Path, default=None,
+                   help='NECA_100_Vector_Library containing symbols.json and all vector SVGs')
+    p.add_argument('--max-symbols', type=int, default=16,
+                   help='Random number of synthetic symbols per crop: 0..N (inclusive)')
+    p.add_argument('--symbol-min-px', type=float, default=12.0)
+    p.add_argument('--symbol-max-px', type=float, default=80.0)
+    p.add_argument('--symbol-augment-probability', type=float, default=0.80)
+    p.add_argument('--procedural-fraction', type=float, default=0.25)
+    p.add_argument('--clean-fraction', type=float, default=0.20)
+    p.add_argument('--labeled-focus-probability', type=float, default=0.65)
     p.add_argument('--init-weights', type=Path, default=None,
                    help='Optional prior SSL checkpoint (last_pretrain.pt or best_yolo26n_p2_backbone.pt) to warm-start from')
     p.add_argument('--resume', action='store_true')
