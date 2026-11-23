@@ -128,11 +128,12 @@ class PdfCropSampler:
                bank_size: int | None = None,
                dpi_variant: int | None = None,
                dpi_variants: int | None = None) -> tuple[np.ndarray, dict]:
-        """Clip-render from PDF; optionally replay an exact clean PDF region.
+        """Clip-render from PDF; optionally reuse an exact physical region anchor.
 
-        crop_seed controls *only* base crop selection. The caller must use
-        an independent RNG for symbols, warps, and degradation. Seedless
-        calls preserve the original fresh-random behavior.
+        crop_seed controls base site selection. With dpi_variant, multiple
+        real 100–400 DPI zoom levels share its physical center, each cached
+        separately. The caller independently randomizes symbols and damage.
+        Seedless calls preserve the previous fresh-random behavior.
         """
         if size < 32:
             raise ValueError("PDF training crop must be at least 32 pixels")
