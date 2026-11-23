@@ -65,8 +65,15 @@ def install_ssl_backbone(model: torch.nn.Module, checkpoint: Mapping) -> dict:
 
     incompatible = model.load_state_dict(source, strict=False)
     expected_missing = set(current) - expected
-    if set(incompatible.missing_keys) != expected_missing or incompatible.unexpected_keys:
-        raise RuntimeError("Incomplete or unexpected SSL backbone transfer")
+    # PyTorch may omit backward-compatible head buffers (e.g. BN tracking)
+    # from missing_keys. Only *unexpected* missing backbone keys are defects.
+    unexplained_missing = set(incompatible.missing_keys) - expected_missing
+    if unexplained_missing or incompatible.unexpected_keys:
+        raise RuntimeError(
+            "Incomplete or unexpected SSL backbone transfer: "
+            f"missing_backbone={sorted(unexplained_missing)[:8]}, "
+            f"unexpected={incompatible.unexpected_keys[:8]}"
+        )
     after = model.state_dict()
     for key in expected:
         if not torch.equal(after[key].detach().cpu(), source[key].detach().cpu()):
