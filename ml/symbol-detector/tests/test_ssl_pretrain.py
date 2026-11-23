@@ -159,3 +159,21 @@ def test_run_fingerprint_stable_and_detects_changed_configuration():
     assert original != run_fingerprint(
         {"buckets": {"a": {"groups": {"project_a": ["changed.png"]}}}},
         val, args)
+
+
+def test_ssl_train_validation_isolation_guard_rejects_overlaps(tmp_path):
+    from scripts_pretrain_ssl import assert_ssl_partition_isolation
+
+    image_a = str(tmp_path / "a.png")
+    image_b = str(tmp_path / "b.png")
+    train = {"buckets": {"real": {"groups": {"same_project": [image_a]}}}}
+    val = {"buckets": {"other": {"groups": {"same_project": [image_b]}}}}
+    with pytest.raises(ValueError, match="source isolation"):
+        assert_ssl_partition_isolation(train, val)
+
+    val = {"buckets": {"other": {"groups": {"different_project": [image_a]}}}}
+    with pytest.raises(ValueError, match="source isolation"):
+        assert_ssl_partition_isolation(train, val)
+
+    val = {"buckets": {"other": {"groups": {"different_project": [image_b]}}}}
+    assert_ssl_partition_isolation(train, val) is None
