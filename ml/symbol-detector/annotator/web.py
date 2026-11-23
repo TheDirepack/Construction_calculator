@@ -137,6 +137,7 @@ class LabelingSession:
         self.dpi = dpi
         self.lock = threading.RLock()
         self.token = secrets.token_urlsafe(32)
+        self._render_cache: dict[int, tuple[Path, int, int, str]] = {}
         self.source_hash = sha256_file(self.pdf) if self.pdf else None
         self.source_stat = self.pdf.stat() if self.pdf else None
         if self.pdf:
@@ -187,12 +188,19 @@ class LabelingSession:
 
     def _raster(self, index: int) -> tuple[Path, int, int, str]:
         self._assert_pdf_unchanged()
+        if index in self._render_cache:
+            cached = self._render_cache[index]
+            if cached[0].is_file():
+                return cached
+            self._render_cache.pop(index)
         if self.edit:
             data = json.loads(self.edit.read_text())
             image = (self.edit.parent / str(data["image_path"])).resolve()
             if not image.is_file():
                 raise LabelingError(f"annotation image unavailable: {image}")
-            return image, int(data["image_width"]), int(data["image_height"]), sha256_file(image)
+            result = image, int(data["image_width"]), int(data["image_height"]), sha256_file(image)
+            self._render_cache[index] = result
+            return result
         with fitz.open(self.pdf) as doc:
             sheet = doc[index]
             factor = self.dpi / 72.0
@@ -203,7 +211,9 @@ class LabelingSession:
             path = self.out_dir / "images" / f"page_{index + 1:04d}_{self.source_hash[:12]}_{width}x{height}.png"
             if not path.is_file():
                 _atomic_bytes(path, pix.tobytes("png"))
-        return path, width, height, sha256_file(path)
+        result = path, width, height, sha256_file(path)
+        self._render_cache[index] = result
+        return result
 
     def _proposal_instances(self, index: int, width: int, height: int) -> list[dict]:
         if self.proposals is None:
