@@ -83,7 +83,15 @@ def test_pdf_native_crops_vary_scale_and_position_without_fullpage_rasters(tmp_p
             crop, meta = sampler.sample(entry, 256, np.random.default_rng(seed))
             assert crop.shape == (256, 256, 3)
             assert crop.dtype == np.uint8
-            assert 25 < meta["effective_dpi"] < 5000
+            assert 100 <= meta["effective_dpi"] <= 400
+            assert meta["requested_dpi"] == meta["effective_dpi"]
+            assert meta["dpi_range"] == [100, 400]
+            assert meta["physical_crop_size_points"] == pytest.approx(
+                256 * 72 / meta["effective_dpi"], rel=2e-5
+            )
+            assert meta["clip_rect_pt"][2] - meta["clip_rect_pt"][0] == pytest.approx(
+                meta["physical_crop_size_points"], abs=.003
+            )
             observed_dpi.add(meta["effective_dpi"])
             observed_clip.add(tuple(meta["clip_rect_pt"]))
             crops.append(crop)
