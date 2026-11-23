@@ -210,9 +210,11 @@ def _process(src: str, rel: str, rule: dict, cfg: dict, out: str, dpi: int, max_
             return
         folder = out_p / role
         folder.mkdir(parents=True, exist_ok=True)
-        fmt = '.jpg' if photo else '.png'
+        # JPEG q95 is visually equivalent for line art at a fraction of the PNG
+        # size, and the training loader ignores the container format.
+        fmt = '.jpg'
         img_path = folder / (name + fmt)
-        ok = cv2.imwrite(str(img_path), img, [cv2.IMWRITE_JPEG_QUALITY, 93] if fmt == '.jpg' else [])
+        ok = cv2.imwrite(str(img_path), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
         if not ok:
             raise OSError(img_path)
         digest = hashlib.sha256(img_path.read_bytes()).hexdigest()
