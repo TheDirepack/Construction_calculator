@@ -427,3 +427,35 @@ def test_bloom_contrast_are_input_only_and_can_mix_with_other_damage():
     assert meta["operations"] == []
     assert np.array_equal(clean, source)
     assert not mask.any()
+
+
+def test_faint_blue_linework_is_rescued_after_severe_optical_washout(monkeypatch):
+    """White-background fixed black-ink threshold missed pale CAD strokes."""
+    import blueprint_symbols.scan_chaos as scan_chaos
+
+    def erase_lines(image, rng, *, strength=1.):
+        return np.full_like(image, 255), ["forced_qa_washout"]
+
+    monkeypatch.setattr(scan_chaos, "add_scan_chaos", erase_lines)
+    source = np.full((128, 128, 3), 255, dtype=np.uint8)
+    for y in range(16, 112, 18):
+        cv2.line(source, (6, y), (117, y), (223, 233, 243),
+                 2, cv2.LINE_AA)
+    baseline = source.copy()
+    degraded, mask, meta = apply_runtime_corruptions(
+        source, np.random.default_rng(11),
+        clean_fraction=0., mask_prob=0., return_metadata=True,
+    )
+    assert np.array_equal(source, baseline)
+    assert "line_contrast_rescue" in meta["operations"]
+    assert "forced_qa_washout" in meta["operations"]
+    assert not mask.any()
+    # If the rescue did not run, every pixel would be white.
+    assert int((cv2.cvtColor(degraded, cv2.COLOR_BGR2GRAY) < 251).sum()) >= 300
+
+    blank = np.full((128, 128, 3), 255, dtype=np.uint8)
+    _, _, plain_meta = apply_runtime_corruptions(
+        blank, np.random.default_rng(11),
+        clean_fraction=0., mask_prob=0., return_metadata=True,
+    )
+    assert "line_contrast_rescue" not in plain_meta["operations"]
