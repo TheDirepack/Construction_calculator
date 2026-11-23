@@ -9,7 +9,11 @@ CODE="$BASE/code"
 DATA="$BASE/data/blueprints_and_libraries"
 WORK="$BASE/work"
 OUT="${SSL_OUT:-$WORK/pretrain_v3}"
-SSL_BATCH="${SSL_BATCH:-4}"
+# Effective optimizer batch, not necessarily the number held on the GPU.
+# The 512px SSL decoder reconstructs full-resolution RGB and can exhaust
+# 6GB VRAM with a physical batch of 16. Default to 4 x 4 accumulation.
+SSL_BATCH="${SSL_BATCH:-16}"
+SSL_MICROBATCH="${SSL_MICROBATCH:-4}"
 SSL_EPOCHS="${SSL_EPOCHS:-60}"
 SSL_ITEMS_PER_EPOCH="${SSL_ITEMS_PER_EPOCH:-8192}"
 SSL_VAL_ITEMS="${SSL_VAL_ITEMS:-512}"
@@ -73,6 +77,7 @@ exec "$PY" scripts_pretrain_ssl.py \
   --out "$OUT" \
   --imgsz 512 \
   --batch "$SSL_BATCH" \
+  --microbatch "$SSL_MICROBATCH" \
   --epochs "$SSL_EPOCHS" \
   --items-per-epoch "$SSL_ITEMS_PER_EPOCH" \
   --val-items "$SSL_VAL_ITEMS" \
