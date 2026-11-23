@@ -255,19 +255,21 @@ Manual denylist suggestions require at least 10 human rejections over two
 PDFs, with no human-confirmed positive. Model-only decisions never
 automatically eliminate references.
 
-**Still unverified:** GPU inference/accuracy/throughput for the installed
-SAM3.1 Transformers version and its custom cross-image concept-token path.
-CPU checks on source NECA switch art found correct 3/4/LV/K/T suffix splits,
-including a two-mark synthetic compound switch. This does not establish
-real blueprint accuracy. Validate group coverage, reference quality losses,
-candidate precision and missed true devices on a small fully audited held-out
-drawing set before merging this draft PR.
+**Still unverified:** actual pretrained SAM3.1 checkpoint inference,
+accuracy, VRAM use and throughput on electrical drawings. The default uses
+same-image visual exemplars, as required by SAM3. CI runs the complete
+low-level geometry/DETR layers **and** a tiny randomly initialized vision
+model through the actual shared-canvas scanner; neither predicts meaningful
+electrical-device labels without pretrained weights. Validate detected true
+devices, false-positive counts, modifier attachment, and missed devices on
+manually audited real PDF pages before merging.
 
 ### Merge readiness / self-hosted acceptance
 
-**Verified by GitHub CI (2026-11-22):** the complete detector Python
-suite, with 129 passing tests as of the latest completed run, including
-grouping, template tags, model-free page inference, OOM retries,
+**Verified by GitHub CI (2026-11-22):** complete detector Python
+suite, 148 tests passing at the last fully verified shared-canvas revision.
+Includes grouping, template tags, real randomly initialized SAM3 vision,
+geometry, DETR and scoring components, page inference, OOM retries,
 annotation conversion and review gates. The runner also imported
 Transformers 5.20.1 and CPU PyTorch 2.6.0 / torchvision 0.21.0
 (including `torchvision.ops.roi_align`). This does not load the
