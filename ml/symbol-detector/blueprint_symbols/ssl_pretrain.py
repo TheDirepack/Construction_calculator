@@ -735,6 +735,14 @@ class BlueprintSSLDataset(Dataset):
         }
         if control_kind is not None and control_kind not in allowed_controls:
             raise ValueError(f"unknown negative control kind: {control_kind}")
+        if control_kind is not None and pdf_crop_meta is not None:
+            # Random DPI, changing physical field of view and random sites
+            # invalidate a reviewed *exact viewport*. Render/crop first to a
+            # fixed raster and review the pixels before classifying negatives.
+            raise ValueError(
+                "negative-control kind requires an exact raster crop; "
+                "random PDF crops can contain unreviewed devices"
+            )
         suppress_synthetic = bool(control_kind is not None or (
             isinstance(entry, dict) and
             entry.get("suppress_synthetic_symbols", False)
