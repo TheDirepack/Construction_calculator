@@ -58,8 +58,8 @@ def read_records(annotation_paths: list[str | Path], *, classes: dict[str, int] 
             exhaustive.update(classes)
         record=RasterRecord(image, str(data.get('project_family_id',data.get('source_id',path.stem))),
                             w,h,data['instances'],
-                            bool(data.get('wall_only_background_verified', False) and
-                                 data.get('synthetic_targets_only', False)),
+                            (data.get('wall_only_background_verified') is True and
+                             data.get('synthetic_targets_only') is True),
                             frozenset(exhaustive),
                             str(data.get('source_type', 'unknown')),
                             negative)

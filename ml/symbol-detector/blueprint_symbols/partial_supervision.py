@@ -21,12 +21,21 @@ def read_supervision(data_yaml: Path) -> dict | None:
     root = data_yaml.resolve().parent
     path = root / 'phase2_supervision.json'
     if not path.is_file():
+        # Every dataset from our exporter carries provenance and a sidecar.
+        # Without the sidecar, ordinary YOLO would train unknown devices as
+        # background. External fully labeled YOLO datasets remain supported.
+        if (root / 'sample_provenance.jsonl').is_file() or (
+                data_yaml.is_file() and
+                'phase2_supervision:' in data_yaml.read_text(encoding='utf-8')):
+            raise ValueError('missing phase-two supervision sidecar; cannot use ordinary YOLO loss')
         return None
     raw = json.loads(path.read_text())
     if not isinstance(raw, dict) or raw.get('format_version') != 1:
         raise ValueError('unsupported phase-two supervision metadata version')
     classes = raw.get('class_ids')
     if (not isinstance(classes, dict) or not classes or
+            any(not isinstance(name, str) or not name.strip() or
+                type(index) is not int for name, index in classes.items()) or
             sorted(classes.values()) != list(range(len(classes)))):
         raise ValueError('invalid phase-two class mapping')
     samples = raw.get('samples')
@@ -37,6 +46,13 @@ def read_supervision(data_yaml: Path) -> dict | None:
         '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff')}
     if not seen or set(samples) != seen:
         raise ValueError('phase-two supervision masks differ from training images')
+    image_stems = [p.stem for p in files if p.is_file() and p.suffix.lower() in (
+        '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff')]
+    if len(image_stems) != len(seen):
+        raise ValueError('duplicate training-image stems in phase-two dataset')
+    labels = root / 'labels' / 'train'
+    if ({p.stem for p in labels.glob('*.txt')} if labels.is_dir() else set()) != seen:
+        raise ValueError('phase-two label files differ from training images')
     n = len(classes)
     for name, class_ids in samples.items():
         if (not isinstance(class_ids, list) or
@@ -44,6 +60,8 @@ def read_supervision(data_yaml: Path) -> dict | None:
                 class_ids != sorted(set(class_ids))):
             raise ValueError(f'invalid verified-negative class mask for sample {name}')
     raw['has_partial'] = any(len(ids) != n for ids in samples.values())
+    if raw['has_partial'] and raw.get('partial_training_enabled') is not True:
+        raise ValueError('partial training masks require explicit partial_training_enabled=true')
     return raw
 
 

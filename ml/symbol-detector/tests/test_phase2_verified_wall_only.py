@@ -197,3 +197,30 @@ def test_export_negative_sampling_prefers_verified_wall_ink(tmp_path):
     assert report["counts"]["train_images"] > 0
     assert report["verified_wall_negative_fraction"] == 1.
     assert report["unverified_annotation_completeness"] == []
+
+
+def test_verified_wall_negative_requires_literal_boolean_and_family_list(tmp_path):
+    manifest = _write_manifest(tmp_path)
+    source = json.loads(manifest.read_text())
+    base = source['sources'][0]
+    for key, value in [
+        ('source_group_verified', 'true'),
+        ('calibration_verified', 'true'),
+        ('verified_negative_families', ['receptacle', 42]),
+        ('verified_negative_families', ['receptacle', {'unexpected': 'object'}]),
+    ]:
+        src = dict(base, **{key: value})
+        manifest.write_text(json.dumps({'sources': [src]}))
+        with pytest.raises(ValueError):
+            generate(manifest, tmp_path / 'should-not-create', copies=2)
+    # A truthy string in an old JSON must never upgrade a crop into a
+    # verified hard negative merely because its other fields are present.
+    image = _wall_source(tmp_path)
+    ann = tmp_path / 'candidate.json'
+    ann.write_text(json.dumps({
+        'image_path': image.name, 'image_width': 768, 'image_height': 768,
+        'instances': [], 'wall_only_background_verified': 'true',
+        'synthetic_targets_only': 'true',
+        'exhaustive_families': [],
+    }))
+    assert not read_records([ann])[0].wall_only_background_verified
