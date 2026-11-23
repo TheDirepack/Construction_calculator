@@ -44,6 +44,8 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
             test_fraction: float = .15, stress_val: bool = True,
             stress_test: bool = True, allow_unverified_completeness: bool = False,
             locked_manifest: Path | None = None,
+            verified_wall_negative_fraction: float = .65,
+            verified_wall_blank_fraction: float = .12,
             eval_scales: tuple[float, ...] = (1.0,), eval_overlap: int = 128) -> dict:
     if destination.exists() and any(destination.iterdir()):
         raise FileExistsError(f'refusing to overwrite existing directory: {destination}')
@@ -60,6 +62,8 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
     export = run(mpath, dataset, samples=train_tiles_per_page, train_variants=train_variants,
                  stress_val=stress_val, stress_test=stress_test,
                  allow_unverified_completeness=allow_unverified_completeness, seed=seed,
+                 verified_wall_negative_fraction=verified_wall_negative_fraction,
+                 verified_wall_blank_fraction=verified_wall_blank_fraction,
                  scales=tuple(eval_scales), overlap=eval_overlap)
     audit = verify_export(dataset)
     result = {
@@ -85,6 +89,8 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--train-tiles-per-page', type=int, default=32)
     p.add_argument('--train-variants', type=int, default=3)
+    p.add_argument('--verified-wall-negative-fraction', type=float, default=.65)
+    p.add_argument('--verified-wall-blank-fraction', type=float, default=.12)
     p.add_argument('--val-fraction', type=float, default=.15)
     p.add_argument('--test-fraction', type=float, default=.15)
     p.add_argument('--seed', type=int, default=2026)
@@ -105,6 +111,8 @@ def main():
                      test_fraction=a.test_fraction, seed=a.seed,
                      stress_val=a.stress_val, stress_test=a.stress_test,
                      allow_unverified_completeness=a.allow_unverified_completeness,
+                     verified_wall_negative_fraction=a.verified_wall_negative_fraction,
+                     verified_wall_blank_fraction=a.verified_wall_blank_fraction,
                      locked_manifest=a.locked_manifest,
                      eval_scales=tuple(float(v) for v in a.eval_scales.split(',')),
                      eval_overlap=a.eval_overlap)
