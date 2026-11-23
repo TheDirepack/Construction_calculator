@@ -462,6 +462,9 @@ class BlueprintSSLDataset(Dataset):
         items_per_epoch: int = 8192,
         seed: int = 2026,
         deterministic_eval: bool = False,
+        crop_reuse_views: int = 4,
+        crop_bank_size: int = 6,
+        fresh_crop_probability: float = 0.20,
         neca_dir: str | Path | None = None,
         max_symbols: int = 16,
         symbol_min_px: float = 12.0,
@@ -484,6 +487,13 @@ class BlueprintSSLDataset(Dataset):
         self.seed = int(seed)
         self.epoch = 0
         self.deterministic_eval = bool(deterministic_eval)
+        if not 1 <= crop_reuse_views <= 32 or not 1 <= crop_bank_size <= 128:
+            raise ValueError("invalid crop reuse views or crop bank size")
+        if not 0 <= fresh_crop_probability <= 1:
+            raise ValueError("fresh_crop_probability must be in [0,1]")
+        self.crop_reuse_views = int(crop_reuse_views)
+        self.crop_bank_size = int(crop_bank_size)
+        self.fresh_crop_probability = float(fresh_crop_probability)
         if not 0 <= symbol_augment_probability <= 1 or not 0 <= clean_fraction <= 1 or not 0 <= labeled_focus_probability <= 1:
             raise ValueError("invalid SSL sampling probabilities")
         self.max_symbols = int(max_symbols)
@@ -540,24 +550,25 @@ class BlueprintSSLDataset(Dataset):
         self._raster_cache_bytes = 0
         self._raster_cache_budget = 96 * (1 << 20)  # per worker, not per rank
         self._pdf_sampler = None
-        self._source_burst = 2
+        self._source_burst = self.crop_reuse_views
         self._source_plan: np.ndarray | None = None
         self.set_epoch(0)
 
     def _build_source_plan(self, epoch: int) -> np.ndarray:
-        """Randomized source-local pairs for low-memory PDF I/O.
+        """Arrange consecutive *views* of a shared base crop.
 
-        Two consecutive samples use the same page, but choose independent
-        positions/scales/noise. This halves document opens and page-thumbnail
-        renders without making one PDF dominate a full optimizer batch:
-        seven source pairs contribute to the effective batch of fourteen.
-        Each project's page list cycles without replacement within an epoch.
+        Each burst uses one source page and crop-bank slot. Other sample RNGs
+        remain independent, so the same scanned/drawn pixels can be trained
+        with different synthetic symbols, rotations, warps and degradations.
+        Small stable per-page banks get revisited across epochs; an optional
+        fresh-site fraction prevents limited-bank spatial overfitting.
         """
         rng = np.random.default_rng(
             np.random.SeedSequence([self.seed, epoch, 0x5A2CE])
         )
         count = self.items_per_epoch
-        plan = np.zeros((count, 3), dtype=np.int32)
+        # columns: bucket, project group, page/image, crop slot
+        plan = np.zeros((count, 4), dtype=np.int32)
         cursors: dict[tuple[int, int], int] = {}
         permutations: dict[tuple[int, int], np.ndarray] = {}
         for offset in range(0, count, self._source_burst):
@@ -573,8 +584,23 @@ class BlueprintSSLDataset(Dataset):
             order = permutations[key]
             idx = int(order[cursors[key] % len(order)])
             cursors[key] += 1
-            plan[offset:min(count, offset + self._source_burst)] = (b, g, idx)
+            # Nonnegative slots repeat across epochs; negative ones are new
+            # crop sites whose seed includes the current epoch and burst.
+            if rng.random() < self.fresh_crop_probability:
+                slot = -1 - offset
+            else:
+                slot = int(rng.integers(self.crop_bank_size))
+            plan[offset:min(count, offset + self._source_burst)] = (b, g, idx, slot)
         return plan
+
+    def _base_crop_seed(self, source: str, page: int, slot: int,
+                        epoch: int) -> int:
+        """Stable 64-bit source crop seed, independent of worker/index RNG."""
+        scope = (f"{self.seed}/bank/{source}/{page}/{slot}/{self.size}"
+                 if slot >= 0 else
+                 f"{self.seed}/fresh/{epoch}/{source}/{page}/{slot}/{self.size}")
+        return int.from_bytes(hashlib.sha256(scope.encode()).digest()[:8],
+                              "big")
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
@@ -610,11 +636,14 @@ class BlueprintSSLDataset(Dataset):
         pdf_crop_meta = None
         path = ""
         b_idx = 0
+        crop_slot = -1 - index
         for attempt in range(8):
             if attempt == 0 and self._source_plan is not None:
-                b_idx, group_idx, entry_idx = map(
+                b_idx, group_idx, entry_idx, crop_slot = map(
                     int, self._source_plan[index]
                 )
+            else:
+                crop_slot = -1 - index - attempt * self.items_per_epoch
             else:
                 b_idx = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
                 name = self.bucket_names[b_idx]
@@ -626,6 +655,12 @@ class BlueprintSSLDataset(Dataset):
             group = groups[group_idx]
             entry = group[entry_idx]
             path = entry["image_path"] if isinstance(entry, dict) else entry
+            crop_page = int(entry.get("pdf_page_index", -1)) if isinstance(entry, dict) else -1
+            crop_seed = self._base_crop_seed(
+                str(entry.get("source_pdf") or path) if isinstance(entry, dict)
+                else str(path), crop_page, crop_slot, ep
+            )
+            crop_rng = np.random.default_rng(crop_seed)
             if isinstance(entry, dict) and "pdf_page_index" in entry:
                 # Clip-render at the final needed scale; never load a 24MP
                 # full-page raster merely to discard nearly all of it.
@@ -633,7 +668,9 @@ class BlueprintSSLDataset(Dataset):
                     from .pdf_crop import PdfCropSampler
                     self._pdf_sampler = PdfCropSampler()
                 try:
-                    clean, pdf_crop_meta = self._pdf_sampler.sample(entry, self.size, rng)
+                    clean, pdf_crop_meta = self._pdf_sampler.sample(
+                        entry, self.size, crop_rng, crop_seed=crop_seed
+                    )
                 except (OSError, ValueError, IndexError, RuntimeError):
                     continue
                 break
@@ -641,7 +678,7 @@ class BlueprintSSLDataset(Dataset):
             img = self._read_cached(path)
             if img is not None and min(img.shape[:2]) >= 64:
                 clean = sample_label_guided_crop(
-                    img, self.size, rng, boxes,
+                    img, self.size, crop_rng, boxes,
                     focus_probability=self.labeled_focus_probability,
                 )
                 break
@@ -712,6 +749,13 @@ class BlueprintSSLDataset(Dataset):
             details = {
                 "source": str(path), "bucket": self.bucket_names[b_idx],
                 "pdf_crop": pdf_crop_meta,
+                "base_crop": {
+                    "seed": crop_seed,
+                    "bank_slot": crop_slot if crop_slot >= 0 else None,
+                    "fresh": crop_slot < 0,
+                    "reuse_views": self.crop_reuse_views,
+                    "background_labels_exhaustive": False,
+                },
                 "full_clean_view": full_clean_view,
                 "geometric_variability_enabled": not full_clean_view,
                 "symbol_stats": symbol_stats,
