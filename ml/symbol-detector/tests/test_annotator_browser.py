@@ -8,6 +8,7 @@ Run with:
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 from http.server import ThreadingHTTPServer
 
@@ -17,6 +18,19 @@ fitz = pytest.importorskip("fitz")
 playwright = pytest.importorskip("playwright.sync_api")
 
 from annotator.web import LabelingSession, make_handler
+
+
+def _launch_browser(playwright_instance):
+    # GitHub's Ubuntu 24.04 runner already provides Chrome; avoid downloading
+    # another 100+ MB browser for every PR push. Local developers can use
+    # system Chromium or the Playwright-managed browser as a fallback.
+    executable = (shutil.which("google-chrome") or
+                  shutil.which("google-chrome-stable") or
+                  shutil.which("chromium") or shutil.which("chromium-browser"))
+    options = {"executable_path": executable} if executable else {}
+    return playwright_instance.chromium.launch(
+        headless=True, args=["--no-sandbox"], **options,
+    )
 
 
 def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
@@ -34,7 +48,7 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
     worker.start()
     try:
         with playwright.sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            browser = _launch_browser(pw)
             try:
                 page = browser.new_page(viewport={"width": 1420, "height": 900})
                 page.goto(f"http://127.0.0.1:{server.server_port}/")
@@ -143,7 +157,7 @@ def test_browser_sam_class_alternative_is_not_automatically_verified(tmp_path):
     worker.start()
     try:
         with playwright.sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            browser = _launch_browser(pw)
             try:
                 tab = browser.new_page(viewport={"width": 1420, "height": 900})
                 tab.goto(f"http://127.0.0.1:{server.server_port}/")
