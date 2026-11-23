@@ -305,3 +305,54 @@ def test_new_warp_controls_change_resume_fingerprint():
     args.symbol_chaos_strength = 1.
     args.placement_chaos = .20
     assert run_fingerprint(manifest, {"buckets": {}}, args) != reference
+
+
+def test_clean_fraction_bypasses_symbol_page_and_scan_damage(tmp_path):
+    import cv2
+    import torch
+    from blueprint_symbols.ssl_pretrain import BlueprintSSLDataset
+
+    png = tmp_path / "sheet.png"
+    assert cv2.imwrite(str(png), _fake_blueprint(320, 320))
+    manifest = {"buckets": {"drawings": {"groups": {"project": [str(png)]}}}}
+    dataset = BlueprintSSLDataset(
+        manifest, size=256, items_per_epoch=12, seed=123,
+        clean_fraction=1.0, max_symbols=16, symbol_augment_probability=1.0,
+        symbol_chaos_probability=1.0, page_chaos_probability=1.0,
+        return_metadata=True,
+    )
+    placed_total = 0
+    for index in range(len(dataset)):
+        damaged, clean, mask, info = dataset[index]
+        assert info["full_clean_view"] is True
+        assert torch.equal(clean, damaged)
+        assert not bool(mask.any())
+        assert info["page_chaos"]["operations"] == []
+        assert info["degradation"]["operations"] == []
+        placements = info["symbol_stats"].get("placements", [])
+        placed_total += len(placements)
+        assert all(not p["symbol_chaos"].get("operations") for p in placements)
+    assert placed_total > 0
+
+
+def test_no_clean_views_means_scans_and_page_warps_are_eligible(tmp_path):
+    import cv2
+    from blueprint_symbols.ssl_pretrain import BlueprintSSLDataset
+
+    png = tmp_path / "sheet.png"
+    assert cv2.imwrite(str(png), _fake_blueprint(320, 320))
+    manifest = {"buckets": {"drawings": {"groups": {"project": [str(png)]}}}}
+    dataset = BlueprintSSLDataset(
+        manifest, size=256, items_per_epoch=8, seed=492,
+        clean_fraction=0.0, max_symbols=0,
+        page_chaos_probability=1.0, page_chaos_strength=1.5,
+        return_metadata=True,
+    )
+    modes = set()
+    for index in range(len(dataset)):
+        _, _, _, info = dataset[index]
+        assert info["full_clean_view"] is False
+        assert info["degradation"]["severity"] != "clean"
+        assert info["degradation"]["operations"]
+        modes.update(info["page_chaos"]["operations"])
+    assert modes
