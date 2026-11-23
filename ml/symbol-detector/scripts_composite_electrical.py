@@ -33,6 +33,9 @@ import cv2
 import numpy as np
 
 from blueprint_symbols.electrical_glyphs import DEFAULT_WEIGHTS, rotate_glyph, sample_glyph
+from blueprint_symbols.wall_alignment import (
+    detect_wall_sites, wall_rotation_degrees, snap_symbol_to_wall,
+)
 
 ELECTRICAL = tuple(DEFAULT_WEIGHTS)
 
@@ -47,44 +50,10 @@ CANONICAL_ELECTRICAL_MAP = {
 }
 
 
-def _find_wall_sites(gray: np.ndarray, rng: np.random.Generator, max_sites: int = 800) -> list[tuple[int, int, int, int]]:
-    """Detect straight wall pixels and return (wx, wy, nx, ny) sites where (nx, ny) points into open space."""
-    h, w = gray.shape
-    scale = min(1.0, 1600.0 / max(h, w))
-    small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1.0 else gray
-    sh, sw = small.shape
-    ink = (small < 165).astype(np.uint8)
-    k = max(20, min(80, max(sh, sw) // 45))
-    long_h = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (k, 1)))
-    long_v = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, k)))
-
-    sites: list[tuple[int, int, int, int]] = []
-    hy, hx = np.nonzero(long_h > 0)
-    if len(hx):
-        idx = rng.choice(len(hx), size=min(max_sites // 2, len(hx)), replace=False)
-        for i in idx:
-            sx, sy = int(hx[i]), int(hy[i])
-            if sy < 12 or sy >= sh - 12 or sx < 12 or sx >= sw - 12:
-                continue
-            above = float(ink[max(0, sy - 14):max(1, sy - 2), max(0, sx - 6):min(sw, sx + 7)].mean())
-            below = float(ink[min(sh - 1, sy + 2):min(sh, sy + 14), max(0, sx - 6):min(sw, sx + 7)].mean())
-            ny = -1 if above <= below else 1
-            sites.append((int(round(sx / scale)), int(round(sy / scale)), 0, ny))
-
-    vy, vx = np.nonzero(long_v > 0)
-    if len(vx):
-        idx = rng.choice(len(vx), size=min(max_sites // 2, len(vx)), replace=False)
-        for i in idx:
-            sx, sy = int(vx[i]), int(vy[i])
-            if sy < 12 or sy >= sh - 12 or sx < 12 or sx >= sw - 12:
-                continue
-            left = float(ink[max(0, sy - 6):min(sh, sy + 7), max(0, sx - 14):max(1, sx - 2)].mean())
-            right = float(ink[max(0, sy - 6):min(sh, sy + 7), min(sw - 1, sx + 2):min(sw, sx + 14)].mean())
-            nx = -1 if left <= right else 1
-            sites.append((int(round(sx / scale)), int(round(sy / scale)), nx, 0))
-
-    rng.shuffle(sites)
-    return sites
+def _find_wall_sites(gray: np.ndarray, rng: np.random.Generator, max_sites: int = 800):
+    """Legacy site list; composite_page uses shared raster wall geometry."""
+    sites, _ = detect_wall_sites(gray, rng, max_sites=max_sites)
+    return [(site.x, site.y, site.nx, site.ny) for site in sites]
 
 
 def _overlaps(box, boxes, margin=3.0) -> bool:
@@ -135,7 +104,11 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
     gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
     dark = (gray < 160).astype(np.uint8)
     integral = cv2.integral(dark)
-    wall_sites = _find_wall_sites(gray, rng) if wall_fraction > 0 and per_page > 0 else []
+    wall_sites, wall_mask = (
+        detect_wall_sites(gray, rng)
+        if wall_fraction > 0 and per_page > 0
+        else ([], np.zeros((h, w), np.uint8))
+    )
     wall_cursor = 0
     # Match glyph line weight to the page so symbols sit at a plausible drawing scale.
     reference_scale = (drawing_dpi / 200.0) if drawing_dpi is not None else 1.0
@@ -169,17 +142,12 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
         chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
         placement_mode = "wall" if want_wall else "uniform"
         if want_wall:
-            wx, wy, nx, ny = wall_sites[wall_cursor % len(wall_sites)]
+            site = wall_sites[wall_cursor % len(wall_sites)]
             wall_cursor += 1
-            # Orient symbol so its bottom/attachment edge touches the wall and body extends along (nx, ny)
-            if ny == -1:
-                angle = 0.0
-            elif ny == 1:
-                angle = 180.0
-            elif nx == -1:
-                angle = 90.0
-            else:
-                angle = 270.0
+            wx, wy = site.x, site.y
+            # The normal points from the wall toward the open side. Align
+            # the glyph baseline to the fitted tangent, not just 0/90 axes.
+            angle = wall_rotation_degrees(site.nx, site.ny)
             anchors_with_contact = dict(anchors)
             if 'wall_attachment' not in anchors_with_contact:
                 anchors_with_contact['wall_attachment'] = (0.5, 1.0)
@@ -195,21 +163,20 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
                 glyph[:, :, 3] = warped
                 pts = {key: (px * gw / old_w, py * gh / old_h)
                        for key, (px, py) in pts.items()}
-                # For warped wall-mounted symbols, use the new outer edge as
-                # the approximate physical contact point, never the distorted
-                # interior of the mask.
-                anchor = ((gw / 2, gh) if ny == -1 else
-                          (gw / 2, 0) if ny == 1 else
-                          (gw, gh / 2) if nx == -1 else (0, gh / 2))
-                pts["wall_attachment"] = anchor
+                # Nonlinear chaos does not preserve the analytic attachment.
+                # Locate the new wallward *ink* edge instead, and suppress
+                # keypoint annotation below.
+                pts.pop('wall_attachment', None)
             gh, gw = glyph.shape[:2]
             if gw + 4 >= w or gh + 4 >= h:
                 continue
-            ax, ay = pts['wall_attachment']
-            x = int(round(wx - ax))
-            y = int(round(wy - ay))
-            if x < 2 or y < 2 or x + gw >= w - 2 or y + gh >= h - 2:
+            position = snap_symbol_to_wall(
+                glyph[:, :, 3], site, wall_mask,
+                attachment=pts.get('wall_attachment'), margin=3,
+            )
+            if position is None:
                 continue
+            x, y = position
         else:
             angle = float(rng.choice([0, 90, 180, 270])) if rng.random() < .8 else float(rng.uniform(-180, 180))
             glyph, pts = rotate_glyph(rgba, anchors, angle, scale)
@@ -296,7 +263,9 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
                                         else 'known_placement_transform'),
                        'glyph_scale': scale, 'drawing_dpi': drawing_dpi,
                        'ink_color_bgr': [int(round(v)) for v in ink_col],
-                       'placement_mode': 'wall_touching' if want_wall else placement_mode},
+                       'placement_mode': 'wall_aligned_raster' if want_wall else placement_mode,
+                       'wall_angle_degrees_image': round(angle, 3) if want_wall else None,
+                       'wall_contact_method': 'raster_line_fit' if want_wall else None},
         })
     return page, placed
 
