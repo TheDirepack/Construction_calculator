@@ -402,7 +402,8 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
     # optimizer state must not be resumed across objective revisions.
     conf["ssl_objective"] = "ink-paper-balanced-v2"
     conf["symbol_geometry_augmentation"] = "bounded_chaos_v1"
-    conf["page_geometry_augmentation"] = "aligned_multiwarp_v1"
+    conf["page_geometry_augmentation"] = "aligned_multiwarp_v2_ink_retention"
+    conf["clean_sampling_policy"] = "end_to_end_undistorted_crop_v1"
     conf["neca_svg_bank_sha256"] = neca_source_fingerprint(args.neca_dir)
     manifest = {"format": 1, "settings": conf,
                 "train": train_manifest, "validation": val_manifest}
