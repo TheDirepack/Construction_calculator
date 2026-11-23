@@ -722,6 +722,23 @@ class BlueprintSSLDataset(Dataset):
 
         if clean is None:
             raise RuntimeError('Failed to sample a blueprint after 8 attempts')
+        # Explicit QA/SSL controls must NOT receive added symbols, even if the
+        # same source can also serve as a synthetic-positive background.
+        # Do not infer a detector negative merely from 'no reviewed boxes'.
+        control_kind = (
+            entry.get("negative_control_kind") if isinstance(entry, dict)
+            else None
+        )
+        allowed_controls = {
+            "text_heavy", "walls_only", "sparse_lines", "blank",
+            "non_device_geometry",
+        }
+        if control_kind is not None and control_kind not in allowed_controls:
+            raise ValueError(f"unknown negative control kind: {control_kind}")
+        suppress_synthetic = bool(control_kind is not None or (
+            isinstance(entry, dict) and
+            entry.get("suppress_synthetic_symbols", False)
+        ))
         # Decide on a genuinely clean crop before any rotation/skew/page
         # deformation. Truly clean examples retain the crop's source geometry,
         # whereas the other examples receive all independent chaos stages.
@@ -730,7 +747,8 @@ class BlueprintSSLDataset(Dataset):
             clean = apply_geometric_variability(clean, rng)
         symbol_stats = {"requested": 0, "placed": 0, "shortfall": 0,
                         "neca": 0, "procedural": 0}
-        if self.max_symbols > 0 and rng.random() < self.symbol_augment_probability:
+        if (not suppress_synthetic and self.max_symbols > 0 and
+                rng.random() < self.symbol_augment_probability):
             from .ssl_augmentation import compose_ssl_symbols
             clean, symbol_stats = compose_ssl_symbols(
                 clean, rng, neca_bank=self.neca_bank,
@@ -798,6 +816,12 @@ class BlueprintSSLDataset(Dataset):
                     ),
                 },
                 "full_clean_view": full_clean_view,
+                "negative_control_kind": control_kind,
+                "synthetic_suppressed": suppress_synthetic,
+                # Negative ground truth requires independent exhaustive
+                # human review of the *exact* final crop; PDF zoom and
+                # page deformation invalidate region-level assumptions.
+                "detector_negative_verified": False,
                 "geometric_variability_enabled": not full_clean_view,
                 "symbol_stats": symbol_stats,
                 "page_chaos": page_chaos_meta,
