@@ -340,6 +340,20 @@ def test_explicitly_pending_boxes_never_become_training_positives():
     assert not trusted_training_instance(pending)
     assert not trusted_training_instance(fake_accept)
     assert not trusted_training_instance(absent_status)
+    # Legacy model proposals still contain explicit model provenance even
+    # when a broken importer accidentally clears uncertain.
+    pseudo = dict(base, review_required=True, source={
+        'kind': 'teacher_pseudo_label', 'label_method': 'model_prediction',
+        'not_ground_truth': True,
+    })
+    assert not trusted_training_instance(pseudo)
+    assert not trusted_training_instance(dict(base, review_source='sam3',
+                                              verified_ground_truth=True))
+    assert not trusted_training_instance(dict(base, review_required='false'))
+    # The human-acceptance action overrides preserved original provenance.
+    reviewed_pseudo = dict(pseudo, review_status='accepted',
+                           review_source='human', verified_ground_truth=True)
+    assert trusted_training_instance(reviewed_pseudo)
     tile = SimpleNamespace(x=0, y=0, size=512, source_scale=1)
     for source in (pending, fake_accept, absent_status):
         targets, ignored = _export_annotations([source], tile, {'receptacle': 0})
@@ -348,6 +362,11 @@ def test_explicitly_pending_boxes_never_become_training_positives():
     for source in (legacy, accepted):
         targets, ignored = _export_annotations([source], tile, {'receptacle': 0})
         assert len(targets) == 1 and ignored == []
+    for source in (pseudo, dict(base, review_source='sam3', verified_ground_truth=True)):
+        targets, ignored = _export_annotations([source], tile, {'receptacle': 0})
+        assert targets == [] and ignored
+    targets, ignored = _export_annotations([reviewed_pseudo], tile, {'receptacle': 0})
+    assert len(targets) == 1 and ignored == []
 
 
 def test_manifest_class_count_ignores_malformed_explicit_review(tmp_path):
@@ -364,3 +383,62 @@ def test_manifest_class_count_ignores_malformed_explicit_review(tmp_path):
                                allow_partial_training=True)
     row = next(x for x in refreshed['source_images'] if x['annotation'] == str(source))
     assert row['usable_families'] == []
+
+
+def test_sampler_enforces_review_status_for_actual_training_targets(tmp_path):
+    """Training sample() must enforce the same trust policy as the manifest."""
+    from blueprint_symbols.raster_training import RasterRecord, RasterTileDataset
+
+    image = tmp_path / 'page.png'
+    assert cv2.imwrite(str(image), np.full((512, 512, 3), 245, np.uint8))
+    instances = [
+        {'instance_id': 'accepted', 'symbol_family': 'receptacle',
+         'bbox_xyxy': [40, 40, 80, 80], 'review_status': 'accepted',
+         'review_source': 'human', 'verified_ground_truth': True, 'uncertain': False},
+        {'instance_id': 'legacy', 'symbol_family': 'receptacle',
+         'bbox_xyxy': [110, 40, 150, 80], 'uncertain': False},
+        # Invalid-but-possible imported records must not become positives.
+        {'instance_id': 'pending', 'symbol_family': 'switch_sensor',
+         'bbox_xyxy': [185, 40, 225, 80], 'review_status': 'unreviewed',
+         'review_source': 'sam3', 'verified_ground_truth': False, 'uncertain': False},
+        {'instance_id': 'model_accepted', 'symbol_family': 'switch_sensor',
+         'bbox_xyxy': [250, 40, 290, 80], 'review_status': 'accepted',
+         'review_source': 'sam3', 'verified_ground_truth': True, 'uncertain': False},
+        {'instance_id': 'uncertain', 'symbol_family': 'switch_sensor',
+         'bbox_xyxy': [320, 40, 360, 80], 'uncertain': True},
+    ]
+    rec = RasterRecord(image, 'source-A', 512, 512, instances)
+    dataset = RasterTileDataset(
+        [rec], {'receptacle': 0, 'switch_sensor': 1},
+        size=512, virtual_tiles_per_image=4, source_scales=(1., 1.),
+        target_symbol_pixels=None,
+    )
+    assert set(dataset.class_sampling_weights) == {'receptacle'}
+    for index in range(len(dataset)):
+        _, targets, meta = dataset.sample(index)
+        assert len(targets) == 2
+        assert all(target[0] == 0 for target in targets)
+        assert len(meta['ignore_boxes']) == 3
+        assert {(round(box[0]), round(box[1])) for box in meta['ignore_boxes']} == {
+            (185, 40), (250, 40), (320, 40),
+        }
+
+
+def test_pending_only_sampler_cannot_invent_positive_or_verified_negative(tmp_path):
+    from blueprint_symbols.raster_training import RasterRecord, RasterTileDataset
+
+    image = tmp_path / 'pending.png'
+    assert cv2.imwrite(str(image), np.full((512, 512, 3), 255, np.uint8))
+    pending = {'symbol_family': 'switch_sensor', 'bbox_xyxy': [40, 40, 80, 80],
+               'review_status': 'unreviewed', 'review_source': 'sam3',
+               'verified_ground_truth': False, 'uncertain': False}
+    dataset = RasterTileDataset(
+        [RasterRecord(image, 'pending-only', 512, 512, [pending])],
+        {'switch_sensor': 0},
+        size=512, virtual_tiles_per_image=2, source_scales=(1., 1.),
+    )
+    assert dataset.class_sampling_weights == {}
+    for i in range(len(dataset)):
+        _, positives, meta = dataset.sample(i)
+        assert positives == []
+        assert len(meta['ignore_boxes']) == 1
