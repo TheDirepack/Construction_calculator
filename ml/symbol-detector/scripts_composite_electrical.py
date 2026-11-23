@@ -122,7 +122,8 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
     from blueprint_symbols.symbol_chaos import distort_symbol_alpha, sample_free_origin
     from blueprint_symbols.ink_style import local_drawing_ink_bgr
 
-    if drawing_dpi is not None and not 100 <= drawing_dpi <= 400:
+    if drawing_dpi is not None and not (math.isfinite(drawing_dpi) and
+                                        100 <= drawing_dpi <= 400):
         raise ValueError("drawing_dpi must be in [100,400]")
     reference = image if ink_reference is None else ink_reference
     if reference.shape != image.shape or reference.dtype != image.dtype:
@@ -137,8 +138,12 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
     wall_sites = _find_wall_sites(gray, rng) if wall_fraction > 0 and per_page > 0 else []
     wall_cursor = 0
     # Match glyph line weight to the page so symbols sit at a plausible drawing scale.
-    base = estimate_stroke(gray) / GLYPH_STROKE_PX if stroke_match else 1.0
-    base = float(np.clip(base, .4, 6.0))
+    reference_scale = (drawing_dpi / 200.0) if drawing_dpi is not None else 1.0
+    base = (estimate_stroke(gray) / (GLYPH_STROKE_PX * reference_scale)
+            if stroke_match else 1.0)
+    base = float(np.clip(base, .65, 1.55)) if drawing_dpi is not None else float(
+        np.clip(base, .4, 6.0)
+    )
     ink_bgr = np.percentile(page[dark.astype(bool)], 10, axis=0) if dark.any() else np.zeros(3)
     occupied = [list(map(float, i['bbox_xyxy'])) for i in doc['instances']]
     placed = []
