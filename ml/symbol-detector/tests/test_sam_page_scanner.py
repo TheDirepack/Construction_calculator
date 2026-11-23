@@ -53,6 +53,7 @@ class FakeSam3:
         self.query_batches = 0
         self.detr_decoder = self
         self.batch = 1
+        self.fail_large_batches = False
 
     def get_vision_features(self, pixel_values):
         self.visions += 1
@@ -63,6 +64,8 @@ class FakeSam3:
     def detr_encoder(self, **kwargs):
         self.batch = kwargs['text_features'].shape[0]
         self.query_batches += 1
+        if self.fail_large_batches and self.batch > 1:
+            raise torch.cuda.OutOfMemoryError('simulated limited VRAM')
         t = torch.zeros(self.batch, 1, 4)
         return SimpleNamespace(last_hidden_state=t, text_features=kwargs['text_features'],
                                pos_embeds_flattened=t,
@@ -147,3 +150,29 @@ def test_grouped_page_scanner_skips_blank_image_without_encoding(monkeypatch):
     )
     assert result == []
     assert model.visions == 0
+
+
+
+def test_decoder_oom_retry_reuses_image_embedding_and_preserves_queries(monkeypatch):
+    scanner = _load_scanner_with_fake_transformers(monkeypatch)
+    image = np.full((1008, 1008, 3), 255, dtype=np.uint8)
+    cv2.circle(image, (504, 504), 24, (0, 0, 0), 3)
+    model = FakeSam3()
+    model.fail_large_batches = True
+    glyphs = [
+        _glyph('NECA_S', 'switch', 'switch.base_letter_s'),
+        _glyph('NECA_R', 'receptacle', 'receptacle.wall_duplex_open'),
+    ]
+    stats = Counter()
+    dets = scanner.detect_page_sam3(
+        model, FakeProcessor(), image, glyphs,
+        torch.zeros(2, 1, 4), torch.ones(2, 1, dtype=torch.bool),
+        torch.zeros(1, 1, 4), torch.ones(1, 1, dtype=torch.bool),
+        prompt_plan={'mode': 'grouped'}, svg_batch=2,
+        query_stats=stats, device='cpu', dtype=torch.float32,
+    )
+    assert model.visions == 1
+    assert model.query_batches == 3  # one failed batch of 2, then 2x1
+    assert stats['sam_inference_oom_retries'] == 1
+    assert stats['visual_base_prompts'] == 2
+    assert len(dets) == 1  # two label proposals fuse into one location
