@@ -421,6 +421,11 @@ def detect_page_sam3(
                         if pres.ndim == 1:
                             pres = pres.unsqueeze(-1)
                         scores = logits.sigmoid() * pres.sigmoid()
+                        if scores.ndim != 2 or scores.shape[0] != B or scores.shape[1] < 1:
+                            raise RuntimeError(
+                                f'SAM3 score tensor shape mismatch: expected [B,Q] '
+                                f'for batch {B}, got {tuple(scores.shape)}'
+                            )
                         if family_thresholds:
                             # Apply independent family cutoffs before CPU copy.
                             thrs = torch.tensor([
@@ -441,6 +446,11 @@ def detect_page_sam3(
                         boxes = box_cxcywh_to_xyxy(
                             (inverse_sigmoid(refs) + offsets).sigmoid()
                         ) * float(tile_size)
+                        if boxes.ndim != 3 or boxes.shape[:2] != scores.shape or boxes.shape[-1] != 4:
+                            raise RuntimeError(
+                                f'SAM3 box tensor shape mismatch: expected '
+                                f'{tuple(scores.shape)} + [4], got {tuple(boxes.shape)}'
+                            )
                         # Exactly one CPU synchronization per batch. Pulling
                         # individual boxes/scores causes hundreds of tiny
                         # cuda syncs on dense electrical sheets.
