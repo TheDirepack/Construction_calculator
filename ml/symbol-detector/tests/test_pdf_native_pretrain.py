@@ -269,7 +269,12 @@ def test_native_pdf_dataset_passes_sampled_dpi_into_synthetic_symbols(tmp_path):
             assert 0 <= x0 < x1 <= 256 and 0 <= y0 < y1 <= 256
             symbols_seen += 1
     assert symbols_seen > 0
-    assert min(all_dpis) < 175 and max(all_dpis) > 325
+    # Each replayed base crop is rendered at one true physical DPI, with
+    # independent symbols/warps in its four views. A 16-view fixture only
+    # samples four DPIs; extremes are not guaranteed on that small sample.
+    assert len(set(all_dpis)) == len(dataset) // dataset.crop_reuse_views
+    assert all(len(set(all_dpis[i:i + dataset.crop_reuse_views])) == 1
+               for i in range(0, len(dataset), dataset.crop_reuse_views))
 
 
 def test_pdf_crop_finds_isolated_faint_plan_ink(tmp_path):
