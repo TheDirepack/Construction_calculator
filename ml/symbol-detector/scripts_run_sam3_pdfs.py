@@ -44,7 +44,7 @@ from blueprint_symbols.switch_suffix_templates import (
     build_switch_suffix_templates, search_switch_suffixes,
 )
 from blueprint_symbols.neca_modifier_attachment import attach_device_modifiers
-from blueprint_symbols.sam_precision import filter_sam_detections
+from blueprint_symbols.sam_precision import filter_sam_detections, tile_origins
 from blueprint_symbols.sam_precision_profile import (
     load_family_thresholds, threshold_for_family,
 )
@@ -359,8 +359,8 @@ def detect_page_sam3(
         raise ValueError('invalid SAM precision gate configuration')
     H, W = page_rgb.shape[:2]
     step = tile_size - overlap
-    ys = list(range(0, max(1, H - overlap), step))
-    xs = list(range(0, max(1, W - overlap), step))
+    ys = tile_origins(H, tile_size, overlap)
+    xs = tile_origins(W, tile_size, overlap)
     raw_dets: list[dict[str, Any]] = []
     tile_no = 0
 
