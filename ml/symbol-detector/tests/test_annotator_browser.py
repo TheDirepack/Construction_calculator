@@ -310,7 +310,7 @@ def test_browser_invalid_import_keeps_current_verified_labels(tmp_path):
                     incoming.write_text(json.dumps(dict(header, instances=instances)))
                     page.locator("#importJsonFile").set_input_files(str(incoming))
                     page.wait_for_function(
-                        "part => document.querySelector('#message')?.textContent?.includes(part)", expected
+                        "part => document.querySelector('#message')?.textContent?.includes(part)", arg=expected
                     )
                     assert "1 verified" in page.locator("#count").inner_text()
                     assert page.locator("#dirty").inner_text() == "Saved"
