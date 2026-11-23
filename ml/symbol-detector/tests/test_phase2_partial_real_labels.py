@@ -188,6 +188,23 @@ def test_actual_ultralytics_criterion_masks_unknown_background(tmp_path):
     items=[dataset[i] for i in range(len(dataset))]
     mask_counts={int(item['verified_class_mask'][0]) for item in items}
     assert mask_counts=={0,1}
-    collated=dataset.collate_fn(items[:2])
+    partial_item=next(item for item in items if not item['verified_class_mask'][0])
+    complete_item=next(item for item in items if item['verified_class_mask'][0])
+    collated=dataset.collate_fn([partial_item,complete_item])
     assert collated['verified_class_mask'].shape==(2,1)
     assert collated['img'].shape[0]==2
+
+    # Actual YOLO26 forward + assigned-object loss + backward on a mixed
+    # partial/complete minibatch, not just a synthetic BCE tensor.
+    import torch.nn.functional as F
+    collated['img']=F.interpolate(
+        collated['img'].float(),size=(128,128),mode='bilinear',
+        align_corners=False,
+    )/255.0
+    model.train()
+    model.zero_grad(set_to_none=True)
+    loss,metrics=model.loss(collated)
+    assert torch.isfinite(loss).all()
+    loss.sum().backward()
+    assert model.model[0].conv.weight.grad is not None
+    assert torch.isfinite(model.model[0].conv.weight.grad).all()
