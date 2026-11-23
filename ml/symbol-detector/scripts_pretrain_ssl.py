@@ -740,9 +740,22 @@ def train(args: argparse.Namespace) -> None:
             torch.cuda.set_rng_state_all(ckpt['cuda_rng_state_all'])
         print(f'Resumed from epoch {start_epoch} (best_val={best_val:.5f})', flush=True)
 
-    total_params = sum(p.numel() for p in model.parameters())
-    bb_params = sum(p.numel() for k, p in model.det_model.named_parameters() if not k.startswith(f'model.{model.detect_idx}.'))
-    print(f'Model: YOLO26n-P2 SSL | backbone+neck={bb_params:,} params | total_with_decoder={total_params:,} params', flush=True)
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    bb_params = sum(p.numel() for k, p in model.det_model.named_parameters()
+                    if not k.startswith(f'model.{model.detect_idx}.'))
+    frozen_detect_params = sum(
+        p.numel() for p in model.det_model.model[model.detect_idx].parameters()
+    )
+    optimizer_param_ids = [id(p) for group in optimizer.param_groups for p in group["params"]]
+    expected_param_ids = {id(p) for p in model.parameters() if p.requires_grad}
+    if len(optimizer_param_ids) != len(expected_param_ids) or set(optimizer_param_ids) != expected_param_ids:
+        raise ValueError("SSL optimizer must include every trainable model parameter exactly once")
+    print(
+        f'Model: YOLO26n-P2 SSL | backbone+neck={bb_params:,} params | '
+        f'trainable_with_decoder={trainable_params:,} | '
+        f'frozen_random_detect_head={frozen_detect_params:,} params',
+        flush=True,
+    )
     print(
         f'Training: epochs={args.epochs}, items/epoch={args.items_per_epoch}, '
         f'effective_batch={args.batch}, gpu_microbatch={microbatch}, '
