@@ -474,6 +474,7 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
     # optimizer state must not be resumed across objective revisions.
     conf["ssl_objective"] = "ink-paper-balanced-v2"
     conf["training_step_policy"] = "effective_batch_gradient_accumulation_v1"
+    conf["source_sampling_policy"] = "paired_source_locality_permuted_pages_v1"
     conf["symbol_geometry_augmentation"] = "bounded_chaos_v1"
     conf["page_geometry_augmentation"] = "aligned_multiwarp_v2_ink_retention"
     conf["clean_sampling_policy"] = "end_to_end_undistorted_crop_v1"
@@ -749,7 +750,9 @@ def train(args: argparse.Namespace) -> None:
         args.batch, configured_microbatch(args)
     )
     train_loader = DataLoader(
-        train_ds, batch_size=microbatch, shuffle=True, num_workers=args.workers,
+        # Epoch-specific randomized source pairs are preplanned inside the
+        # dataset. Shuffling here would destroy consecutive PDF cache hits.
+        train_ds, batch_size=microbatch, shuffle=False, num_workers=args.workers,
         pin_memory=True, drop_last=True, worker_init_fn=_worker_init,
     )
     val_loader = DataLoader(
