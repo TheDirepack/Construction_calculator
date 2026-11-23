@@ -503,12 +503,16 @@ def validate_pretrain_settings(args: argparse.Namespace) -> None:
                 "clean_fraction", "labeled_focus_probability",
                 "symbol_chaos_probability", "placement_chaos",
                 "page_chaos_probability"):
-        prob = getattr(args, key)
+        defaults = {"symbol_chaos_probability": .88,
+                    "placement_chaos": .85, "page_chaos_probability": .70}
+        prob = getattr(args, key, defaults.get(key))
         if not math.isfinite(prob) or not 0 <= prob <= 1:
             raise ValueError(f"{key} must be a probability in [0,1]")
-    if not math.isfinite(args.symbol_chaos_strength) or not 0 <= args.symbol_chaos_strength <= 2:
+    symbol_strength = getattr(args, "symbol_chaos_strength", 1.0)
+    page_strength = getattr(args, "page_chaos_strength", 1.0)
+    if not math.isfinite(symbol_strength) or not 0 <= symbol_strength <= 2:
         raise ValueError("symbol_chaos_strength must be in [0,2]")
-    if not math.isfinite(args.page_chaos_strength) or not 0 <= args.page_chaos_strength <= 2:
+    if not math.isfinite(page_strength) or not 0 <= page_strength <= 2:
         raise ValueError("page_chaos_strength must be in [0,2]")
 
 
