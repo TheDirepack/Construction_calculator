@@ -6,6 +6,7 @@ on:
       - 'ml/symbol-detector/annotator/**'
       - 'ml/symbol-detector/tests/test_annotator_browser.py'
       - 'ml/symbol-detector/tests/test_annotator_web.py'
+      - 'ml/symbol-detector/tests/test_annotator_improvements.py'
       - '.github/workflows/ml-labeler-ui-ci.yml'
   workflow_dispatch:
 
@@ -43,4 +44,4 @@ jobs:
           fi
       - name: Verify manual labeling browser and HTTP contract
         working-directory: ml/symbol-detector
-        run: python -m pytest -q tests/test_annotator_browser.py tests/test_annotator_web.py
+        run: python -m pytest -q tests/test_annotator_browser.py tests/test_annotator_web.py tests/test_annotator_improvements.py

@@ -869,8 +869,9 @@ class LabelingSession:
             _, _, path = self._load(index)
             return path.read_bytes(), _image_mime(path)
 
-    def save(self, index: int, *, revision: str | None, instances: object,
-             rejected: object, metadata: object = None) -> str:
+    def validate_review_payload(self, index: int, *, revision: str | None,
+                                instances: object, rejected: object) -> tuple[dict, list[dict]]:
+        """Check a proposed edit without writing it. Save reuses these exact gates."""
         with self.lock:
             baseline, actual_revision, _ = self._load(index)
             if revision != actual_revision:
@@ -896,6 +897,14 @@ class LabelingSession:
                 _valid_box(item.get("bbox_xyxy"), width, height)
                 rejected_ids.add(item["instance_id"])
                 cleaned_rejected.append(_normalize_instance_for_save(item))
+            return baseline, cleaned_rejected
+
+    def save(self, index: int, *, revision: str | None, instances: object,
+             rejected: object, metadata: object = None) -> str:
+        with self.lock:
+            baseline, cleaned_rejected = self.validate_review_payload(
+                index, revision=revision, instances=instances, rejected=rejected
+            )
 
             if metadata is not None:
                 if not isinstance(metadata, dict):
@@ -991,7 +1000,7 @@ def make_handler(session: LabelingSession):
                 self._json(403, {"error": "foreign origin rejected"})
                 return
             url = urlsplit(self.path)
-            if url.path not in ("/api/save", "/api/open", "/api/snap"):
+            if url.path not in ("/api/save", "/api/validate", "/api/open", "/api/snap"):
                 self._json(404, {"error": "unknown endpoint"})
                 return
             length_header = self.headers.get("Content-Length", "")
@@ -1017,6 +1026,14 @@ def make_handler(session: LabelingSession):
                     self._json(200, {"snap": snap})
                     return
                 page_idx = self._page(url.query)
+                if url.path == "/api/validate":
+                    session.validate_review_payload(
+                        page_idx, revision=data.get("revision"),
+                        instances=data.get("instances"),
+                        rejected=data.get("rejected_proposals"),
+                    )
+                    self._json(200, {"valid": True})
+                    return
                 new_revision = session.save(
                     page_idx,
                     revision=data.get("revision"),

@@ -2106,8 +2106,7 @@ async function importJsonFromFile(file) {
       "This JSON does not identify the exact current image. Import as UNVERIFIED " +
       "proposals and discard previous rejected marks? Review every box before accepting."
     )) return;
-    remember();
-    state.doc.instances = imported.instances.map((raw, idx) => {
+    const preparedInstances = imported.instances.map((raw, idx) => {
       const fam = String(raw.symbol_family || raw.device_type || "unknown_symbol");
       return {
         ...raw,
@@ -2125,8 +2124,21 @@ async function importJsonFromFile(file) {
         } : {}),
       };
     });
-    state.doc.rejected_proposals = sameImage && Array.isArray(imported.rejected_proposals)
+    const preparedRejected = sameImage && Array.isArray(imported.rejected_proposals)
       ? imported.rejected_proposals : [];
+    // Check the same geometry, review, and attribute gates used by Save before
+    // mutating the current annotations. A failed import preserves editor state.
+    await api("/api/validate?page=" + state.page, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+      body: JSON.stringify({
+        revision: state.revision, instances: preparedInstances,
+        rejected_proposals: preparedRejected,
+      }),
+    });
+    remember();
+    state.doc.instances = preparedInstances;
+    state.doc.rejected_proposals = preparedRejected;
     state.selectedId = null;
     editState();
     refresh();

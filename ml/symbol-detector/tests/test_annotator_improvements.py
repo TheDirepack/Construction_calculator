@@ -197,3 +197,68 @@ def test_edited_image_reference_changed_after_open_refuses_stale_geometry(tmp_pa
     # A changed JSON image reference must not silently reuse the previous raster.
     with pytest.raises(RevisionConflict, match="source image reference changed"):
         session.page_state(0)
+
+def test_http_preflight_is_read_only_and_attributes_survive_reopen(tmp_path: Path):
+    image = _png(tmp_path / "electrical_plan.png")
+    label_path = tmp_path / "electrical_plan.json"
+    label_path.write_text(json.dumps({
+        "image_path": image.name, "image_width": 400, "image_height": 300,
+        "coordinate_system": "original_page_pixels_top_left_y_down", "instances": [],
+    }))
+    session = LabelingSession(edit=label_path)
+    current = session.page_state(0)
+    instance = {
+        "instance_id": "duplex_1", "symbol_family": "receptacle",
+        "symbol_variant": "duplex", "bbox_xyxy": [100.0, 80.0, 130.0, 110.0],
+        "device_attributes": {"voltage_v": 120, "circuit_label": "LPA-14", "gfci": True},
+        "attributes_from_text": ["GFCI", "WP"],
+        "review_status": "accepted", "review_source": "human",
+        "verified_ground_truth": True, "uncertain": False,
+    }
+    payload = {"revision": current["revision"], "instances": [instance], "rejected_proposals": []}
+    original_bytes = label_path.read_bytes()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+
+    def post(endpoint: str, data: dict) -> tuple[int, dict]:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+        try:
+            conn.request("POST", endpoint, body=json.dumps(data), headers={
+                "X-Labeler-Token": session.token, "Content-Type": "application/json",
+            })
+            res = conn.getresponse()
+            return res.status, json.loads(res.read())
+        finally:
+            conn.close()
+
+    try:
+        status, body = post("/api/validate?page=0", payload)
+        assert status == 200 and body == {"valid": True}
+        assert label_path.read_bytes() == original_bytes, "preflight must never write"
+        duplicated = dict(payload, instances=[instance, dict(instance)])
+        status, body = post("/api/validate?page=0", duplicated)
+        assert status == 400 and "unique" in body["error"]
+        invalid_attr = dict(instance, device_attributes={"voltage_v": -4})
+        status, body = post("/api/validate?page=0", dict(payload, instances=[invalid_attr]))
+        assert status == 400 and "device_attributes" in body["error"]
+        invalid_rejected = dict(instance, instance_id="bad_reject", review_status="rejected")
+        status, _ = post("/api/validate?page=0", dict(payload, rejected_proposals=[invalid_rejected]))
+        assert status == 400
+        status, _ = post("/api/validate?page=0", dict(payload, revision="stale"))
+        assert status == 409
+        assert label_path.read_bytes() == original_bytes
+        status, result = post("/api/save?page=0", payload)
+        assert status == 200 and result["saved"] is True
+        saved = json.loads(label_path.read_text(encoding="utf-8"))
+        assert saved["instances"][0]["device_attributes"] == instance["device_attributes"]
+        assert saved["instances"][0]["attributes_from_text"] == ["GFCI", "WP"]
+        reopened = LabelingSession(edit=label_path)
+        read_back = reopened.page_state(0)["document"]["instances"][0]
+        assert read_back["device_attributes"] == instance["device_attributes"]
+        assert read_back["review_status"] == "accepted"
+        assert reopened.page_state(0)["document"]["annotation_completeness"] == "partial"
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
