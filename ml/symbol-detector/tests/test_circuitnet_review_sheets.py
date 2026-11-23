@@ -369,3 +369,35 @@ def test_review_pdf_source_stat_guards_against_modified_drawings(tmp_path):
     # Legacy exports without source stats remain readable.
     proposal.pop('source_pdf_stat')
     assert resolve_pdf_path(proposal, tmp_path, index) == pdf
+
+
+
+def test_pdf_review_hash_rejects_same_size_same_mtime_changed_content(tmp_path):
+    import os
+    from blueprint_symbols.sam_resume import file_sha256
+    from scripts_circuitnet_review_sheets import resolve_pdf_path, build_pdf_index
+
+    project = tmp_path / 'project'
+    project.mkdir()
+    source = project / 'E3.pdf'
+    source.write_bytes(b'AAA-original-BBB')
+    st = source.stat()
+    original_bytes = source.read_bytes()
+    original_hash = file_sha256(source)
+    payload = {
+        'source_file': 'E3.pdf',
+        'source_pdf_relative': 'project/E3.pdf',
+        'source_pdf_sha256': original_hash,
+        'source_pdf_stat': {'size_bytes': st.st_size, 'mtime_ns': st.st_mtime_ns},
+    }
+    assert resolve_pdf_path(payload, tmp_path, build_pdf_index(tmp_path)) == source
+    # Same byte length and forced same modification time fools stat checks.
+    source.write_bytes(b'AAA-modified-BBB')
+    os.utime(source, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert source.stat().st_size == st.st_size
+    assert source.stat().st_mtime_ns == st.st_mtime_ns
+    assert resolve_pdf_path(payload, tmp_path, build_pdf_index(tmp_path)) is None
+    # A moved/re-copied identical PDF is still valid with a changed mtime.
+    source.write_bytes(original_bytes)
+    os.utime(source, ns=(st.st_atime_ns, st.st_mtime_ns+1_000_000))
+    assert resolve_pdf_path(payload, tmp_path, build_pdf_index(tmp_path)) == source
