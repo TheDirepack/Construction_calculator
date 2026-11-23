@@ -200,6 +200,7 @@ def apply_runtime_corruptions(
     mask_prob: float = 0.85,
     clean_fraction: float = 0.20,
     return_metadata: bool = False,
+    protected_boxes: list[list[float]] | None = None,
 ) -> tuple:
     """Random, independent scan/camera/PDF corruptions at varying severity.
 
@@ -396,7 +397,39 @@ def apply_runtime_corruptions(
         gh, gw = math.ceil(h / patch), math.ceil(w / patch)
         ratio = float(rng.uniform(.15, .55))
         grid = (rng.random((gh, gw)) < ratio).astype(np.float32)
-        mask = np.repeat(np.repeat(grid, patch, axis=0), patch, axis=1)[:h, :w]
+        mask = np.repeat(np.repeat(grid, patch, axis=0), patch, axis=1)[:h, :w].copy()
+        # MIM may hide *part* of a device, but erasing every stroke in a
+        # known synthetic symbol makes its class unrecoverable from the input.
+        # Cap masked area inside each warped symbol box at 60%. This does not
+        # protect unannotated devices and cannot guarantee readability after
+        # the independent optical/noise degradations.
+        protected_reduced = 0
+        for raw in protected_boxes or []:
+            if len(raw) != 4 or not all(math.isfinite(v) for v in raw):
+                raise ValueError("invalid protected symbol bbox")
+            x0, y0, x1, y1 = (
+                max(0, int(math.floor(raw[0]))),
+                max(0, int(math.floor(raw[1]))),
+                min(w, int(math.ceil(raw[2]))),
+                min(h, int(math.ceil(raw[3]))),
+            )
+            if x1 <= x0 or y1 <= y0:
+                continue
+            region = mask[y0:y1, x0:x1]
+            if float(region.mean()) > .60:
+                if rng.random() < .5:
+                    reveal = max(1, int(math.ceil((x1-x0) * .5)))
+                    region[:, :reveal] = 0
+                else:
+                    reveal = max(1, int(math.ceil((y1-y0) * .5)))
+                    region[:reveal, :] = 0
+                # Existing unmasked pixels might be concentrated on the
+                # revealed side; never restore *more* masking.
+                if float(region.mean()) > .60:
+                    region[:, :max(1, int(math.ceil((x1-x0) * .5)))] = 0
+                protected_reduced += 1
+        if protected_reduced:
+            operations.append("masked_symbol_visibility_guard")
         paper = np.median(x.reshape(-1, 3), axis=0).astype(np.float32)
         fill = np.clip(paper[None, None, :] + rng.normal(0, 4, x.shape), 0, 255).astype(np.uint8)
         x = np.where(mask[:, :, None] > .5, fill, x)
@@ -582,11 +615,13 @@ class BlueprintSSLDataset(Dataset):
         if self.return_metadata:
             degraded, mask, degradation_meta = apply_runtime_corruptions(
                 clean, rng, clean_fraction=(1.0 if full_clean_view else 0.0),
+                protected_boxes=[item["bbox_xyxy"] for item in placements],
                 return_metadata=True,
             )
         else:
             degraded, mask = apply_runtime_corruptions(
                 clean, rng, clean_fraction=(1.0 if full_clean_view else 0.0),
+                protected_boxes=[item["bbox_xyxy"] for item in placements],
             )
 
         # BGR uint8 -> RGB float32 [0, 1] CHW
