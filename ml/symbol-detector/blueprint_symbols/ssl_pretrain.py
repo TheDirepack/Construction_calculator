@@ -549,6 +549,9 @@ class BlueprintSSLDataset(Dataset):
         self._raster_cache: OrderedDict[str, np.ndarray] = OrderedDict()
         self._raster_cache_bytes = 0
         self._raster_cache_budget = 96 * (1 << 20)  # per worker, not per rank
+        self._raster_crop_cache: OrderedDict[tuple, np.ndarray] = OrderedDict()
+        self._raster_crop_bytes = 0
+        self._raster_crop_budget = 24 * (1 << 20)  # worker-local, bounded
         self._pdf_sampler = None
         self._source_burst = self.crop_reuse_views
         self._source_plan: np.ndarray | None = None
@@ -634,6 +637,7 @@ class BlueprintSSLDataset(Dataset):
 
         clean = None
         pdf_crop_meta = None
+        crop_cache_hit = False
         path = ""
         b_idx = 0
         crop_slot = -1 - index
@@ -675,12 +679,29 @@ class BlueprintSSLDataset(Dataset):
                     continue
                 break
             boxes = entry.get("boxes") if isinstance(entry, dict) else None
+            # Raster scans and verified-label crops also replay a stable
+            # physical region. Cache the *base* crop, never its augmented
+            # version, so every encounter still gets independent transforms.
+            crop_key = (str(path), int(self.size), int(crop_seed),
+                        self.labeled_focus_probability)
+            cached = self._raster_crop_cache.get(crop_key)
+            if cached is not None:
+                self._raster_crop_cache.move_to_end(crop_key)
+                clean = cached.copy()
+                crop_cache_hit = True
+                break
             img = self._read_cached(path)
             if img is not None and min(img.shape[:2]) >= 64:
                 clean = sample_label_guided_crop(
                     img, self.size, crop_rng, boxes,
                     focus_probability=self.labeled_focus_probability,
                 )
+                if clean.nbytes <= self._raster_crop_budget:
+                    self._raster_crop_cache[crop_key] = clean.copy()
+                    self._raster_crop_bytes += clean.nbytes
+                    while self._raster_crop_bytes > self._raster_crop_budget:
+                        _, removed = self._raster_crop_cache.popitem(last=False)
+                        self._raster_crop_bytes -= removed.nbytes
                 break
 
         if clean is None:
@@ -755,6 +776,10 @@ class BlueprintSSLDataset(Dataset):
                     "fresh": crop_slot < 0,
                     "reuse_views": self.crop_reuse_views,
                     "background_labels_exhaustive": False,
+                    "clean_crop_cache_hit": (
+                        bool(pdf_crop_meta.get("clean_crop_cache_hit"))
+                        if pdf_crop_meta is not None else crop_cache_hit
+                    ),
                 },
                 "full_clean_view": full_clean_view,
                 "geometric_variability_enabled": not full_clean_view,
