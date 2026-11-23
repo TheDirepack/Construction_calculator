@@ -49,6 +49,7 @@ from blueprint_symbols.sam_precision_profile import (
 )
 from blueprint_symbols.preencoded_prompt_cache import (
     prompt_feature_cache_path, load_prompt_features, save_prompt_features,
+    resolve_model_weight_identity,
 )
 from blueprint_symbols.hierarchical_sam import (build_hierarchical_prompt_plan,
     active_fine_indices, accepted_fine_match, explain_query_savings)
@@ -725,6 +726,13 @@ def main() -> None:
     t0 = time.time()
     model = Sam3Model.from_pretrained(args.model_id, dtype=dtype).to('cuda').eval()
     processor = Sam3Processor.from_pretrained(args.model_id)
+    resolved_model_revision = resolve_model_weight_identity(
+        args.model_id, getattr(model.config, '_commit_hash', None),
+    )
+    if resolved_model_revision is None:
+        print('WARNING: model weight revision cannot be established; '
+              'encoded reference cache disabled to avoid stale GPU features',
+              flush=True)
     print(f'Model loaded in {time.time() - t0:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
 
     cache_root = args.out.resolve() / '_sam_prompt_cache'
@@ -751,11 +759,11 @@ def main() -> None:
     t_enc = time.time()
     feature_cache = None
     cached_features = None
-    if not args.no_prompt_cache:
+    if not args.no_prompt_cache and resolved_model_revision is not None:
         feature_cache = prompt_feature_cache_path(
             cache_root / 'encoded', glyphs,
             model_id=args.model_id,
-            model_revision=getattr(model.config, '_commit_hash', None),
+            model_revision=resolved_model_revision,
             model_config=model.config.to_json_string(),
             dtype=dtype, target_px=44,
         )
@@ -848,7 +856,7 @@ def main() -> None:
     run_config = {
         'model_id': args.model_id,
         'inference_dtype': str(dtype),
-        'model_resolved_revision': getattr(model.config, '_commit_hash', None),
+        'model_resolved_revision': resolved_model_revision,
         'model_config_hash': hashlib.sha256(
             model.config.to_json_string().encode('utf-8')
         ).hexdigest(),
