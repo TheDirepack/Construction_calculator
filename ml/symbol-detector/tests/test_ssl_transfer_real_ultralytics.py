@@ -56,6 +56,10 @@ def test_real_ultralytics_trainer_hook_loads_our_backbone(tmp_path):
 
     trainer_type = build_ssl_detection_trainer(weight_path)
     trainer = trainer_type.__new__(trainer_type)
+    # A normal Ultralytics trainer initializes args during __init__;
+    # this isolated get_model test deliberately skips that heavy setup.
+    from types import SimpleNamespace
+    trainer.args = SimpleNamespace(cls_remap=False)
     trainer.data = {"nc": 6, "channels": 3}
     trained = trainer.get_model(cfg=source.yaml, weights=None, verbose=False)
     assert trained.model[-1].nc == 6
