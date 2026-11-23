@@ -44,6 +44,18 @@ def test_exact_negative_pdf_viewport_export_is_not_detector_ground_truth(tmp_pat
         assert row["review_status"] == "pending_exact_crop_exhaustive_review"
         im = cv2.imread(str(tmp_path / "out" / row["output"]))
         assert im is not None and im.shape == (128, 128, 3)
+        assert row["aspect_ratio_preserved"] is True
+        left, top, right, bottom = row["content_bbox_xyxy"]
+        assert 0 <= left < right <= 128 and 0 <= top < bottom <= 128
+        source_x0, source_y0, source_x1, source_y1 = row["rect_pt"]
+        source_ratio = ((source_x1 - source_x0) /
+                        (source_y1 - source_y0))
+        output_ratio = (right - left) / (bottom - top)
+        assert output_ratio == pytest.approx(source_ratio, rel=.04)
+        if top:
+            assert (im[:top] == 255).all()
+        if left:
+            assert (im[:, :left] == 255).all()
     assert report["controls"][2]["ink_fraction_lt_210"] < .001
 
 
