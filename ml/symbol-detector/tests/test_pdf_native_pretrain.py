@@ -171,3 +171,57 @@ def test_page_balancing_gives_long_documents_more_views_without_monopoly():
     assert .60 < max(p) < .80
     assert .20 < min(p) < .40
     assert p.sum() == pytest.approx(1.0)
+
+
+
+def test_native_pdf_index_accepts_uppercase_extension(tmp_path):
+    root = tmp_path / "data"
+    upper = root / "1_blueprints" / "new_downloads_202611_upper" / "DRAWINGS.PDF"
+    make_pdf(upper, 2)
+    output = tmp_path / "work" / "pdf_page_index" / "index.json"
+    result = index_pdf_pages(root, output, roles=ROLES)
+    assert result["stats"]["indexed_pages"] == 2
+    assert str(upper.resolve()) == next(iter(result["documents"].values()))["pages"][0]["source_pdf"]
+
+
+def test_native_pdf_replaces_existing_raster_without_double_counting(tmp_path):
+    root, work = tmp_path / "data", tmp_path / "work"
+    pdf = root / "1_blueprints" / "new_downloads_202611_a" / "site.pdf"
+    make_pdf(pdf, 4)
+    index_pdf_pages(root, work / "pdf_page_index" / "index.json", roles=ROLES)
+
+    background = work / "pool" / "background"
+    background.mkdir(parents=True)
+    img = np.full((256, 256, 3), 250, np.uint8)
+    assert cv2.imwrite(str(background / "old_page.png"), img)
+    record = {
+        "image_path": "old_page.png", "project_family_id": "old_raster_group",
+        "image_width": 256, "image_height": 256,
+        "pool": {"source_path": pdf.relative_to(root).as_posix()},
+    }
+    (background / "old_page.json").write_text(json.dumps(record))
+    train, val, audit = build_pretrain_manifests(root, work)
+    assert audit["excluded_counts"].get("replaced_by_direct_pdf") == 1
+    direct = (train.get("buckets", {}).get("real_pdf_pages")
+              or val.get("buckets", {}).get("real_pdf_pages"))
+    assert direct is not None
+    assert sum(len(v) for v in direct["groups"].values()) == 4
+
+
+def test_pdf_file_revision_changes_training_manifest_fingerprint(tmp_path):
+    import os
+    root, work = tmp_path / "data", tmp_path / "work"
+    pdf = root / "1_blueprints" / "new_downloads_202611_a" / "site.pdf"
+    make_pdf(pdf, 4)
+    index_path = work / "pdf_page_index" / "index.json"
+    index_pdf_pages(root, index_path, roles=ROLES)
+    old = build_pretrain_manifests(root, work)
+    old_entries = old[0]["buckets"].get("real_pdf_pages") or old[1]["buckets"]["real_pdf_pages"]
+    old_signature = next(iter(old_entries["groups"].values()))[0]["pdf_source_signature"]
+    st = pdf.stat()
+    os.utime(pdf, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
+    index_pdf_pages(root, index_path, roles=ROLES)
+    updated = build_pretrain_manifests(root, work)
+    new_entries = updated[0]["buckets"].get("real_pdf_pages") or updated[1]["buckets"]["real_pdf_pages"]
+    new_signature = next(iter(new_entries["groups"].values()))[0]["pdf_source_signature"]
+    assert old_signature != new_signature
