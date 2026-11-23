@@ -225,7 +225,7 @@ def test_partial_export_requires_sidecar_even_after_accidental_deletion(tmp_path
     # The provenance file also protects older exporter output whose YAML
     # predates the explicit marker.
     yaml_path.write_text(yaml_path.read_text().replace(
-        'phase2_supervision: phase2_supervision.json\\n', ''
+        'phase2_supervision: phase2_supervision.json\n', ''
     ))
     with pytest.raises(ValueError, match='missing phase-two supervision sidecar'):
         read_supervision(yaml_path)
