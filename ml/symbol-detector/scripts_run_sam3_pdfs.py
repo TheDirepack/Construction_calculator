@@ -44,6 +44,7 @@ from blueprint_symbols.switch_suffix_templates import (
 )
 from blueprint_symbols.neca_modifier_attachment import attach_device_modifiers
 from blueprint_symbols.sam_precision import filter_sam_detections, tile_origins
+from blueprint_symbols.sam_resume import completed_sam_output, atomic_write_json
 from blueprint_symbols.sam_precision_profile import (
     load_family_thresholds, threshold_for_family,
 )
@@ -931,8 +932,13 @@ def main() -> None:
         short_hash = hashlib.sha256(source_fingerprint.encode('utf-8')).hexdigest()[:8]
         safe_stem = re.sub(r'[^a-zA-Z0-9._-]+', '_', pdf_path.stem)[:80]
         out_json = out_dir / f'{safe_stem}_{short_hash}_{run_config_hash}_SAM3.json'
-        if out_json.is_file():
+        if completed_sam_output(
+                out_json, run_config_hash=run_config_hash,
+                source_pdf_relative=rel):
             continue
+        if out_json.exists():
+            print(f'[{idx}/{len(pdfs)}] Recomputing incomplete/stale output '
+                  f'{out_json.name}', flush=True)
 
         t_pdf = time.time()
         try:
@@ -1098,7 +1104,7 @@ def main() -> None:
             'pages': pages_meta,
             'devices': pdf_devices,
         }
-        out_json.write_text(json.dumps(payload))
+        atomic_write_json(out_json, payload)
         total_devices += len(pdf_devices)
         dt = time.time() - t_pdf
         with summary_path.open('a') as sf:
