@@ -104,7 +104,9 @@ def test_ssl_metadata_preserves_dpi_ink_and_bounded_boxes():
     seen = 0
     for dpi in (100., 400.):
         result, report = compose_ssl_symbols(
-            original, np.random.default_rng(23), max_symbols=16,
+            # Seed 23 legitimately requests zero symbols; use a seed
+            # selecting a nonzero requested count to test placed metadata.
+            original, np.random.default_rng(1), max_symbols=16,
             drawing_dpi=dpi, neca_bank=_Bank(), procedural_fraction=0.,
             symbol_chaos_probability=0., placement_chaos=0.,
         )
