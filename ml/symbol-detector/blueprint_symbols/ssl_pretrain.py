@@ -669,6 +669,8 @@ class BlueprintSSLDataset(Dataset):
                 ),
                 symbol_chaos_strength=self.symbol_chaos_strength,
                 placement_chaos=self.placement_chaos,
+                drawing_dpi=(pdf_crop_meta["effective_dpi"]
+                             if pdf_crop_meta is not None else None),
             )
 
         # Page-wide deformation happens after individual symbol composition.
