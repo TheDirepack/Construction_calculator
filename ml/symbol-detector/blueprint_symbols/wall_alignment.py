@@ -69,7 +69,9 @@ def detect_wall_sites(
     if raw is None:
         return [], wall_mask
 
-    segments = [tuple(map(float, a[0])) for a in raw]
+    # OpenCV releases differ: HoughLinesP may return (N,1,4) or (N,4).
+    # Normalize both before iterating so a line is always (x1,y1,x2,y2).
+    segments = [tuple(map(float, line)) for line in np.asarray(raw).reshape(-1, 4)]
     rng.shuffle(segments)
     # Budget for busy sheets and avoid thousands of near-identical line sites.
     segments = segments[:max(1, min(len(segments), max_sites // 2))]
