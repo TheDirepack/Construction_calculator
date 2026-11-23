@@ -266,6 +266,34 @@ function fillSelection() {
   $("proposalHint").textContent = item.review_status === "accepted" ?
     "Human-verified positive. Page completeness remains unknown." :
     "Unverified " + (item.review_source || "candidate") + " proposal " + score + ". Inspect before verifying.";
+  const alternatives = Array.isArray(item.proposal_alternative_labels)
+    ? item.proposal_alternative_labels : [];
+  const evidence = Boolean(item.proposal_score != null || item.proposal_neca_symbol_id ||
+                           item.proposal_visual_group || alternatives.length);
+  $("modelEvidence").hidden = !evidence;
+  $("proposalAlternatives").replaceChildren();
+  if (evidence) {
+    const info = [];
+    if (item.proposal_neca_symbol_id) info.push("NECA " + item.proposal_neca_symbol_id);
+    if (item.proposal_visual_group) info.push("Group " + item.proposal_visual_group);
+    if (typeof item.proposal_score === "number") info.push("Score " + item.proposal_score.toFixed(3));
+    $("modelSource").textContent = info.join(" · ");
+    for (const alt of alternatives.slice(0, 12)) {
+      const family = String(alt?.device_type || "");
+      const variant = String(alt?.subtype || "unspecified");
+      if (!family) continue;
+      const button = document.createElement("button");
+      button.textContent = "Use " + family + " / " + variant +
+        (typeof alt.score === "number" ? " (" + alt.score.toFixed(2) + ")" : "");
+      button.title = "Apply this proposed class without marking the symbol verified";
+      button.addEventListener("click", () => modifySelection(x => {
+        x.symbol_family = family;
+        x.symbol_variant = variant;
+        state.lastFamily = family;
+      }));
+      $("proposalAlternatives").append(button);
+    }
+  }
 }
 function refresh() {
   if (!state.doc) return;
