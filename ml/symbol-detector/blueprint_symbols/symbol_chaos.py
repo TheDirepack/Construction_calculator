@@ -151,7 +151,17 @@ def _elastic(alpha: np.ndarray, rng: np.random.Generator, power: float, mode: st
 def _print_damage(alpha: np.ndarray, rng: np.random.Generator, power: float, mode: str) -> np.ndarray:
     h, w = alpha.shape
     out = alpha.copy()
-    if mode == "stroke_gain":
+    if mode == "stroke_width":
+        # Independently vary the entire glyph's line weight by a fractional
+        # pixel. Alpha blending keeps subpixel variants instead of forcing
+        # every symbol into an identical 1px dilation/erosion.
+        radius = int(rng.choice((3, 5)))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius, radius))
+        heavier = bool(rng.integers(2))
+        morphed = cv2.dilate(out, kernel) if heavier else cv2.erode(out, kernel)
+        blend = float(rng.uniform(.12, .72) * min(power, 1.5))
+        out = cv2.addWeighted(out, 1. - blend, morphed, blend, 0)
+    elif mode == "stroke_gain":
         kernel = cv2.getStructuringElement(
             int(rng.choice([cv2.MORPH_ELLIPSE, cv2.MORPH_RECT, cv2.MORPH_CROSS])),
             (3, 3),
@@ -221,7 +231,7 @@ def distort_symbol_alpha(
     # to remain recognizable, hence the per-stage validity checks.
     count = int(rng.integers(1, 5))
     modes = ["axis_stretch_shear", "perspective", "elastic_mesh",
-             "cross_ripple", "fold", "pinch_twist", "stroke_gain",
+             "cross_ripple", "fold", "pinch_twist", "stroke_gain", "stroke_width",
              "dry_pen", "misregistration", "low_dpi", "ink_fade", "blur"]
     for mode in rng.choice(modes, size=count, replace=False):
         if mode == "axis_stretch_shear":
