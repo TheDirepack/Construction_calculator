@@ -134,3 +134,28 @@ def test_labeled_pretraining_manifest_provides_boxes(tmp_path):
     first = next(iter(train['buckets']['labeled_devices']['groups'].values()))[0]
     assert first['boxes'] == [[110., 100., 140., 130.]]
     assert len(first['image_path']) > 0
+
+
+def test_run_fingerprint_stable_and_detects_changed_configuration():
+    import argparse
+    from scripts_pretrain_ssl import run_fingerprint
+
+    args = argparse.Namespace(
+        imgsz=512, batch=4, epochs=60, items_per_epoch=8192,
+        val_items=512, optimizer="MuSGD", lr=0.005, workers=2,
+        pool_val_fraction=0.1, seed=2026, max_symbols=16,
+        symbol_min_px=12.0, symbol_max_px=80.0,
+        symbol_augment_probability=1.0, procedural_fraction=0.25,
+        clean_fraction=0.2, labeled_focus_probability=0.65,
+        neca_dir=None,
+    )
+    train = {"buckets": {"a": {"groups": {"project_a": ["a.png"]}}}}
+    val = {"buckets": {"b": {"groups": {"project_b": ["b.png"]}}}}
+    original = run_fingerprint(train, val, args)
+    assert original == run_fingerprint(train, val, args)
+    args.clean_fraction = 0.5
+    assert original != run_fingerprint(train, val, args)
+    args.clean_fraction = 0.2
+    assert original != run_fingerprint(
+        {"buckets": {"a": {"groups": {"project_a": ["changed.png"]}}}},
+        val, args)
