@@ -24,6 +24,8 @@ def test_preview_creates_aligned_pairs_and_count_audit(tmp_path):
     out = tmp_path / "previews"
     report = preview(manifest_path, out, samples=5, max_symbols=16, seed=42)
     assert report["samples"] == 5
+    assert report["full_clean_views"] == sum(r["full_clean_view"] for r in report["rows"])
+    assert 0 <= report["full_clean_fraction_observed"] <= 1
     assert report["placement_shortfall"] == report["requested_total"] - report["placed_total"]
     assert report["placed_total"] <= report["requested_total"] <= 5 * 16
     assert len(report["rows"]) == 5
