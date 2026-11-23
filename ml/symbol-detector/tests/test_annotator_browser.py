@@ -444,6 +444,7 @@ def test_browser_verified_label_demoted_after_semantic_edits(tmp_path):
                 page.locator("#accept").click()
                 assert "1 verified" in page.locator("#count").inner_text()
 
+                page.locator("#deviceAttrSection summary").click()
                 page.locator("#customAttrKey").fill("gfci")
                 page.locator("#customAttrVal").fill("true")
                 page.locator("#addCustomAttr").click()
