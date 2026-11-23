@@ -92,3 +92,25 @@ def test_independent_precision_profiles_are_validated(tmp_path):
                 {'switch': {'other': .8}}, {'switch': {'fine': True}}]:
         with pytest.raises(ValueError):
             validate_family_thresholds(bad, {'switch'})
+
+
+
+def test_exterior_circuit_label_trim_preserves_core_and_internal_letter():
+    from blueprint_symbols.reference_quality import trim_external_reference_annotations
+    # External title/schedule text above; circle outline + internal letter below.
+    import cv2
+    alpha = np.zeros((70, 130), dtype=np.uint8)
+    cv2.circle(alpha, (82, 46), 18, 255, 2)
+    cv2.putText(alpha, 'S', (75, 52), cv2.FONT_HERSHEY_SIMPLEX, .5, 255, 1)
+    cv2.putText(alpha, 'EP-2 CKT.1', (2, 15), cv2.FONT_HERSHEY_SIMPLEX, .42, 255, 1)
+    cropped, changed = trim_external_reference_annotations(
+        alpha, 'receptacle.wall_duplex_emergency_filled')
+    assert changed is True
+    assert cropped.shape[1] < alpha.shape[1]
+    assert cropped.shape[0] < alpha.shape[0]
+    assert np.count_nonzero(cropped) >= 50
+
+    untrimmed, changed = trim_external_reference_annotations(
+        alpha, 'luminaire.track')
+    assert changed is False
+    np.testing.assert_array_equal(untrimmed, alpha)
