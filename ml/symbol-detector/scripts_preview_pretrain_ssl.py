@@ -11,6 +11,7 @@ mask coverage, and input/target difference. No labels are fabricated.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 
@@ -42,11 +43,39 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         path = output / f"sample_{i:04d}.png"
         if not cv2.imwrite(str(path), display):
             raise OSError(f"Failed to save {path}")
+        # Separate annotation overlay preserves the two-panel training pair.
+        # Only newly inserted glyphs get rectangles; original devices have
+        # no fabricated boxes or labels.
+        overlay = as_bgr(clean)
+        for glyph in meta["symbol_stats"].get("placements", []):
+            x0, y0, x1, y1 = [int(round(v)) for v in glyph["bbox_xyxy"]]
+            color = (30, 180, 30) if glyph["generator"] == "neca_svg" else (180, 60, 20)
+            cv2.rectangle(overlay, (x0, y0), (x1, y1), color, 1)
+            cv2.putText(overlay, glyph["symbol_family"],
+                        (max(0, x0), max(10, y0 - 3)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.30, color, 1, cv2.LINE_AA)
+        overlay_path = output / f"sample_{i:04d}_overlay.png"
+        if not cv2.imwrite(str(overlay_path), overlay):
+            raise OSError(f"Failed to save {overlay_path}")
         rows.append(meta)
     added = [r["symbol_stats"]["placed"] for r in rows]
     requested = [r["symbol_stats"]["requested"] for r in rows]
+    placements = [g for row in rows for g in row["symbol_stats"].get("placements", [])]
+    families = Counter(g["symbol_family"] for g in placements)
+    variants = {g["symbol_variant"] for g in placements}
+    neca_variants = {g["symbol_variant"] for g in placements if g["generator"] == "neca_svg"}
+    all_neca_ids = (
+        {glyph.symbol_id for glyphs in dataset.neca_bank.by_class.values() for glyph in glyphs}
+        if dataset.neca_bank else set()
+    )
     report = {
         "samples": samples,
+        "placed_by_family": dict(sorted(families.items())),
+        "distinct_inserted_variants": len(variants),
+        "eligible_neca_svg_variants": len(all_neca_ids),
+        "neca_svg_variants_seen": len(neca_variants),
+        "neca_svg_variant_coverage": round(len(neca_variants) / len(all_neca_ids), 4)
+        if all_neca_ids else None,
         "requested_total": sum(requested),
         "placed_total": sum(added),
         "placement_shortfall": sum(requested) - sum(added),
