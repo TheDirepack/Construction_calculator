@@ -164,3 +164,30 @@ def test_actual_ultralytics_criterion_masks_unknown_background(tmp_path):
     assert logits.grad[0,0,0].item()==0
     assert logits.grad[0,1,0].abs().item()>0
     assert logits.grad[1,0,0].abs().item()>0
+
+    # Regression: YOLO saves the *model object*, not only state_dict.
+    # The custom loss/model must be importable global classes, not closures.
+    import io
+    model.criterion = criterion
+    stream=io.BytesIO()
+    torch.save(model,stream)
+    stream.seek(0)
+    restored=torch.load(stream,map_location='cpu',weights_only=False)
+    assert type(restored).__name__=='PartialDetectionModel'
+    assert type(restored.criterion.one2many.bce).__name__=='PositiveAwareBCE'
+
+    # Read actual YOLO image/label pairs and prove masks follow samples through
+    # the real detector DataLoader's expected collate contract.
+    cfg=get_cfg(overrides={'imgsz':512,'mosaic':0.0,'mixup':0.0,
+                           'cutmix':0.0,'copy_paste':0.0,'fraction':1.0})
+    trainer.args=cfg
+    trainer.model=model
+    trainer.data={'nc':1,'channels':3,'names':['receptacle']}
+    dataset=trainer.build_dataset(str(tmp_path/'out'/'images'/'train'),mode='train',batch=2)
+    assert len(dataset)>0
+    items=[dataset[i] for i in range(len(dataset))]
+    mask_counts={int(item['verified_class_mask'][0]) for item in items}
+    assert mask_counts=={0,1}
+    collated=dataset.collate_fn(items[:2])
+    assert collated['verified_class_mask'].shape==(2,1)
+    assert collated['img'].shape[0]==2
