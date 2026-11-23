@@ -261,8 +261,10 @@ def preencode_svg_prompts(
             # small batches bound GPU VRAM on the self-hosted 6GB machine.
             if geometry_batch < 1:
                 raise ValueError('geometry_batch must be positive')
-            for box_start in range(0, len(boxes), geometry_batch):
-                group = boxes[box_start:box_start + geometry_batch]
+            box_start = 0
+            active_batch = geometry_batch
+            while box_start < len(boxes):
+                group = boxes[box_start:box_start + active_batch]
                 coords = []
                 for lb in group:
                     cx = (lb[0] + lb[2]) / 2.0 / 1008.0
@@ -274,15 +276,24 @@ def preencode_svg_prompts(
                 b_emb = torch.tensor(coords, dtype=dtype, device=device)
                 b_lbl = torch.ones((B, 1), dtype=torch.long, device=device)
                 b_msk = torch.ones((B, 1), dtype=torch.bool, device=device)
-                geo = model.geometry_encoder(
-                    box_embeddings=b_emb,
-                    box_mask=b_msk,
-                    box_labels=b_lbl,
-                    img_feats=[t.expand(B, *t.shape[1:]) for t in s_fpn],
-                    img_pos_embeds=[t.expand(B, *t.shape[1:]) for t in s_pos],
-                )
+                try:
+                    geo = model.geometry_encoder(
+                        box_embeddings=b_emb,
+                        box_mask=b_msk,
+                        box_labels=b_lbl,
+                        img_feats=[t.expand(B, *t.shape[1:]) for t in s_fpn],
+                        img_pos_embeds=[t.expand(B, *t.shape[1:]) for t in s_pos],
+                    )
+                except torch.cuda.OutOfMemoryError:
+                    if active_batch == 1:
+                        raise
+                    active_batch = max(1, active_batch // 2)
+                    torch.cuda.empty_cache()
+                    print(f'SAM reference geometry OOM: retrying with batch={active_batch}', flush=True)
+                    continue
                 geo_feat_list.append(geo.last_hidden_state.to(dtype))
                 geo_mask_list.append(geo.attention_mask.bool())
+                box_start += B
 
     geo_feats = torch.cat(geo_feat_list, dim=0)
     geo_masks = torch.cat(geo_mask_list, dim=0)
