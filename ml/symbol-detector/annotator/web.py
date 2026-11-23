@@ -113,8 +113,17 @@ def validate_instances(instances: object, width: int, height: int) -> list[dict]
                     item.get("verified_ground_truth") is not True or
                     item.get("uncertain") is True):
                 raise LabelingError("accepted annotations require explicit human verification")
+        if status == "unreviewed" and (
+                item.get("verified_ground_truth") is True or
+                item.get("uncertain") is not True):
+            raise LabelingError("unreviewed proposals must remain uncertain and unverified")
         if item.get("verified_ground_truth") is True and item.get("uncertain") is True:
             raise LabelingError("a verified annotation cannot remain uncertain")
+        if rotated is not None:
+            from annotator.model import RotatedBox
+            oriented = RotatedBox(*values).aabb()
+            if any(abs(a - b) > .08 for a, b in zip(oriented, item["bbox_xyxy"])):
+                raise LabelingError("bbox_rotated and bbox_xyxy disagree")
     return instances
 
 
@@ -190,7 +199,9 @@ class LabelingSession:
         self._assert_pdf_unchanged()
         if index in self._render_cache:
             cached = self._render_cache[index]
-            if cached[0].is_file():
+            if self.pdf and cached[0].is_file():
+                if sha256_file(cached[0]) != cached[3]:
+                    raise RevisionConflict("rendered image changed during labeling")
                 return cached
             self._render_cache.pop(index)
         if self.edit:
@@ -209,8 +220,9 @@ class LabelingSession:
             pix = sheet.get_pixmap(matrix=fitz.Matrix(factor, factor), alpha=False)
             width, height = pix.width, pix.height
             path = self.out_dir / "images" / f"page_{index + 1:04d}_{self.source_hash[:12]}_{width}x{height}.png"
-            if not path.is_file():
-                _atomic_bytes(path, pix.tobytes("png"))
+            png = pix.tobytes("png")
+            if not path.is_file() or path.read_bytes() != png:
+                _atomic_bytes(path, png)
         result = path, width, height, sha256_file(path)
         self._render_cache[index] = result
         return result
@@ -330,20 +342,30 @@ class LabelingSession:
             validate_instances(instances, width, height)
             if not isinstance(rejected, list) or len(rejected) > 150_000:
                 raise LabelingError("rejected_proposals must be a bounded list")
+            rejected_ids: set[str] = set()
+            active_ids = {item["instance_id"] for item in instances}
             for item in rejected:
                 if (not isinstance(item, dict) or
                         item.get("review_status") != "rejected" or
-                        item.get("verified_ground_truth") is True):
-                    raise LabelingError("rejection history must contain unverified rejected boxes")
+                        item.get("review_source") != "human" or
+                        item.get("verified_ground_truth") is True or
+                        item.get("uncertain") is not True or
+                        not isinstance(item.get("instance_id"), str) or
+                        not ID_PATTERN.fullmatch(item["instance_id"]) or
+                        item["instance_id"] in active_ids or
+                        item["instance_id"] in rejected_ids):
+                    raise LabelingError("rejected boxes must be unique, human-reviewed and unverified")
+                _valid_box(item.get("bbox_xyxy"), width, height)
+                rejected_ids.add(item["instance_id"])
             baseline["instances"] = instances
             baseline["rejected_proposals"] = rejected
-            # Page-level completeness is never implicitly conferred by manual
-            # positive labels or by exhausting SAM proposal review.
-            if self.pdf:
-                baseline["exhaustive_families"] = []
-                baseline["annotation_completeness"] = "partial"
-                baseline["annotation_completeness_verified"] = False
-                baseline["annotation_scope"] = "positive_only"
+            # Any edit invalidates prior full-page coverage attestations.
+            # Neither an empty page nor exhausting SAM proposals implies no
+            # undetected devices. Both PDF and existing-JSON edits stay partial.
+            baseline["exhaustive_families"] = []
+            baseline["annotation_completeness"] = "partial"
+            baseline["annotation_completeness_verified"] = False
+            baseline["annotation_scope"] = "positive_only"
             encoded = (json.dumps(baseline, ensure_ascii=False, indent=2) + "\n").encode()
             _atomic_bytes(self._json_path(index), encoded)
             return hashlib.sha256(encoded).hexdigest()
