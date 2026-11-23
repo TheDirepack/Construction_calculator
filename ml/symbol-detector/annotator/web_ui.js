@@ -84,12 +84,12 @@ function restore(snapshotText) {
   refresh();
 }
 function undo() {
-  if (!state.undo.length) return;
+  if (state.busy || !state.undo.length) return;
   state.redo.push(snapshot());
   restore(state.undo.pop());
 }
 function redo() {
-  if (!state.redo.length) return;
+  if (state.busy || !state.redo.length) return;
   state.undo.push(snapshot());
   restore(state.redo.pop());
 }
@@ -200,7 +200,9 @@ function draw() {
   $("zoomLabel").textContent = Math.round(state.scale * 100) + "%";
 }
 function refreshControls() {
-  $("pageIndicator").textContent = "Page " + (state.page + 1) + " / " + state.pageCount;
+  $("pageIndicator").textContent = (state.pageCount === 1 && state.doc?.page_index > 0)
+    ? "Source p" + (state.doc.page_index + 1)
+    : "Page " + (state.page + 1) + " / " + state.pageCount;
   $("prevPage").disabled = state.page === 0 || state.busy;
   $("nextPage").disabled = state.page >= state.pageCount - 1 || state.busy;
   for (const name of ["select", "draw", "pan"]) {
@@ -276,6 +278,7 @@ function select(id, focus = false) {
   refresh();
 }
 function setMode(mode) {
+  if (state.busy) return;
   state.mode = mode;
   refreshControls();
   elements.canvas.style.cursor = mode === "pan" ? "grab" : mode === "draw" ? "crosshair" : "default";
@@ -301,6 +304,7 @@ function checkBox(box) {
     box[3] <= state.doc.image_height;
 }
 function modifySelection(callback) {
+  if (state.busy) return;
   const item = chosen();
   if (!item) return;
   remember();
@@ -323,6 +327,7 @@ function verifySelected() {
   nextPending(false);
 }
 function rejectSelected() {
+  if (state.busy) return;
   const item = chosen();
   if (!item) return;
   remember();
@@ -336,7 +341,7 @@ function rejectSelected() {
   nextPending(false);
 }
 function deleteSelected() {
-  if (!chosen()) return;
+  if (state.busy || !chosen()) return;
   remember();
   state.doc.instances = state.doc.instances.filter(x => x.instance_id !== state.selectedId);
   state.selectedId = null;
@@ -364,7 +369,7 @@ function currentPageMouseHit(point) {
   return null;
 }
 function pointerDown(event) {
-  if (!state.image || event.button > 1) return;
+  if (!state.image || state.busy || event.button > 1) return;
   event.preventDefault();
   const xy = coordinate(event), pt = screenToImage(...xy, viewport());
   if (state.space || state.mode === "pan" || event.button === 1) {
@@ -379,6 +384,7 @@ function pointerDown(event) {
       select(hit.item.instance_id);
       remember();
       state.drag = { type: hit.action, start: pt, box: [...hit.item.bbox_xyxy],
+                     originalRotation: hit.item.bbox_rotated ? { ...hit.item.bbox_rotated } : null,
                      moved: false, selected: hit.item.instance_id };
     }
   }
@@ -440,7 +446,25 @@ function pointerUp(event) {
   }
   draw();
 }
+function cancelDrag() {
+  const drag = state.drag;
+  if (!drag) return;
+  if (drag.type === "pan") {
+    state.x = drag.x; state.y = drag.y;
+  } else if (drag.type !== "draw") {
+    const item = state.doc.instances.find(x => x.instance_id === drag.selected);
+    if (item) {
+      item.bbox_xyxy = [...drag.box];
+      if (drag.originalRotation) item.bbox_rotated = { ...drag.originalRotation };
+      else delete item.bbox_rotated;
+    }
+    state.undo.pop();
+  }
+  state.drag = null;
+  refresh();
+}
 function updateSelectedFields() {
+  if (state.busy) return;
   const item = chosen();
   if (!item) return;
   const box = ["x0", "y0", "x1", "y1"].map(id => Number($(id).value));
@@ -467,6 +491,7 @@ function updateSelectedFields() {
   });
 }
 function updateAngle() {
+  if (state.busy) return;
   const item = chosen();
   if (!item) return;
   const angle = Number($("angle").value);
@@ -580,7 +605,7 @@ function wireEvents() {
   elements.canvas.addEventListener("pointerdown", pointerDown);
   elements.canvas.addEventListener("pointermove", pointerMove);
   elements.canvas.addEventListener("pointerup", pointerUp);
-  elements.canvas.addEventListener("pointercancel", pointerUp);
+  elements.canvas.addEventListener("pointercancel", cancelDrag);
   elements.canvas.addEventListener("wheel", event => {
     event.preventDefault();
     const [x,y] = coordinate(event);
@@ -607,8 +632,13 @@ function wireEvents() {
       event.preventDefault(); redo(); return;
     }
     if (event.code === "Space") { event.preventDefault(); state.space = true; return; }
-    if (event.repeat) return;
+    if (event.repeat || state.busy) return;
     const key = event.key.toLowerCase();
+    if (key === "escape") {
+      cancelDrag();
+      setMode("select");
+      return;
+    }
     if (key === "b") setMode("draw");
     else if (key === "v") setMode("select");
     else if (key === "a") verifySelected();
