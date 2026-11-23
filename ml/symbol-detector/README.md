@@ -236,8 +236,11 @@ python scripts_preview_pretrain_ssl.py ../work/pretrain_v3/train_manifest.json \
 
 Each preview shows the clean target beside its degraded/masked input.
 `preview_report.json` counts **requested versus actually placed** symbols,
-including shortfalls on crowded pages and zero-symbol examples. Visually
-inspect symbol fidelity and near-invisible cases before increasing severity.
+including shortfalls on crowded pages, zero-symbol examples, symbols by
+family/variant, eligible NECA vocabulary coverage, and observed degradation
+severities/categories. A separate `sample_NNNN_overlay.png` draws boxes only
+around inserted symbols. Visually inspect symbol fidelity and near-invisible
+cases before increasing severity.
 
 For the second-stage supervised detector, **preflight actual weight transfer**
 rather than trusting that `model.load_state_dict` before `model.train` worked.
