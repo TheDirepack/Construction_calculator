@@ -36,6 +36,7 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
     dataset = BlueprintSSLDataset(
         manifest, size=size, items_per_epoch=samples, seed=seed,
         neca_dir=neca_dir, max_symbols=max_symbols, return_metadata=True,
+        include_pre_page_preview=True,
         symbol_chaos_probability=symbol_chaos_probability,
         symbol_chaos_strength=symbol_chaos_strength,
         placement_chaos=placement_chaos,
@@ -47,11 +48,19 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
     rows = []
     for i in range(samples):
         degraded, clean, mask, meta = dataset[i]
+        pre_page = meta.pop("pre_page_bgr")
         def as_bgr(tensor):
             rgb = (tensor.permute(1, 2, 0).numpy() * 255.0).round()
             return cv2.cvtColor(np.clip(rgb, 0, 255).astype(np.uint8),
                                 cv2.COLOR_RGB2BGR)
         display = np.concatenate([as_bgr(clean), as_bgr(degraded)], axis=1)
+        # Dedicated geometry preview: left = symbol-composited page before
+        # whole-page deformation; right = same page after all warp stages.
+        # This makes it possible to see the actual geometric transformation.
+        geometry = np.concatenate([pre_page, as_bgr(clean)], axis=1)
+        geometry_path = output / f"sample_{i:04d}_geometry.png"
+        if not cv2.imwrite(str(geometry_path), geometry):
+            raise OSError(f"Failed to save {geometry_path}")
         path = output / f"sample_{i:04d}.png"
         if not cv2.imwrite(str(path), display):
             raise OSError(f"Failed to save {path}")
