@@ -164,3 +164,42 @@ def test_no_optimizer_step_on_incomplete_accumulation():
             device=torch.device("cpu"), effective_batch=16,
         )
     assert torch.equal(before, model.weight.detach())
+
+
+
+def test_run_safety_refuses_to_overwrite_existing_manifests(tmp_path, monkeypatch):
+    """Checkpoint mismatch must be detected before any files are rewritten."""
+    import scripts_pretrain_ssl as script
+
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "last_pretrain.pt").write_bytes(b"prior checkpoint")
+    (out / "train_manifest.json").write_text("original manifest bytes")
+    (out / "run_fingerprint.txt").write_text("old-data-fingerprint")
+
+    monkeypatch.setattr(script, "build_pretrain_manifests",
+                        lambda *a, **k: ({"buckets": {}}, {"buckets": {}}, {}))
+    monkeypatch.setattr(script, "run_fingerprint",
+                        lambda *a, **k: "different-fingerprint")
+    args = argparse.Namespace(
+        data_root=tmp_path, work_root=tmp_path, out=out,
+        fpcad_train_dir=None, labeled_annotations=[], neca_dir=None,
+        imgsz=512, batch=16, microbatch=4, epochs=60,
+        items_per_epoch=8192, val_items=512, workers=2,
+        pool_val_fraction=.1, lr=.005, optimizer="MuSGD", seed=99,
+        max_symbols=16, symbol_min_px=12., symbol_max_px=80.,
+        symbol_augment_probability=1., procedural_fraction=.25,
+        clean_fraction=.20, labeled_focus_probability=.65,
+        symbol_chaos_probability=.88, symbol_chaos_strength=1.,
+        placement_chaos=.85, page_chaos_probability=.70,
+        page_chaos_strength=1., init_weights=None, run=True, resume=False,
+    )
+    with pytest.raises(SystemExit, match="Existing SSL run"):
+        script.train(args)
+    assert (out / "train_manifest.json").read_text() == "original manifest bytes"
+
+    args.resume = True
+    with pytest.raises(ValueError, match="existing run files untouched"):
+        script.train(args)
+    assert (out / "train_manifest.json").read_text() == "original manifest bytes"
+    assert (out / "run_fingerprint.txt").read_text() == "old-data-fingerprint"
