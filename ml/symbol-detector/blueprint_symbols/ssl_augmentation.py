@@ -103,7 +103,10 @@ def compose_ssl_symbols(
         page, procedural = composite_page(
             {"instances": instances}, page, rng,
             per_page=proc_count,
-            scale_range=(glyph_min_px / 40.0, glyph_max_px / 40.0),
+            # Procedural compositor performs the same 200dpi -> drawing
+            # DPI scaling internally; pass reference-unit sizes, not sizes
+            # already DPI-adjusted (which would double the scale).
+            scale_range=(min_size_px / 40.0, max_size_px / 40.0),
             max_ink=0.16, tag="ssl",
             stroke_match=(drawing_dpi is None),
             drawing_dpi=drawing_dpi, match_local_ink=True,
