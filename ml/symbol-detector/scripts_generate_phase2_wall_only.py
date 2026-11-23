@@ -293,6 +293,10 @@ def generate(
                     "project_family_id": group,
                     "source_group_verified": True,
                     "wall_only_background_verified": True,
+                    "source_background_verified_no_symbols": True,
+                    # Source is verified empty, but a generated *image* with
+                    # inserted devices is NOT an all-negative sample.
+                    "verified_no_symbols": not bool(instances),
                     "synthetic_targets_only": True,
                     "verified_negative_families": sorted(set(entry["verified_negative_families"])),
                     "exhaustive_families": sorted(classes),
