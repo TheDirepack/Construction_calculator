@@ -47,22 +47,19 @@ def read_supervision(data_yaml: Path) -> dict | None:
     return raw
 
 
-def build_masked_detection_trainer(data_yaml: Path, weights: Path | None = None):
-    """Build a real Ultralytics trainer, preserving verified SSL weight transfer.
 
-    Requires the v8.4.216 YOLO26 API used in this project's regression CI.
-    No custom loss is installed for ordinary fully-annotated datasets.
+def build_masked_detection_trainer(data_yaml: Path, weights: Path | None = None):
+    """Real YOLO26 trainer using global (checkpoint-picklable) masked model/loss.
+
+    Preserves the verified backbone transfer hook when an SSL checkpoint is
+    supplied. A custom trainer is necessary because the standard YOLO
+    criterion cannot represent unknown-background labels.
     """
-    import torch
-    import torch.nn as nn
-    import torch.nn.functional as F
-    from types import MethodType
     from ultralytics import __version__ as ultralytics_version
-    from ultralytics.data.dataset import YOLODataset
     from ultralytics.models.yolo.detect import DetectionTrainer
     from ultralytics.utils import colorstr
-    from ultralytics.utils.loss import E2ELoss, v8DetectionLoss
     from ultralytics.utils.torch_utils import unwrap_model
+    from .partial_yolo import PartialYOLODataset, PartialDetectionModel
 
     if ultralytics_version != '8.4.216':
         raise RuntimeError('partial-label YOLO loss requires tested ultralytics==8.4.216; '
@@ -76,60 +73,6 @@ def build_masked_detection_trainer(data_yaml: Path, weights: Path | None = None)
         base = build_ssl_detection_trainer(weights)
     else:
         base = DetectionTrainer
-
-    class PositiveAwareBCE(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.verified_class_mask = None
-
-        def forward(self, logits, assigned_scores):
-            if self.verified_class_mask is None:
-                raise RuntimeError('missing phase-two classification mask in actual loss')
-            mask = self.verified_class_mask
-            if (mask.ndim != 2 or mask.shape[0] != logits.shape[0] or
-                    mask.shape[1] != logits.shape[-1]):
-                raise ValueError('phase-two class mask does not match prediction heads')
-            # Known assigned positive scores ALWAYS train. Unknown-background
-            # labels NEVER contribute negative BCE gradients.
-            allowed = mask[:, None, :] | (assigned_scores > 0)
-            return F.binary_cross_entropy_with_logits(
-                logits, assigned_scores, reduction='none'
-            ) * allowed.to(dtype=logits.dtype)
-
-    class PartialDetectionLoss(v8DetectionLoss):
-        def __init__(self, model, tal_topk=10, tal_topk2=None):
-            super().__init__(model, tal_topk=tal_topk, tal_topk2=tal_topk2)
-            self.bce = PositiveAwareBCE()
-
-        def loss(self, preds, batch):
-            mask = batch.get('verified_class_mask')
-            if not isinstance(mask, torch.Tensor):
-                raise RuntimeError('partial detection batch has no verified class mask')
-            self.bce.verified_class_mask = mask.to(device=self.device, dtype=torch.bool)
-            return super().loss(preds, batch)
-
-    class PartialYOLODataset(YOLODataset):
-        def __init__(self, *args, **kwargs):
-            self.coverage = kwargs.pop('coverage')
-            super().__init__(*args, **kwargs)
-            missing = [p for p in self.im_files if Path(p).stem not in self.coverage]
-            if missing:
-                raise ValueError(f'missing class masks for training images: {missing[:4]}')
-
-        def __getitem__(self, index):
-            item = super().__getitem__(index)
-            name = Path(self.im_files[index]).stem
-            mask = torch.zeros(nc, dtype=torch.bool)
-            mask[self.coverage[name]] = True
-            item['verified_class_mask'] = mask
-            return item
-
-        @staticmethod
-        def collate_fn(batch):
-            masks = torch.stack([item.pop('verified_class_mask') for item in batch])
-            output = YOLODataset.collate_fn(batch)
-            output['verified_class_mask'] = masks
-            return output
 
     class PartialTrainer(base):
         def build_dataset(self, img_path, mode='train', batch=None):
@@ -157,15 +100,17 @@ def build_masked_detection_trainer(data_yaml: Path, weights: Path | None = None)
                 prefix=colorstr('train: '), task=cfg.task,
                 classes=None, data=self.data, fraction=1.0,
                 tile=cfg.tile, coverage=supervision['samples'],
+                num_classes=nc,
             )
 
         def get_model(self, cfg=None, weights=None, verbose=True):
             model = super().get_model(cfg=cfg, weights=weights, verbose=verbose)
-            def init_partial_criterion(self_model):
-                if getattr(self_model.model[-1], 'one2one_cv2', None) is not None:
-                    return E2ELoss(self_model, PartialDetectionLoss)
-                return PartialDetectionLoss(self_model)
-            model.init_criterion = MethodType(init_partial_criterion, model)
+            if type(model).__name__ != 'DetectionModel':
+                raise TypeError('unrecognized model type for phase-two partial supervision')
+            # Replace the method through a globally importable subclass.
+            # Avoid setting a locally defined bound init_criterion function:
+            # torch.save()/Ultralytics checkpoints must pickle this model.
+            model.__class__ = PartialDetectionModel
             return model
 
     return PartialTrainer
