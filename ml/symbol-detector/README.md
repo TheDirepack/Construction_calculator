@@ -246,7 +246,8 @@ than overwriting the full experiment:
 
 ```bash
 SSL_OUT="$HOME/Projects/blueprint-symbols/work/pretrain_smoke_v3" \
-SSL_EPOCHS=1 SSL_ITEMS_PER_EPOCH=24 SSL_VAL_ITEMS=12 SSL_BATCH=2 \
+SSL_EPOCHS=1 SSL_ITEMS_PER_EPOCH=32 SSL_VAL_ITEMS=16 \
+SSL_BATCH=16 SSL_MICROBATCH=2 \
   bash remote/run_pretrain_v3.sh
 ```
 
@@ -269,9 +270,28 @@ The remote runner forwards `SSL_SYMBOL_CHAOS_PROBABILITY`,
 `SSL_PAGE_CHAOS_PROBABILITY`, and `SSL_PAGE_CHAOS_STRENGTH`.
 These settings enter the resume fingerprint; changing them requires a
 new run directory.
-The proposed batch size of 4 is conservative and **not yet profiled** for
-the reconstruction decoder. Existing checkpoints refuse accidental overwrite;
-use `--resume` explicitly after a compatible interruption.
+**Pretraining settings (YOLO26n-P2):** default logical/optimizer batch
+**16**, physical GPU microbatch **4**, and **4 gradient-accumulation passes**
+per MuSGD optimizer update. This retains `--optimizer MuSGD` (the default)
+and uses the pinned Ultralytics implementation. The detection head stays
+random and frozen; backbone/neck and SSL decoder are trained. Data resolution
+remains 512 px, optimizer LR `0.005`, momentum `0.937`, weight decay
+`0.0005`, 60 epochs × 8192 samples = **30,720 optimizer updates**.
+Warmup uses three epochs, followed by cosine decay; FP16 autocast and
+`GradScaler` run on CUDA, with gradient unscale and clip **once per 16
+examples**. Validation also uses the physical microbatch (4) to avoid
+unnecessary VRAM spikes. MuSGD matches the model family, but the LR and
+loss schedule remain an **unmeasured starting recipe for this custom SSL
+objective**, not a reproduced official detection-training recipe.
+
+Use `SSL_BATCH=16 SSL_MICROBATCH=4` for the recommended initial profile.
+If the 6 GB RTX 2060 runs out of memory, use `SSL_MICROBATCH=2` or `1`
+with the same logical batch 16. BatchNorm statistics still follow the
+physical microbatch, so accumulation is **not strictly equivalent** to a
+physical batch of 16. The full-resolution SSL decoder has **not yet been
+profiled on this GPU**; the earlier 2 GB measurement was for the standard
+detection head. Existing checkpoints refuse accidental overwrite; use
+`--resume` explicitly after a compatible interruption.
 
 Before running a long GPU job, inspect what the generator actually creates.
 After a manifest has been produced, run:
