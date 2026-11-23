@@ -286,14 +286,14 @@ function newInstance(box) {
     symbol_family: state.lastFamily,
     symbol_variant: "unspecified",
     bbox_xyxy: box.map(x => Math.round(x * 1000) / 1000),
-    uncertain: false, review_status: "accepted",
-    review_source: "human", verified_ground_truth: true,
+    uncertain: true, review_status: "unreviewed",
+    review_source: "manual_draft", verified_ground_truth: false,
     is_truncated: false, is_occluded: false,
   };
   state.doc.instances.push(item);
   select(item.instance_id);
   editState();
-  notify("Added human-labeled box. Specify its exact class and save.");
+  notify("Draft box added. Set the correct class, then press A to verify. Continue drawing with B mode.");
 }
 function checkBox(box) {
   return box[2] - box[0] >= 2 && box[3] - box[1] >= 2 &&
@@ -429,7 +429,7 @@ function pointerUp(event) {
   state.drag = null;
   if (d.type === "draw") {
     const box = normalizedBox(d.start, d.current, state.doc.image_width, state.doc.image_height);
-    if (checkBox(box)) { remember(); newInstance(box); setMode("select"); }
+    if (checkBox(box)) { remember(); newInstance(box); }
   } else if (d.type !== "pan") {
     if (d.moved) {
       editState(); refresh();
