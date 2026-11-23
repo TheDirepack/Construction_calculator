@@ -202,3 +202,33 @@ def test_pretrain_rejects_no_steps_and_invalid_degradation_settings():
     args.symbol_min_px = 90
     with pytest.raises(ValueError, match="symbol size"):
         validate_pretrain_settings(args)
+
+
+def test_sparse_ink_gets_meaningful_gradient_in_reconstruction_loss():
+    import torch
+    from blueprint_symbols.ssl_pretrain import BlueprintSSLLoss
+
+    target = torch.ones((1, 3, 64, 64), dtype=torch.float32)
+    target[:, :, 31:33, 31:33] = 0.0  # four dark pixels in ~4,096
+    predicted = torch.ones_like(target, requires_grad=True)
+    mask = torch.zeros((1, 1, 64, 64), dtype=torch.float32)
+    loss, stats = BlueprintSSLLoss(mask_weight=0, edge_weight=0)(predicted, target, mask)
+    assert loss.item() > 1.0  # ink must not be washed out by white background
+    loss.backward()
+    assert predicted.grad is not None
+    assert predicted.grad[:, :, 31:33, 31:33].abs().sum().item() > 0
+
+    # A blank page still yields finite, nonzero loss if incorrectly predicted.
+    blank_target = torch.ones((1, 3, 64, 64), dtype=torch.float32)
+    blank_pred = torch.zeros_like(blank_target)
+    blank_loss, _ = BlueprintSSLLoss()(blank_pred, blank_target, mask)
+    assert torch.isfinite(blank_loss)
+    assert blank_loss.item() >= 2.0
+
+
+def test_ssl_loss_rejects_invalid_region_weights():
+    from blueprint_symbols.ssl_pretrain import BlueprintSSLLoss
+    with pytest.raises(ValueError):
+        BlueprintSSLLoss(ink_weight=0)
+    with pytest.raises(ValueError):
+        BlueprintSSLLoss(mask_weight=-1)
