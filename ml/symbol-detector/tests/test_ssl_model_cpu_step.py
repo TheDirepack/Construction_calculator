@@ -11,6 +11,7 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("ultralytics")
 from blueprint_symbols.ssl_pretrain import Yolo26P2SSLModel, BlueprintSSLLoss
+from scripts_pretrain_ssl import build_musgd_optimizer
 
 
 def test_real_yolo26p2_ssl_forward_backward_cpu():
@@ -40,5 +41,14 @@ def test_real_yolo26p2_ssl_forward_backward_cpu():
         assert grad_decoder is not None and torch.isfinite(grad_decoder).all()
         assert grad_backbone.abs().sum().item() > 0
         assert grad_decoder.abs().sum().item() > 0
+
+        # MuSGD is the actual optimizer used on the remote training machine.
+        # Check parameter grouping and one real update, not only loss.backward.
+        optimizer = build_musgd_optimizer(model, lr=0.005)
+        before = model.det_model.model[0].conv.weight.detach().clone()
+        optimizer.step()
+        after = model.det_model.model[0].conv.weight.detach()
+        assert torch.isfinite(after).all()
+        assert not torch.equal(before, after)
     finally:
         torch.set_num_threads(previous_threads)
