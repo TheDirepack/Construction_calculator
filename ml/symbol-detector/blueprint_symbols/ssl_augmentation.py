@@ -42,6 +42,7 @@ def compose_ssl_symbols(
     requested = int(rng.integers(0, max_symbols + 1))
     metadata = {"requested": requested, "placed": 0, "neca": 0, "procedural": 0}
     if not requested:
+        metadata["shortfall"] = 0
         return clean.copy(), metadata
 
     neca_count = int(rng.binomial(requested, 1 - procedural_fraction)) if neca_bank else 0
@@ -57,6 +58,10 @@ def compose_ssl_symbols(
         )
         metadata["neca"] = len(instances)
 
+    # If wall-aware NECA placement could not fit all selected glyphs, try
+    # procedural symbols for the shortfall instead of silently starving
+    # crowded crops. The actual count may still fall short on dense pages.
+    proc_count += neca_count - len(instances)
     if proc_count:
         # Keep the existing procedural compositor's stroke matching, wall
         # placement, collision handling and anti-aliased drawing.
@@ -72,4 +77,5 @@ def compose_ssl_symbols(
         metadata["procedural"] = len(procedural)
 
     metadata["placed"] = metadata["neca"] + metadata["procedural"]
+    metadata["shortfall"] = metadata["requested"] - metadata["placed"]
     return page, metadata
