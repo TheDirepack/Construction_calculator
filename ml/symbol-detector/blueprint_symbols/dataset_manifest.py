@@ -25,6 +25,21 @@ def trusted_training_instance(instance: dict) -> bool:
         return (instance['review_status'] == 'accepted' and
                 instance.get('review_source') == 'human' and
                 instance.get('verified_ground_truth') is True)
+    # Older auto-label proposals may lack modern review_status, but still
+    # carry review_required or model provenance. Do not let a malformed
+    # uncertain=False field promote these into ground truth.
+    if 'review_required' in instance and instance['review_required'] is not False:
+        return False
+    provenance = instance.get('source')
+    if isinstance(provenance, dict) and (
+            provenance.get('not_ground_truth') is True or
+            provenance.get('kind') in ('teacher_pseudo_label', 'model_prediction') or
+            provenance.get('label_method') == 'model_prediction'):
+        return False
+    if 'review_source' in instance and (
+            instance['review_source'] != 'human' or
+            instance.get('verified_ground_truth') is not True):
+        return False
     if 'verified_ground_truth' in instance and instance['verified_ground_truth'] is not True:
         return False
     return True
