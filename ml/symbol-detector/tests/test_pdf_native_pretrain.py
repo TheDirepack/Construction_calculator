@@ -269,3 +269,58 @@ def test_native_pdf_dataset_passes_sampled_dpi_into_synthetic_symbols(tmp_path):
             symbols_seen += 1
     assert symbols_seen > 0
     assert min(all_dpis) < 175 and max(all_dpis) > 325
+
+
+def test_pdf_crop_finds_isolated_faint_plan_ink(tmp_path):
+    """Rare pale device strokes must be reachable on a large mostly empty PDF."""
+    source = tmp_path / "sparse_faint_electrical.pdf"
+    pdf = fitz.open()
+    page = pdf.new_page(width=2592, height=1728)
+    for i in range(6):
+        page.draw_line((255, 340 + 16 * i), (420, 340 + 16 * i),
+                       color=(.82, .84, .88), width=2)
+        page.draw_line((290 + 16 * i, 305), (290 + 16 * i, 460),
+                       color=(.82, .84, .88), width=1.5)
+    pdf.save(source)
+    pdf.close()
+    entry = {"image_path": str(source), "source_pdf": str(source),
+             "pdf_page_index": 0}
+    sampler = PdfCropSampler()
+    hits = 0
+    try:
+        for index in range(32):
+            crop, meta = sampler.sample(
+                entry, 512, np.random.default_rng(2026 + index)
+            )
+            assert crop.shape == (512, 512, 3)
+            assert 100 <= meta["effective_dpi"] <= 400
+            assert meta["sampling_policy"] == "adaptive_ink_guided_v2"
+            assert meta["thumbnail_ink_threshold"] >= 200
+            assert 0 <= meta["ink_anchored_proposals"] <= 15
+            x0, y0, x1, y1 = meta["clip_rect_pt"]
+            if x0 < 420 and x1 > 255 and y0 < 470 and y1 > 305:
+                hits += 1
+        # Uniform 512px crops rarely intersect this small island. Anchored
+        # proposals must find it without sacrificing uniform sparse views.
+        assert hits >= 15
+    finally:
+        sampler.close()
+
+
+def test_pdf_crop_blank_thumbnail_falls_back_to_uniform(tmp_path):
+    source = tmp_path / "blank_sheet.pdf"
+    pdf = fitz.open()
+    pdf.new_page(width=900, height=650)
+    pdf.save(source)
+    pdf.close()
+    sampler = PdfCropSampler()
+    try:
+        crop, meta = sampler.sample(
+            {"source_pdf": str(source), "pdf_page_index": 0}, 256,
+            np.random.default_rng(44)
+        )
+        assert crop.shape == (256, 256, 3)
+        assert meta["ink_anchored_proposals"] == 0
+        assert meta["thumbnail_ink_fraction"] == 0.0
+    finally:
+        sampler.close()
