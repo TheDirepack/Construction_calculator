@@ -59,3 +59,24 @@ def test_adjacent_real_symbols_are_not_merged_by_containment_gate():
     right = det(120, 'receptacle', .89, 'r2')
     right['box_px'] = [120, 100, 138, 118]
     assert len(merge_sam_proposals([left, right])) == 2
+
+
+
+def test_tile_fusion_then_page_fusion_preserves_prior_alternative_labels():
+    a = det(100, 'switch', .99, 's1')
+    a['stage'] = 'visual_base'
+    b = det(101, 'receptacle', .95, 'r1')
+    b['stage'] = 'visual_base'
+    c = det(102, 'switch', .91, 's2')
+    c['stage'] = 'visual_base'
+    first_pass = merge_sam_proposals([a, b])
+    assert len(first_pass) == 1
+    assert first_pass[0]['same_region_prompt_hits'] == 2
+    final_pass = merge_sam_proposals(first_pass + [c])
+    assert len(final_pass) == 1
+    item = final_pass[0]
+    assert item['same_region_prompt_hits'] == 3
+    assert item['needs_class_review'] is True
+    assert item['family_only'] is True
+    assert {a['device_type'] for a in item['alternative_labels']} == {'receptacle'}
+    assert merge_sam_proposals(final_pass)[0]['alternative_labels'] == item['alternative_labels']
