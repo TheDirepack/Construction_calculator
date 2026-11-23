@@ -401,9 +401,16 @@ def composite_neca_page(
     wall_fraction: float = 0.60,
     size_px_range: tuple[float, float] = (20.0, 64.0),
     max_clutter_ink: float = 0.08,
+    symbol_chaos_probability: float = 0.0,
+    symbol_chaos_strength: float = 1.0,
+    placement_chaos: float = 0.0,
     tag: str = 'neca',
 ) -> tuple[np.ndarray, list[dict]]:
     """Composite NECA 100-2013 SVG devices onto a clean blueprint page with zero wall clipping."""
+    if not 0 <= placement_chaos <= 1:
+        raise ValueError("placement_chaos must be a probability")
+    from .symbol_chaos import distort_symbol_alpha, sample_free_origin
+
     page = image.copy()
     h, w = page.shape[:2]
     gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
@@ -442,7 +449,13 @@ def composite_neca_page(
         attempts += 1
         glyph = bank.sample(rng)
         target_px = float(np.exp(rng.uniform(math.log(lo_px), math.log(hi_px))))
-        want_wall = has_walls and (rng.random() < wall_fraction)
+        # Layout-dependent wall/free ratios instead of a single fixed split.
+        # Legacy supervised callers with placement_chaos=0 stay unchanged.
+        wall_prob = (float(rng.uniform(.08, .92))
+                     if rng.random() < placement_chaos else wall_fraction)
+        want_wall = has_walls and (rng.random() < wall_prob)
+        chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
+        placement_mode = "wall" if want_wall else "uniform"
 
         if want_wall and cand_walls:
             wx, wy = cand_walls[wall_cursor % len(cand_walls)]
@@ -477,6 +490,11 @@ def composite_neca_page(
                 continue
             nx, ny, angle = best_dir
             alpha = _resize_and_rotate_alpha(glyph.alpha, target_px, angle)
+            if symbol_chaos_probability:
+                alpha, chaos_details = distort_symbol_alpha(
+                    alpha, rng, probability=symbol_chaos_probability,
+                    strength=symbol_chaos_strength,
+                )
             gh, gw = alpha.shape
             if gw + 8 >= w or gh + 8 >= h:
                 continue
@@ -544,11 +562,21 @@ def composite_neca_page(
             # Free-space placement: NOT touching any wall -> extra vector in the center
             angle = float(rng.choice([0.0, 90.0, 180.0, 270.0]))
             alpha = _resize_and_rotate_alpha(glyph.alpha, target_px, angle)
+            if symbol_chaos_probability:
+                alpha, chaos_details = distort_symbol_alpha(
+                    alpha, rng, probability=symbol_chaos_probability,
+                    strength=symbol_chaos_strength,
+                )
             gh, gw = alpha.shape
             if gw + 16 >= w or gh + 16 >= h:
                 continue
-            x0 = int(rng.integers(8, w - gw - 8))
-            y0 = int(rng.integers(8, h - gh - 8))
+            if placement_chaos:
+                x0, y0, placement_mode = sample_free_origin(
+                    rng, (h, w), (gh, gw), occupied, chaos=placement_chaos,
+                )
+            else:
+                x0 = int(rng.integers(8, w - gw - 8))
+                y0 = int(rng.integers(8, h - gh - 8))
             # Strictly ZERO wall pixels inside box AND at least 6px clearance from walls
             pad = 6
             if _rect_sum(wall_int, max(0, x0 - pad), max(0, y0 - pad), min(w, x0 + gw + pad), min(h, y0 + gh + pad)) > 0:
@@ -594,11 +622,12 @@ def composite_neca_page(
                 }
             },
             'rotation_degrees_image': angle,
+            'symbol_chaos': chaos_details,
             'source': {
                 'kind': 'neca_100_2013_svg_composite',
                 'label_method': 'known_placement_transform',
                 'target_px': round(target_px, 2),
-                'placement_mode': 'wall_touching_shifted' if is_wall else 'free_space_center',
+                'placement_mode': 'wall_touching_shifted' if is_wall else placement_mode,
             },
         })
 
