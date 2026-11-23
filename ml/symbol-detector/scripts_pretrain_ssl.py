@@ -389,16 +389,20 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
         "symbol_augment_probability", "procedural_fraction",
         "clean_fraction", "labeled_focus_probability",
         "symbol_chaos_probability", "symbol_chaos_strength", "placement_chaos",
+        "page_chaos_probability", "page_chaos_strength",
     )
     # The defaults preserve callers constructing Namespace in older tests.
     chaos_defaults = {"symbol_chaos_probability": .88,
                       "symbol_chaos_strength": 1.0,
-                      "placement_chaos": .85}
+                      "placement_chaos": .85,
+                      "page_chaos_probability": .70,
+                      "page_chaos_strength": 1.0}
     conf = {key: getattr(args, key, chaos_defaults.get(key)) for key in fields}
     # Changing loss weighting changes the trained representation; old
     # optimizer state must not be resumed across objective revisions.
     conf["ssl_objective"] = "ink-paper-balanced-v2"
     conf["symbol_geometry_augmentation"] = "bounded_chaos_v1"
+    conf["page_geometry_augmentation"] = "aligned_multiwarp_v1"
     conf["neca_svg_bank_sha256"] = neca_source_fingerprint(args.neca_dir)
     manifest = {"format": 1, "settings": conf,
                 "train": train_manifest, "validation": val_manifest}
@@ -497,12 +501,15 @@ def validate_pretrain_settings(args: argparse.Namespace) -> None:
         raise ValueError("invalid symbol size range")
     for key in ("symbol_augment_probability", "procedural_fraction",
                 "clean_fraction", "labeled_focus_probability",
-                "symbol_chaos_probability", "placement_chaos"):
+                "symbol_chaos_probability", "placement_chaos",
+                "page_chaos_probability"):
         prob = getattr(args, key)
         if not math.isfinite(prob) or not 0 <= prob <= 1:
             raise ValueError(f"{key} must be a probability in [0,1]")
     if not math.isfinite(args.symbol_chaos_strength) or not 0 <= args.symbol_chaos_strength <= 2:
         raise ValueError("symbol_chaos_strength must be in [0,2]")
+    if not math.isfinite(args.page_chaos_strength) or not 0 <= args.page_chaos_strength <= 2:
+        raise ValueError("page_chaos_strength must be in [0,2]")
 
 
 def train(args: argparse.Namespace) -> None:
@@ -565,6 +572,8 @@ def train(args: argparse.Namespace) -> None:
         'symbol_chaos_probability': args.symbol_chaos_probability,
         'symbol_chaos_strength': args.symbol_chaos_strength,
         'placement_chaos': args.placement_chaos,
+        'page_chaos_probability': args.page_chaos_probability,
+        'page_chaos_strength': args.page_chaos_strength,
     }
     train_ds = BlueprintSSLDataset(
         train_manifest, size=args.imgsz, items_per_epoch=args.items_per_epoch,
@@ -773,6 +782,10 @@ def main() -> None:
                    help='Nonlinear warp/stroke severity multiplier 0..2')
     p.add_argument('--placement-chaos', type=float, default=0.85,
                    help='Mix uniform, edge, corner, cluster, and band placements 0..1')
+    p.add_argument('--page-chaos-probability', type=float, default=0.70,
+                   help='Probability of aligned whole-drawing geometry deformation 0..1')
+    p.add_argument('--page-chaos-strength', type=float, default=1.0,
+                   help='Amplitude of perspective, nonuniform scaling, folds, page curl and waves 0..2')
     p.add_argument('--init-weights', type=Path, default=None,
                    help='Optional prior SSL checkpoint (last_pretrain.pt or best_yolo26n_p2_backbone.pt) to warm-start from')
     p.add_argument('--resume', action='store_true')
