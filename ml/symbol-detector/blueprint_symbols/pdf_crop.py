@@ -127,7 +127,8 @@ class PdfCropSampler:
                crop_slot: int | None = None,
                bank_size: int | None = None,
                dpi_variant: int | None = None,
-               dpi_variants: int | None = None) -> tuple[np.ndarray, dict]:
+               dpi_variants: int | None = None,
+               dpi_epoch: int = 0) -> tuple[np.ndarray, dict]:
         """Clip-render from PDF; optionally reuse an exact physical region anchor.
 
         crop_seed controls base site selection. With dpi_variant, multiple
@@ -137,6 +138,8 @@ class PdfCropSampler:
         """
         if size < 32:
             raise ValueError("PDF training crop must be at least 32 pixels")
+        if not isinstance(dpi_epoch, int) or dpi_epoch < 0:
+            raise ValueError("dpi_epoch must be a nonnegative integer")
         if (dpi_variant is None) != (dpi_variants is None):
             raise ValueError("dpi_variant and dpi_variants must be provided together")
         if dpi_variant is not None and not (
@@ -156,7 +159,8 @@ class PdfCropSampler:
         pdf_path = str(entry.get("source_pdf") or entry["image_path"])
         page_index = int(entry["pdf_page_index"])
         key = ((pdf_path, page_index, int(size), int(crop_seed),
-                crop_slot, bank_size, dpi_variant, dpi_variants)
+                crop_slot, bank_size, dpi_variant, dpi_variants,
+                dpi_epoch if dpi_variant is not None else 0)
                if crop_seed is not None else None)
         if key is not None and key in self._crops:
             self._crops.move_to_end(key)
@@ -261,7 +265,7 @@ class PdfCropSampler:
             variant_seed = np.random.SeedSequence([
                 int(crop_seed & 0xffffffff),
                 int((crop_seed >> 32) & 0xffffffff),
-                dpi_variant, dpi_variants, 0xD91,
+                dpi_variant, dpi_variants, dpi_epoch, 0xD91,
             ])
             dpi_rng = np.random.default_rng(variant_seed)
             new_dpi = float(dpi_rng.uniform(lo, hi))
@@ -317,6 +321,7 @@ class PdfCropSampler:
             "bank_grid": list(grid) if grid is not None else None,
             "dpi_variant": dpi_variant,
             "dpi_variants": dpi_variants,
+            "dpi_epoch": dpi_epoch if dpi_variant is not None else None,
             "region_anchor_pt": region_anchor,
             "clean_crop_seed": int(crop_seed) if crop_seed is not None else None,
             "clean_crop_cache_hit": False,
