@@ -122,12 +122,12 @@ def test_native_pdf_dataset_spans_many_pages_and_keeps_clean_alignment(tmp_path)
     )
     plan = dataset._source_plan
     assert plan is not None
-    # Adjacent pairs reuse the same source PDF *and page*, but produce
-    # independently randomized crops. One long project rotates through
-    # its pages instead of drawing the same few with replacement.
-    assert all(np.array_equal(plan[i], plan[i + 1])
-               for i in range(0, len(dataset), 2))
-    assert len({int(plan[i, 2]) for i in range(0, len(dataset), 2)}) == 48
+    # Four views share a source and exact base crop, while project pages
+    # continue rotating without replacement between bursts.
+    assert plan.shape == (96, 4)
+    assert all(np.array_equal(plan[i], plan[i + j])
+               for i in range(0, len(dataset), 4) for j in range(4))
+    assert len({int(plan[i, 2]) for i in range(0, len(dataset), 4)}) == 24
     pages = set()
     clip_rects = set()
     for i in range(len(dataset)):
@@ -137,8 +137,8 @@ def test_native_pdf_dataset_spans_many_pages_and_keeps_clean_alignment(tmp_path)
         assert info["pdf_crop"] is not None
         pages.add(info["pdf_crop"]["pdf_page_index"])
         clip_rects.add(tuple(info["pdf_crop"]["clip_rect_pt"]))
-    assert len(pages) >= 35
-    assert len(clip_rects) >= 92
+    assert len(pages) == 24
+    assert len(clip_rects) == 24
 
 
 def test_pretraining_manifest_reads_native_pages_without_reserved_leakage(tmp_path):
@@ -324,3 +324,103 @@ def test_pdf_crop_blank_thumbnail_falls_back_to_uniform(tmp_path):
         assert meta["thumbnail_ink_fraction"] == 0.0
     finally:
         sampler.close()
+
+
+def test_seeded_pdf_crop_replays_exact_pixels_and_is_immutable(tmp_path):
+    path = tmp_path / "electrical_symbols.pdf"
+    make_pdf(path, 2)
+    entry = {"image_path": str(path), "source_pdf": str(path),
+             "pdf_page_index": 0}
+    sampler = PdfCropSampler(max_cached_crops=2)
+    try:
+        first, info1 = sampler.sample(
+            entry, 256, np.random.default_rng(55), crop_seed=1025
+        )
+        assert info1["clean_crop_cache_hit"] is False
+        first[:, :, :] = 0  # Mutating the returned array must not alter cache.
+        replay, info2 = sampler.sample(
+            entry, 256, np.random.default_rng(999), crop_seed=1025
+        )
+        assert info2["clean_crop_cache_hit"] is True
+        assert np.any(replay != 0)
+        assert info1["clip_rect_pt"] == info2["clip_rect_pt"]
+        assert info1["effective_dpi"] == info2["effective_dpi"]
+        assert info1["clean_crop_seed"] == 1025
+        assert len(sampler._crops) == 1
+        for seed in (1026, 1027):
+            sampler.sample(entry, 256, np.random.default_rng(0),
+                           crop_seed=seed)
+        assert len(sampler._crops) == 2
+    finally:
+        sampler.close()
+
+
+def test_repeated_pdf_crop_gets_independent_synthetic_views(tmp_path):
+    path = tmp_path / "annotated_real_electrical.pdf"
+    make_pdf(path, 1)
+    entry = {"image_path": str(path), "source_pdf": str(path),
+             "pdf_page_index": 0}
+    manifest = {"buckets": {"real_pdf_pages": {
+        "weight": 1., "groups": {"same_project": [entry]},
+    }}}
+    dataset = BlueprintSSLDataset(
+        manifest, size=128, items_per_epoch=12, seed=643,
+        crop_reuse_views=4, crop_bank_size=1,
+        fresh_crop_probability=0., max_symbols=12, clean_fraction=1.,
+        return_metadata=True,
+    )
+    try:
+        sources = []
+        results = []
+        for index in range(12):
+            degraded, clean, mask, info = dataset[index]
+            assert np.array_equal(degraded.numpy(), clean.numpy())
+            assert not mask.any()
+            assert info["base_crop"]["background_labels_exhaustive"] is False
+            assert info["base_crop"]["bank_slot"] == 0
+            sources.append(tuple(info["pdf_crop"]["clip_rect_pt"]))
+            results.append(clean.numpy())
+        assert len(set(sources)) == 1
+        # Every sample reuses same source region, but the inserted symbols
+        # (including zero-symbol views) are independently randomized.
+        assert len({array.tobytes() for array in results}) >= 4
+        assert dataset._pdf_sampler is not None
+        assert len(dataset._pdf_sampler._crops) == 1
+        dataset.set_epoch(1)
+        _, _, _, revisited = dataset[0]
+        assert tuple(revisited["pdf_crop"]["clip_rect_pt"]) == sources[0]
+    finally:
+        if dataset._pdf_sampler is not None:
+            dataset._pdf_sampler.close()
+
+
+def test_reused_labeled_raster_preserves_existing_device_pixels(tmp_path):
+    path = tmp_path / "real_annotated_symbols.png"
+    img = np.full((256, 256, 3), 255, np.uint8)
+    cv2.circle(img, (120, 130), 15, (30, 30, 30), 2)
+    cv2.putText(img, "S3", (60, 90), cv2.FONT_HERSHEY_SIMPLEX,
+                0.8, (70, 70, 70), 2)
+    assert cv2.imwrite(str(path), img)
+    entry = {"image_path": str(path), "boxes": [[105, 115, 135, 145]]}
+    manifest = {"buckets": {"labeled_devices": {
+        "weight": 1., "groups": {"same_job": [entry]},
+    }}}
+    dataset = BlueprintSSLDataset(
+        manifest, size=128, items_per_epoch=12, seed=80,
+        crop_reuse_views=4, crop_bank_size=1,
+        fresh_crop_probability=0., max_symbols=12, clean_fraction=1.,
+        labeled_focus_probability=1., return_metadata=True,
+    )
+    crops = []
+    for index in range(12):
+        _, clean, _, meta = dataset[index]
+        raw = sample_label_guided_crop(
+            img, 128, np.random.default_rng(meta["base_crop"]["seed"]),
+            entry["boxes"], focus_probability=1.,
+        )
+        # Additive compositing cannot erase existing source receptacle/text
+        # strokes, even if a new synthetic device is drawn alongside them.
+        clean_bgr = (clean.numpy().transpose(1, 2, 0)[:, :, ::-1] * 255).round().astype(np.uint8)
+        assert np.all(clean_bgr <= raw + 0)  # uint8 cannot overflow in this comparison.
+        crops.append(meta["base_crop"]["seed"])
+    assert len(set(crops)) == 1
