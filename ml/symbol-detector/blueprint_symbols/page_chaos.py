@@ -71,7 +71,9 @@ def warp_whole_page(
         if not (0 <= box[0] < box[2] <= w and 0 <= box[1] < box[3] <= h):
             raise ValueError("bbox outside blueprint")
     meta = {"severity": "unchanged", "operations": [],
-            "rejected": 0, "rejection_reasons": {}, "box_count": len(prior)}
+            "rejected": 0, "rejection_reasons": {}, "box_count": len(prior),
+            "min_symbol_ink_retention": None,
+            "min_symbol_area_retention": None}
     if min(h, w) < 64 or probability == 0 or strength == 0 or rng.random() >= probability:
         return image.copy(), prior, meta
 
@@ -272,4 +274,22 @@ def warp_whole_page(
                               float(xs.max()+1), float(ys.max()+1)])
     if meta["operations"]:
         meta["severity"] = severity
+    if prior:
+        final_areas = np.bincount(labels.ravel(), minlength=len(prior) + 1)
+        final_dark = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY) < 190
+        final_symbol_ink = np.bincount(
+            labels[final_dark].ravel(), minlength=len(prior) + 1
+        )
+        ink_ratios = [
+            float(final_symbol_ink[i] / base_symbol_ink[i])
+            for i in range(1, len(prior) + 1) if base_symbol_ink[i] >= 6
+        ]
+        area_ratios = [
+            float(final_areas[i] / base_areas[i])
+            for i in range(1, len(prior) + 1) if base_areas[i] >= 4
+        ]
+        if ink_ratios:
+            meta["min_symbol_ink_retention"] = round(min(ink_ratios), 4)
+        if area_ratios:
+            meta["min_symbol_area_retention"] = round(min(area_ratios), 4)
     return np.ascontiguousarray(out), new_boxes, meta
