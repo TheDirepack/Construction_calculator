@@ -492,15 +492,15 @@ def build_musgd_optimizer(model: torch.nn.Module, *, lr: float, momentum: float 
 def configured_microbatch(args: argparse.Namespace) -> int:
     """Default to a small GPU microbatch when only --batch was provided."""
     size = getattr(args, "microbatch", None)
-    return min(4, args.batch) if size is None else size
+    return min(2, args.batch) if size is None else size
 
 
 def resolve_batch_plan(effective_batch: int, microbatch: int) -> tuple[int, int]:
     """Return the actual GPU batch and accumulation count for an optimizer step.
 
     The 512px full-resolution SSL decoder is substantially heavier than the
-    ordinary YOLO detector head. A logical batch of 16 can safely be built
-    from four GPU microbatches of four on a memory-limited card.
+    ordinary YOLO detector head. A logical batch of 14 can be built from seven GPU microbatches of two
+    on a memory-limited card.
     """
     if (effective_batch < 1 or microbatch < 1
             or microbatch > effective_batch or effective_batch % microbatch):
@@ -776,7 +776,7 @@ def train(args: argparse.Namespace) -> None:
         updates_per_epoch = len(train_loader) // accumulate
         for step in range(1, updates_per_epoch + 1):
             # The DataLoader shuffles microbatches; each optimizer update sees
-            # exactly the requested logical batch, without needing 16 images
+            # exactly the requested logical batch, without needing 14 images
             # and their full-resolution feature maps on the GPU at once.
             stats = accumulated_training_update(
                 model, criterion, optimizer, scaler,
@@ -870,12 +870,12 @@ def main() -> None:
                    help='Optional directory of extracted FloorPlanCAD train-only clean PNGs')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--imgsz', type=int, default=512)
-    p.add_argument('--batch', type=int, default=16,
+    p.add_argument('--batch', type=int, default=14,
                    help='Effective examples per optimizer step (default 16)')
     p.add_argument('--microbatch', type=int, default=None,
-                   help='Physical GPU images per forward/backward; defaults to min(4, batch)')
+                   help='Physical GPU images per forward/backward; defaults to min(2, batch)')
     p.add_argument('--epochs', type=int, default=60)
-    p.add_argument('--items-per-epoch', type=int, default=8192)
+    p.add_argument('--items-per-epoch', type=int, default=8190)
     p.add_argument('--val-items', type=int, default=512)
     p.add_argument('--optimizer', choices=('MuSGD', 'SGD'), default='MuSGD')
     p.add_argument('--lr', type=float, default=5e-3)
