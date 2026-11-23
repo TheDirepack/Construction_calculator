@@ -170,9 +170,16 @@ hundreds of pages. The SSL loader opens each source PDF lazily, caches at most
 three document handles and 96 tiny density thumbnails per worker, and renders
 only randomized crop rectangles at the selected training scale. It does **not**
 first rasterize each sheet at 150 DPI and downsample a 24 MP page to 512px.
-Four logarithmic detail-to-overview scale bands, mixed density-guided and
-uniform/stratified positions, fresh rotations and degradations yield many
-different views from every available page across epochs. Original image/scan
+For each 512px training crop, randomly sample the **true PDF rasterization
+resolution uniformly between 100 and 400 DPI**, then compute its physical
+source clip size as `512 × 72 / DPI` PDF points. At 100 DPI the crop
+covers about 5.12 inches on a sheet; at 400 DPI it covers 1.28 inches.
+For smaller pages, restrict the lower bound just enough for the square to
+fit; reject a page if it cannot fit even at 400 DPI. The selected rectangle
+is rendered directly at that DPI; any final rounding to 512 pixels is at
+most the pixel-grid alignment of the PDF rasterizer. Mixed density-guided
+and uniform/stratified positions, fresh rotations, and degradations generate
+many distinct views from each available page. Original image/scan
 sources retain a bounded 96 MB LRU cache per worker. Source groups are
 weighted by 45% uniform plus 55% sqrt(page count), allowing longer sets more
 views without overwhelming small projects.
@@ -211,12 +218,28 @@ symbols on original drawings are retained. The eligible NECA SVG bank contains
 the verified device sections, not routing arrows or standalone modifiers.
 The prior procedural glyph families supply additional variation.
 
+**DPI and ink consistency:** For PDF-native crops, both the NECA vector
+glyphs and procedural electrical symbols receive **the same sampled 100–400
+DPI** as the crop. Their apparent physical sizes use a common 200 DPI
+reference and scale by `sampled_dpi / 200`; they are clamped to fit at most
+38% of the crop's shorter side, and the normal placement checks reject
+wall overlaps, crowded regions, and off-page devices. This reference does
+**not** assert that the source SVGs have dimensionally calibrated physical
+device sizes. Each inserted symbol also samples nearby **original drafting
+line color** (including tinted blue/grey ink) rather than defaulting to
+black or using ink from previously composited symbols. Procedural ink
+weight is DPI-scaled with the symbol; independent fractional line-width
+randomization still applies. Raster images without known DPI do not
+receive a fabricated DPI label. Preview JSON reports DPI bins, symbol
+DPI mismatches, and distinct matched ink colors. These rendering changes
+invalidate old SSL checkpoint fingerprints and require a new run.
+
 **High-entropy symbol deformation (PR #9):** Each inserted device independently
 samples 1–4 geometric/print perturbations, with a default 0.88 activation
 probability. Effects include independent X/Y stretching, two-axis shear,
 rotation and keystone, elastic control-point meshes, crossing horizontal and
-vertical waves, folds, radial pinch/bulge with twist, stroke erosion or expansion, fractional **per-symbol line-width** variation,
-dry-pen dropouts, ink misregistration, low-DPI print, fading and
+vertical waves, folds, radial pinch/bulge with twist, stroke erosion or expansion, fractional **per-symbol line-width**
+variation, dry-pen dropouts, ink misregistration, low-DPI print, fading and
 defocus. Small/heavy/rare-extreme severity levels are sampled per symbol.
 Bounds and ink-retention guards reject severe collapse, but **human-recognizable
 class identity is not guaranteed** by a pixel-area test.
