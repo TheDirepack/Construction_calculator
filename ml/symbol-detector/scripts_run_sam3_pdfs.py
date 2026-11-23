@@ -44,6 +44,7 @@ from blueprint_symbols.switch_suffix_templates import (
 )
 from blueprint_symbols.neca_modifier_attachment import attach_device_modifiers
 from blueprint_symbols.sam_precision import filter_sam_detections, tile_origins
+from blueprint_symbols.sam_shared_canvas import SharedCanvas, build_shared_canvas
 from blueprint_symbols.sam_resume import completed_sam_output, atomic_write_json
 from blueprint_symbols.sam_precision_profile import (
     load_family_thresholds, threshold_for_family,
@@ -330,6 +331,7 @@ def detect_page_sam3(
     score_thr: float = 0.72,
     coarse_score_thr: float = 0.50,
     prompt_plan: dict[str, Any] | None = None,
+    shared_canvas: SharedCanvas | None = None,
     fallback_every_tiles: int = 0,
     fine_match_iou: float = 0.10,
     emit_generic: bool = False,
@@ -359,9 +361,11 @@ def detect_page_sam3(
     if coarse_family_limit < 0 or fine_family_limit < 0 or max_detections_per_tile < 0 or max_box_aspect < 1.0:
         raise ValueError('invalid SAM precision gate configuration')
     H, W = page_rgb.shape[:2]
-    step = tile_size - overlap
+    target_width = shared_canvas.target_width if shared_canvas is not None else tile_size
+    if shared_canvas is not None and shared_canvas.tile_size != tile_size:
+        raise ValueError('shared reference canvas does not match SAM tile size')
     ys = tile_origins(H, tile_size, overlap)
-    xs = tile_origins(W, tile_size, overlap)
+    xs = tile_origins(W, target_width, overlap)
     raw_dets: list[dict[str, Any]] = []
     tile_no = 0
 
@@ -369,14 +373,17 @@ def detect_page_sam3(
         for y0 in ys:
             for x0 in xs:
                 ye = min(H, y0 + tile_size)
-                xe = min(W, x0 + tile_size)
+                xe = min(W, x0 + target_width)
                 sub = page_rgb[y0:ye, x0:xe]
                 if sub.size == 0 or sub.min() > 240:
                     continue
                 tile_no += 1
-                tile = np.full((tile_size, tile_size, 3), 255, dtype=np.uint8)
-                th, tw = sub.shape[:2]
-                tile[:th, :tw] = sub
+                if shared_canvas is None:
+                    tile = np.full((tile_size, tile_size, 3), 255, dtype=np.uint8)
+                    th, tw = sub.shape[:2]
+                    tile[:th, :tw] = sub
+                else:
+                    tile = shared_canvas.with_target(sub)
                 t_inp = processor(images=Image.fromarray(tile), return_tensors='pt')
                 # The expensive vision encoder executes ONCE per tile.
                 t_ve = model.get_vision_features(pixel_values=t_inp['pixel_values'].to(device, dtype))
@@ -393,8 +400,32 @@ def detect_page_sam3(
                         B = len(subset)
                         batch_found: list[dict[str, Any]] = []
                         idx_t = torch.tensor(subset, dtype=torch.long, device=geo_feats.device)
-                        gf = geo_feats.index_select(0, idx_t)
-                        gm = geo_masks.index_select(0, idx_t)
+                        if shared_canvas is None:
+                            # Experimental legacy off-image prompt transfer.
+                            gf = geo_feats.index_select(0, idx_t)
+                            gm = geo_masks.index_select(0, idx_t)
+                        else:
+                            # Native SAM3 visual prompts reference the SAME
+                            # image whose features are searched by DETR.
+                            ref_boxes = torch.tensor(
+                                [shared_canvas.reference_boxes[i] for i in subset],
+                                dtype=dtype, device=device,
+                            ).unsqueeze(1)
+                            geometry = model.geometry_encoder(
+                                box_embeddings=ref_boxes,
+                                box_mask=torch.ones((B, 1), dtype=torch.bool, device=device),
+                                box_labels=torch.ones((B, 1), dtype=torch.long, device=device),
+                                img_feats=[
+                                    t.expand(B, *t.shape[1:])
+                                    for t in t_ve.fpn_hidden_states[:-1]
+                                ],
+                                img_pos_embeds=[
+                                    t.expand(B, *t.shape[1:])
+                                    for t in t_ve.fpn_position_encoding[:-1]
+                                ],
+                            )
+                            gf = geometry.last_hidden_state.to(dtype)
+                            gm = geometry.attention_mask.bool()
                         tf = blank_text_feat.expand(B, -1, -1)
                         tm = blank_text_mask.expand(B, -1)
                         comb_feat = torch.cat([tf, gf], dim=1)
@@ -461,6 +492,13 @@ def detect_page_sam3(
                         scores_cpu = scores.float().cpu().numpy()
                         for b_i, q_i in hits_cpu:
                             bx0, by0, bx1, by1 = boxes_cpu[b_i, q_i].tolist()
+                            if shared_canvas is not None and (
+                                bx0 < 0 or bx1 > target_width or bx0 >= target_width
+                            ):
+                                # Ref-strip detections aren't blueprint devices.
+                                if query_stats is not None:
+                                    query_stats['filtered_reference_strip'] += 1
+                                continue
                             bw, bh = bx1 - bx0, by1 - by0
                             if bw < min_box_px or bh < min_box_px or bw > max_box_px or bh > max_box_px:
                                 continue
@@ -520,6 +558,7 @@ def detect_page_sam3(
                         minimum_box_size=min_box_px,
                         max_per_family=family_limit if apply_caps else 0,
                         max_total=max_detections_per_tile if apply_caps else 0,
+                        tile_width=target_width,
                         stats=query_stats,
                     )
 
