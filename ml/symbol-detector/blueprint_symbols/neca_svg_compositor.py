@@ -444,16 +444,17 @@ def composite_neca_page(
     wall_cursor = 0
     attempts = 0
     max_attempts = max(200, per_page * 60)
+    wall_probability = (
+        float(rng.uniform(.08, .92))
+        if placement_chaos and rng.random() < placement_chaos else wall_fraction
+    )
 
     while len(placed) < per_page and attempts < max_attempts:
         attempts += 1
         glyph = bank.sample(rng)
         target_px = float(np.exp(rng.uniform(math.log(lo_px), math.log(hi_px))))
-        # Layout-dependent wall/free ratios instead of a single fixed split.
-        # Legacy supervised callers with placement_chaos=0 stay unchanged.
-        wall_prob = (float(rng.uniform(.08, .92))
-                     if rng.random() < placement_chaos else wall_fraction)
-        want_wall = has_walls and (rng.random() < wall_prob)
+        # Per-page wall/free ratio; original supervised callers remain fixed.
+        want_wall = has_walls and (rng.random() < wall_probability)
         chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
         placement_mode = "wall" if want_wall else "uniform"
 
