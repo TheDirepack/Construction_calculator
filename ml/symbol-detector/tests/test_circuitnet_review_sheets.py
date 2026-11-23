@@ -339,3 +339,33 @@ def test_pdf_fallback_refuses_duplicate_filenames_across_projects(tmp_path):
     unique.write_bytes(b'unique')
     index = build_pdf_index(tmp_path)
     assert resolve_pdf_path({'source_file': 'E2.pdf'}, tmp_path, index) == unique
+
+
+
+def test_review_pdf_source_stat_guards_against_modified_drawings(tmp_path):
+    from scripts_circuitnet_review_sheets import resolve_pdf_path, build_pdf_index
+    project = tmp_path / 'project'
+    project.mkdir()
+    pdf = project / 'E2.pdf'
+    pdf.write_bytes(b'original plan bytes')
+    stat = pdf.stat()
+    proposal = {
+        'source_file': 'E2.pdf',
+        'source_pdf_relative': 'project/E2.pdf',
+        'source_pdf_absolute': str(pdf),
+        'source_pdf_stat': {
+            'size_bytes': stat.st_size,
+            'mtime_ns': stat.st_mtime_ns,
+        },
+    }
+    index = build_pdf_index(tmp_path)
+    assert resolve_pdf_path(proposal, tmp_path, index) == pdf
+    # Same filename and path cannot silently qualify after the drawing changes.
+    pdf.write_bytes(b'new, modified plan drawing with changed dimensions')
+    assert resolve_pdf_path(proposal, tmp_path, index) is None
+    # A correct-size export with malformed metadata also fails closed.
+    proposal['source_pdf_stat'] = {'size_bytes': 'not an integer'}
+    assert resolve_pdf_path(proposal, tmp_path, index) is None
+    # Legacy exports without source stats remain readable.
+    proposal.pop('source_pdf_stat')
+    assert resolve_pdf_path(proposal, tmp_path, index) == pdf
