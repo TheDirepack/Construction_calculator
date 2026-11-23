@@ -223,3 +223,92 @@ def test_neca_review_category_hierarchy_cannot_be_hallucinated():
             {**item, 'refined_subcategory': 'imaginary'}, {'receptacle': ['duplex']},
             category_taxonomy=category_taxonomy,
         )
+
+
+def test_sam3_visual_group_to_review_sheet_and_approved_pdf_roundtrip(tmp_path):
+    """The actual SAM3 output filename must reach human/VLM review intact."""
+    import argparse
+    import json
+    import pymupdf
+
+    from scripts_circuitnet_review_sheets import cmd_render, cmd_apply
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=400)
+    page.draw_rect(pymupdf.Rect(230, 150, 258, 180), color=(0, 0, 0))
+    pdf_path = tmp_path / 'drawing.pdf'
+    doc.save(pdf_path)
+    doc.close()
+
+    source = tmp_path / 'proposals'
+    source.mkdir()
+    payload = {
+        'source_file': 'drawing.pdf',
+        'source_pdf_relative': 'drawing.pdf',
+        'source_pdf_absolute': str(pdf_path),
+        'prompt_taxonomy': {'switch': ['unspecified', 'three_way']},
+        'prompt_category_taxonomy': {'lighting_control': ['unspecified']},
+        'devices': [{
+            'pdf_page': 1,
+            'device_type': 'switch',
+            'subtype': 'unspecified',
+            'category': 'lighting_control',
+            'subcategory': 'unspecified',
+            'score': .94,
+            'symbol_bbox': [230, 220, 258, 250],
+            'visual_group': 'switch.base_letter_s',
+            'analytic_attributes': {'pole_configuration': 'three_way'},
+            'modifier_evidence': [{
+                'source': 'neca_suffix_template',
+                'attribute': 'pole_configuration',
+                'value': 'three_way',
+                'score': .98,
+                'box_px': [240, 155, 256, 170],
+            }],
+        }],
+    }
+    (source / 'drawing_12345678_abcdef123456_SAM3.json').write_text(json.dumps(payload))
+    review_dir = tmp_path / 'review'
+    cmd_render(argparse.Namespace(
+        proposals_dir=source, data_root=tmp_path, out=review_dir,
+        per_sheet=50, cols=10, cell_size=128, dpi=96,
+        context_mult=2.5, min_context_pts=36.0,
+        min_score=0.0, pdf_filter='', limit_pdfs=0,
+        no_grid=True, include_pdf=False, zip=False,
+    ))
+    reviewed = list(review_dir.rglob('*_batch_001.json'))
+    assert len(reviewed) == 1
+    batch = json.loads(reviewed[0].read_text())
+    assert batch['schema'] == 'blueprint_device_refinement_batch_v2'
+    assert len(batch['items']) == 1
+    item = batch['items'][0]
+    assert item['review_status'] == 'unreviewed'
+    assert item['keep'] is None
+    assert item['visual_group'] == 'switch.base_letter_s'
+    assert item['analytic_attributes'] == {'pole_configuration': 'three_way'}
+    assert item['modifier_evidence'][0]['source'] == 'neca_suffix_template'
+    assert reviewed[0].with_suffix('.png').exists()
+
+    item.update({
+        'review_status': 'accepted', 'review_source': 'human', 'keep': True,
+        'refined_device_type': 'switch', 'refined_subtype': 'unspecified',
+        'refined_bbox_cell': item['provisional_bbox_cell'],
+        'on_wall': False,
+        'attributes': {'pole_configuration': 'three_way'},
+    })
+    reviewed[0].write_text(json.dumps(batch))
+    output = tmp_path / 'approved'
+    cmd_apply(argparse.Namespace(review_dir=review_dir, out=output))
+    results = list(output.glob('*_REFINED_DEVICES.json'))
+    assert len(results) == 1
+    result = json.loads(results[0].read_text())
+    assert result['summary']['kept_devices'] == 1
+    device = result['devices'][0]
+    assert device['visual_group'] == 'switch.base_letter_s'
+    assert device['analytic_attributes_proposed'] == {
+        'pole_configuration': 'three_way'
+    }
+    assert device['attributes'] == {'pole_configuration': 'three_way'}
+    assert device['review_source'] == 'human'
+    assert not device['verified_ground_truth']
+    assert device['symbol_bbox'] == [230, 220, 258, 250]
