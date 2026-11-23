@@ -33,11 +33,14 @@ def audit_pdfs(
     seed: int = 2026,
     max_symbols: int = 8,
     neca_dir: Path | None = None,
+    repeat_region_dpis: int = 1,
+    dpi_epoch: int = 0,
 ) -> dict:
     """Return counts and visual diagnostics without writing training labels."""
     import fitz
 
-    if samples_per_page < 1 or size < 32 or not 0 <= max_symbols <= 16:
+    if (samples_per_page < 1 or size < 32 or not 0 <= max_symbols <= 16
+            or not 1 <= repeat_region_dpis <= 32 or dpi_epoch < 0):
         raise ValueError("Invalid audit sample count, crop size, or symbol limit")
     if not pdfs or not all(p.is_file() for p in pdfs):
         raise FileNotFoundError("Every QA PDF must already exist")
@@ -70,7 +73,24 @@ def audit_pdfs(
                             hashlib.sha256(identity.encode()).digest()[:8], "big"
                         )
                         rng = np.random.default_rng(state)
-                        clean, meta = sampler.sample(entry, size, rng)
+                        if repeat_region_dpis > 1:
+                            # Hold physical source anchor across neighboring
+                            # samples, but render each at its own real DPI.
+                            group_index = sample_id // repeat_region_dpis
+                            anchor_key = (f"{seed}|{pdf_path}|{index}|"
+                                          f"region:{group_index}")
+                            anchor_seed = int.from_bytes(
+                                hashlib.sha256(anchor_key.encode()).digest()[:8],
+                                "big"
+                            )
+                            clean, meta = sampler.sample(
+                                entry, size, rng, crop_seed=anchor_seed,
+                                dpi_variant=sample_id % repeat_region_dpis,
+                                dpi_variants=repeat_region_dpis,
+                                dpi_epoch=dpi_epoch,
+                            )
+                        else:
+                            clean, meta = sampler.sample(entry, size, rng)
                         composite, symbol_meta = compose_ssl_symbols(
                             clean, rng, neca_bank=bank, max_symbols=max_symbols,
                             drawing_dpi=meta["effective_dpi"],
@@ -118,6 +138,8 @@ def audit_pdfs(
         "pdf_count": len({row["pdf_source_key"] for row in records}),
         "dpi_min": min(dpis) if dpis else None,
         "dpi_max": max(dpis) if dpis else None,
+        "repeat_region_dpis": repeat_region_dpis,
+        "dpi_epoch": dpi_epoch,
         "symbols_by_type": dict(class_counts),
         "records": records,
     }
@@ -136,13 +158,18 @@ def main() -> None:
     parser.add_argument("--samples-per-page", type=int, default=4)
     parser.add_argument("--size", type=int, default=512)
     parser.add_argument("--max-symbols", type=int, default=8)
+    parser.add_argument("--repeat-region-dpis", type=int, default=1,
+                        help="Render each physical PDF region at N different true DPI values")
+    parser.add_argument("--dpi-epoch", type=int, default=0,
+                        help="Refresh random DPI variants while retaining the same PDF anchor")
     parser.add_argument("--neca-dir", type=Path)
     parser.add_argument("--seed", type=int, default=2026)
     a = parser.parse_args()
     r = audit_pdfs(
         a.pdfs, a.out, pages=a.pages, samples_per_page=a.samples_per_page,
         size=a.size, max_symbols=a.max_symbols, neca_dir=a.neca_dir,
-        seed=a.seed,
+        seed=a.seed, repeat_region_dpis=a.repeat_region_dpis,
+        dpi_epoch=a.dpi_epoch,
     )
     print(json.dumps({k: v for k, v in r.items() if k != "records"}, indent=2))
 
