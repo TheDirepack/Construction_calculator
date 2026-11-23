@@ -1,0 +1,54 @@
+name: ML symbol detector checks
+
+on:
+  pull_request:
+    paths:
+      - 'ml/symbol-detector/**'
+      - '.github/workflows/ml-symbol-detector-ci.yml'
+  push:
+    branches:
+      - 't3/blueprint-labeling-review-gate-nov22'
+    paths:
+      - 'ml/symbol-detector/**'
+      - '.github/workflows/ml-symbol-detector-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  symbols-cpu:
+    name: Symbol pipeline / CPU regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            ml/symbol-detector/requirements.txt
+            ml/symbol-detector/requirements-test.txt
+      - name: Install CPU test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r ml/symbol-detector/requirements-test.txt
+          python -m pip install 'torch==2.6.0' --index-url https://download.pytorch.org/whl/cpu
+      - name: Syntax compile all detector Python code
+        run: python -m compileall -q ml/symbol-detector
+      - name: Run symbol/regression tests
+        working-directory: ml/symbol-detector
+        run: |
+          python -m pytest -q \
+            tests/test_neca_visual_groups.py \
+            tests/test_neca_modifier_attachment.py \
+            tests/test_switch_suffix_templates.py \
+            tests/test_sam_reference_cache.py \
+            tests/test_sam_precision.py \
+            tests/test_neca_prompt_catalog.py \
+            tests/test_proposal_fusion.py \
+            tests/test_hierarchical_sam.py \
+            tests/test_sam_prompt_feedback.py \
+            tests/test_electrical_device_attributes.py \
+            tests/test_circuitnet_review_sheets.py
