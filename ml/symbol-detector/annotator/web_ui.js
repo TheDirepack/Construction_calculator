@@ -454,12 +454,15 @@ function updateSelectedFields() {
     fillSelection(); return;
   }
   modifySelection(x => {
+    const changedBox = box.some((v, i) => Math.abs(v - x.bbox_xyxy[i]) > .051);
     x.symbol_family = family; x.symbol_variant = variant;
-    x.bbox_xyxy = box;
+    if (changedBox) {
+      // A manually edited axis-aligned hull supersedes rotated geometry.
+      x.bbox_xyxy = box;
+      delete x.bbox_rotated; x.rotation_degrees = 0;
+    }
     x.is_occluded = $("occluded").checked;
     x.is_truncated = $("truncated").checked;
-    // Editing coordinates manually sets the axis-aligned box as authoritative.
-    delete x.bbox_rotated; x.rotation_degrees = 0;
     state.lastFamily = family;
   });
 }
