@@ -27,9 +27,20 @@ def test_preview_creates_aligned_pairs_and_count_audit(tmp_path):
     assert report["placement_shortfall"] == report["requested_total"] - report["placed_total"]
     assert report["placed_total"] <= report["requested_total"] <= 5 * 16
     assert len(report["rows"]) == 5
+    assert report["distinct_inserted_variants"] >= 0
+    assert report["eligible_neca_svg_variants"] == 0  # procedural-only fixture
+    assert sum(report["placed_by_family"].values()) == report["placed_total"]
     assert (out / "preview_report.json").is_file()
     for i in range(5):
         path = out / f"sample_{i:04d}.png"
         img = cv2.imread(str(path))
         assert img is not None and img.shape == (512, 1024, 3)
+        overlay = cv2.imread(str(out / f"sample_{i:04d}_overlay.png"))
+        assert overlay is not None and overlay.shape == (512, 512, 3)
+        placements = report["rows"][i]["symbol_stats"]["placements"]
+        assert len(placements) == report["rows"][i]["symbol_stats"]["placed"]
+        for placed in placements:
+            assert placed["symbol_family"]
+            assert placed["symbol_variant"]
+            assert len(placed["bbox_xyxy"]) == 4
         assert 0 <= report["rows"][i]["mask_fraction"] <= 1
