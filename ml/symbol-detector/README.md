@@ -115,6 +115,36 @@ identities, invalid boxes or duplicate IDs. Cached rasters and JSON outputs
 are stored in `--out-dir`. For an unattended remote machine, use an SSH local
 port forward rather than binding the server to a public interface.
 
+### Conservative PDF page-presence scanner
+
+For large mixed-discipline PDF sets, generate a **read-only** review queue:
+
+```bash
+python scripts_triage_pdf_symbol_pages.py /path/to/construction_pdfs \
+  --output work/page_review_queue.json
+python -m annotator.web --pdf /path/to/construction_pdfs/drawings.pdf \
+  --page-presence work/page_review_queue.json --open-browser
+```
+
+Outputs: possible_symbols when electrical/symbol text is detected,
+review_required for other content (including raster-only and
+architectural/structural drawings), and blank_candidate **only** for a page
+without a PDF content stream, embedded images or visible annotations.
+These are **unverified suggestions**, not binary truth labels. A blank
+candidate still needs human review. Source SHA256 is checked before displaying
+suggestions. The scanner never changes normalized annotation JSON or sets
+verified_no_symbols=true. A model's failure to detect symbols must not
+be used as proof of absence. Reviewed pages can be marked manually using
+the editor checkbox. The original source remains usable for SSL
+pretraining and synthetic composites regardless of review category.
+
+For supervised synthetic composites, a verified symbol-free **source**
+can produce both empty negative and inserted-positive samples.
+The generated page's verified_no_symbols is true only when there are
+**zero** actual inserted devices; positive composites retain their exact
+inserted boxes. The source's negative attestation does not override
+the final composite's labels.
+
 ## 1. Import and normalize source annotations
 
 Keep source images, annotations, and generated datasets in local storage. Use the
