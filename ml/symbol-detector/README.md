@@ -189,12 +189,15 @@ generic pool builder; other programs retain its previous behavior. Earlier
 pool PNGs from the same indexed PDF are skipped to prevent double weighting.
 The dataset now deliberately **replays one exact source crop across multiple
 independent SSL views** (default 4, configurable 1–32). Each page/image has a
-stable small crop bank (default 6) so the same pixel region can recur in later
+stable spatially stratified crop bank (default 32) so the same pixel region can recur in later
 epochs with completely new symbols, counts, orientations, warps, masks, scan
 noise and clean/degraded branches. About 20% of source bursts explore a new
 crop site instead of a bank slot. Source pages continue to cycle without
-replacement between bursts; the effective MuSGD batch remains 14. Per-worker
-LRU caches hold at most 12 rendered PDF crops and 24 MiB of base raster
+replacement between bursts, and repeat visits cycle through spatial slots
+rather than randomly resampling the same slot while others are unvisited.
+Bank slots form a page-aspect-ratio-aware grid, with ink-guided selection
+inside each region. The effective MuSGD batch remains 14. Per-worker
+LRU caches hold at most 32 rendered PDF crops and 24 MiB of base raster
 crops, with independent copies returned to augmentations. No full-page
 pre-rendering or on-disk cache is required.
 
@@ -203,7 +206,7 @@ Tuning: `SSL_CROP_REUSE_VIEWS`, `SSL_CROP_BANK_SIZE`, and
 CLI flags are `--crop-reuse-views`, `--crop-bank-size`, and
 `--fresh-crop-probability`. A larger repeat count trades unique pages per
 epoch for more randomized training views from each sampled location. Preview
-reports unique clean crops, repeated views and cache hits. Any change
+reports unique clean crops, repeated views, bank grid coordinates and cache hits. Any change
 invalidates the run fingerprint.
 
 Verified device-centered raster crops remain available. Existing receptacles,
