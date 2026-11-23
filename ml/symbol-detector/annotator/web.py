@@ -389,6 +389,7 @@ def _normalize_loaded_document(data: dict) -> dict:
     doc.setdefault("coordinate_system", "original_page_pixels_top_left_y_down")
     doc.setdefault("rejected_proposals", [])
     doc.setdefault("instances", [])
+    doc.setdefault("verified_no_symbols", False)
     normalized_instances = []
     for idx, raw in enumerate(doc["instances"]):
         if not isinstance(raw, dict):
@@ -750,6 +751,7 @@ class LabelingSession:
                 "image_width": width, "image_height": height,
                 "coordinate_system": "original_page_pixels_top_left_y_down",
                 "exhaustive_families": [],
+                "verified_no_symbols": False,
                 "annotation_completeness": "partial",
                 "annotation_completeness_verified": False,
                 "annotation_scope": "positive_only",
@@ -870,7 +872,8 @@ class LabelingSession:
             return path.read_bytes(), _image_mime(path)
 
     def validate_review_payload(self, index: int, *, revision: str | None,
-                                instances: object, rejected: object) -> tuple[dict, list[dict]]:
+                                instances: object, rejected: object,
+                                metadata: object = None) -> tuple[dict, list[dict]]:
         """Check a proposed edit without writing it. Save reuses these exact gates."""
         with self.lock:
             baseline, actual_revision, _ = self._load(index)
@@ -878,6 +881,14 @@ class LabelingSession:
                 raise RevisionConflict("saved annotations changed; reload page before overwriting")
             width, height = int(baseline["image_width"]), int(baseline["image_height"])
             validate_instances(instances, width, height)
+            if metadata is not None and not isinstance(metadata, dict):
+                raise LabelingError("metadata must be an object")
+            negative = (metadata.get("verified_no_symbols", baseline.get("verified_no_symbols", False))
+                        if metadata is not None else baseline.get("verified_no_symbols", False))
+            if type(negative) is not bool:
+                raise LabelingError("metadata.verified_no_symbols must be boolean")
+            if negative and instances:
+                raise LabelingError("verified symbol-free pages cannot contain active boxes; reject or remove proposals first")
             if not isinstance(rejected, list) or len(rejected) > 150_000:
                 raise LabelingError("rejected_proposals must be a bounded list")
             rejected_ids: set[str] = set()
@@ -903,7 +914,7 @@ class LabelingSession:
              rejected: object, metadata: object = None) -> str:
         with self.lock:
             baseline, cleaned_rejected = self.validate_review_payload(
-                index, revision=revision, instances=instances, rejected=rejected
+                index, revision=revision, instances=instances, rejected=rejected, metadata=metadata
             )
 
             if metadata is not None:
@@ -916,12 +927,15 @@ class LabelingSession:
                             raise LabelingError(f"metadata.{key} must be a short string")
                         baseline[key] = val.strip()
 
+            if metadata is not None and "verified_no_symbols" in metadata:
+                baseline["verified_no_symbols"] = metadata["verified_no_symbols"]
             baseline["instances"] = [_normalize_instance_for_save(item) for item in instances]
             baseline["rejected_proposals"] = cleaned_rejected
             baseline["exhaustive_families"] = []
-            baseline["annotation_completeness"] = "partial"
-            baseline["annotation_completeness_verified"] = False
-            baseline["annotation_scope"] = "positive_only"
+            negative = baseline.get("verified_no_symbols", False)
+            baseline["annotation_completeness"] = "complete" if negative else "partial"
+            baseline["annotation_completeness_verified"] = negative
+            baseline["annotation_scope"] = "verified_no_symbols" if negative else "positive_only"
             encoded = (json.dumps(baseline, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
             _atomic_bytes(self._json_path(index), encoded)
             return hashlib.sha256(encoded).hexdigest()
@@ -1031,6 +1045,7 @@ def make_handler(session: LabelingSession):
                         page_idx, revision=data.get("revision"),
                         instances=data.get("instances"),
                         rejected=data.get("rejected_proposals"),
+                        metadata=data.get("metadata"),
                     )
                     self._json(200, {"valid": True})
                     return
