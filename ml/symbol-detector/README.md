@@ -181,7 +181,7 @@ python scripts_prepare_training_data.py \
   --train-tiles-per-page 32 --train-variants 4
 
 python scripts_train_ultralytics.py prepared/phase2_mixed/yolo/data.yaml \
-  --weights work/blueprint_ssl_backbone.pt --batch 14
+  --weights work/blueprint_ssl_backbone.pt --batch 2
 # add --run only on the CUDA training machine after preflight
 ```
 
