@@ -730,9 +730,12 @@ def main() -> None:
         args.model_id, getattr(model.config, '_commit_hash', None),
     )
     if resolved_model_revision is None:
-        print('WARNING: model weight revision cannot be established; '
-              'encoded reference cache disabled to avoid stale GPU features',
-              flush=True)
+        ap.error(
+            'cannot establish model weight revision; refusing stale resume '
+            'and reference embeddings. Load an immutable Hugging Face model '
+            'revision or a local model directory containing actual '
+            '.safetensors/.bin checkpoint shards.'
+        )
     print(f'Model loaded in {time.time() - t0:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
 
     cache_root = args.out.resolve() / '_sam_prompt_cache'
