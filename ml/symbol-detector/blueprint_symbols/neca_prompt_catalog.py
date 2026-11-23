@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
@@ -302,7 +303,7 @@ def load_neca_sam_prompts(
         if alpha is None:
             alpha = _rasterize_svg_alpha(svg_path, render_height=render_height)
             if alpha is not None and cached is not None:
-                temp = cached.with_suffix('.tmp.png')
+                temp = cached.with_name(f'{cached.stem}.{os.getpid()}.tmp.png')
                 if cv2.imwrite(str(temp), alpha):
                     temp.replace(cached)
             if reference_stats is not None:
