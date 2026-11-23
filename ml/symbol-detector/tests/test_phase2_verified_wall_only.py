@@ -51,6 +51,8 @@ def test_wall_only_positive_and_empty_view_targets_are_distinct(tmp_path):
     assert len(docs) == report["counts"]["total_views"]
     assert all(doc["project_family_id"] == "verified-building" for doc in docs)
     assert all(doc["synthetic_targets_only"] and doc["wall_only_background_verified"] for doc in docs)
+    assert all(doc["verified_no_symbols"] is (not bool(doc["instances"])) for doc in docs)
+    assert all(doc["source_background_verified_no_symbols"] is True for doc in docs)
     assert all(set(doc["exhaustive_families"]) == set(CANONICAL_CLASSES) for doc in docs)
     assert all(len(doc["instances"]) == doc["composite"]["inserted_symbols"] for doc in docs)
     positives = [doc for doc in docs if doc["composite"]["mode"] == "inserted_symbols"]

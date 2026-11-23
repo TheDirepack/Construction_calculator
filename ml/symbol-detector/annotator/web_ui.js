@@ -145,6 +145,7 @@ function saveLocalDraft() {
       coordinate_system: state.doc.coordinate_system,
       instances: state.doc.instances,
       rejected_proposals: state.doc.rejected_proposals || [],
+      verified_no_symbols: state.doc.verified_no_symbols === true,
       savedAt: Date.now(),
     }));
   } catch (_) {}
@@ -190,6 +191,7 @@ function snapshot() {
   return JSON.stringify({
     instances: state.doc.instances,
     rejected_proposals: state.doc.rejected_proposals || [],
+    verified_no_symbols: state.doc.verified_no_symbols === true,
     selectedId: state.selectedId,
     meta: {
       source_id: state.doc.source_id || "",
@@ -208,6 +210,7 @@ function restore(snapshotText) {
   const data = JSON.parse(snapshotText);
   state.doc.instances = data.instances;
   state.doc.rejected_proposals = data.rejected_proposals;
+  state.doc.verified_no_symbols = data.verified_no_symbols === true;
   state.selectedId = data.selectedId;
   if (data.meta) Object.assign(state.doc, data.meta);
   editState();
@@ -694,6 +697,7 @@ function refreshControls() {
   $("undo").disabled = state.undo.length === 0;
   $("redo").disabled = state.redo.length === 0;
   $("save").disabled = (!state.dirty && state.revision !== null) || state.busy;
+  $("verifiedNoSymbols").checked = state.doc?.verified_no_symbols === true;
   $("toggleLabels").setAttribute("aria-pressed", String(state.showLabels));
   $("toggleLoupe").setAttribute("aria-pressed", String(state.showLoupe));
   $("toggleWalls").hidden = !state.walls.length;
@@ -1338,6 +1342,7 @@ function newInstance(box, rotated = null) {
       angle_deg: Math.round(rotated.angle_deg * 1000) / 1000,
     };
   }
+  state.doc.verified_no_symbols = false;
   state.doc.instances.push(item);
   select(item.instance_id);
   editState();
@@ -1525,6 +1530,7 @@ function duplicateSelected() {
   if (!item) return;
   remember();
   const copy = cloneInstanceAt(item, null);
+  state.doc.verified_no_symbols = false;
   state.doc.instances.push(copy);
   select(copy.instance_id);
   editState();
@@ -1542,6 +1548,7 @@ function pasteAtCursor() {
   if (!state.clipboard || !state.doc || state.busy) return;
   remember();
   const copy = cloneInstanceAt(state.clipboard, state.pointerImg);
+  state.doc.verified_no_symbols = false;
   state.doc.instances.push(copy);
   select(copy.instance_id);
   editState();
@@ -2208,12 +2215,14 @@ async function importJsonFromFile(file) {
       body: JSON.stringify({
         revision: source.revision, instances: preparedInstances,
         rejected_proposals: preparedRejected,
+        metadata: {verified_no_symbols: false},
       }),
     });
     if (!sourceUnchanged()) throw new Error("Active page changed during import; import cancelled.");
     remember();
     state.doc.instances = preparedInstances;
     state.doc.rejected_proposals = preparedRejected;
+    state.doc.verified_no_symbols = false;
     state.selectedId = null;
     editState();
     refresh();
@@ -2284,6 +2293,20 @@ async function loadPage(page, force = false) {
     state.pageCount = result.page_count;
     state.revision = result.revision;
     state.doc = result.document;
+    const presence = result.page_presence_suggestion;
+    const presenceHint = $("pagePresenceHint");
+    presenceHint.hidden = !presence;
+    if (presence) {
+      const labels = {
+        possible_symbols: "Possible symbols; inspect and label all target devices.",
+        review_required: "Unable to exclude symbols; visually inspect the entire page.",
+        blank_candidate: "No PDF content stream detected; still requires explicit full-page review.",
+      };
+      const terms = Array.isArray(presence.risk_terms) && presence.risk_terms.length
+        ? " Signals: " + presence.risk_terms.join(", ") : "";
+      presenceHint.textContent = "Automated suggestion (unverified): " +
+        (labels[presence.suggestion] || labels.review_required) + terms;
+    }
     state.image = img;
     state.selectedId = null;
     state.snapPreview = null;
@@ -2357,6 +2380,7 @@ async function savePage() {
       source_id: state.doc.source_id || "",
       project_family_id: state.doc.project_family_id || "",
       document_id: state.doc.document_id || "",
+      verified_no_symbols: state.doc.verified_no_symbols === true,
     };
     if (state.doc.notes) metadata.notes = state.doc.notes;
     const result = await api("/api/save?page=" + state.page, {
@@ -2375,7 +2399,8 @@ async function savePage() {
     }
     savedState();
     refresh();
-    notify(`Saved ${state.jsonFilename || ("page " + (state.page + 1))}. No full-page completeness asserted.`, "saved");
+    notify(`Saved ${state.jsonFilename || ("page " + (state.page + 1))}. ` +
+      (state.doc.verified_no_symbols ? "Verified symbol-free negative." : "Page completeness remains unknown."), "saved");
     return true;
   } catch (error) {
     if (error.status === 409) {
@@ -2414,6 +2439,23 @@ function wireEvents() {
   $("undo").addEventListener("click", undo);
   $("redo").addEventListener("click", redo);
   $("save").addEventListener("click", savePage);
+  $("verifiedNoSymbols").addEventListener("change", (event) => {
+    if (!state.doc || state.busy) return;
+    const value = event.target.checked;
+    if (value && state.doc.instances.length) {
+      event.target.checked = false;
+      notify("Reject or remove every active proposal before marking this page symbol-free.", "warning");
+      return;
+    }
+    if (value && !window.confirm("Have you reviewed the ENTIRE page and confirmed there are no target symbols? This creates negative training labels.")) {
+      event.target.checked = false;
+      return;
+    }
+    remember();
+    state.doc.verified_no_symbols = value;
+    editState();
+    refresh();
+  });
   $("reloadFromDisk").addEventListener("click", () => loadPage(state.page, true));
   $("restoreDraftBtn").addEventListener("click", async () => {
     try {
@@ -2430,6 +2472,7 @@ function wireEvents() {
         body: JSON.stringify({
           revision: source.revision, instances: parsed.instances,
           rejected_proposals: parsed.rejected_proposals,
+          metadata: {verified_no_symbols: parsed.verified_no_symbols === true},
         }),
       });
       if (state.page !== source.page || state.revision !== source.revision ||
@@ -2439,6 +2482,7 @@ function wireEvents() {
       remember();
       state.doc.instances = parsed.instances;
       state.doc.rejected_proposals = parsed.rejected_proposals;
+      state.doc.verified_no_symbols = parsed.verified_no_symbols === true;
       $("draftBanner").hidden = true;
       editState();
       refresh();

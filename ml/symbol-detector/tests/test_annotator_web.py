@@ -55,6 +55,7 @@ def test_pdf_labeler_saves_safe_positive_only_page(tmp_path):
     assert view["document"]["annotation_completeness"] == "partial"
     assert view["document"]["exhaustive_families"] == []
     assert not view["document"]["annotation_completeness_verified"]
+    assert view["document"]["verified_no_symbols"] is False
     # _raster must cache the expensive PDF rendering across the UI metadata,
     # image request and save (not render the same 100+ megapixel sheet 3 times).
     before = session._render_cache[0]
@@ -76,6 +77,58 @@ def test_pdf_labeler_saves_safe_positive_only_page(tmp_path):
     assert next_page["document"]["instances"] == []
     assert next_page["document"]["annotation_completeness_verified"] is False
     assert (tmp_path / "labels" / "electrical_p0001.json").is_file()
+
+
+def test_verified_no_symbols_roundtrip_and_conflict_rejection(tmp_path):
+    session = LabelingSession(pdf=_pdf(tmp_path / "plans.pdf"), out_dir=tmp_path / "labels")
+    with pytest.raises(LabelingError, match="active boxes"):
+        session.save(0, revision=None, instances=[_box()], rejected=[],
+                     metadata={"verified_no_symbols": True})
+    with pytest.raises(LabelingError, match="must be boolean"):
+        session.save(0, revision=None, instances=[], rejected=[],
+                     metadata={"verified_no_symbols": "true"})
+    assert session.page_state(0)["revision"] is None
+    first = session.save(0, revision=None, instances=[], rejected=[],
+                         metadata={"verified_no_symbols": True})
+    doc = session.page_state(0)["document"]
+    assert doc["verified_no_symbols"] is True
+    assert doc["annotation_completeness_verified"] is True
+    assert doc["annotation_scope"] == "verified_no_symbols"
+    assert doc["exhaustive_families"] == []  # Expanded against current model classes on export.
+    with pytest.raises(LabelingError, match="active boxes"):
+        session.save(0, revision=first, instances=[_box()], rejected=[])
+    session.save(0, revision=first, instances=[_box()], rejected=[],
+                 metadata={"verified_no_symbols": False})
+    doc = session.page_state(0)["document"]
+    assert doc["verified_no_symbols"] is False
+    assert doc["annotation_completeness_verified"] is False
+    assert doc["annotation_scope"] == "positive_only"
+
+
+def test_page_presence_proposals_are_read_only_and_source_hash_bound(tmp_path):
+    from scripts_triage_pdf_symbol_pages import scan_pdfs
+    pdf = _pdf(tmp_path / "source.pdf")
+    queue = scan_pdfs([pdf])
+    suggestions = tmp_path / "page_presence.json"
+    suggestions.write_text(json.dumps(queue))
+    session = LabelingSession(pdf=pdf, out_dir=tmp_path / "labels",
+                              page_presence=suggestions)
+    page = session.page_state(0)
+    assert page["page_presence_suggestion"]["suggestion"] == "possible_symbols"
+    assert page["document"]["verified_no_symbols"] is False
+    assert not (tmp_path / "labels" / "source_p0001.json").exists()
+    forged = json.loads(suggestions.read_text())
+    forged["documents"][0]["pages"][0]["verified_no_symbols"] = True
+    suggestions.write_text(json.dumps(forged))
+    with pytest.raises(LabelingError, match="untrusted"):
+        LabelingSession(pdf=pdf, out_dir=tmp_path / "another",
+                        page_presence=suggestions)
+    forged["documents"][0]["pages"][0]["verified_no_symbols"] = False
+    forged["documents"][0]["source_pdf_sha256"] = "0" * 64
+    suggestions.write_text(json.dumps(forged))
+    with pytest.raises(LabelingError, match="SHA256"):
+        LabelingSession(pdf=pdf, out_dir=tmp_path / "different",
+                        page_presence=suggestions)
 
 
 def test_reject_unreviewed_proposals_and_preserve_provenance(tmp_path):

@@ -149,7 +149,12 @@
         <span id="fileBadge" class="pill" hidden></span>
       </span>
     </h2>
-    <p class="muted-box">Only <strong>individually verified</strong> boxes are confirmed positives. Unreviewed proposals remain uncertain. Pages stay <strong>positive-only</strong>.</p>
+    <p class="muted-box">Only <strong>individually verified</strong> boxes are confirmed positives. Unreviewed proposals remain uncertain. Unreviewed pages are <strong>not negatives</strong>.</p>
+    <p id="pagePresenceHint" class="muted-box" hidden></p>
+    <div class="section-card">
+      <label class="checkbox"><input id="verifiedNoSymbols" type="checkbox"> Verified no target symbols on this entire page</label>
+      <p class="small">Mark only after reviewing the full page. Confirmed symbol-free pages remain eligible for negative training crops and synthetic-symbol pretraining backgrounds. Reject or remove active boxes first.</p>
+    </div>
     <div class="row wrap">
       <span id="count" class="small count">0 labels</span>
       <button id="nextPending" class="ghost" title="Jump to next unreviewed proposal (N)">Next pending · N</button>

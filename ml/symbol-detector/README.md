@@ -97,11 +97,15 @@ proposals are moved to `rejected_proposals` and are **not** active labels.
 Manually drawn boxes also begin as drafts and require explicit
 verification of the class before becoming trusted positives; Box mode remains
 active for rapid consecutive drawings. **No page is automatically
-complete/exhaustive**, even when every proposal was reviewed
-or a page contains no devices. Editing an already attested page revokes
-previous completeness claims; re-attest separately after a whole-page audit.
-These positive-only JSONs are **not eligible for the standard exhaustive YOLO
-export until coverage is independently attested**.
+complete/exhaustive**, even when every proposal was reviewed or a page
+contains no devices. After visually inspecting the entire page, use the
+**Verified no target symbols** checkbox to explicitly save
+`"verified_no_symbols": true` (requires no active boxes). This attests a
+whole-page negative for all currently trained detector classes; removing the
+check revokes the attestation. Unchecked/legacy pages remain unknown, never
+implicit negatives. The page can still serve as a real-PDF background for
+synthetic symbol insertion in pretraining. For positive pages, the usual
+independent exhaustive-family review requirement remains.
 
 Images remain at the original rendered-page pixel coordinates; SAM PDF-point
 boxes are converted from PDF bottom-left to image top-left coordinates.
@@ -110,6 +114,48 @@ writes JSON atomically, and refuses stale revisions, mismatched PDF/image
 identities, invalid boxes or duplicate IDs. Cached rasters and JSON outputs
 are stored in `--out-dir`. For an unattended remote machine, use an SSH local
 port forward rather than binding the server to a public interface.
+
+### Conservative PDF page-presence scanner
+
+For large mixed-discipline PDF sets, generate a **read-only** review queue:
+
+```bash
+python scripts_triage_pdf_symbol_pages.py /path/to/construction_pdfs \
+  --output work/page_review_queue.json
+python -m annotator.web --pdf /path/to/construction_pdfs/drawings.pdf \
+  --page-presence work/page_review_queue.json --open-browser
+```
+
+Outputs: possible_symbols when electrical/symbol text is detected,
+review_required for other content (including raster-only and
+architectural/structural drawings), and blank_candidate **only** for a page
+without a PDF content stream, embedded images or visible annotations.
+These are **unverified suggestions**, not binary truth labels. A blank
+candidate still needs human review. Source SHA256 is checked before displaying
+suggestions. The scanner never changes normalized annotation JSON or sets
+verified_no_symbols=true. A model's failure to detect symbols must not
+be used as proof of absence. Reviewed pages can be marked manually using
+the editor checkbox. The original source remains usable for SSL
+pretraining and synthetic composites regardless of review category.
+
+For supervised synthetic composites, a verified symbol-free **source**
+can produce both empty negative and inserted-positive samples.
+The generated page's verified_no_symbols is true only when there are
+**zero** actual inserted devices; positive composites retain their exact
+inserted boxes. The source's negative attestation does not override
+the final composite's labels.
+
+The older `scripts_composite_neca_svg.py` and
+`scripts_composite_electrical.py` follow the same rule. Unreviewed/partially
+annotated PDF backgrounds can still receive generated symbols, but those
+insertions add **verified positives only**: the scripts preserve original
+`exhaustive_families` without claiming the rest of the page is empty.
+Export these derivatives with `--allow-partial-training` so unknown original
+symbols are not trained as background. A background explicitly verified empty
+may produce exhaustive synthetic-positive samples; `--negative` in the
+procedural compositor refuses unverified sources entirely. Source
+`verified_no_symbols` becomes false on every final image containing inserts,
+while `source_background_verified_no_symbols` records its original state.
 
 ## 1. Import and normalize source annotations
 
@@ -219,8 +265,10 @@ positive truth. Existing manual label tool output may be partial.
 
 For example: one real page with manually confirmed receptacle boxes but
 other unlabeled receptacles has exhaustive_families=[]. A distinct fully
-reviewed wall-only page with no target devices may declare
-exhaustive_families=["receptacle","switch_sensor",...] and instances=[].
+reviewed symbol-free page may set `"verified_no_symbols": true` and
+`"instances": []`; the manifest and tile exporter automatically expand its
+negative coverage to the trained class map. Other verified negatives may still
+use class-specific `exhaustive_families`.
 Do not make completeness claims solely because a sheet is called
 "architectural" or "negative" in its file name.
 

@@ -76,6 +76,11 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
             raise ValueError(f'annotation dimensions disagree with image: {path} / {img}')
         if not isinstance(data['instances'],list):
             raise ValueError(f'instances must be a list: {path}')
+        verified_no_symbols=data.get('verified_no_symbols',False)
+        if type(verified_no_symbols) is not bool:
+            raise ValueError(f'verified_no_symbols must be boolean: {path}')
+        if verified_no_symbols and data['instances']:
+            raise ValueError(f'verified_no_symbols page contains active annotations: {path}')
         instance_ids=set()
         for index,inst in enumerate(data['instances']):
             if not isinstance(inst,dict) or not isinstance(inst.get('bbox_xyxy'),(list,tuple)) or len(inst['bbox_xyxy'])!=4:
@@ -105,8 +110,14 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
                      'project_group':g,'source_type':data.get('source_type','unknown'),
                      'image_width':data['image_width'],'image_height':data['image_height'],
                      'usable_families':sorted(seen),
+                     'verified_no_symbols':verified_no_symbols,
                      'exhaustive_families':sorted(set(data.get('exhaustive_families', [])))})
         by_group[g].append(docs[-1])
+    # Only explicit reviewed negatives imply exhaustive class coverage.
+    # A zero-box unreviewed source remains unknown.
+    for row in docs:
+        if row['verified_no_symbols']:
+            row['exhaustive_families']=sorted(counts)
     if not docs: raise ValueError('no training annotation files found')
     groups=sorted(by_group,key=lambda g:hashlib.sha256(g.encode()).hexdigest())
     if len(groups)<3:

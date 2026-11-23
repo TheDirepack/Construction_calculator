@@ -1,15 +1,15 @@
 {
   "_comment": [
     "Role of every raw source page, first matching rule wins. Globs are relative to the data root.",
-    "background  = has NO electrical symbols: electrical glyphs are composited onto it, labels are exact.",
+    "background  = UNVERIFIED source for synthetic/SSL use; it may contain real electrical symbols and MUST NOT be used as a supervised negative.",
     "label_queue = has REAL electrical symbols with no labels: model proposals + human review, never trained on as-is.",
     "asset       = symbol library (shapes to composite), not a page.",
-    "auto_text   = vector PDF: pages whose text mentions electrical words go to label_queue, others to background.",
+    "auto_text   = text-match pages go to label_queue; no text match goes to UNVERIFIED background, never a trusted negative.",
     "skip        = not useful for plan symbols.",
     "group: 'file' = each file is its own project; 'set:<name>' = all matches are one project (one split);",
     "       'dir:N' = first N path parts (one project per folder); 'regex:<pat>' = group(1) of the file stem.",
     "       'series' = files named <series>-<n>-<hash> share a project.",
-    "pages: per-page overrides for scanned PDFs (1-based, ranges allowed)."
+    "pages: per-page routing hints for scanned PDFs (1-based, ranges allowed); not exhaustive presence attestations."
   ],
   "electrical_words": [
     "ELECTRICAL",

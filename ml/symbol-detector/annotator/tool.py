@@ -122,6 +122,7 @@ def main():
                 "annotation_completeness_verified": False,
                 "annotation_completeness": "partial",
                 "annotation_scope": "positive_only",
+                "verified_no_symbols": False,
             },
         )
         print(f"Created new sheet: {sheet.image_width}x{sheet.image_height} px")
@@ -210,6 +211,7 @@ def main():
             "annotation_completeness_verified": False,
             "annotation_completeness": "partial",
             "annotation_scope": "positive_only",
+            "verified_no_symbols": False,
         })
 
     # Existing annotation files may be saved to another folder. Rebase
