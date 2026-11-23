@@ -19,6 +19,8 @@ from dataclasses import dataclass, field, asdict
 from typing import Any
 import math
 import json
+import os
+import tempfile
 
 
 FAMILY_DISCIPLINES: dict[str, str] = {
@@ -259,4 +261,16 @@ class Sheet:
 
     def save(self, path) -> None:
         from pathlib import Path
-        Path(path).write_text(json.dumps(self.to_dict(), indent=2))
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        encoded = (json.dumps(self.to_dict(), indent=2) + "\n").encode("utf-8")
+        fd, temp = tempfile.mkstemp(prefix="." + path.name + ".", suffix=".tmp", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp, path)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
