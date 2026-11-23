@@ -83,6 +83,9 @@ exec "$PY" scripts_pretrain_ssl.py \
   --symbol-max-px 80 \
   --symbol-augment-probability 1.00 \
   --procedural-fraction 0.25 \
+  --symbol-chaos-probability "${SSL_SYMBOL_CHAOS_PROBABILITY:-0.88}" \
+  --symbol-chaos-strength "${SSL_SYMBOL_CHAOS_STRENGTH:-1.0}" \
+  --placement-chaos "${SSL_PLACEMENT_CHAOS:-0.85}" \
   --clean-fraction 0.20 \
   --labeled-focus-probability 0.65 \
   --workers "$SSL_WORKERS" \
