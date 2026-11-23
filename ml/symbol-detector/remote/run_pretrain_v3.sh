@@ -11,11 +11,11 @@ WORK="$BASE/work"
 OUT="${SSL_OUT:-$WORK/pretrain_v3}"
 # Effective optimizer batch, not necessarily the number held on the GPU.
 # The 512px SSL decoder reconstructs full-resolution RGB and can exhaust
-# 6GB VRAM with a physical batch of 16. Default to 4 x 4 accumulation.
-SSL_BATCH="${SSL_BATCH:-16}"
-SSL_MICROBATCH="${SSL_MICROBATCH:-$(( SSL_BATCH < 4 ? SSL_BATCH : 4 ))}"
+# 6GB VRAM with a physical batch of 14. Default to 7 x 2 accumulation.
+SSL_BATCH="${SSL_BATCH:-14}"
+SSL_MICROBATCH="${SSL_MICROBATCH:-$(( SSL_BATCH < 2 ? SSL_BATCH : 2 ))}"
 SSL_EPOCHS="${SSL_EPOCHS:-60}"
-SSL_ITEMS_PER_EPOCH="${SSL_ITEMS_PER_EPOCH:-8192}"
+SSL_ITEMS_PER_EPOCH="${SSL_ITEMS_PER_EPOCH:-8190}"
 SSL_VAL_ITEMS="${SSL_VAL_ITEMS:-512}"
 SSL_WORKERS="${SSL_WORKERS:-2}"
 RESUME_ARGS=()
