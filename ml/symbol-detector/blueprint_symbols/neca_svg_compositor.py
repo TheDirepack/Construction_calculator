@@ -404,14 +404,21 @@ def composite_neca_page(
     symbol_chaos_probability: float = 0.0,
     symbol_chaos_strength: float = 1.0,
     placement_chaos: float = 0.0,
+    drawing_dpi: float | None = None,
+    match_local_ink: bool = False,
+    ink_reference: np.ndarray | None = None,
     tag: str = 'neca',
 ) -> tuple[np.ndarray, list[dict]]:
     """Composite NECA 100-2013 SVG devices onto a clean blueprint page with zero wall clipping."""
     if not 0 <= placement_chaos <= 1:
         raise ValueError("placement_chaos must be a probability")
     from .symbol_chaos import distort_symbol_alpha, sample_free_origin
+    from .ink_style import local_drawing_ink_bgr, sized_symbol_range
 
     page = image.copy()
+    reference = image if ink_reference is None else ink_reference
+    if reference.shape != image.shape or reference.dtype != image.dtype:
+        raise ValueError("ink_reference must match the source drawing shape/dtype")
     h, w = page.shape[:2]
     gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
     ink_mask = (gray < 175).astype(np.uint8)
@@ -436,9 +443,14 @@ def composite_neca_page(
     occupied: list[list[float]] = [list(map(float, i['bbox_xyxy'])) for i in doc.get('instances', [])]
 
     # Scale symbol range mildly with page resolution so 5000px sheets get appropriately sized symbols
-    res_factor = float(np.clip(max(h, w) / 2800.0, 0.70, 1.85))
-    lo_px = size_px_range[0] * res_factor
-    hi_px = size_px_range[1] * res_factor
+    if drawing_dpi is not None:
+        # SVG source has no authoritative physical size; choose an apparent
+        # symbol size at 200dpi, then scale at the exact PDF-render DPI.
+        lo_px, hi_px = sized_symbol_range(size_px_range, drawing_dpi, (h, w))
+    else:
+        res_factor = float(np.clip(max(h, w) / 2800.0, 0.70, 1.85))
+        lo_px = size_px_range[0] * res_factor
+        hi_px = size_px_range[1] * res_factor
 
     placed: list[dict] = []
     wall_cursor = 0
@@ -598,7 +610,11 @@ def composite_neca_page(
         # Blend cleanly onto the clean blueprint (before any noise/compression!)
         roi = page[y0:y0 + gh, x0:x0 + gw].astype(np.float32)
         a = (alpha.astype(np.float32) / 255.0)[:, :, None]
-        ink_col = np.clip(ink_bgr + rng.normal(0.0, 6.0, 3), 0.0, 180.0).astype(np.float32)
+        ink_col = (
+            np.asarray(local_drawing_ink_bgr(reference, box), dtype=np.float32)
+            if match_local_ink else
+            np.clip(ink_bgr + rng.normal(0.0, 6.0, 3), 0.0, 180.0).astype(np.float32)
+        )
         blended = roi * (1.0 - a) + np.minimum(roi, ink_col) * a
         page[y0:y0 + gh, x0:x0 + gw] = np.clip(blended, 0.0, 255.0).astype(np.uint8)
         occupied.append(box)
@@ -629,6 +645,8 @@ def composite_neca_page(
                 'label_method': ('warped_bbox_only' if chaos_details["operations"]
                                  else 'known_placement_transform'),
                 'target_px': round(target_px, 2),
+                'drawing_dpi': drawing_dpi,
+                'ink_color_bgr': [int(round(v)) for v in ink_col],
                 'placement_mode': 'wall_touching_shifted' if is_wall else placement_mode,
             },
         })
