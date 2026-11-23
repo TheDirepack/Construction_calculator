@@ -432,3 +432,103 @@ def test_reused_labeled_raster_preserves_existing_device_pixels(tmp_path):
     assert accepted > 0
     assert cache_hits >= 11
     assert len(dataset._raster_crop_cache) == 1
+
+
+@pytest.mark.parametrize("width,height,bank_size,expected_grid", [
+    (2592, 1728, 32, (8, 4)),
+    (3024, 2160, 32, (8, 4)),
+    (1591, 2453, 32, (4, 8)),
+    (2592, 1728, 16, (4, 4)),
+])
+def test_spatial_pdf_bank_covers_distinct_page_regions(
+    tmp_path, width, height, bank_size, expected_grid
+):
+    """Each indexed crop slot belongs to a distinct page-origin stratum."""
+    source = tmp_path / "large_sheet.pdf"
+    pdf = fitz.open()
+    page = pdf.new_page(width=width, height=height)
+    for x in range(100, width - 100, 220):
+        page.draw_line((x, 90), (x, height - 90),
+                       color=(.28, .34, .40), width=1)
+    for y in range(120, height - 120, 220):
+        page.draw_line((90, y), (width - 90, y),
+                       color=(.28, .34, .40), width=1)
+    pdf.save(source)
+    pdf.close()
+    sampler = PdfCropSampler(max_cached_crops=32)
+    entry = {"source_pdf": str(source), "pdf_page_index": 0}
+    regions = set()
+    try:
+        for slot in range(bank_size):
+            crop, meta = sampler.sample(
+                entry, 128, np.random.default_rng(slot), crop_seed=slot + 430,
+                crop_slot=slot, bank_size=bank_size,
+            )
+            assert crop.shape == (128, 128, 3)
+            assert meta["sampling_policy"] == "stratified_ink_guided_v3"
+            assert meta["bank_grid"] == list(expected_grid)
+            assert meta["bank_slot"] == slot
+            assert meta["bank_size"] == bank_size
+            assert 100 <= meta["effective_dpi"] <= 400
+            span = meta["physical_crop_size_points"]
+            max_x, max_y = width - span, height - span
+            cols, rows = expected_grid
+            col, row = slot % cols, slot // cols
+            x, y = meta["clip_rect_pt"][:2]
+            assert (max_x * col / cols - .01 <= x <=
+                    max_x * (col + 1) / cols + .01)
+            assert (max_y * row / rows - .01 <= y <=
+                    max_y * (row + 1) / rows + .01)
+            regions.add((col, row))
+        assert len(regions) == bank_size
+        assert len(sampler._crops) <= 32
+    finally:
+        sampler.close()
+
+
+def test_spatial_page_bank_slots_cycle_without_replacement():
+    manifest = {"buckets": {"real_pdf_pages": {
+        "weight": 1.0,
+        "groups": {"job": [
+            {"source_pdf": "/not/rendered/here.pdf",
+             "image_path": "/not/rendered/here.pdf", "pdf_page_index": 0},
+        ]},
+    }}}
+    dataset = BlueprintSSLDataset(
+        manifest, size=128, items_per_epoch=128, seed=1337,
+        crop_reuse_views=4, crop_bank_size=32,
+        fresh_crop_probability=0, max_symbols=0,
+    )
+    plan = dataset._source_plan
+    assert plan is not None and plan.shape == (128, 4)
+    assert all(np.array_equal(plan[i], plan[i+j])
+               for i in range(0, 128, 4) for j in range(4))
+    slots = [int(plan[i, 3]) for i in range(0, 128, 4)]
+    assert len(set(slots)) == 32
+    assert set(slots) == set(range(32))
+    assert dataset._base_crop_seed("/not/rendered/here.pdf", 0, slots[0], 0) == (
+        dataset._base_crop_seed("/not/rendered/here.pdf", 0, slots[0], 22)
+    )
+
+
+def test_bank_parameters_and_fresh_non_stratified_crop(tmp_path):
+    path = tmp_path / "plan.pdf"
+    make_pdf(path, 1)
+    entry = {"source_pdf": str(path), "pdf_page_index": 0}
+    sampler = PdfCropSampler()
+    try:
+        with pytest.raises(ValueError):
+            sampler.sample(entry, 128, np.random.default_rng(1),
+                           crop_seed=3, crop_slot=32, bank_size=32)
+        with pytest.raises(ValueError):
+            sampler.sample(entry, 128, np.random.default_rng(1),
+                           crop_seed=3, crop_slot=0)
+        crop, meta = sampler.sample(
+            entry, 128, np.random.default_rng(3), crop_seed=14
+        )
+        assert crop.shape == (128, 128, 3)
+        assert meta["bank_slot"] is None
+        assert meta["bank_grid"] is None
+        assert meta["sampling_policy"] == "adaptive_ink_guided_v2"
+    finally:
+        sampler.close()
