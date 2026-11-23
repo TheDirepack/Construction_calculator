@@ -48,7 +48,7 @@ def warp_whole_page(
         if not (0 <= box[0] < box[2] <= w and 0 <= box[1] < box[3] <= h):
             raise ValueError("bbox outside blueprint")
     meta = {"severity": "unchanged", "operations": [],
-            "rejected": 0, "box_count": len(prior)}
+            "rejected": 0, "rejection_reasons": {}, "box_count": len(prior)}
     if min(h, w) < 64 or probability == 0 or strength == 0 or rng.random() >= probability:
         return image.copy(), prior, meta
 
@@ -64,7 +64,12 @@ def warp_whole_page(
         xx1, yy1 = min(w, int(math.ceil(x1))), min(h, int(math.ceil(y1)))
         labels[yy0:yy1, xx0:xx1] = idx
 
-    base_ink = int((cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) < 190).sum())
+    original_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    base_ink = int((original_gray < 190).sum())
+    base_areas = np.bincount(labels.ravel(), minlength=len(prior) + 1)
+    base_symbol_ink = np.bincount(
+        labels[original_gray < 190].ravel(), minlength=len(prior) + 1
+    )
     paper = tuple(int(v) for v in np.median(image.reshape(-1, 3), axis=0))
     out = image.copy()
     base_names = ("stretch_shear", "projective", "elastic_mesh", "cross_waves",
@@ -98,6 +103,8 @@ def warp_whole_page(
             A = R @ np.array([[sx, shear_x], [shear_y, sy]], np.float32)
             if np.linalg.det(A) < .64:
                 meta["rejected"] += 1
+                reasons = meta["rejection_reasons"]
+                reasons["foldover"] = reasons.get("foldover", 0) + 1
                 continue
             trans = np.array([cx, cy], np.float32) - A @ np.array([cx, cy], np.float32)
             trans += rng.uniform(-max_move * .25, max_move * .25, 2).astype(np.float32)
@@ -188,25 +195,41 @@ def warp_whole_page(
             candidate_ids = cv2.remap(labels, grid_x, grid_y, cv2.INTER_NEAREST,
                                       borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
-        # Protect each newly inserted symbol against disappearing near an edge
-        # or shrinking into illegibility. Area changes are allowed.
-        valid = True
-        for idx in range(1, len(prior)+1):
-            before = int((labels == idx).sum())
-            after = int((candidate_ids == idx).sum())
-            if before and (after < max(4, before * .44) or after > before * 2.30):
-                valid = False
-                break
-        if valid and base_ink > 64:
-            remaining = int((cv2.cvtColor(candidate, cv2.COLOR_BGR2GRAY) < 190).sum())
+        # Check both box area AND actual symbol ink against the *original*
+        # sheet. Area-only checks can accept a blank symbol-shaped rectangle.
+        # Vectorized bincount avoids scanning the entire page separately for
+        # each inserted symbol (up to sixteen per crop).
+        reason = None
+        candidate_gray = cv2.cvtColor(candidate, cv2.COLOR_BGR2GRAY)
+        if prior:
+            areas = np.bincount(candidate_ids.ravel(), minlength=len(prior) + 1)
+            symbol_ink = np.bincount(
+                candidate_ids[candidate_gray < 190].ravel(),
+                minlength=len(prior) + 1,
+            )
+            for idx in range(1, len(prior) + 1):
+                baseline = int(base_areas[idx])
+                after = int(areas[idx])
+                if baseline and (after < max(4, baseline * .40)
+                                 or after > baseline * 2.60):
+                    reason = "symbol_area_loss_or_expansion"
+                    break
+                baseline_ink = int(base_symbol_ink[idx])
+                if baseline_ink >= 6 and symbol_ink[idx] < max(2, baseline_ink * .30):
+                    reason = "symbol_ink_loss"
+                    break
+        if reason is None and base_ink > 64:
+            remaining = int((candidate_gray < 190).sum())
             if remaining < .42 * base_ink or remaining > 2.1 * base_ink:
-                valid = False
-        if valid:
+                reason = "page_ink_loss_or_expansion"
+        if reason is None:
             out = candidate
             labels = candidate_ids
             meta["operations"].append(mode)
         else:
             meta["rejected"] += 1
+            reasons = meta["rejection_reasons"]
+            reasons[reason] = reasons.get(reason, 0) + 1
 
     new_boxes: list[list[float]] = []
     for idx, before_box in enumerate(prior, 1):
