@@ -201,6 +201,17 @@ def main():
             inst.snap = snap
             print(f"  Instance {inst.instance_id}: snap kind={snap.get('kind')}, note={snap.get('note')}")
 
+    # Any label or snap change invalidates the prior whole-page coverage
+    # audit. The CLI, like the browser editor, cannot infer absent devices.
+    if any((args.classify, args.add_box, args.rotate,
+            args.snap_vector, args.run_snap)):
+        sheet.extra.update({
+            "exhaustive_families": [],
+            "annotation_completeness_verified": False,
+            "annotation_completeness": "partial",
+            "annotation_scope": "positive_only",
+        })
+
     # Existing annotation files may be saved to another folder. Rebase
     # the image reference so a new JSON never points at the wrong raster.
     if img_full_path.is_file():
