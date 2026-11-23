@@ -47,19 +47,6 @@ jobs:
           PY
       - name: Syntax compile all detector Python code
         run: python -m compileall -q ml/symbol-detector
-      - name: Run symbol/regression tests
+      - name: Run complete symbol-detector test suite
         working-directory: ml/symbol-detector
-        run: |
-          python -m pytest -q \
-            tests/test_neca_visual_groups.py \
-            tests/test_sam_page_scanner.py \
-            tests/test_neca_modifier_attachment.py \
-            tests/test_switch_suffix_templates.py \
-            tests/test_sam_reference_cache.py \
-            tests/test_sam_precision.py \
-            tests/test_neca_prompt_catalog.py \
-            tests/test_proposal_fusion.py \
-            tests/test_hierarchical_sam.py \
-            tests/test_sam_prompt_feedback.py \
-            tests/test_electrical_device_attributes.py \
-            tests/test_circuitnet_review_sheets.py
+        run: python -m pytest -q tests
