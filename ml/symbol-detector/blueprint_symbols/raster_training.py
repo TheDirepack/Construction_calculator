@@ -22,6 +22,7 @@ except ImportError:
 from .multiscale import ScaleTile, sample_tile
 from .augmentation import photometric
 from .degradation import degrade, choose_profile
+from .dataset_manifest import trusted_training_instance
 
 
 @dataclass(frozen=True)
@@ -111,7 +112,7 @@ class RasterTileDataset(Dataset):
         if not 0 <= class_balance_exponent <= 1:
             raise ValueError('class_balance_exponent must be in [0,1]')
         counts=Counter(inst.get('symbol_family') for rec in records for inst in rec.instances
-                       if inst.get('symbol_family') in classes and not inst.get('uncertain',False))
+                       if inst.get('symbol_family') in classes and trusted_training_instance(inst))
         self.class_sampling_weights={cls: max(1,n)**(-class_balance_exponent)
                                      for cls,n in counts.items()}
 
@@ -144,7 +145,7 @@ class RasterTileDataset(Dataset):
             self._cached_image_key=rec.image if img.nbytes<=self.cache_max_bytes else None
             self._cached_image=img if self._cached_image_key is not None else None
         eligible=[v for v in rec.instances if v.get('symbol_family') in self.classes
-                  and not v.get('uncertain',False)]
+                  and trusted_training_instance(v)]
         picked=None
         if eligible and rng.random() < .85:
             weight=np.asarray([self.class_sampling_weights.get(v.get('symbol_family'),1.)
@@ -198,7 +199,7 @@ class RasterTileDataset(Dataset):
                 continue
             coverage=(cx1-cx0)*(cy1-cy0)/((u1-u0)*(v1-v0))
             box=(cx0,cy0,cx1,cy1)
-            if coverage >= .98 and inst.get('symbol_family') in self.classes and not inst.get('uncertain',False):
+            if coverage >= .98 and inst.get('symbol_family') in self.classes and trusted_training_instance(inst):
                 targets.append((self.classes[inst['symbol_family']],box))
             else:
                 # Never mislabel a clipped/uncertain component as background.
