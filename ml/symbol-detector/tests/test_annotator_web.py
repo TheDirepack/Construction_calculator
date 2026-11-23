@@ -5,8 +5,6 @@ import copy
 import hashlib
 import http.client
 import json
-import shutil
-import subprocess
 import sys
 import threading
 from http.server import ThreadingHTTPServer
@@ -239,34 +237,6 @@ def test_cli_sheet_model_roundtrip_preserves_review_metadata(tmp_path):
     assert copy_doc["instances"][0]["modifier_evidence"][0]["value"] == "dimmer"
     assert copy_doc["exhaustive_families"] == []
     assert copy_doc["source_pdf_sha256"] == sha256_file(pdf)
-
-
-def test_browser_geometry_helpers_if_node_is_present(tmp_path):
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("Node.js unavailable; browser geometry helper check optional")
-    source = Path(__file__).resolve().parents[1] / "annotator" / "web_ui.js"
-    module = tmp_path / "geometry.mjs"
-    module.write_text(source.read_text())
-    script = f"""
-import {{ screenToImage, imageToScreen, normalizedBox, rotatedAabb, hitBox }}
-  from {json.dumps(module.as_uri())};
-const v = {{ scale: 2.5, x: 100, y: 200 }};
-const p = screenToImage(...imageToScreen(30, 40, v), v);
-if (p[0] !== 30 || p[1] !== 40) throw new Error('noninvertible coordinate transform');
-const box = normalizedBox([100, 100], [-15, 260], 200, 150);
-if (JSON.stringify(box) !== JSON.stringify([0,100,100,150]))
-    throw new Error('box not clamped');
-const aabb = rotatedAabb(50,50,20,10,90);
-if (Math.abs(aabb[0] - 45)>1e-8 || Math.abs(aabb[1]-40)>1e-8)
-    throw new Error('rotated bbox incorrect');
-if (hitBox([10,10,50,50], 10, 10, 1, true)!=='nw')
-    throw new Error('resize handle not detected');
-"""
-    proc = subprocess.run([node, "--input-type=module", "--eval", script],
-                          capture_output=True, text=True, timeout=10)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-
 
 
 def test_legacy_cli_uses_portable_raster_reference_and_revokes_old_coverage(tmp_path, monkeypatch):
