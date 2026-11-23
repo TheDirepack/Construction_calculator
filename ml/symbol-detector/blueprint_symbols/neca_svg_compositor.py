@@ -210,15 +210,18 @@ def map_neca_to_v7(section: str, name: str) -> tuple[str, str]:
     if 'box' in s:
         return 'junction_box', 'junction_box'
 
-    # Communications / teledata / AV
-    if 'teledata' in s or 'communications' in s:
-        if 'speaker' in n:
-            return 'speaker', 'speaker'
+    # Telecom jacks are data outlets; AV equipment (intercom, volume
+    # control, equipment rack, CATV, microphone) is not a data jack.
+    if 'teledata' in s:
         if 'telephone' in n and ('data' in n or 'combo' in n or 'combination' in n):
             return 'data_outlet', 'data_telephone'
         if 'telephone' in n or 'phone' in n:
             return 'data_outlet', 'telephone'
         return 'data_outlet', 'data'
+    if 'communications' in s:
+        if 'speaker' in n:
+            return 'speaker', 'speaker'
+        return 'other_device', 'unspecified'
 
     # Security
     if 'security' in s:
