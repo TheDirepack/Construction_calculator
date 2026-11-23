@@ -53,3 +53,24 @@ def test_audit_rejects_out_of_range_page(tmp_path):
     with pytest.raises(IndexError, match="Page 3"):
         audit_pdfs([pdf_path], tmp_path / "qa", pages=[3],
                    samples_per_page=1, max_symbols=0)
+
+def test_audit_identically_named_pdfs_keep_separate_output_images(tmp_path):
+    inputs = []
+    for subdir in ("first", "second"):
+        directory = tmp_path / subdir
+        directory.mkdir()
+        path = directory / "plans.pdf"
+        pdf = fitz.open()
+        page = pdf.new_page(width=900, height=650)
+        page.draw_line((30, 30), (600, 450),
+                       color=(0, 0, 0), width=2)
+        pdf.save(path)
+        pdf.close()
+        inputs.append(path)
+    output = tmp_path / "qa"
+    result = audit_pdfs(inputs, output, pages=[1], samples_per_page=1,
+                        size=128, max_symbols=0)
+    assert result["pdf_count"] == 2
+    filenames = [row["output"] for row in result["records"]]
+    assert len(set(filenames)) == 2
+    assert all((output / name).is_file() for name in filenames)
