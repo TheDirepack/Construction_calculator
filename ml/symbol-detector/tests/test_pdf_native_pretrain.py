@@ -269,11 +269,10 @@ def test_native_pdf_dataset_passes_sampled_dpi_into_synthetic_symbols(tmp_path):
             assert 0 <= x0 < x1 <= 256 and 0 <= y0 < y1 <= 256
             symbols_seen += 1
     assert symbols_seen > 0
-    # Each replayed base crop is rendered at one true physical DPI, with
-    # independent symbols/warps in its four views. A 16-view fixture only
-    # samples four DPIs; extremes are not guaranteed on that small sample.
-    assert len(set(all_dpis)) == len(dataset) // dataset.crop_reuse_views
-    assert all(len(set(all_dpis[i:i + dataset.crop_reuse_views])) == 1
+    # Every 4-view source region covers four nonoverlapping DPI bands.
+    # Glyph compositing receives the actual DPI for each rendered view.
+    assert len(set(all_dpis)) == len(dataset)
+    assert all(len(set(all_dpis[i:i + dataset.crop_reuse_views])) == 4
                for i in range(0, len(dataset), dataset.crop_reuse_views))
 
 
@@ -377,6 +376,7 @@ def test_repeated_pdf_crop_gets_independent_synthetic_views(tmp_path):
     )
     try:
         sources = []
+        anchors = []
         results = []
         for index in range(12):
             degraded, clean, mask, info = dataset[index]
@@ -385,13 +385,17 @@ def test_repeated_pdf_crop_gets_independent_synthetic_views(tmp_path):
             assert info["base_crop"]["background_labels_exhaustive"] is False
             assert info["base_crop"]["bank_slot"] == 0
             sources.append(tuple(info["pdf_crop"]["clip_rect_pt"]))
+            anchors.append(tuple(info["pdf_crop"]["region_anchor_pt"]))
+            assert info["pdf_crop"]["dpi_variant"] == index % 4
+            assert info["pdf_crop"]["dpi_variants"] == 4
             results.append(clean.numpy())
-        assert len(set(sources)) == 1
+        assert len(set(sources)) == 4
+        assert len(set(anchors)) == 1
         # Every sample reuses same source region, but the inserted symbols
         # (including zero-symbol views) are independently randomized.
         assert len({array.tobytes() for array in results}) >= 4
         assert dataset._pdf_sampler is not None
-        assert len(dataset._pdf_sampler._crops) == 1
+        assert len(dataset._pdf_sampler._crops) == 4
         dataset.set_epoch(1)
         _, _, _, revisited = dataset[0]
         assert tuple(revisited["pdf_crop"]["clip_rect_pt"]) == sources[0]
@@ -535,5 +539,52 @@ def test_bank_parameters_and_fresh_non_stratified_crop(tmp_path):
         assert meta["bank_slot"] is None
         assert meta["bank_grid"] is None
         assert meta["sampling_policy"] == "adaptive_ink_guided_v2"
+    finally:
+        sampler.close()
+
+def test_multi_dpi_views_keep_physical_anchor_and_cover_range(tmp_path):
+    path = tmp_path / "multiple_zoom_construction.pdf"
+    make_pdf(path, 1)
+    entry = {"source_pdf": str(path), "pdf_page_index": 0}
+    sampler = PdfCropSampler(max_cached_crops=8)
+    meta = []
+    try:
+        for variant in range(4):
+            img, info = sampler.sample(
+                entry, 256, np.random.default_rng(900 + variant),
+                crop_seed=20261234, crop_slot=0, bank_size=32,
+                dpi_variant=variant, dpi_variants=4,
+            )
+            assert img.shape == (256, 256, 3)
+            assert 100 <= info["effective_dpi"] <= 400
+            assert info["dpi_variant"] == variant
+            assert info["dpi_variants"] == 4
+            meta.append(info)
+        # Actual physical field of view changes while the source location
+        # remains fixed. Each DPI draw is randomized inside its assigned bin.
+        assert len({m["effective_dpi"] for m in meta}) == 4
+        assert len({tuple(m["region_anchor_pt"]) for m in meta}) == 1
+        for m in meta:
+            x0, y0, x1, y1 = m["clip_rect_pt"]
+            ax, ay = m["region_anchor_pt"]
+            assert (x0 + x1) / 2 == pytest.approx(ax, abs=.002)
+            assert (y0 + y1) / 2 == pytest.approx(ay, abs=.002)
+            assert m["physical_crop_size_points"] == pytest.approx(
+                256 * 72 / m["effective_dpi"], rel=2e-5
+            )
+        # Cached variant replay is pixel-identical and immutable.
+        earlier, old = sampler.sample(
+            entry, 256, np.random.default_rng(0),
+            crop_seed=20261234, crop_slot=0, bank_size=32,
+            dpi_variant=2, dpi_variants=4,
+        )
+        assert old["clean_crop_cache_hit"]
+        assert old["effective_dpi"] == meta[2]["effective_dpi"]
+        assert len(sampler._crops) == 4
+        with pytest.raises(ValueError):
+            sampler.sample(
+                entry, 256, np.random.default_rng(0), crop_seed=22,
+                dpi_variant=4, dpi_variants=4
+            )
     finally:
         sampler.close()
