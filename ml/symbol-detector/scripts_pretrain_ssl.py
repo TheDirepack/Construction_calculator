@@ -22,6 +22,7 @@ import glob
 import hashlib
 import json
 import math
+import re
 import time
 from contextlib import nullcontext
 from collections import defaultdict
@@ -135,6 +136,32 @@ def build_pretrain_manifests(
                 locked_eval_groups.update(d.get('split_groups', {}).get(sp, []))
         except Exception:
             pass
+
+    # The evaluation folder can be populated after a page has already been
+    # rendered into the persistent pool. Match its original source filename
+    # and exclude the entire cached project, including its labeled crops.
+    eval_dir = data_root / '1_blueprints' / 'evaluation'
+    eval_sources = {
+        path.name.casefold() for path in eval_dir.rglob('*')
+        if path.is_file() and path.suffix.lower() in {'.pdf', '.png', '.jpg', '.jpeg', '.tif', '.tiff', '.webp'}
+    } if eval_dir.is_dir() else set()
+    locked_eval_groups.update(
+        re.sub(r'[^a-zA-Z0-9_-]+', '_', Path(name).stem).strip('_').lower()
+        for name in eval_sources
+    )
+    source_groups: dict[str, set[str]] = defaultdict(set)
+    for role in ('label_queue', 'background', 'reserve', 'negative'):
+        for jpath in (pool_dir / role).glob('*.json'):
+            try:
+                doc = json.loads(jpath.read_text())
+            except (OSError, ValueError):
+                continue
+            source = str((doc.get('pool') or {}).get('source_path') or '')
+            gid = str(doc.get('project_family_id') or '').strip()
+            if source and gid:
+                source_groups[Path(source).name.casefold()].add(gid)
+                if Path(source).name.casefold() in eval_sources or '/evaluation/' in source.lower():
+                    locked_eval_groups.add(gid)
 
     from scripts_index_real_pdfs import reserved_sources
     reserved_file = work_root / "heldout_real_pdfs.json"
@@ -367,6 +394,17 @@ def build_pretrain_manifests(
             audit['excluded_counts']['unverified_labeled_group'] += 1
             continue
         gid = str(doc.get('project_family_id') or '').strip()
+        source = str(doc.get('source_pdf_path') or '')
+        source_name = Path(source).name.casefold()
+        groups = source_groups.get(source_name, set()) if source else set()
+        if source and (source_name in eval_sources or '/evaluation/' in source.lower()):
+            audit['excluded_counts']['labeled_evaluation_source'] += 1
+            continue
+        if len(groups) > 1:
+            audit['excluded_counts']['labeled_ambiguous_source_groups'] += 1
+            continue
+        if groups:
+            gid = next(iter(groups))
         if not gid or gid in locked_eval_groups or gid in reserved_groups:
             audit['excluded_counts']['labeled_locked_or_missing_group'] += 1
             continue

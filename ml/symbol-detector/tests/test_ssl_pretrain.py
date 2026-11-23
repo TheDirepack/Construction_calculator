@@ -137,6 +137,61 @@ def test_labeled_pretraining_manifest_provides_boxes(tmp_path):
     assert len(first['image_path']) > 0
 
 
+def test_cached_evaluation_pages_and_their_project_are_excluded(tmp_path):
+    import json
+    from scripts_pretrain_ssl import build_pretrain_manifests
+
+    data = tmp_path / 'data'
+    evaluation = data / '1_blueprints' / 'evaluation'
+    evaluation.mkdir(parents=True)
+    (evaluation / 'held-out.pdf').write_bytes(b'held out')
+    pool = tmp_path / 'work' / 'pool' / 'background'
+    pool.mkdir(parents=True)
+    for name, source, group in (
+        ('held', 'old/location/held-out.pdf', 'project_a'),
+        ('related', 'old/location/another-sheet.pdf', 'project_a'),
+        ('training', 'old/location/training.pdf', 'project_b'),
+    ):
+        (pool / f'{name}.png').write_bytes(b'image')
+        (pool / f'{name}.json').write_text(json.dumps({
+            'image_path': f'{name}.png', 'project_family_id': group,
+            'pool': {'source_path': source},
+        }))
+    train, val, audit = build_pretrain_manifests(data, tmp_path / 'work')
+    groups = {group for manifest in (train, val)
+              for bucket in manifest['buckets'].values() for group in bucket['groups']}
+    assert 'project_a' not in groups
+    assert 'project_b' in groups
+    assert audit['excluded_counts']['locked_detector_eval'] == 2
+
+
+def test_device_crops_share_the_pool_source_group(tmp_path):
+    import json
+    from scripts_pretrain_ssl import build_pretrain_manifests
+
+    pool = tmp_path / 'work' / 'pool' / 'background'
+    pool.mkdir(parents=True)
+    (pool / 'page.png').write_bytes(b'image')
+    (pool / 'page.json').write_text(json.dumps({
+        'image_path': 'page.png', 'project_family_id': 'pool_group',
+        'pool': {'source_path': 'drawings/project.pdf'},
+    }))
+    (tmp_path / 'crop.png').write_bytes(b'image')
+    crop = tmp_path / 'crop.json'
+    crop.write_text(json.dumps({
+        'source_group_verified': True, 'project_family_id': 'different_import_group',
+        'source_pdf_path': 'drawings/project.pdf', 'image_path': 'crop.png',
+        'image_width': 100, 'image_height': 100,
+        'instances': [{'bbox_xyxy': [1, 2, 10, 12]}],
+    }))
+    train, val, _ = build_pretrain_manifests(tmp_path, tmp_path / 'work', labeled_annotations=[crop])
+    for manifest in (train, val):
+        buckets = manifest['buckets']
+        if 'labeled_devices' in buckets:
+            assert set(buckets['labeled_devices']['groups']) == {'pool_group'}
+            assert 'pool_group' in buckets['pool_other_background']['groups']
+
+
 def test_run_fingerprint_stable_and_detects_changed_configuration():
     import argparse
     from scripts_pretrain_ssl import run_fingerprint

@@ -124,6 +124,11 @@
       "group": "file"
     },
     {
+      "glob": "1_blueprints/evaluation/**",
+      "role": "skip",
+      "why": "locked detector evaluation set; never rendered into a training pool"
+    },
+    {
       "glob": "1_blueprints/**",
       "role": "background",
       "group": "file"

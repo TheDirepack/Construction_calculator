@@ -184,6 +184,9 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
                 counts['missing_pdf'] += 1
                 print(f'WARN: missing PDF for {jpath.name}: {src_str}', flush=True)
                 continue
+            if 'evaluation' in pdf.relative_to(data_root).parts:
+                counts['evaluation_holdout_skipped'] += 1
+                continue
             for dev in devs:
                 pg = dev.get('pdf_page') or dev.get('page')
                 if not isinstance(pg, int) or pg < 1:
@@ -273,6 +276,7 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
                     'document_id': stem,
                     'page_index': page_idx,
                     'source_type': 'real_construction_pdf_devices',
+                    'source_pdf_path': pdf_path.relative_to(data_root).as_posix(),
                     'image_path': png.name,
                     'image_sha256': hashlib.sha256(png.read_bytes()).hexdigest(),
                     'image_width': w,
