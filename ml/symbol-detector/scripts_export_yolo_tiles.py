@@ -105,14 +105,17 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
     # The legacy unverified exploratory override must never bypass that requirement.
     if allow_partial_training and allow_unverified_completeness:
         raise ValueError('partial training cannot combine with unsafe completeness override')
-    per_split={key:read_records(value) for key,value in splits.items()}
+    per_split={key:read_records(value,classes=classes) for key,value in splits.items()}
     paths={str(d['annotation']):d for d in mf.get('source_images',[])}
     unchecked=[]
     incomplete_eval=[]
     for s in per_split:
         for path in splits[s]:
             data=json.loads(Path(path).read_text())
-            exhaustive=set(data.get('exhaustive_families', []))
+            negative=data.get('verified_no_symbols',False)
+            if type(negative) is not bool or (negative and data['instances']):
+                raise ValueError(f'invalid verified_no_symbols negative attestation: {path}')
+            exhaustive=set(classes) if negative else set(data.get('exhaustive_families', []))
             if not set(classes).issubset(exhaustive):
                 unchecked.append(path)
                 if s in ('val', 'test'):
@@ -156,7 +159,7 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
             # Fully annotated symbol-free tiles are necessary hard negatives, but
             # mostly-white tiles with no/few lines are strongly devalued and get fewer variants.
             neg_seed=int.from_bytes(hashlib.sha256(f'{seed}/negative/{i}'.encode()).digest()[:8],'big')
-            if info.get('verified_wall_background'):
+            if info.get('verified_wall_background') or info.get('verified_page_negative'):
                 # Empty crops from attested symbol-free sources are meaningful
                 # hard negatives; retain more without flooding on blank paper.
                 keep_p=(verified_wall_blank_fraction if is_blank
@@ -183,6 +186,7 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
             meta.append({'verified_negative_class_ids':verified_class_ids,
                          'partial_positive_only':partial_positive_only,
                          'source_type':info['source_type'],
+                         'verified_page_negative':info.get('verified_page_negative', False),
                          'sample':name,'source':info['image_path'],'group':info['group'],
                          'source_box':list(info['tile'].source_box),
                          'source_scale':info['tile'].source_scale,
