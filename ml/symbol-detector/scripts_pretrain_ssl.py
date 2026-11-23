@@ -315,6 +315,29 @@ def build_pretrain_manifests(
     return train_manifest, val_manifest, audit
 
 
+def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Namespace) -> str:
+    """Fingerprint the source manifest and training settings for safe resume.
+
+    This is a manifest/configuration signature, not a checksum of every image
+    byte. Dataset source-file provenance must still be independently managed.
+    """
+    fields = (
+        "imgsz", "batch", "epochs", "items_per_epoch", "val_items",
+        "optimizer", "lr", "workers", "pool_val_fraction", "seed",
+        "max_symbols", "symbol_min_px", "symbol_max_px",
+        "symbol_augment_probability", "procedural_fraction",
+        "clean_fraction", "labeled_focus_probability",
+    )
+    conf = {key: getattr(args, key) for key in fields}
+    conf["neca_catalog_sha256"] = (
+        hashlib.sha256((args.neca_dir / "symbols.json").read_bytes()).hexdigest()
+        if args.neca_dir else None
+    )
+    manifest = {"format": 1, "settings": conf,
+                "train": train_manifest, "validation": val_manifest}
+    return hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+
+
 def save_checkpoints(
     out_dir: Path,
     model: Yolo26P2SSLModel,
@@ -325,6 +348,7 @@ def save_checkpoints(
     best_val: float,
     history: list[dict[str, Any]],
     is_best: bool,
+    fingerprint: str,
 ) -> None:
     # Atomic same-directory replacements retain the previous complete
     # checkpoint if the process dies during serialization.
@@ -342,6 +366,9 @@ def save_checkpoints(
         'scheduler': scheduler.state_dict(),
         'scaler': scaler.state_dict(),
         'history': history,
+        'run_fingerprint': fingerprint,
+        'torch_rng_state': torch.get_rng_state(),
+        'cuda_rng_state_all': torch.cuda.get_rng_state_all(),
     }, out_dir / 'last_pretrain.pt')
 
     # Clean YOLO26n-P2 backbone+neck checkpoint (no Detect head, no decoder)
@@ -350,6 +377,7 @@ def save_checkpoints(
         'architecture': 'yolo26n-p2.yaml',
         'epoch': epoch,
         'best_val': best_val,
+        'run_fingerprint': fingerprint,
         'detect_layer_index': model.detect_idx,
         'backbone_neck_state_dict': model.backbone_neck_state_dict(),
     }
@@ -407,6 +435,8 @@ def train(args: argparse.Namespace) -> None:
         print('PLAN ONLY. Pass --run to start GPU pretraining.', flush=True)
         return
 
+    if args.resume and not (out_dir / 'last_pretrain.pt').is_file():
+        raise FileNotFoundError('Resume requested but last_pretrain.pt is missing')
     if not torch.cuda.is_available():
         raise SystemExit('CUDA GPU unavailable; refusing CPU pretraining')
     if (out_dir / 'last_pretrain.pt').exists() and not args.resume:
@@ -415,6 +445,10 @@ def train(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f'Initial weights do not exist: {args.init_weights}')
     if args.neca_dir and not (args.neca_dir / 'symbols.json').is_file():
         raise FileNotFoundError(f'NECA SVG bank missing symbols.json: {args.neca_dir}')
+
+    identity = run_fingerprint(train_manifest, val_manifest, args)
+    (out_dir / "run_fingerprint.txt").write_text(identity + "\n")
+    print(f'Pretrain run fingerprint: {identity}', flush=True)
 
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -482,6 +516,8 @@ def train(args: argparse.Namespace) -> None:
     resume_ckpt = out_dir / 'last_pretrain.pt'
     if args.resume and resume_ckpt.is_file():
         ckpt = torch.load(resume_ckpt, map_location=device, weights_only=False)
+        if ckpt.get('run_fingerprint') != identity:
+            raise ValueError('SSL resume dataset/configuration fingerprint differs from checkpoint')
         model.load_state_dict(ckpt['model'])
         optimizer.load_state_dict(ckpt['optimizer'])
         scheduler.load_state_dict(ckpt['scheduler'])
@@ -489,6 +525,10 @@ def train(args: argparse.Namespace) -> None:
         start_epoch = int(ckpt['epoch']) + 1
         best_val = float(ckpt.get('best_val', float('inf')))
         history = list(ckpt.get('history', []))
+        if 'torch_rng_state' in ckpt:
+            torch.set_rng_state(ckpt['torch_rng_state'].cpu())
+        if 'cuda_rng_state_all' in ckpt:
+            torch.cuda.set_rng_state_all(ckpt['cuda_rng_state_all'])
         print(f'Resumed from epoch {start_epoch} (best_val={best_val:.5f})', flush=True)
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -588,7 +628,7 @@ def train(args: argparse.Namespace) -> None:
             flush=True,
         )
 
-        save_checkpoints(out_dir, model, optimizer, scheduler, scaler, epoch, best_val, history, is_best)
+        save_checkpoints(out_dir, model, optimizer, scheduler, scaler, epoch, best_val, history, is_best, identity)
         if (epoch + 1) % 10 == 0:
             torch.save(
                 {'epoch': epoch + 1, 'backbone_neck_state_dict': model.backbone_neck_state_dict()},
