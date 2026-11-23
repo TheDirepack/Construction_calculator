@@ -179,6 +179,12 @@ symbols on original drawings are retained. The eligible NECA SVG bank contains
 the verified device sections, not routing arrows or standalone modifiers.
 The prior procedural glyph families supply additional variation.
 
+**Pre-training objective:** Mask-aware line-art restoration using separately
+normalized dark-ink and background losses, combined 2:1 by default, plus
+a Sobel edge term. A 1%-ink drawing no longer gets a nearly all-white
+reconstruction objective. This is a **learning-signal correction**, not
+evidence that downstream object detection has improved.
+
 **Degradation:** 20% true clean-view target by default; other views independently
 sample light, moderate, heavy, and rare extreme corruption. Categories include
 illumination/paper tint and gradients, Gaussian/motion blur, sharpening,
@@ -193,6 +199,21 @@ weights and no automatic resume):
 ```bash
 bash remote/run_pretrain_v3.sh
 ```
+
+For a **short CUDA smoke test**, use a separate output directory rather
+than overwriting the full experiment:
+
+```bash
+SSL_OUT="$HOME/Projects/blueprint-symbols/work/pretrain_smoke_v3" \
+SSL_EPOCHS=1 SSL_ITEMS_PER_EPOCH=24 SSL_VAL_ITEMS=12 SSL_BATCH=2 \
+  bash remote/run_pretrain_v3.sh
+```
+
+An interrupted, otherwise unchanged run can be resumed with
+`SSL_RESUME=1 bash remote/run_pretrain_v3.sh`. Different dataset
+manifests, model objectives, and training options deliberately fail
+resume fingerprint checks. The runner regenerates the device-positive
+annotation index on each invocation so newly annotated pages are eligible.
 
 This runner imports existing device annotations as *positive-only crop hints*,
 loads the NECA SVG library, and generates 0..16 symbols per augmented crop.
