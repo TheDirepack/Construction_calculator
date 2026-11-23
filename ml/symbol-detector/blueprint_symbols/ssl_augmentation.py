@@ -130,6 +130,7 @@ def compose_ssl_symbols(
             "generator": generator,
             "symbol_chaos": inst.get("symbol_chaos", {}),
             "placement_mode": inst["source"].get("placement_mode", "unknown"),
+            "wall_sampling_probability": inst["source"].get("wall_sampling_probability"),
             "drawing_dpi": inst["source"].get("drawing_dpi"),
             "ink_color_bgr": inst["source"].get("ink_color_bgr"),
             "target_size_px": inst["source"].get("target_px"),
