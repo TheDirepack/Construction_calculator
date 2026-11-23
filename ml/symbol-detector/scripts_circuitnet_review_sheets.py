@@ -685,6 +685,7 @@ def cmd_render(args: argparse.Namespace) -> None:
                     'source_file': payload.get('source_file'),
                     'source_pdf_relative': payload.get('source_pdf_relative'),
                     'source_pdf_absolute': payload.get('source_pdf_absolute'),
+                    'source_pdf_sha256': payload.get('source_pdf_sha256'),
                     'source_circuitnet_json': str(jpath),
                     'batch_index': b_idx + 1,
                     'total_batches_for_pdf': n_batches,
@@ -736,6 +737,7 @@ def cmd_render(args: argparse.Namespace) -> None:
             'pdf_folder': pdf_stem,
             'source_file': pdf_path.name,
             'source_pdf_relative': payload.get('source_pdf_relative'),
+            'source_pdf_sha256': payload.get('source_pdf_sha256'),
             'source_circuitnet_json': str(jpath),
             'pdf_included': pdf_included,
             'instructions_file': 'AGENTS.md',
@@ -862,6 +864,7 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
         'source_file': first.get('source_file'),
         'source_pdf_relative': first.get('source_pdf_relative'),
         'source_pdf_absolute': first.get('source_pdf_absolute'),
+        'source_pdf_sha256': first.get('source_pdf_sha256'),
         'source_circuitnet_json': first.get('source_circuitnet_json'),
         'coordinate_system': {
             'origin': 'bottom_left',
