@@ -96,9 +96,10 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
     classes=mf['class_ids']
     if sorted(classes.values()) != list(range(len(classes))):
         raise ValueError('class ids must be consecutive')
-    if samples < 1 or not 1 <= train_variants <= 12 or not scales or overlap < 0 or overlap >= 512 or not 0 <= train_negative_fraction <= 1 or
+    if (samples < 1 or not 1 <= train_variants <= 12 or not scales or
+            overlap < 0 or overlap >= 512 or not 0 <= train_negative_fraction <= 1 or
             not 0 <= verified_wall_negative_fraction <= 1 or
-            not 0 <= verified_wall_blank_fraction <= 1:
+            not 0 <= verified_wall_blank_fraction <= 1):
         raise ValueError('bad tiling options')
     # Do not trust missing unlabeled objects as negatives in YOLO detection loss.
     per_split={key:read_records(value) for key,value in splits.items()}
