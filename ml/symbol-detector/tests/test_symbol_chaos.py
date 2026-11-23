@@ -163,3 +163,23 @@ def test_chaotic_procedural_compositing_preserves_boxes():
         x0, y0, x1, y1 = item["bbox_xyxy"]
         assert x1 > x0 >= 0 and y1 > y0 >= 0
         assert x1 <= 512 and y1 <= 512
+
+
+def test_symbol_rejects_fragmentation_and_missing_loop_despite_ink_survival():
+    from blueprint_symbols.symbol_chaos import _valid
+
+    line = np.zeros((64, 64), dtype=np.uint8)
+    cv2.line(line, (10, 32), (54, 32), 255, 6)
+    dots = np.zeros_like(line)
+    dots[3:61:4, 3:61:4] = 255
+    assert _valid(line, line)
+    # Hundreds of isolated dots have comparable total ink and box dimensions,
+    # yet no longer represent the original stroke.
+    assert not _valid(dots, line)
+
+    ring = np.zeros_like(line)
+    cv2.circle(ring, (32, 32), 21, 255, 3)
+    broken = ring.copy()
+    cv2.rectangle(broken, (28, 8), (36, 17), 0, -1)
+    assert _valid(ring, ring)
+    assert not _valid(broken, ring)
