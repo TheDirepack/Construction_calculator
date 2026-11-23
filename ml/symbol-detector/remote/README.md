@@ -289,10 +289,12 @@ python scripts_run_sam3_pdfs.py --catalog-only \
   --out "$SAM_OUTPUT" \
   --visual-audit-out "$SAM_OUTPUT/neca_visual_groups.json"
 
-# One real PDF from a representative folder (local inference, no SaaS):
+# Smoke: up to TWO eligible electrical pages from one real PDF;
+# the output is marked partial and has a distinct resume fingerprint.
 python scripts_run_sam3_pdfs.py --scan-mode grouped \
   --neca-dir "$NECA_ROOT" --data-root "$BLUEPRINT_ROOT" \
-  --subdirs "$DRAWING_SUBDIR" --out "$SAM_OUTPUT" --limit-pdfs 1
+  --subdirs "$DRAWING_SUBDIR" --out "$SAM_OUTPUT" \
+  --limit-pdfs 1 --max-pages-per-pdf 2
 
 # Inspect actual proposal boxes and VLM contact sheet:
 python scripts_circuitnet_review_sheets.py render \
@@ -300,13 +302,15 @@ python scripts_circuitnet_review_sheets.py render \
   --out "$SAM_OUTPUT/review" --limit-pdfs 1
 ```
 
-**Merge only after** the weighted run finishes without an unsupported
-SAM internal API, missing visual group, CUDA OOM, or an invalid PDF
-coordinate; confirm that the resulting contact sheet contains genuine
-devices with acceptable false-positive volume and that switch suffixes
-land on the correct parent rather than generating separate devices.
-Compare the grouped run to the prior `--scan-mode flat` configuration
-on the same PDF before claiming any speed/precision improvement.
+**Merge only after** a weighted same-image SAM 3.1 run finishes
+without an unsupported internal API, missing reference group, CUDA OOM,
+or invalid PDF coordinates. Inspect grouped contact sheets for actual
+devices, false positives, and modifier attachment. For a valid
+performance comparison use the **same-image grouped path** with different
+quality/score settings and `--no-switch-suffixes`; the old
+`hierarchical` and `flat` modes rely on unsupported cross-image
+feature transfer and are not an authoritative performance baseline.
+A partially scanned PDF does not establish full-document recall.
 The `--allow-missing-visual-groups` override is for diagnosis only:
 the default requires every selected coarse silhouette to survive
 reference screening. If there are no valid devices in the test PDF,
