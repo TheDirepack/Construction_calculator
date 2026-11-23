@@ -42,6 +42,19 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
                     "() => document.querySelector('#pageIndicator').textContent === 'Page 1 / 2'"
                 )
                 assert "0 active" in page.locator("#count").inner_text()
+                geometry_ok = page.evaluate("""async () => {
+                  const {screenToImage,imageToScreen,normalizedBox,rotatedAabb,hitBox}
+                    = await import('/web_ui.js');
+                  const v = {scale: 2.5, x: 100, y: 200};
+                  const p = screenToImage(...imageToScreen(30, 40, v), v);
+                  const b = normalizedBox([100, 100], [-15, 260], 200, 150);
+                  const a = rotatedAabb(50, 50, 20, 10, 90);
+                  return p[0] === 30 && p[1] === 40 &&
+                    JSON.stringify(b) === JSON.stringify([0,100,100,150]) &&
+                    Math.abs(a[0]-45) < 1e-8 && Math.abs(a[1]-40) < 1e-8 &&
+                    hitBox([10,10,50,50],10,10,1,true) === 'nw';
+                }""")
+                assert geometry_ok
                 page.locator("#drawTool").click()
                 canvas = page.locator("#canvas").bounding_box()
                 assert canvas is not None
