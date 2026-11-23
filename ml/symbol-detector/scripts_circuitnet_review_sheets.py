@@ -380,6 +380,25 @@ def build_pdf_index(data_root: Path | None) -> dict[str, Path | None]:
     return idx
 
 
+def _source_pdf_stat_matches(payload: dict[str, Any], candidate: Path) -> bool:
+    """Prevent review crops from silently using a modified source PDF."""
+    expected = payload.get('source_pdf_stat')
+    if expected is None:  # Legacy proposal exports lacked this metadata.
+        return True
+    if not isinstance(expected, dict):
+        return False
+    try:
+        actual = candidate.stat()
+        return (
+            type(expected.get('size_bytes')) is int
+            and type(expected.get('mtime_ns')) is int
+            and actual.st_size == expected['size_bytes']
+            and actual.st_mtime_ns == expected['mtime_ns']
+        )
+    except OSError:
+        return False
+
+
 def resolve_pdf_path(
     payload: dict[str, Any],
     data_root: Path | None,
@@ -388,18 +407,19 @@ def resolve_pdf_path(
     rel = payload.get('source_pdf_relative')
     if data_root is not None and rel:
         cand = (data_root / rel).resolve()
-        if cand.is_file():
+        if cand.is_file() and _source_pdf_stat_matches(payload, cand):
             return cand
     abs_p = payload.get('source_pdf_absolute')
     if abs_p:
         cand = Path(abs_p)
-        if cand.is_file():
+        if cand.is_file() and _source_pdf_stat_matches(payload, cand):
             return cand
     src_file = payload.get('source_file') or (Path(rel).name if rel else '')
     if src_file and pdf_index:
         for key in (src_file.lower(), _sanitize_pdf_stem(src_file)):
             candidate = pdf_index.get(key)
-            if candidate is not None and candidate.is_file():
+            if (candidate is not None and candidate.is_file()
+                    and _source_pdf_stat_matches(payload, candidate)):
                 return candidate
     return None
 
