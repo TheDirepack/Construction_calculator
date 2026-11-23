@@ -78,28 +78,41 @@ def merge_sam_proposals(detections: list[dict], *, iou_threshold: float = .50,
                     best, best_iou = cluster, ov
         if best is None:
             primary = dict(d)
-            primary['same_region_prompt_hits'] = 1
-            primary['alternative_labels'] = []
-            primary['_label_scores'] = {(d['device_type'], d.get('subtype')): float(d['score'])}
+            primary['same_region_prompt_hits'] = int(d.get('same_region_prompt_hits', 1))
+            # A tile may already have been fused before the page-level pass.
+            # Preserve its competing interpretations across both passes.
+            primary['alternative_labels'] = list(d.get('alternative_labels', []))
+            primary['_label_scores'] = {
+                (d['device_type'], d.get('subtype')): float(d['score'])
+            }
+            for alt in primary['alternative_labels']:
+                primary['_label_scores'][(alt['device_type'], alt.get('subtype'))] = float(
+                    alt.get('score', 0.0)
+                )
             selected.append(primary)
             continue
-        best['same_region_prompt_hits'] += 1
-        key = (d['device_type'], d.get('subtype'))
-        # Do not report a generic family proposal as a competing subtype
-        # when a fine result identifies the same family in the same region.
-        coarse_same_family = (
-            d.get('stage') == 'coarse'
-            and d['device_type'] == best['device_type']
-            and best.get('stage') == 'fine'
-        )
-        if key not in best['_label_scores'] and not coarse_same_family:
-            best['_label_scores'][key] = float(d['score'])
-            best['alternative_labels'].append({
-                'device_type': d['device_type'], 'subtype': d.get('subtype'),
-                'category': d.get('category'), 'subcategory': d.get('subcategory'),
-                'score': float(d['score']), 'neca_symbol_id': d.get('symbol_id'),
-                'neca_name': d.get('neca_name'),
-            })
+        best['same_region_prompt_hits'] += int(d.get('same_region_prompt_hits', 1))
+        proposed_labels = [{
+            'device_type': d['device_type'], 'subtype': d.get('subtype'),
+            'category': d.get('category'), 'subcategory': d.get('subcategory'),
+            'score': float(d['score']), 'neca_symbol_id': d.get('symbol_id'),
+            'neca_name': d.get('neca_name'),
+            'stage': d.get('stage'),
+        }] + [{**alt, 'stage': d.get('stage')} for alt in d.get('alternative_labels', [])]
+        for alt in proposed_labels:
+            key = (alt['device_type'], alt.get('subtype'))
+            # A confirmed fine result takes precedence over a generic
+            # coarse hypothesis on the same object.
+            coarse_same_family = (
+                alt.get('stage') == 'coarse'
+                and alt['device_type'] == best['device_type']
+                and best.get('stage') == 'fine'
+            )
+            if key not in best['_label_scores'] and not coarse_same_family:
+                best['_label_scores'][key] = float(alt.get('score', 0.0))
+                best['alternative_labels'].append({
+                    k: v for k, v in alt.items() if k != 'stage'
+                })
     for cluster in selected:
         cluster.pop('_label_scores')
         cluster['alternative_labels'] = cluster['alternative_labels'][:max_alternatives]
