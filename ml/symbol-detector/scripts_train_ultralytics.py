@@ -104,18 +104,8 @@ def main():
         # into the YOLO(yaml) object here would silently discard those weights.
         # Instead inject the verified SSL tensors into the actual training model
         # during DetectionTrainer.get_model().
-        from ultralytics.models.yolo.detect import DetectionTrainer
-        from blueprint_symbols.ssl_transfer import read_ssl_backbone, install_ssl_backbone
-        ckpt = read_ssl_backbone(args.weights)
-
-        class SSLDetectionTrainer(DetectionTrainer):
-            def get_model(self, cfg=None, weights=None, verbose=True):
-                trained_model = super().get_model(cfg=cfg, weights=None, verbose=verbose)
-                report = install_ssl_backbone(trained_model, ckpt)
-                print(f'Verified SSL backbone transfer into actual YOLO trainer: {report}', flush=True)
-                return trained_model
-
-        ssl_trainer = SSLDetectionTrainer
+        from blueprint_symbols.ssl_transfer import build_ssl_detection_trainer
+        ssl_trainer = build_ssl_detection_trainer(args.weights)
     strides = [int(v) for v in model.model.stride]
     if 4 not in strides:
         parser.error(f'P2 stride-4 head is missing; found strides: {strides}')
