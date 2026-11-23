@@ -294,15 +294,37 @@ class NecaSymbolBank:
         meta = json.loads(meta_path.read_text())
         self.by_class: dict[str, list[NecaGlyph]] = {c: [] for c in CANONICAL_CLASSES}
 
-        for entry in meta.get('symbols', []):
+        entries = meta.get('symbols', [])
+        # Many NECA numbered-row SVGs contain two or more *alternatives*
+        # inside one cell. Never place that composite as one labeled device
+        # when individually extracted variants are available.
+        split_rows = {
+            (entry.get('section'), entry.get('code'))
+            for entry in entries if entry.get('kind') == 'printed_alternative'
+        }
+        annotation_sections = {
+            'Luminaires - Orientation Modifiers',
+            'Luminaires - Extended Modifiers',
+            'Luminaires - Emergency Modifiers',
+        }
+        for entry in entries:
             sec = entry.get('section', '')
             cls = NECA_SECTION_TO_CLASS.get(sec)
-            if cls is None or (not include_modifiers and 'modifier' in sec.lower()):
+            if cls is None or sec in annotation_sections:
                 continue
-            # For Raceways - Boxes and Busways, keep only actual box/pole devices (skip busways/trays)
+            if not include_modifiers and 'modifier' in sec.lower():
+                continue
+            kind = entry.get('kind', 'numbered_row')
+            if kind == 'numbered_row' and (sec, entry.get('code')) in split_rows:
+                continue
+            # Mounting-row figures are arrays of different mountings/shapes;
+            # only the isolated round/rectangular figure variants are devices.
+            if sec == 'Luminaires - Mounting Modifiers' and kind != 'printed_alternative':
+                continue
+            # Diagram annotations, raceway poles and busways are not boxes.
             if sec == 'Raceways - Boxes and Busways':
                 low_name = entry.get('name', '').lower()
-                if not any(k in low_name for k in ('box', 'pole', 'handhole')):
+                if not any(k in low_name for k in ('box', 'handhole')):
                     continue
             svg_path = self.library_root / entry['file']
             if not svg_path.is_file():
