@@ -124,11 +124,25 @@ const elements = typeof document === "undefined" ? null : {
 function draftStorageKey() {
   return `blueprint_labeler_draft::${state.jsonPath || state.jsonFilename || ("page_" + state.page)}`;
 }
+function draftCompatible(parsed) {
+  return Boolean(state.doc && parsed && Array.isArray(parsed.instances) &&
+    Array.isArray(parsed.rejected_proposals) && parsed.revision === state.revision &&
+    parsed.image_sha256 === state.doc.image_sha256 &&
+    parsed.source_pdf_sha256 === (state.doc.source_pdf_sha256 || null) &&
+    parsed.image_width === state.doc.image_width &&
+    parsed.image_height === state.doc.image_height &&
+    parsed.coordinate_system === state.doc.coordinate_system);
+}
 function saveLocalDraft() {
   if (!state.doc || !state.dirty) return;
   try {
     window.localStorage?.setItem(draftStorageKey(), JSON.stringify({
       revision: state.revision,
+      image_sha256: state.doc.image_sha256,
+      source_pdf_sha256: state.doc.source_pdf_sha256 || null,
+      image_width: state.doc.image_width,
+      image_height: state.doc.image_height,
+      coordinate_system: state.doc.coordinate_system,
       instances: state.doc.instances,
       rejected_proposals: state.doc.rejected_proposals || [],
       savedAt: Date.now(),
@@ -144,11 +158,9 @@ function checkLocalDraft() {
     const raw = window.localStorage?.getItem(draftStorageKey());
     if (!raw) { $("draftBanner").hidden = true; return; }
     const parsed = JSON.parse(raw);
-    if (parsed && parsed.revision === state.revision && Array.isArray(parsed.instances)) {
-      $("draftBanner").hidden = false;
-    } else {
-      clearLocalDraft();
-    }
+    // The saved JSON revision can be null for a new PDF page. Never restore
+    // across a raster/source change; retain incompatible draft bytes as backup.
+    $("draftBanner").hidden = !draftCompatible(parsed);
   } catch (_) {
     $("draftBanner").hidden = true;
   }
@@ -2080,8 +2092,16 @@ async function runWallSnapPreview() {
 
 async function importJsonFromFile(file) {
   if (!file || !state.doc) return;
+  const source = {
+    page: state.page, revision: state.revision, jsonPath: state.jsonPath,
+    image_sha256: state.doc.image_sha256,
+  };
+  const sourceUnchanged = () => state.page === source.page &&
+    state.revision === source.revision && state.jsonPath === source.jsonPath &&
+    state.doc?.image_sha256 === source.image_sha256;
   try {
     const text = await file.text();
+    if (!sourceUnchanged()) throw new Error("Active page changed during import; import cancelled.");
     const imported = JSON.parse(text);
     if (!imported || typeof imported !== "object" || !Array.isArray(imported.instances)) {
       throw new Error("JSON file must contain an instances array.");
@@ -2128,14 +2148,15 @@ async function importJsonFromFile(file) {
       ? imported.rejected_proposals : [];
     // Check the same geometry, review, and attribute gates used by Save before
     // mutating the current annotations. A failed import preserves editor state.
-    await api("/api/validate?page=" + state.page, {
+    await api("/api/validate?page=" + source.page, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
       body: JSON.stringify({
-        revision: state.revision, instances: preparedInstances,
+        revision: source.revision, instances: preparedInstances,
         rejected_proposals: preparedRejected,
       }),
     });
+    if (!sourceUnchanged()) throw new Error("Active page changed during import; import cancelled.");
     remember();
     state.doc.instances = preparedInstances;
     state.doc.rejected_proposals = preparedRejected;
@@ -2340,19 +2361,37 @@ function wireEvents() {
   $("redo").addEventListener("click", redo);
   $("save").addEventListener("click", savePage);
   $("reloadFromDisk").addEventListener("click", () => loadPage(state.page, true));
-  $("restoreDraftBtn").addEventListener("click", () => {
+  $("restoreDraftBtn").addEventListener("click", async () => {
     try {
       const parsed = JSON.parse(window.localStorage?.getItem(draftStorageKey()) || "null");
-      if (parsed?.instances) {
-        remember();
-        state.doc.instances = parsed.instances;
-        state.doc.rejected_proposals = parsed.rejected_proposals || [];
+      if (!draftCompatible(parsed)) {
         $("draftBanner").hidden = true;
-        editState();
-        refresh();
-        notify("Restored unsaved local draft. Press Save when ready.", "saved");
+        notify("Draft cannot be restored: image identity or saved revision differs.", "error");
+        return;
       }
-    } catch (_) { clearLocalDraft(); }
+      const source = { page: state.page, revision: state.revision, jsonPath: state.jsonPath };
+      await api("/api/validate?page=" + source.page, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+        body: JSON.stringify({
+          revision: source.revision, instances: parsed.instances,
+          rejected_proposals: parsed.rejected_proposals,
+        }),
+      });
+      if (state.page !== source.page || state.revision !== source.revision ||
+          state.jsonPath !== source.jsonPath || !draftCompatible(parsed)) {
+        throw new Error("Active page changed while validating the draft; nothing restored.");
+      }
+      remember();
+      state.doc.instances = parsed.instances;
+      state.doc.rejected_proposals = parsed.rejected_proposals;
+      $("draftBanner").hidden = true;
+      editState();
+      refresh();
+      notify("Restored unsaved local draft. Press Save when ready.", "saved");
+    } catch (error) {
+      notify("Draft restore failed: " + (error.message || error), "error");
+    }
   });
   $("dismissDraftBtn").addEventListener("click", clearLocalDraft);
   $("importJsonBtn").addEventListener("click", () => $("importJsonFile").click());
