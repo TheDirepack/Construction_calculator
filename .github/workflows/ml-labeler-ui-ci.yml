@@ -34,7 +34,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r ml/symbol-detector/requirements-test.txt 'playwright==1.56.0'
-          python -m playwright install --with-deps chromium
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          elif command -v chromium >/dev/null 2>&1; then
+            chromium --version
+          else
+            python -m playwright install chromium
+          fi
       - name: Verify manual labeling browser and HTTP contract
         working-directory: ml/symbol-detector
         run: python -m pytest -q tests/test_annotator_browser.py tests/test_annotator_web.py
