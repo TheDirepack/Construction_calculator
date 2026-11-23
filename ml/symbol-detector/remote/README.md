@@ -31,7 +31,7 @@ cd ~/Projects/blueprint-symbols
 ~/.local/share/uv/python/cpython-3.12.10-linux-x86_64-gnu/bin/python3.12 -m venv .venv
 mkdir -p .piptmp && export TMPDIR=$PWD/.piptmp
 .venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-.venv/bin/pip install ultralytics ezdxf cairosvg pymupdf numpy opencv-python-headless pytest svgpathtools
+.venv/bin/pip install ultralytics==8.4.216 ezdxf cairosvg pymupdf numpy opencv-python-headless pytest svgpathtools
 rm -rf .piptmp
 ```
 

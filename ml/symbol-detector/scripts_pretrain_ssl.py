@@ -18,6 +18,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import glob
+import hashlib
 import json
 import math
 import time
@@ -78,6 +80,35 @@ def _is_real_construction(gid: str, source_path: str) -> bool:
     return any(h in hay for h in REAL_CONSTRUCTION_HINTS)
 
 
+def assert_ssl_partition_isolation(train_manifest: dict, val_manifest: dict) -> None:
+    """Reject overlapping source project IDs or image paths across SSL splits.
+
+    A stable original-project mapping is still required when one drawing has
+    different renders, filenames, or resolutions. This gate detects exact
+    path/group conflicts, not perceptual near-duplicates.
+    """
+    def collect(manifest: dict) -> tuple[set[str], set[str]]:
+        groups: set[str] = set()
+        paths: set[str] = set()
+        for bucket in manifest.get("buckets", {}).values():
+            for gid, entries in bucket.get("groups", {}).items():
+                groups.add(str(gid))
+                for entry in entries:
+                    path = entry["image_path"] if isinstance(entry, dict) else entry
+                    paths.add(str(Path(path).expanduser().resolve()))
+        return groups, paths
+
+    train_groups, train_paths = collect(train_manifest)
+    val_groups, val_paths = collect(val_manifest)
+    group_overlap = train_groups & val_groups
+    path_overlap = train_paths & val_paths
+    if group_overlap or path_overlap:
+        raise ValueError(
+            "SSL train/validation source isolation violation: "
+            f"groups={sorted(group_overlap)[:8]}, paths={sorted(path_overlap)[:8]}"
+        )
+
+
 def build_pretrain_manifests(
     data_root: Path,
     work_root: Path,
@@ -85,6 +116,7 @@ def build_pretrain_manifests(
     fpcad_train_dir: Path | None = None,
     pool_val_fraction: float = 0.10,
     include_reserve: bool = False,
+    labeled_annotations: list[Path] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Discover all eligible blueprint training images and strictly exclude val/test plans."""
     pool_dir = work_root / 'pool'
@@ -148,7 +180,12 @@ def build_pretrain_manifests(
             gid = str(doc.get('project_family_id') or jpath.stem)
             src_path = str((doc.get('pool') or {}).get('source_path') or jpath.name)
             is_real = _is_real_construction(gid, src_path) or role == 'label_queue'
-            is_val = gid in locked_eval_groups or group_is_holdout(gid, val_fraction=pool_val_fraction)
+            # Locked detector val/test projects must never influence even SSL
+            # checkpoint selection. They are excluded rather than moved to SSL val.
+            if gid in locked_eval_groups:
+                audit['excluded_counts']['locked_detector_eval'] += 1
+                continue
+            is_val = group_is_holdout(gid, val_fraction=pool_val_fraction)
             if is_real:
                 if is_val:
                     real_va[gid].append(str(img_path))
@@ -245,6 +282,56 @@ def build_pretrain_manifests(
         if bl_groups:
             train_buckets['rendered_layouts_train'] = {'weight': 0.04, 'groups': bl_groups}
 
+    # 5. Real, verified positive device boxes guide SSL crop selection. This
+    # does NOT assert that all symbols have been labeled, and it never turns
+    # unannotated regions into supervised detection negatives.
+    labeled_tr: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    labeled_va: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for jpath in sorted(set(labeled_annotations or [])):
+        try:
+            doc = json.loads(jpath.read_text())
+        except (OSError, ValueError):
+            audit['excluded_counts']['invalid_labeled_json'] += 1
+            continue
+        if not doc.get('source_group_verified'):
+            audit['excluded_counts']['unverified_labeled_group'] += 1
+            continue
+        gid = str(doc.get('project_family_id') or '').strip()
+        if not gid or gid in locked_eval_groups:
+            audit['excluded_counts']['labeled_locked_or_missing_group'] += 1
+            continue
+        imgpath = (jpath.parent / str(doc.get('image_path', ''))).resolve()
+        if not imgpath.is_file():
+            audit['excluded_counts']['labeled_image_missing'] += 1
+            continue
+        boxes = []
+        w, h = doc.get('image_width', 0), doc.get('image_height', 0)
+        for inst in doc.get('instances', []):
+            if inst.get('uncertain') or inst.get('review_required'):
+                continue
+            box = inst.get('bbox_xyxy')
+            if not isinstance(box, list) or len(box) != 4:
+                continue
+            try:
+                x0, y0, x1, y1 = map(float, box)
+            except (ValueError, TypeError):
+                continue
+            if all(math.isfinite(v) for v in (x0, y0, x1, y1)) and 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h:
+                boxes.append([x0, y0, x1, y1])
+        if not boxes:
+            audit['excluded_counts']['labeled_no_usable_boxes'] += 1
+            continue
+        record = {'image_path': str(imgpath), 'boxes': boxes}
+        target = labeled_va if group_is_holdout(gid, val_fraction=pool_val_fraction) else labeled_tr
+        target[gid].append(record)
+        key = 'labeled_devices_train' if target is labeled_tr else 'labeled_devices_val'
+        audit['included_counts' if target is labeled_tr else 'val_monitor_counts'][key] += 1
+
+    if labeled_tr:
+        train_buckets['labeled_devices'] = {'weight': 0.24, 'groups': dict(labeled_tr)}
+    if labeled_va:
+        val_buckets['labeled_devices'] = {'weight': 0.24, 'groups': dict(labeled_va)}
+
     audit['excluded_counts'] = dict(audit['excluded_counts'])
     audit['included_counts'] = dict(audit['included_counts'])
     audit['val_monitor_counts'] = dict(audit['val_monitor_counts'])
@@ -254,7 +341,62 @@ def build_pretrain_manifests(
 
     train_manifest = {'kind': 'blueprint_ssl_train', 'buckets': train_buckets}
     val_manifest = {'kind': 'blueprint_ssl_val_readonly', 'buckets': val_buckets}
+    assert_ssl_partition_isolation(train_manifest, val_manifest)
     return train_manifest, val_manifest, audit
+
+
+def neca_source_fingerprint(symbol_dir: Path | None) -> str | None:
+    """Fingerprint SVG geometry as well as symbols.json metadata.
+
+    A symbol's vector strokes may change without changing its metadata ID;
+    resuming with the same metadata hash alone would silently change the
+    denoising objective mid-run.
+    """
+    if symbol_dir is None:
+        return None
+    root = symbol_dir.resolve()
+    meta_path = root / "symbols.json"
+    catalog = json.loads(meta_path.read_text())
+    digest = hashlib.sha256()
+    digest.update(meta_path.read_bytes())
+    refs = sorted({str(item["file"]) for item in catalog.get("symbols", [])})
+    for relative in refs:
+        svg = (root / relative).resolve()
+        if not svg.is_relative_to(root):
+            raise ValueError(f"NECA symbol path escapes source bank: {relative}")
+        if not svg.is_file():
+            # NecaSymbolBank skips missing files, but a change in availability
+            # must still invalidate resume, not silently alter data sampling.
+            digest.update(f"MISSING:{relative}".encode())
+            continue
+        digest.update(relative.encode())
+        with svg.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1 << 20), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Namespace) -> str:
+    """Fingerprint the source manifest and training settings for safe resume.
+
+    This is a manifest/configuration signature, not a checksum of every image
+    byte. Dataset source-file provenance must still be independently managed.
+    """
+    fields = (
+        "imgsz", "batch", "epochs", "items_per_epoch", "val_items",
+        "optimizer", "lr", "workers", "pool_val_fraction", "seed",
+        "max_symbols", "symbol_min_px", "symbol_max_px",
+        "symbol_augment_probability", "procedural_fraction",
+        "clean_fraction", "labeled_focus_probability",
+    )
+    conf = {key: getattr(args, key) for key in fields}
+    # Changing loss weighting changes the trained representation; old
+    # optimizer state must not be resumed across objective revisions.
+    conf["ssl_objective"] = "ink-paper-balanced-v2"
+    conf["neca_svg_bank_sha256"] = neca_source_fingerprint(args.neca_dir)
+    manifest = {"format": 1, "settings": conf,
+                "train": train_manifest, "validation": val_manifest}
+    return hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
 
 
 def save_checkpoints(
@@ -267,9 +409,17 @@ def save_checkpoints(
     best_val: float,
     history: list[dict[str, Any]],
     is_best: bool,
+    fingerprint: str,
 ) -> None:
+    # Atomic same-directory replacements retain the previous complete
+    # checkpoint if the process dies during serialization.
+    def atomic_save(payload: dict, destination: Path) -> None:
+        temporary = destination.with_name(destination.name + '.tmp')
+        torch.save(payload, temporary)
+        temporary.replace(destination)
+
     # Full resumable pretraining state
-    torch.save({
+    atomic_save({
         'epoch': epoch,
         'best_val': best_val,
         'model': model.state_dict(),
@@ -277,6 +427,9 @@ def save_checkpoints(
         'scheduler': scheduler.state_dict(),
         'scaler': scaler.state_dict(),
         'history': history,
+        'run_fingerprint': fingerprint,
+        'torch_rng_state': torch.get_rng_state(),
+        'cuda_rng_state_all': torch.cuda.get_rng_state_all(),
     }, out_dir / 'last_pretrain.pt')
 
     # Clean YOLO26n-P2 backbone+neck checkpoint (no Detect head, no decoder)
@@ -285,12 +438,13 @@ def save_checkpoints(
         'architecture': 'yolo26n-p2.yaml',
         'epoch': epoch,
         'best_val': best_val,
+        'run_fingerprint': fingerprint,
         'detect_layer_index': model.detect_idx,
         'backbone_neck_state_dict': model.backbone_neck_state_dict(),
     }
-    torch.save(bb_payload, out_dir / 'last_yolo26n_p2_backbone.pt')
+    atomic_save(bb_payload, out_dir / 'last_yolo26n_p2_backbone.pt')
     if is_best:
-        torch.save(bb_payload, out_dir / 'best_yolo26n_p2_backbone.pt')
+        atomic_save(bb_payload, out_dir / 'best_yolo26n_p2_backbone.pt')
 
 
 def build_musgd_optimizer(model: torch.nn.Module, *, lr: float, momentum: float = 0.937, weight_decay: float = 5e-4) -> torch.optim.Optimizer:
@@ -319,7 +473,31 @@ def build_musgd_optimizer(model: torch.nn.Module, *, lr: float, momentum: float 
     return MuSGD(param_groups, lr=lr, momentum=momentum, nesterov=True)
 
 
+def validate_pretrain_settings(args: argparse.Namespace) -> None:
+    """Fail before building manifests or allocating a model for invalid runs."""
+    if args.batch < 1 or args.items_per_epoch < args.batch:
+        raise ValueError("items-per-epoch must be at least batch size")
+    if args.epochs < 1 or args.val_items < 1 or args.workers < 0:
+        raise ValueError("invalid epochs/validation items/workers")
+    if args.imgsz < 128 or args.imgsz % 32:
+        raise ValueError("imgsz must be a multiple of 32 and at least 128")
+    if not 0 <= args.pool_val_fraction < 1:
+        raise ValueError("pool-val-fraction must be in [0,1)")
+    if not math.isfinite(args.lr) or args.lr <= 0:
+        raise ValueError("learning rate must be finite and positive")
+    if not 0 <= args.max_symbols <= 128:
+        raise ValueError("max-symbols must be in [0,128]")
+    if not 0 < args.symbol_min_px <= args.symbol_max_px:
+        raise ValueError("invalid symbol size range")
+    for key in ("symbol_augment_probability", "procedural_fraction",
+                "clean_fraction", "labeled_focus_probability"):
+        prob = getattr(args, key)
+        if not math.isfinite(prob) or not 0 <= prob <= 1:
+            raise ValueError(f"{key} must be a probability in [0,1]")
+
+
 def train(args: argparse.Namespace) -> None:
+    validate_pretrain_settings(args)
     out_dir: Path = args.out.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -328,7 +506,16 @@ def train(args: argparse.Namespace) -> None:
         args.work_root.resolve(),
         fpcad_train_dir=args.fpcad_train_dir.resolve() if args.fpcad_train_dir else None,
         pool_val_fraction=args.pool_val_fraction,
+        labeled_annotations=[
+            Path(f) for pattern in args.labeled_annotations for f in glob.glob(pattern, recursive=True)
+        ],
     )
+    identity = run_fingerprint(train_manifest, val_manifest, args)
+    prior_fingerprint_file = out_dir / "run_fingerprint.txt"
+    if args.run and args.resume and prior_fingerprint_file.exists():
+        if prior_fingerprint_file.read_text().strip() != identity:
+            raise ValueError("SSL resume changes data or configuration; existing run files untouched")
+
     (out_dir / 'pretrain_audit.json').write_text(json.dumps(audit, indent=2))
     (out_dir / 'train_manifest.json').write_text(json.dumps(train_manifest))
     (out_dir / 'val_manifest.json').write_text(json.dumps(val_manifest))
@@ -339,17 +526,41 @@ def train(args: argparse.Namespace) -> None:
         print('PLAN ONLY. Pass --run to start GPU pretraining.', flush=True)
         return
 
+    if args.resume and not (out_dir / 'last_pretrain.pt').is_file():
+        raise FileNotFoundError('Resume requested but last_pretrain.pt is missing')
     if not torch.cuda.is_available():
         raise SystemExit('CUDA GPU unavailable; refusing CPU pretraining')
+    if (out_dir / 'last_pretrain.pt').exists() and not args.resume:
+        raise SystemExit('Existing SSL checkpoint found; use --resume or a fresh --out directory')
+    if args.init_weights and not args.init_weights.is_file():
+        raise FileNotFoundError(f'Initial weights do not exist: {args.init_weights}')
+    if args.neca_dir and not (args.neca_dir / 'symbols.json').is_file():
+        raise FileNotFoundError(f'NECA SVG bank missing symbols.json: {args.neca_dir}')
 
+    (out_dir / "run_fingerprint.txt").write_text(identity + "\n")
+    print(f'Pretrain run fingerprint: {identity}', flush=True)
+
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
     device = torch.device('cuda:0')
 
+    data_opts = {
+        'neca_dir': args.neca_dir,
+        'max_symbols': args.max_symbols,
+        'symbol_min_px': args.symbol_min_px,
+        'symbol_max_px': args.symbol_max_px,
+        'symbol_augment_probability': args.symbol_augment_probability,
+        'procedural_fraction': args.procedural_fraction,
+        'clean_fraction': args.clean_fraction,
+        'labeled_focus_probability': args.labeled_focus_probability,
+    }
     train_ds = BlueprintSSLDataset(
-        train_manifest, size=args.imgsz, items_per_epoch=args.items_per_epoch, seed=args.seed
+        train_manifest, size=args.imgsz, items_per_epoch=args.items_per_epoch,
+        seed=args.seed, **data_opts,
     )
     val_ds = BlueprintSSLDataset(
         val_manifest, size=args.imgsz, items_per_epoch=args.val_items,
-        seed=args.seed + 9999, deterministic_eval=True,
+        seed=args.seed + 9999, deterministic_eval=True, **data_opts,
     ) if val_manifest['buckets'] else None
 
     train_loader = DataLoader(
@@ -395,6 +606,8 @@ def train(args: argparse.Namespace) -> None:
     resume_ckpt = out_dir / 'last_pretrain.pt'
     if args.resume and resume_ckpt.is_file():
         ckpt = torch.load(resume_ckpt, map_location=device, weights_only=False)
+        if ckpt.get('run_fingerprint') != identity:
+            raise ValueError('SSL resume dataset/configuration fingerprint differs from checkpoint')
         model.load_state_dict(ckpt['model'])
         optimizer.load_state_dict(ckpt['optimizer'])
         scheduler.load_state_dict(ckpt['scheduler'])
@@ -402,6 +615,10 @@ def train(args: argparse.Namespace) -> None:
         start_epoch = int(ckpt['epoch']) + 1
         best_val = float(ckpt.get('best_val', float('inf')))
         history = list(ckpt.get('history', []))
+        if 'torch_rng_state' in ckpt:
+            torch.set_rng_state(ckpt['torch_rng_state'].cpu())
+        if 'cuda_rng_state_all' in ckpt:
+            torch.cuda.set_rng_state_all(ckpt['cuda_rng_state_all'])
         print(f'Resumed from epoch {start_epoch} (best_val={best_val:.5f})', flush=True)
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -501,7 +718,7 @@ def train(args: argparse.Namespace) -> None:
             flush=True,
         )
 
-        save_checkpoints(out_dir, model, optimizer, scheduler, scaler, epoch, best_val, history, is_best)
+        save_checkpoints(out_dir, model, optimizer, scheduler, scaler, epoch, best_val, history, is_best, identity)
         if (epoch + 1) % 10 == 0:
             torch.save(
                 {'epoch': epoch + 1, 'backbone_neck_state_dict': model.backbone_neck_state_dict()},
@@ -526,6 +743,18 @@ def main() -> None:
     p.add_argument('--workers', type=int, default=2)
     p.add_argument('--pool-val-fraction', type=float, default=0.10)
     p.add_argument('--seed', type=int, default=2026)
+    p.add_argument('--labeled-annotations', action='append', default=[], metavar='GLOB',
+                   help='Verified positive device JSONs used for device-centered SSL crops')
+    p.add_argument('--neca-dir', type=Path, default=None,
+                   help='NECA_100_Vector_Library containing symbols.json and all vector SVGs')
+    p.add_argument('--max-symbols', type=int, default=16,
+                   help='Random number of synthetic symbols per crop: 0..N (inclusive)')
+    p.add_argument('--symbol-min-px', type=float, default=12.0)
+    p.add_argument('--symbol-max-px', type=float, default=80.0)
+    p.add_argument('--symbol-augment-probability', type=float, default=1.00)
+    p.add_argument('--procedural-fraction', type=float, default=0.25)
+    p.add_argument('--clean-fraction', type=float, default=0.20)
+    p.add_argument('--labeled-focus-probability', type=float, default=0.65)
     p.add_argument('--init-weights', type=Path, default=None,
                    help='Optional prior SSL checkpoint (last_pretrain.pt or best_yolo26n_p2_backbone.pt) to warm-start from')
     p.add_argument('--resume', action='store_true')

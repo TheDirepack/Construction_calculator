@@ -112,6 +112,55 @@ def sample_random_crop(image: np.ndarray, size: int, rng: np.random.Generator) -
     return best_crop if best_crop is not None else cv2.resize(image, (size, size), interpolation=cv2.INTER_AREA)
 
 
+def sample_label_guided_crop(
+    image: np.ndarray,
+    size: int,
+    rng: np.random.Generator,
+    boxes: list[list[float]] | None,
+    *,
+    focus_probability: float = 0.65,
+) -> np.ndarray:
+    """Prefer verified device neighborhoods while retaining random plan crops.
+
+    Boxes are optional positive-only annotations; no completeness assumption
+    is made. Scale selection targets roughly 12..96 output pixels for the
+    chosen glyph so small devices are not erased by wholesale page resize.
+    """
+    valid = []
+    h, w = image.shape[:2]
+    if boxes and rng.random() < focus_probability:
+        for item in boxes:
+            if len(item) != 4:
+                continue
+            x0, y0, x1, y1 = map(float, item)
+            if all(math.isfinite(v) for v in (x0, y0, x1, y1)) and (
+                0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h
+            ):
+                valid.append((x0, y0, x1, y1))
+    if not valid:
+        return sample_random_crop(image, size, rng)
+
+    x0, y0, x1, y1 = valid[int(rng.integers(len(valid)))]
+    device_px = max(x1 - x0, y1 - y0)
+    target_px = float(np.exp(rng.uniform(math.log(12), math.log(96))))
+    min_span = min(max(h, w), max(64, math.ceil(device_px * 1.5)))
+    span = int(np.clip(round(size * device_px / target_px), min_span, max(h, w)))
+    # Keep the selected box in the crop, even near source-image borders.
+    left = max(0, math.ceil(x1 - span))
+    right = min(max(0, w - span), math.floor(x0))
+    top = max(0, math.ceil(y1 - span))
+    bottom = min(max(0, h - span), math.floor(y0))
+    cx0 = int(rng.integers(left, right + 1)) if right >= left else max(0, min(w - span, round(x0)))
+    cy0 = int(rng.integers(top, bottom + 1)) if bottom >= top else max(0, min(h - span, round(y0)))
+    patch = image[cy0:min(h, cy0 + span), cx0:min(w, cx0 + span)]
+    ph, pw = patch.shape[:2]
+    if ph != span or pw != span:
+        paper = tuple(int(v) for v in np.median(patch.reshape(-1, 3), axis=0))
+        patch = cv2.copyMakeBorder(patch, 0, span - ph, 0, span - pw,
+                                   cv2.BORDER_CONSTANT, value=paper)
+    return cv2.resize(patch, (size, size),
+                      interpolation=cv2.INTER_AREA if span > size else cv2.INTER_LINEAR)
+
 def apply_geometric_variability(clean: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     """Apply geometric transforms identically to the clean crop (target & input stay aligned)."""
     out = clean
@@ -130,6 +179,17 @@ def apply_geometric_variability(clean: np.ndarray, rng: np.random.Generator) -> 
         mat = cv2.getRotationMatrix2D((w * 0.5, h * 0.5), angle, 1.0)
         out = cv2.warpAffine(out, mat, (w, h), flags=cv2.INTER_LINEAR,
                              borderMode=cv2.BORDER_CONSTANT, borderValue=border_val)
+    # Photo perspective / curled-sheet approximation. Transform BOTH SSL
+    # branches identically here; never warp only the reconstruction input.
+    if rng.random() < 0.22:
+        h, w = out.shape[:2]
+        src = np.float32([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]])
+        move = min(h, w) * float(rng.uniform(0.006, 0.035))
+        dst = src + rng.uniform(-move, move, src.shape).astype(np.float32)
+        mat = cv2.getPerspectiveTransform(src, dst)
+        paper = tuple(int(v) for v in np.median(out.reshape(-1, 3), axis=0))
+        out = cv2.warpPerspective(out, mat, (w, h), flags=cv2.INTER_LINEAR,
+                                  borderMode=cv2.BORDER_CONSTANT, borderValue=paper)
     return out
 
 
@@ -138,126 +198,198 @@ def apply_runtime_corruptions(
     rng: np.random.Generator,
     *,
     mask_prob: float = 0.85,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Apply runtime resolution filtering, common filtering, JPEG compression noise, and block masking.
+    clean_fraction: float = 0.20,
+    return_metadata: bool = False,
+) -> tuple:
+    """Random, independent scan/camera/PDF corruptions at varying severity.
 
-    Returns:
-      degraded_bgr: uint8 (H, W, 3)
-      mask: float32 (H, W) with 1.0 on masked pixels, 0.0 elsewhere
+    A true, untouched clean-view fraction is intentionally retained. Other
+    views independently sample photometric, optical, raster, printing,
+    scanner, noise and codec transformations. All are coordinate preserving;
+    geometric transforms of clean and input happen earlier, together.
     """
+    if not 0 <= clean_fraction <= 1 or not 0 <= mask_prob <= 1:
+        raise ValueError("probabilities must be in [0,1]")
     x = clean_bgr.copy()
     h, w = x.shape[:2]
+    mask = np.zeros((h, w), np.float32)
+    operations: list[str] = []
 
-    # 1. Photometric / illumination / paper tint variability
-    if rng.random() < 0.85:
-        gain = float(rng.uniform(0.75, 1.25))
-        offset = float(rng.uniform(-22.0, 22.0))
+    # Requested fully clean views are genuinely unmasked; mask_prob=1 is an
+    # explicit testing/training override that still guarantees MIM masking.
+    if rng.random() < clean_fraction and mask_prob < 1:
+        meta = {"severity": "clean", "operations": []}
+        return (x, mask, meta) if return_metadata else (x, mask)
+
+    severity = str(rng.choice(("light", "moderate", "heavy", "extreme"),
+                              p=(0.34, 0.37, 0.23, 0.06)))
+    strength = {"light": 0.45, "moderate": 0.80,
+                "heavy": 1.15, "extreme": 1.55}[severity]
+
+    def chance(p: float) -> bool:
+        return bool(rng.random() < min(1.0, strength * p))
+
+    # Illumination, white balance, paper color, locally uneven exposure.
+    if chance(0.68):
+        operations.append("illumination")
+        gain = float(rng.uniform(1 - 0.22 * strength, 1 + 0.22 * strength))
+        offset = float(rng.uniform(-18 * strength, 18 * strength))
         xf = x.astype(np.float32) * gain + offset
-        # Spatially varying illumination (scanner/camera shadow gradient)
-        if rng.random() < 0.50:
-            limit = float(rng.uniform(8.0, 40.0))
-            gx = np.linspace(-1.0, 1.0, w, dtype=np.float32)[None, :]
-            gy = np.linspace(-1.0, 1.0, h, dtype=np.float32)[:, None]
-            direction = float(rng.uniform(-1.0, 1.0))
-            field = limit * (direction * gx + (1.0 - abs(direction)) * gy)
-            xf = xf + field[:, :, None]
-        # Subtle paper tint / white-balance shift
-        if rng.random() < 0.30:
-            tint = rng.uniform(0.90, 1.10, size=(1, 1, 3)).astype(np.float32)
-            xf = xf * tint
-        x = np.clip(xf, 0.0, 255.0).astype(np.uint8)
+        if chance(0.46):
+            operations.append("uneven_lighting")
+            gx = np.linspace(-1, 1, w, dtype=np.float32)[None, :]
+            gy = np.linspace(-1, 1, h, dtype=np.float32)[:, None]
+            theta = float(rng.uniform(-np.pi, np.pi))
+            field = (gx * np.cos(theta) + gy * np.sin(theta)) * float(rng.uniform(5, 30)) * strength
+            xf += field[:, :, None]
+        if chance(0.28):
+            operations.append("white_balance")
+            xf *= rng.uniform(1 - 0.08 * strength, 1 + 0.08 * strength, (1, 1, 3))
+        x = np.clip(xf, 0, 255).astype(np.uint8)
 
-    if rng.random() < 0.20:
-        g = cv2.cvtColor(x, cv2.COLOR_BGR2GRAY)
-        x = cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
-
-    # 2. Common filtering: Gaussian blur, directional motion blur, median/box/sharpen, stroke morphology
-    if rng.random() < 0.60:
-        sigma = float(rng.uniform(0.25, 1.9))
+    # Optical blur, including movement along arbitrary scan directions.
+    if chance(0.52):
+        operations.append("gaussian_blur")
+        sigma = float(rng.uniform(0.25, 1.4 * strength + 0.25))
         x = cv2.GaussianBlur(x, (0, 0), sigma)
-
-    if rng.random() < 0.25:
-        ksize = int(rng.choice((3, 5, 7)))
-        kernel = np.zeros((ksize, ksize), dtype=np.float32)
-        mode = int(rng.integers(0, 4))
-        if mode == 0:
-            kernel[ksize // 2, :] = 1.0 / ksize
-        elif mode == 1:
-            kernel[:, ksize // 2] = 1.0 / ksize
-        elif mode == 2:
-            np.fill_diagonal(kernel, 1.0 / ksize)
-        else:
-            np.fill_diagonal(np.fliplr(kernel), 1.0 / ksize)
-        x = cv2.filter2D(x, -1, kernel)
-
-    if rng.random() < 0.25:
-        filt = int(rng.integers(0, 3))
-        if filt == 0:
-            x = cv2.medianBlur(x, 3)
-        elif filt == 1:
-            x = cv2.blur(x, (3, 3))
-        else:
-            # Unsharp mask (common PDF/scanner oversharpening)
-            blurred = cv2.GaussianBlur(x, (0, 0), 1.0)
-            amount = float(rng.uniform(0.4, 1.2))
-            x = cv2.addWeighted(x, 1.0 + amount, blurred, -amount, 0)
-
-    # 3. Resolution filtering: lossy area downscale + varied reconstruction upsample
-    if rng.random() < 0.80:
-        # Mix of mild, medium, severe, and extreme resolution bottlenecks
-        band = float(rng.random())
-        if band < 0.30:
-            frac = float(rng.uniform(0.65, 0.92))
-        elif band < 0.70:
-            frac = float(rng.uniform(0.40, 0.68))
-        else:
-            frac = float(rng.uniform(0.22, 0.42))
-        nw, nh = max(16, int(round(w * frac))), max(16, int(round(h * frac)))
-        reduced = cv2.resize(x, (nw, nh), interpolation=cv2.INTER_AREA)
-        up_interp = int(rng.choice((cv2.INTER_LINEAR, cv2.INTER_CUBIC, cv2.INTER_NEAREST)))
-        x = cv2.resize(reduced, (w, h), interpolation=up_interp)
-
-    # 4. Stroke morphology (ink bleed / faded toner)
-    if rng.random() < 0.30:
-        k = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+    if chance(0.23):
+        operations.append("motion_blur")
+        k = int(rng.choice((3, 5, 7, 9)))
+        ker = np.zeros((k, k), np.float32)
         if rng.random() < 0.5:
-            x = cv2.erode(x, k, iterations=1)
+            ker[k // 2, :] = 1.0 / k
         else:
-            x = cv2.dilate(x, k, iterations=1)
+            ker[:, k // 2] = 1.0 / k
+        x = cv2.filter2D(x, -1, ker)
 
-    # 5. Additive Gaussian sensor / scan noise
-    if rng.random() < 0.65:
-        sigma = float(rng.uniform(1.0, 14.0))
-        x = np.clip(x.astype(np.float32) + rng.normal(0.0, sigma, x.shape), 0.0, 255.0).astype(np.uint8)
-
-    # 6. Runtime JPEG compression noise (blockiness + ringing around thin drafting lines)
-    if rng.random() < 0.80:
-        if rng.random() < 0.45:
-            quality = int(rng.integers(15, 48))
+    # Camera/software filtering, haloing, scanner despeckle, binary threshold.
+    if chance(0.30):
+        op = int(rng.integers(0, 5))
+        operations.append(("median_filter", "box_filter", "sharpen",
+                           "local_contrast", "thresholding")[op])
+        if op == 0:
+            x = cv2.medianBlur(x, 3)
+        elif op == 1:
+            x = cv2.blur(x, (3, 3))
+        elif op == 2:
+            blur = cv2.GaussianBlur(x, (0, 0), 1.0)
+            x = cv2.addWeighted(x, 1.0 + 0.75 * strength, blur, -0.75 * strength, 0)
+        elif op == 3:
+            gray = cv2.cvtColor(x, cv2.COLOR_BGR2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=1.0 + strength, tileGridSize=(8, 8))
+            x = cv2.cvtColor(clahe.apply(gray), cv2.COLOR_GRAY2BGR)
         else:
-            quality = int(rng.integers(48, 93))
-        ok, buf = cv2.imencode('.jpg', x, [cv2.IMWRITE_JPEG_QUALITY, quality])
+            gray = cv2.cvtColor(x, cv2.COLOR_BGR2GRAY)
+            threshold = int(rng.uniform(145, 215))
+            x = cv2.cvtColor(np.where(gray < threshold, 0, 255).astype(np.uint8),
+                             cv2.COLOR_GRAY2BGR)
+
+    # Simulate original low-DPI scans and interpolation artifacts.
+    if chance(0.67):
+        operations.append("resampling")
+        bands = {
+            "light": (0.72, 0.96), "moderate": (0.48, 0.86),
+            "heavy": (0.28, 0.73), "extreme": (0.16, 0.55),
+        }
+        low, high = bands[severity]
+        frac = float(rng.uniform(low, high))
+        reduced = cv2.resize(x, (max(16, round(w * frac)), max(16, round(h * frac))),
+                             interpolation=cv2.INTER_AREA)
+        interp = int(rng.choice((cv2.INTER_NEAREST, cv2.INTER_LINEAR, cv2.INTER_CUBIC)))
+        x = cv2.resize(reduced, (w, h), interpolation=interp)
+
+    # Toner bleed, faded lines and broken print strokes.
+    if chance(0.30):
+        operations.append("toner_morphology")
+        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+        x = (cv2.erode(x, kernel, iterations=1) if rng.random() < 0.5
+             else cv2.dilate(x, kernel, iterations=1))
+
+    # Missing/broken ink spots, paper speckles, dust and sensor impulse pixels.
+    if chance(0.30):
+        operations.append("salt_pepper")
+        n = int(h * w * rng.uniform(0.00003, 0.0012) * strength)
+        if n:
+            ys = rng.integers(0, h, n)
+            xs = rng.integers(0, w, n)
+            x[ys, xs] = 255 if rng.random() < 0.55 else 0
+    if chance(0.20):
+        operations.append("dust_dropouts")
+        n = int(rng.integers(1, 7))
+        for _ in range(n):
+            px = int(rng.integers(w))
+            py = int(rng.integers(h))
+            radius = max(1, int(rng.uniform(1, 4) * strength))
+            cv2.circle(x, (px, py), radius, (255, 255, 255)
+                       if rng.random() < .6 else (80, 80, 80), -1)
+
+    # Feed/scanner streaks and banding (both axes).
+    if chance(0.20):
+        operations.append("scanner_streaks")
+        axis = int(rng.integers(2))
+        n = int(rng.integers(1, 4))
+        for _ in range(n):
+            pos = int(rng.integers(w if axis == 0 else h))
+            thickness = max(1, int(rng.uniform(1, 3) * strength))
+            tint = int(rng.uniform(190, 255)) if rng.random() < .65 else int(rng.uniform(20, 85))
+            if axis == 0:
+                cv2.line(x, (pos, 0), (pos, h - 1), (tint,) * 3, thickness)
+            else:
+                cv2.line(x, (0, pos), (w - 1, pos), (tint,) * 3, thickness)
+
+    # Grain, sensor and halftone noise.
+    if chance(0.55):
+        operations.append("sensor_noise")
+        sigma = float(rng.uniform(0.6, 9.0) * strength)
+        x = np.clip(x.astype(np.float32) + rng.normal(0, sigma, x.shape), 0, 255).astype(np.uint8)
+    if chance(0.12):
+        operations.append("bit_depth")
+        # Quantization/banding in low-bit-depth scans.
+        levels = int(rng.choice((4, 8, 16, 32)))
+        x = np.round(x.astype(np.float32) / 255 * (levels - 1)) * (255 / (levels - 1))
+        x = np.clip(x, 0, 255).astype(np.uint8)
+
+    # JPEG or WebP codec ringing/block artifacts.
+    if chance(0.70):
+        codec = ".jpg" if rng.random() < .80 else ".webp"
+        qmin = {"light": 75, "moderate": 48, "heavy": 27, "extreme": 12}[severity]
+        quality = int(rng.integers(qmin, 96))
+        key = cv2.IMWRITE_JPEG_QUALITY if codec == ".jpg" else cv2.IMWRITE_WEBP_QUALITY
+        try:
+            ok, buffer = cv2.imencode(codec, x, [key, quality])
+        except cv2.error:
+            # Some headless OpenCV builds omit optional WebP codecs.
+            codec = ".jpg"
+            ok, buffer = cv2.imencode(".jpg", x, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if ok:
-            decoded = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            decoded = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
             if decoded is not None:
                 x = decoded
+                operations.append("jpeg" if codec == ".jpg" else "webp")
 
-    # 7. Multi-scale block masking (MIM)
-    mask = np.zeros((h, w), dtype=np.float32)
+    # Random masked reconstruction. The clean target includes the same
+    # synthetic symbol additions but no corruption.
     if rng.random() < mask_prob:
-        patch = int(rng.choice((16, 32)))
-        gh, gw = h // patch, w // patch
-        ratio = float(rng.uniform(0.30, 0.55))
+        operations.append("masked_blocks")
+        patch = int(rng.choice((8, 16, 32, 64)))
+        gh, gw = math.ceil(h / patch), math.ceil(w / patch)
+        ratio = float(rng.uniform(.15, .55))
         grid = (rng.random((gh, gw)) < ratio).astype(np.float32)
-        mask = np.repeat(np.repeat(grid, patch, axis=0), patch, axis=1)
-        if mask.shape != (h, w):
-            mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
-        paper_tone = np.median(x.reshape(-1, 3), axis=0).astype(np.float32)
-        fill = np.clip(paper_tone[None, None, :] + rng.normal(0.0, 6.0, x.shape), 0.0, 255.0).astype(np.uint8)
-        m3 = mask[:, :, None] > 0.5
-        x = np.where(m3, fill, x)
+        mask = np.repeat(np.repeat(grid, patch, axis=0), patch, axis=1)[:h, :w]
+        paper = np.median(x.reshape(-1, 3), axis=0).astype(np.float32)
+        fill = np.clip(paper[None, None, :] + rng.normal(0, 4, x.shape), 0, 255).astype(np.uint8)
+        x = np.where(mask[:, :, None] > .5, fill, x)
 
-    return x, mask
+    # Independent Bernoulli choices can all miss on a light sample. Keep
+    # the explicit clean_fraction as the only intentionally unchanged path.
+    if not operations:
+        sigma = max(0.8, 1.8 * strength)
+        x = np.clip(x.astype(np.float32) + rng.normal(0, sigma, x.shape),
+                    0, 255).astype(np.uint8)
+        operations.append("sensor_noise")
+
+    meta = {"severity": severity, "operations": operations}
+    return (x, mask, meta) if return_metadata else (x, mask)
 
 
 class BlueprintSSLDataset(Dataset):
@@ -275,6 +407,15 @@ class BlueprintSSLDataset(Dataset):
         items_per_epoch: int = 8192,
         seed: int = 2026,
         deterministic_eval: bool = False,
+        neca_dir: str | Path | None = None,
+        max_symbols: int = 16,
+        symbol_min_px: float = 12.0,
+        symbol_max_px: float = 80.0,
+        symbol_augment_probability: float = 1.00,
+        procedural_fraction: float = 0.25,
+        clean_fraction: float = 0.20,
+        labeled_focus_probability: float = 0.65,
+        return_metadata: bool = False,
     ) -> None:
         super().__init__()
         self.size = int(size)
@@ -282,10 +423,24 @@ class BlueprintSSLDataset(Dataset):
         self.seed = int(seed)
         self.epoch = 0
         self.deterministic_eval = bool(deterministic_eval)
+        if not 0 <= symbol_augment_probability <= 1 or not 0 <= clean_fraction <= 1 or not 0 <= labeled_focus_probability <= 1:
+            raise ValueError("invalid SSL sampling probabilities")
+        self.max_symbols = int(max_symbols)
+        self.symbol_min_px = float(symbol_min_px)
+        self.symbol_max_px = float(symbol_max_px)
+        self.symbol_augment_probability = float(symbol_augment_probability)
+        self.procedural_fraction = float(procedural_fraction)
+        self.clean_fraction = float(clean_fraction)
+        self.labeled_focus_probability = float(labeled_focus_probability)
+        self.return_metadata = bool(return_metadata)
+        self.neca_bank = None
+        if neca_dir is not None:
+            from .neca_svg_compositor import NecaSymbolBank
+            self.neca_bank = NecaSymbolBank(Path(neca_dir), include_modifiers=False)
 
         self.bucket_names: list[str] = []
         self.bucket_weights: list[float] = []
-        self.bucket_groups: dict[str, list[list[str]]] = {}
+        self.bucket_groups: dict[str, list[list[str | dict]]] = {}
 
         for name, info in sorted(manifest['buckets'].items()):
             groups = [paths for paths in info['groups'].values() if paths]
@@ -332,7 +487,9 @@ class BlueprintSSLDataset(Dataset):
             b_idx = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
             groups = self.bucket_groups[self.bucket_names[b_idx]]
             group = groups[int(rng.integers(len(groups)))]
-            path = group[int(rng.integers(len(group)))]
+            entry = group[int(rng.integers(len(group)))]
+            path = entry["image_path"] if isinstance(entry, dict) else entry
+            boxes = entry.get("boxes") if isinstance(entry, dict) else None
             img = self._read_cached(path)
             if img is not None and min(img.shape[:2]) >= 64:
                 break
@@ -340,9 +497,30 @@ class BlueprintSSLDataset(Dataset):
         if img is None:
             raise RuntimeError('Failed to decode any blueprint image after 8 attempts')
 
-        clean = sample_random_crop(img, self.size, rng)
+        clean = sample_label_guided_crop(
+            img, self.size, rng, boxes,
+            focus_probability=self.labeled_focus_probability,
+        )
         clean = apply_geometric_variability(clean, rng)
-        degraded, mask = apply_runtime_corruptions(clean, rng)
+        symbol_stats = {"requested": 0, "placed": 0, "shortfall": 0,
+                        "neca": 0, "procedural": 0}
+        if self.max_symbols > 0 and rng.random() < self.symbol_augment_probability:
+            from .ssl_augmentation import compose_ssl_symbols
+            clean, symbol_stats = compose_ssl_symbols(
+                clean, rng, neca_bank=self.neca_bank,
+                max_symbols=self.max_symbols,
+                min_size_px=self.symbol_min_px,
+                max_size_px=self.symbol_max_px,
+                procedural_fraction=self.procedural_fraction,
+            )
+        if self.return_metadata:
+            degraded, mask, degradation_meta = apply_runtime_corruptions(
+                clean, rng, clean_fraction=self.clean_fraction, return_metadata=True,
+            )
+        else:
+            degraded, mask = apply_runtime_corruptions(
+                clean, rng, clean_fraction=self.clean_fraction,
+            )
 
         # BGR uint8 -> RGB float32 [0, 1] CHW
         clean_rgb = np.ascontiguousarray(clean[:, :, ::-1]).transpose(2, 0, 1)
@@ -351,6 +529,18 @@ class BlueprintSSLDataset(Dataset):
         clean_t = torch.from_numpy(clean_rgb).float().div_(255.0)
         deg_t = torch.from_numpy(deg_rgb).float().div_(255.0)
         mask_t = torch.from_numpy(mask).unsqueeze(0)
+        if self.return_metadata:
+            details = {
+                "source": str(path), "bucket": self.bucket_names[b_idx],
+                "symbol_stats": symbol_stats,
+                "degradation": degradation_meta,
+                "mask_fraction": float(mask.mean()),
+                "mean_absolute_degradation": float(
+                    np.abs(degraded.astype(np.float32) - clean.astype(np.float32)).mean()
+                ),
+                "index": int(index), "epoch": int(ep),
+            }
+            return deg_t, clean_t, mask_t, details
         return deg_t, clean_t, mask_t
 
 
@@ -439,11 +629,20 @@ class Yolo26P2SSLModel(nn.Module):
 
 
 class BlueprintSSLLoss(nn.Module):
-    """Ink- and mask-weighted L1 + Sobel edge gradient loss for line-art blueprints."""
+    """Ink-balanced, masked L1 + Sobel edge restoration loss.
 
-    def __init__(self, mask_weight: float = 2.5, ink_weight: float = 4.0, edge_weight: float = 0.5) -> None:
+    Thin electrical lines are often <2% of a drawing crop. Multiplying their
+    per-pixel weight by four still leaves almost all reconstruction loss on
+    white paper. Normalize ink and paper losses separately, then give ink
+    a stable fraction regardless of how sparse the drawing is.
+    """
+
+    def __init__(self, mask_weight: float = 2.5, ink_weight: float = 2.0, edge_weight: float = 0.5) -> None:
         super().__init__()
+        if mask_weight < 0 or ink_weight <= 0 or edge_weight < 0:
+            raise ValueError("SSL loss weights must be nonnegative (ink_weight > 0)")
         self.mask_weight = float(mask_weight)
+        # Ratio between mean ink error and mean paper error (2 = 2:1).
         self.ink_weight = float(ink_weight)
         self.edge_weight = float(edge_weight)
         kx = torch.tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]]).view(1, 1, 3, 3)
@@ -463,13 +662,27 @@ class BlueprintSSLLoss(nn.Module):
         target: torch.Tensor,
         mask: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        # Ink pixels are dark regions on the clean target
+        # Weight masked regions without allowing empty paper to drown out
+        # the few real symbol strokes. Keep channel-sum error to preserve the
+        # previous L1 scale relative to the Sobel edge term.
         lum = target.mean(dim=1, keepdim=True)
         ink = (lum < 0.80).float()
-        weights = 1.0 + self.mask_weight * mask + self.ink_weight * ink
+        weights = 1.0 + self.mask_weight * mask
 
-        pixel_l1 = (pred - target).abs()
-        weighted_l1 = (pixel_l1 * weights).sum() / weights.sum().clamp_min(1.0)
+        pixel_l1 = (pred - target).abs().sum(dim=1, keepdim=True)
+        ink_mass = weights * ink
+        paper_mass = weights * (1.0 - ink)
+        axes = (1, 2, 3)
+        ink_den = ink_mass.sum(dim=axes)
+        paper_den = paper_mass.sum(dim=axes)
+        ink_l1 = (pixel_l1 * ink_mass).sum(dim=axes) / ink_den.clamp_min(1.0)
+        paper_l1 = (pixel_l1 * paper_mass).sum(dim=axes) / paper_den.clamp_min(1.0)
+        ink_share = self.ink_weight / (1.0 + self.ink_weight)
+        balanced_l1 = ink_share * ink_l1 + (1.0 - ink_share) * paper_l1
+        # A genuinely all-white or all-ink crop must not lose loss scale.
+        balanced_l1 = torch.where(ink_den == 0, paper_l1, balanced_l1)
+        balanced_l1 = torch.where(paper_den == 0, ink_l1, balanced_l1)
+        weighted_l1 = balanced_l1.mean()
 
         px, py = self._edges(pred)
         tx, ty = self._edges(target)

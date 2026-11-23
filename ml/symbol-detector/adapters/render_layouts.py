@@ -191,12 +191,16 @@ def main():
     p.add_argument('output', type=Path)
     p.add_argument('--limit', type=int, default=4000, help='pages per source (0 = all)')
     p.add_argument('--seed', type=int, default=11)
+    p.add_argument('--train-only', action='store_true',
+                   help='Render only train.jsonl from split datasets; useful for SSL training')
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=True)
     rng = random.Random(a.seed)
     counts = {}
     for name, files in (('resplan', sorted(a.datasets.glob('resplan/*.jsonl'))),
                         ('cubicasa', sorted(a.datasets.glob('cubicasa5k_hf/*.jsonl')))):
+        if a.train_only:
+            files = [f for f in files if f.stem == 'train']
         recs, bad = [], 0
         for f in files:
             for line in f.open():

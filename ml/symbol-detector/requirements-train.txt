@@ -1,3 +1,5 @@
 -r requirements.txt
 # Training and model export only. Data preparation and the normal tests do not need it.
 torch
+# Pin the training API used for YOLO26n-P2 SSL backbone transfer.
+ultralytics==8.4.216

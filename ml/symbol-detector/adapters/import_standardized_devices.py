@@ -282,6 +282,8 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
                     # the remaining devices on a construction page were labeled.
                     'exhaustive_families': [],
                     'annotation_completeness': 'partial',
+                    'annotation_completeness_verified': False,
+                    'annotation_scope': 'positive_only',
                     'instances': instances,
                 }
                 png.with_suffix('.json').write_text(json.dumps(norm_doc, indent=1))
