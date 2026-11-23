@@ -46,10 +46,10 @@ else
 fi
 
 echo "=== BUILD DEVICE-POSITIVE CROP REFERENCES (NOT EXHAUSTIVE LABELS) ==="
-if [[ ! -f "$LABELS/.complete" ]]; then
-  "$PY" adapters/import_standardized_devices.py "$DATA" "$LABELS" --dpi 200
-  touch "$LABELS/.complete"
-fi
+# Refresh on every new run. The previous .complete marker could silently
+# freeze the positive-crop pool even after more devices had been annotated.
+# Existing import output is regenerated; source PDFs/DEVICES.json are unchanged.
+"$PY" adapters/import_standardized_devices.py "$DATA" "$LABELS" --dpi 200
 
 echo "=== FRESH BLUEPRINT-ONLY SSL TRAINING ==="
 mkdir -p "$OUT"
