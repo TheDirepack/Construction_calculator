@@ -5,12 +5,6 @@ on:
     paths:
       - 'ml/symbol-detector/**'
       - '.github/workflows/ml-symbol-detector-ci.yml'
-  push:
-    branches:
-      - 't3/blueprint-labeling-review-gate-nov22'
-    paths:
-      - 'ml/symbol-detector/**'
-      - '.github/workflows/ml-symbol-detector-ci.yml'
   workflow_dispatch:
 
 permissions:
@@ -30,11 +24,27 @@ jobs:
           cache-dependency-path: |
             ml/symbol-detector/requirements.txt
             ml/symbol-detector/requirements-test.txt
+            ml/symbol-detector/requirements-sam3.txt
       - name: Install CPU test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r ml/symbol-detector/requirements-test.txt
-          python -m pip install 'torch==2.6.0' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r ml/symbol-detector/requirements-test.txt -r ml/symbol-detector/requirements-sam3.txt
+      - name: Validate installed SAM 3.1 / torchvision API
+        run: |
+          python - <<'PY'
+          import torch, torchvision, transformers
+          from transformers import Sam3Model, Sam3Processor
+          from transformers.models.sam3.modeling_sam3 import inverse_sigmoid, box_cxcywh_to_xyxy
+          from torchvision.ops import roi_align
+          import inspect
+          assert 'img_feats' in inspect.signature(
+              __import__('transformers.models.sam3.modeling_sam3', fromlist=['Sam3GeometryEncoder']).Sam3GeometryEncoder.forward
+          ).parameters
+          assert torch.isfinite(inverse_sigmoid(torch.tensor([0.5]))).all()
+          assert box_cxcywh_to_xyxy(torch.tensor([[0.5, 0.5, 0.2, 0.2]])).shape == (1,4)
+          print('SAM API OK:', torch.__version__, torchvision.__version__, transformers.__version__)
+          PY
       - name: Syntax compile all detector Python code
         run: python -m compileall -q ml/symbol-detector
       - name: Run symbol/regression tests
