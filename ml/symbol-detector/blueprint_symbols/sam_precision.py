@@ -14,6 +14,20 @@ from typing import Any
 import numpy as np
 
 
+def tile_origins(length: int, tile_size: int, overlap: int) -> list[int]:
+    """Minimum evenly stepped tiles that cover the image, without tail slivers.
+
+    The last origin may pad beyond the image, as the detector already does.
+    The overlap remains at least the requested number of pixels.
+    """
+    if length < 1 or tile_size <= overlap or overlap < 0:
+        raise ValueError('invalid image length or tile geometry')
+    step = tile_size - overlap
+    return [i * step for i in range(
+        (max(0, length - tile_size) + step - 1) // step + 1
+    )]
+
+
 def owns_tile_center(box: list[float], *, tile_x: int, tile_y: int,
                      tile_size: int, overlap: int,
                      image_width: int, image_height: int) -> bool:
