@@ -43,6 +43,7 @@ def compose_ssl_symbols(
     metadata = {"requested": requested, "placed": 0, "neca": 0, "procedural": 0}
     if not requested:
         metadata["shortfall"] = 0
+        metadata["placements"] = []
         return clean.copy(), metadata
 
     neca_count = int(rng.binomial(requested, 1 - procedural_fraction)) if neca_bank else 0
@@ -78,4 +79,13 @@ def compose_ssl_symbols(
 
     metadata["placed"] = metadata["neca"] + metadata["procedural"]
     metadata["shortfall"] = metadata["requested"] - metadata["placed"]
+    metadata["placements"] = [
+        {
+            "symbol_family": inst["symbol_family"],
+            "symbol_variant": inst["symbol_variant"],
+            "bbox_xyxy": inst["bbox_xyxy"],
+            "generator": "neca_svg" if inst in instances else "procedural",
+        }
+        for inst in [*instances, *(procedural if proc_count else [])]
+    ]
     return page, metadata
