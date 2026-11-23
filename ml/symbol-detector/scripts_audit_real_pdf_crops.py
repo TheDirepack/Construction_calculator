@@ -55,6 +55,7 @@ def audit_pdfs(
     try:
         for pdf_path in pdfs:
             pdf_path = pdf_path.resolve()
+            source_key = hashlib.sha256(str(pdf_path).encode()).hexdigest()[:10]
             with fitz.open(pdf_path) as pdf:
                 indices = (list(range(len(pdf))) if pages is None
                            else [p - 1 for p in pages])
@@ -88,13 +89,14 @@ def audit_pdfs(
                                 raise AssertionError("Composite symbol leaves crop")
                             class_counts[item.get("symbol_family", "unknown")] += 1
                         pair = np.hstack((clean, composite))
-                        file_name = (f"{pdf_path.stem[:48]}_p{index+1:03d}"
+                        file_name = (f"{pdf_path.stem[:40]}_{source_key}_p{index+1:03d}"
                                      f"_s{sample_id:03d}.png")
                         if not cv2.imwrite(str(output / file_name), pair):
                             raise OSError(f"Failed to write QA image: {file_name}")
                         gray = cv2.cvtColor(clean, cv2.COLOR_BGR2GRAY)
                         records.append({
                             "pdf_name": pdf_path.name,
+                            "pdf_source_key": source_key,
                             "page": index + 1,
                             "sample": sample_id,
                             "output": file_name,
@@ -113,7 +115,7 @@ def audit_pdfs(
     result = {
         "purpose": "real_pdf_visual_qa_only_not_training",
         "sample_count": len(records),
-        "pdf_count": len({row["pdf_name"] for row in records}),
+        "pdf_count": len({row["pdf_source_key"] for row in records}),
         "dpi_min": min(dpis) if dpis else None,
         "dpi_max": max(dpis) if dpis else None,
         "symbols_by_type": dict(class_counts),
