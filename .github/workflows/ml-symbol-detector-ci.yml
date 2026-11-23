@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# Many iterative PR commits can otherwise run the full detector suite in
+# parallel. Only the newest head matters for merge readiness.
+concurrency:
+  group: ml-symbol-detector-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   symbols-cpu:
     name: Symbol pipeline / CPU regression
