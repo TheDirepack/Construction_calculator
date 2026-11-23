@@ -359,6 +359,9 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
         "clean_fraction", "labeled_focus_probability",
     )
     conf = {key: getattr(args, key) for key in fields}
+    # Changing loss weighting changes the trained representation; old
+    # optimizer state must not be resumed across objective revisions.
+    conf["ssl_objective"] = "ink-paper-balanced-v2"
     conf["neca_catalog_sha256"] = (
         hashlib.sha256((args.neca_dir / "symbols.json").read_bytes()).hexdigest()
         if args.neca_dir else None
