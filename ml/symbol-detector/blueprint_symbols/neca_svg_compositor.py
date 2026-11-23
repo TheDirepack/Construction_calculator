@@ -486,8 +486,14 @@ def composite_neca_page(
         # A common per-page preference is modulated by how devices usually
         # mount: switches/receptacles near walls, troffers/downlights mostly
         # in free/ceiling locations. All classes retain random variation.
+        # Some NECA floor-mounted receptacles have a generic v7 subtype,
+        # but their source legend text still identifies floor mounting.
+        placement_subtype = (
+            "floor" if glyph.device_type == "receptacle" and
+            "floor" in glyph.name.lower() else glyph.subtype
+        )
         glyph_wall_probability = wall_placement_probability(
-            glyph.device_type, glyph.subtype, wall_probability
+            glyph.device_type, placement_subtype, wall_probability
         )
         want_wall = has_walls and (rng.random() < glyph_wall_probability)
         chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
