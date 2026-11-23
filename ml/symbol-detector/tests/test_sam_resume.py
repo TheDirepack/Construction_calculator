@@ -1,5 +1,6 @@
 """Self-hosted scanner must not treat crash-truncated output as completed."""
 import json
+import pytest
 
 from blueprint_symbols.sam_resume import atomic_write_json, completed_sam_output, file_sha256
 
