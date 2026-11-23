@@ -39,6 +39,7 @@ from transformers.models.sam3.modeling_sam3 import box_cxcywh_to_xyxy, inverse_s
 from blueprint_symbols.neca_prompt_catalog import (SamNecaPrompt, list_neca_prompt_specs,
     choose_neca_prompts, load_neca_sam_prompts)
 from blueprint_symbols.proposal_fusion import merge_sam_proposals
+from blueprint_symbols.neca_visual_groups import choose_visual_base_prototypes, audit_neca_visual_groups
 from blueprint_symbols.sam_precision import filter_sam_detections
 from blueprint_symbols.sam_precision_profile import (
     load_family_thresholds, threshold_for_family,
@@ -456,16 +457,18 @@ def detect_page_sam3(
                                 'box_px': [gx0, gy0, gx1, gy1],
                                 'score': float(scores_cpu[b_i, q_i]),
                                 'stage': stage,
+                                'visual_group': glyph.visual_group,
+                                'exemplar_attributes': glyph.encoded_attributes,
                                 'device_type': glyph.device_type,
                                 # Coarse stage is a family proposal, not a verified variant.
-                                'subtype': glyph.subtype if stage != 'coarse' else 'unspecified',
+                                'subtype': glyph.subtype if stage not in ('coarse', 'visual_base') else 'unspecified',
                                 'exemplar_subtype': glyph.subtype,
                                 'broad_family': glyph.canonical_class,
                                 'symbol_id': glyph.symbol_id,
                                 'neca_code': glyph.code,
                                 'neca_name': glyph.name,
                                 'category': glyph.category,
-                                'subcategory': glyph.subcategory if stage != 'coarse' else 'unspecified',
+                                'subcategory': glyph.subcategory if stage not in ('coarse', 'visual_base') else 'unspecified',
                             })
                     return found
 
@@ -488,6 +491,16 @@ def detect_page_sam3(
                         query_indices(list(range(len(glyphs))), 'flat', score_thr),
                         fine_family_limit,
                     )
+                elif prompt_plan.get('mode') == 'grouped':
+                    # Exactly one pass over all visually distinct base shapes.
+                    # Switch S3/$3/etc are NOT extra queries; component
+                    # semantics are attached analytically downstream.
+                    tile_dets = gate(
+                        query_indices(list(range(len(glyphs))), 'visual_base', score_thr),
+                        fine_family_limit,
+                    )
+                    if query_stats is not None:
+                        query_stats['grouped_visual_proposals'] += len(tile_dets)
                 else:
                     coarse = gate(
                         query_indices(prompt_plan['coarse_indices'], 'coarse', coarse_score_thr),
@@ -564,7 +577,11 @@ def main() -> None:
                     help='Disable local raster and preencoded-geometry caches for debugging')
     ap.add_argument('--catalog-only', action='store_true',
                     help='Audit selected NECA categories and prompts, then exit without loading a model/GPU')
-    ap.add_argument('--scan-mode', choices=['hierarchical', 'flat'], default='hierarchical',
+    ap.add_argument('--visual-audit-out', type=Path, default=None,
+                    help='Write JSON classification for every NECA source SVG (including ignored/modifier entries)')
+    ap.add_argument('--visual-prototypes-per-group', type=int, default=1,
+                    help='Use one clean representative per visibly distinct base silhouette by default')
+    ap.add_argument('--scan-mode', choices=['grouped', 'hierarchical', 'flat'], default='grouped',
                     help='Hierarchical shares each tile embedding across coarse-family and gated-subtype passes')
     ap.add_argument('--coarse-per-family', type=int, default=2)
     ap.add_argument('--fine-per-family', type=int, default=12,
@@ -612,18 +629,36 @@ def main() -> None:
             ap.error('--prompt-allowlist must be a nonempty JSON array of NECA IDs')
         allowlist = set(ids)
     try:
-        selected = choose_neca_prompts(
-            specs, per_subcategory=args.prompts_per_subcategory,
-            per_category=args.prompts_per_category, total=args.max_prompts,
-            allowlist=allowlist)
+        if args.scan_mode == 'grouped':
+            grouped_bank = [p for p in specs if
+                            allowlist is None or p.symbol_id in allowlist]
+            if allowlist is not None and len(grouped_bank) != len(allowlist):
+                ap.error('grouped allowlist includes unknown or excluded NECA IDs')
+            selected = choose_visual_base_prototypes(
+                grouped_bank, per_group=args.visual_prototypes_per_group)
+        else:
+            selected = choose_neca_prompts(
+                specs, per_subcategory=args.prompts_per_subcategory,
+                per_category=args.prompts_per_category, total=args.max_prompts,
+                allowlist=allowlist)
     except ValueError as exc:
         ap.error(str(exc))
+    if not selected:
+        ap.error('selected reference set empty (grouped mode excludes modifier/composite-only IDs)')
+    if args.visual_audit_out is not None:
+        all_entries = json.loads((args.neca_dir / 'symbols.json').read_text())['symbols']
+        args.visual_audit_out.parent.mkdir(parents=True, exist_ok=True)
+        args.visual_audit_out.write_text(json.dumps(
+            audit_neca_visual_groups(all_entries), indent=2,
+        ))
     chosen_counts = dict(Counter(g.category for g in selected))
     catalog_summary = {
         **catalog_report,
         'selected': len(selected),
         'selected_by_category': chosen_counts,
         'selected_subcategories': len({(g.category, g.subcategory) for g in selected}),
+        'selected_visual_groups': len({g.visual_group for g in selected}),
+        'selected_roles': dict(Counter(g.prompt_role for g in selected)),
         'prompt_budgets': {
             'per_subcategory': args.prompts_per_subcategory,
             'per_category': args.prompts_per_category,
@@ -685,7 +720,9 @@ def main() -> None:
                 (geo_feats, geo_masks, blank_tf, blank_tm),
             )
             print('Cached SAM visual geometry embeddings locally', flush=True)
-    if args.svg_dedup_sim < 1.0:
+    if args.scan_mode != 'grouped' and args.svg_dedup_sim < 1.0:
+        # Global cosine dedup can silently erase an entire visual group;
+        # grouped mode already deduplicates by *core silhouette* metadata.
         orig_n = len(glyphs)
         glyphs, geo_feats, geo_masks = deduplicate_svg_prompts(
             glyphs, geo_feats, geo_masks, sim_threshold=args.svg_dedup_sim,
@@ -697,7 +734,19 @@ def main() -> None:
             flush=True,
         )
     print(f'Pre-encoded {len(glyphs)} active SVG prompts in {time.time() - t_enc:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
+    if args.scan_mode == 'grouped':
+        missing_visual_groups = sorted(
+            {x.visual_group for x in selected} - {x.visual_group for x in glyphs}
+        )
+        print(f'SAM grouped coverage: {len({g.visual_group for g in glyphs})} '
+              f'active visual groups; {len(missing_visual_groups)} missing after raster screening',
+              flush=True)
+        if missing_visual_groups:
+            print('Dropped visual groups: '+', '.join(missing_visual_groups), flush=True)
     prompt_plan = None
+    if args.scan_mode == 'grouped':
+        prompt_plan = {'mode': 'grouped',
+                       'families': sorted({g.device_type for g in glyphs})}
     if args.scan_mode == 'hierarchical':
         try:
             prompt_plan = build_hierarchical_prompt_plan(
@@ -747,6 +796,8 @@ def main() -> None:
         'reference_quality': not args.no_reference_quality,
         'prompt_feature_cache_schema': 2,
         'scan_mode': args.scan_mode,
+        'visual_prototypes_per_group': args.visual_prototypes_per_group,
+        'active_visual_groups': [g.visual_group for g in glyphs],
         'coarse_per_family': args.coarse_per_family,
         'fine_per_family': args.fine_per_family,
         'coarse_score_thr': args.coarse_score_thr,
@@ -907,7 +958,10 @@ def main() -> None:
             'run_config_hash': run_config_hash,
             'query_stats': dict(pdf_query_stats),
             'device_family_vocabulary': prompt_plan['families'] if prompt_plan else sorted({g.device_type for g in glyphs}),
-            'coarse_fine_policy': 'family_proposal_then_gated_variant_evidence' if prompt_plan else 'all_prototypes',
+            'coarse_fine_policy': ('distinct_base_visual_groups_with_analytic_modifiers'
+                if args.scan_mode == 'grouped' else
+                'family_proposal_then_gated_variant_evidence'
+                if prompt_plan else 'all_prototypes'),
             'prompt_taxonomy': {
                 dtype: sorted({g.subtype for g in specs if g.device_type == dtype})
                 for dtype in sorted({g.device_type for g in specs})
