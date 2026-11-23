@@ -1,20 +1,19 @@
-"""GPU-accelerated SAM 3.1 + NECA 100-2013 SVG visual-prompt detector across all blueprint PDFs.
+"""Self-hosted SAM 3.1 provisional electrical-symbol proposals.
 
-Pre-encodes every NECA 100-2013 electrical symbol SVG's visual geometry prompt ONCE on
-startup using `unsloth/sam3.1` (FP16, ~2.2 GB VRAM), then encodes each non-blank
-1008x1008 blueprint tile ONCE and queries every NECA SVG one-by-one (batched in GPU
-mini-batches for speed with identical per-SVG results).
+Default: scan each distinct NECA base silhouette once per nonblank blueprint
+tile, without querying every compound switch/receptacle variant. Small switch
+suffix marks are matched locally and attached as provisional attributes to
+the SAME device bounding box. Keep all detected boxes/labels reviewable; never
+treat automatically generated proposals as exhaustive ground truth.
 
-Outputs one resume-safe `<stem>_<sha8>_SAM3.json` per PDF using the exact bottom-left
-PDF-point schema compatible with `scripts_circuitnet_review_sheets.py`.
+The tile image encoder runs once per tile and feeds batched exemplar-geometry
+queries. Reference rasters/embeddings and PDF resume outputs are stored locally.
+`--scan-mode flat` and `hierarchical` preserve explicit A/B controls.
+`--catalog-only --visual-audit-out ...` exports every NECA visual grouping.
 
-Usage:
-  python scripts_run_sam3_pdfs.py \
-      --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
-      --data-root ../data/blueprints_and_libraries \
-      --subdirs 1_blueprints \
-      --out ../work/sam3_proposals \
-      --dpi 150 --svg-batch 8 --score-thr 0.45
+Example:
+  python scripts_run_sam3_pdfs.py --neca-dir <NECA_Vector_Library> \\
+    --data-root <blueprint-root> --out <local-output>
 """
 from __future__ import annotations
 
