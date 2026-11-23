@@ -7,6 +7,8 @@ No pseudo-labels are emitted or treated as annotations.
 """
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 
 from .neca_svg_compositor import NecaSymbolBank, composite_neca_page
@@ -21,6 +23,9 @@ def compose_ssl_symbols(
     min_size_px: float = 12.0,
     max_size_px: float = 80.0,
     procedural_fraction: float = 0.25,
+    symbol_chaos_probability: float = 0.88,
+    symbol_chaos_strength: float = 1.0,
+    placement_chaos: float = 0.85,
 ) -> tuple[np.ndarray, dict]:
     """Composite 0..max_symbols randomly scaled glyphs on a source crop.
 
@@ -36,6 +41,10 @@ def compose_ssl_symbols(
         raise ValueError("invalid symbol size range")
     if not 0 <= procedural_fraction <= 1:
         raise ValueError("invalid procedural_fraction")
+    if not 0 <= symbol_chaos_probability <= 1 or not 0 <= symbol_chaos_strength <= 2:
+        raise ValueError("invalid symbol chaos controls")
+    if not 0 <= placement_chaos <= 1:
+        raise ValueError("placement_chaos must be in [0,1]")
     if clean.ndim != 3 or clean.shape[2] != 3 or clean.dtype != np.uint8:
         raise ValueError("expected uint8 BGR drawing crop")
 
@@ -44,9 +53,14 @@ def compose_ssl_symbols(
     if not requested:
         metadata["shortfall"] = 0
         metadata["placements"] = []
+        metadata["symbol_warp_operations"] = {}
+        metadata["placement_modes"] = {}
+        metadata["warped_symbols"] = 0
         return clean.copy(), metadata
 
     neca_count = int(rng.binomial(requested, 1 - procedural_fraction)) if neca_bank else 0
+    # Vary placement distribution *per drawing*, not only per symbol.
+    wall_fraction = float(rng.uniform(0.12, 0.88))
     proc_count = requested - neca_count
     page = clean.copy()
     instances = []
@@ -54,8 +68,11 @@ def compose_ssl_symbols(
     if neca_count:
         page, instances = composite_neca_page(
             {"instances": []}, page, neca_bank, rng,
-            per_page=neca_count, wall_fraction=0.55,
+            per_page=neca_count, wall_fraction=wall_fraction,
             size_px_range=(min_size_px, max_size_px), tag="ssl",
+            symbol_chaos_probability=symbol_chaos_probability,
+            symbol_chaos_strength=symbol_chaos_strength,
+            placement_chaos=placement_chaos,
         )
         metadata["neca"] = len(instances)
 
@@ -73,19 +90,37 @@ def compose_ssl_symbols(
             per_page=proc_count,
             scale_range=(min_size_px / 40.0, max_size_px / 40.0),
             max_ink=0.16, tag="ssl", stroke_match=True,
-            wall_fraction=0.55, canonical_classes=True,
+            wall_fraction=wall_fraction, canonical_classes=True,
+            symbol_chaos_probability=symbol_chaos_probability,
+            symbol_chaos_strength=symbol_chaos_strength,
+            placement_chaos=placement_chaos,
         )
         metadata["procedural"] = len(procedural)
 
     metadata["placed"] = metadata["neca"] + metadata["procedural"]
     metadata["shortfall"] = metadata["requested"] - metadata["placed"]
+    combined = [(inst, "neca_svg") for inst in instances]
+    combined.extend((inst, "procedural") for inst in (procedural if proc_count else []))
     metadata["placements"] = [
         {
             "symbol_family": inst["symbol_family"],
             "symbol_variant": inst["symbol_variant"],
             "bbox_xyxy": inst["bbox_xyxy"],
-            "generator": "neca_svg" if inst in instances else "procedural",
+            "generator": generator,
+            "symbol_chaos": inst.get("symbol_chaos", {}),
+            "placement_mode": inst["source"].get("placement_mode", "unknown"),
         }
-        for inst in [*instances, *(procedural if proc_count else [])]
+        for inst, generator in combined
     ]
+    warp_ops = Counter(
+        operation for inst, _ in combined
+        for operation in inst.get("symbol_chaos", {}).get("operations", [])
+    )
+    metadata["symbol_warp_operations"] = dict(warp_ops)
+    metadata["placement_modes"] = dict(Counter(
+        inst["source"].get("placement_mode", "unknown") for inst, _ in combined
+    ))
+    metadata["warped_symbols"] = sum(
+        bool(inst.get("symbol_chaos", {}).get("operations")) for inst, _ in combined
+    )
     return page, metadata
