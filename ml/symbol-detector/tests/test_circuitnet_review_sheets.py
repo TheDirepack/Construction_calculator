@@ -312,3 +312,30 @@ def test_sam3_visual_group_to_review_sheet_and_approved_pdf_roundtrip(tmp_path):
     assert device['review_source'] == 'human'
     assert not device['verified_ground_truth']
     assert device['symbol_bbox'] == [230, 220, 258, 250]
+
+
+
+def test_pdf_fallback_refuses_duplicate_filenames_across_projects(tmp_path):
+    from scripts_circuitnet_review_sheets import build_pdf_index, resolve_pdf_path
+    proj_a = tmp_path / 'project_a'
+    proj_b = tmp_path / 'project_b'
+    proj_a.mkdir()
+    proj_b.mkdir()
+    plan_a = proj_a / 'E1.pdf'
+    plan_b = proj_b / 'E1.pdf'
+    plan_a.write_bytes(b'pdf a')
+    plan_b.write_bytes(b'pdf b')
+    index = build_pdf_index(tmp_path)
+    assert index['e1.pdf'] is None
+    assert index['e1'] is None
+    unresolved = {'source_file': 'E1.pdf'}
+    assert resolve_pdf_path(unresolved, tmp_path, index) is None
+    # Explicit project-relative paths remain safe and authoritative.
+    selected = {'source_file': 'E1.pdf',
+                'source_pdf_relative': 'project_b/E1.pdf'}
+    assert resolve_pdf_path(selected, tmp_path, index) == plan_b
+    # A similarly named but unique source can still resolve by name.
+    unique = proj_a / 'E2.pdf'
+    unique.write_bytes(b'unique')
+    index = build_pdf_index(tmp_path)
+    assert resolve_pdf_path({'source_file': 'E2.pdf'}, tmp_path, index) == unique
