@@ -93,15 +93,18 @@ class PdfCropSampler:
         if min(width, height) < 72:
             raise ValueError("Invalid small/empty PDF drawing page")
 
-        # Four views of drafting context: detail, room-level, layout section,
-        # near-overview. A logarithmic subrange changes continuously on each
-        # visit, so even one giant drawing can supply thousands of new crops.
-        profiles = ((.035, .12), (.09, .27), (.24, .58), (.50, .98))
-        profile = int(rng.choice(4, p=(.28, .35, .28, .09)))
-        lo, hi = profiles[profile]
-        base = min(width, height)
-        span = float(base * np.exp(rng.uniform(math.log(lo), math.log(hi))))
-        span = max(12.0, min(span, base))
+        # Pick the *rendering* DPI, not a post-resize approximation. The
+        # physical PDF crop is size * 72 / dpi points on each side. For a 512
+        # pixel crop this spans ~369pt at 100dpi down to ~92pt at 400dpi.
+        # A too-small PDF page can require higher than 100dpi to fit the
+        # square; do not shrink/pad it and then mislabel its physical scale.
+        dpi_min = max(100.0, size * 72.0 / min(width, height))
+        if dpi_min > 400.0:
+            raise ValueError("PDF page too small for requested 100..400 DPI square")
+        requested_dpi = float(rng.uniform(dpi_min, 400.0))
+        span = float(size * 72.0 / requested_dpi)
+        # Detailed views naturally occur at high DPI, broader views at low DPI.
+        profile = int(np.clip(np.searchsorted((150, 225, 325), requested_dpi), 0, 3))
         max_x = max(0., width - span)
         max_y = max(0., height - span)
 
@@ -134,7 +137,7 @@ class PdfCropSampler:
         import fitz
         clip = fitz.Rect(bounds.x0+x, bounds.y0+y,
                          bounds.x0+x+span, bounds.y0+y+span)
-        zoom = size / span
+        zoom = requested_dpi / 72.0
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom),
                               clip=clip, colorspace=fitz.csRGB, alpha=False)
         if pix.n != 3 or pix.width <= 0 or pix.height <= 0:
@@ -150,7 +153,10 @@ class PdfCropSampler:
         return bgr, {
             "pdf_page_index": page_index,
             "clip_rect_pt": [round(v, 3) for v in (x, y, x + span, y + span)],
-            "effective_dpi": round(72 * zoom, 1),
+            "effective_dpi": round(requested_dpi, 3),
+            "requested_dpi": round(requested_dpi, 3),
+            "dpi_range": [100, 400],
+            "physical_crop_size_points": round(span, 5),
             "profile": profile, "placement": placement,
             "thumbnail_ink_fraction": round(ink, 5),
         }
