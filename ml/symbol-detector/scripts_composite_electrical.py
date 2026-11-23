@@ -112,7 +112,14 @@ def estimate_stroke(gray: np.ndarray) -> float:
 def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, per_page: int,
                    scale_range: tuple[float, float], max_ink: float, tag: str,
                    stroke_match: bool = True, wall_fraction: float = 0.6,
-                   canonical_classes: bool = False) -> tuple[np.ndarray, list[dict]]:
+                   canonical_classes: bool = False,
+                   symbol_chaos_probability: float = 0.0,
+                   symbol_chaos_strength: float = 1.0,
+                   placement_chaos: float = 0.0) -> tuple[np.ndarray, list[dict]]:
+    from blueprint_symbols.symbol_chaos import distort_symbol_alpha, sample_free_origin
+
+    if not 0 <= placement_chaos <= 1:
+        raise ValueError("placement_chaos must be in [0,1]")
     page = image.copy()
     h, w = page.shape[:2]
     gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
@@ -127,12 +134,18 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
     occupied = [list(map(float, i['bbox_xyxy'])) for i in doc['instances']]
     placed = []
     attempts = 0
+    wall_probability = (
+        float(rng.uniform(.10, .90))
+        if placement_chaos and rng.random() < placement_chaos else wall_fraction
+    )
     while len(placed) < per_page and attempts < per_page * 50:
         attempts += 1
         family, variant, rgba, anchors = sample_glyph(rng)
         scale = base * float(np.exp(rng.uniform(*np.log(scale_range))))
 
-        want_wall = bool(wall_sites) and (rng.random() < wall_fraction)
+        want_wall = bool(wall_sites) and (rng.random() < wall_probability)
+        chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
+        placement_mode = "wall" if want_wall else "uniform"
         if want_wall:
             wx, wy, nx, ny = wall_sites[wall_cursor % len(wall_sites)]
             wall_cursor += 1
@@ -149,6 +162,24 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
             if 'wall_attachment' not in anchors_with_contact:
                 anchors_with_contact['wall_attachment'] = (0.5, 1.0)
             glyph, pts = rotate_glyph(rgba, anchors_with_contact, angle, scale)
+            if symbol_chaos_probability:
+                old_h, old_w = glyph.shape[:2]
+                warped, chaos_details = distort_symbol_alpha(
+                    glyph[:, :, 3], rng, probability=symbol_chaos_probability,
+                    strength=symbol_chaos_strength,
+                )
+                gh, gw = warped.shape
+                glyph = np.zeros((gh, gw, 4), dtype=np.uint8)
+                glyph[:, :, 3] = warped
+                pts = {key: (px * gw / old_w, py * gh / old_h)
+                       for key, (px, py) in pts.items()}
+                # For warped wall-mounted symbols, use the new outer edge as
+                # the approximate physical contact point, never the distorted
+                # interior of the mask.
+                anchor = ((gw / 2, gh) if ny == -1 else
+                          (gw / 2, 0) if ny == 1 else
+                          (gw, gh / 2) if nx == -1 else (0, gh / 2))
+                pts["wall_attachment"] = anchor
             gh, gw = glyph.shape[:2]
             if gw + 4 >= w or gh + 4 >= h:
                 continue
@@ -160,11 +191,27 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
         else:
             angle = float(rng.choice([0, 90, 180, 270])) if rng.random() < .8 else float(rng.uniform(-180, 180))
             glyph, pts = rotate_glyph(rgba, anchors, angle, scale)
+            if symbol_chaos_probability:
+                old_h, old_w = glyph.shape[:2]
+                warped, chaos_details = distort_symbol_alpha(
+                    glyph[:, :, 3], rng, probability=symbol_chaos_probability,
+                    strength=symbol_chaos_strength,
+                )
+                gh, gw = warped.shape
+                glyph = np.zeros((gh, gw, 4), dtype=np.uint8)
+                glyph[:, :, 3] = warped
+                pts = {key: (px * gw / old_w, py * gh / old_h)
+                       for key, (px, py) in pts.items()}
             gh, gw = glyph.shape[:2]
             if gw + 4 >= w or gh + 4 >= h:
                 continue
-            x = int(rng.integers(2, w - gw - 2))
-            y = int(rng.integers(2, h - gh - 2))
+            if placement_chaos and gw + 10 < w and gh + 10 < h:
+                x, y, placement_mode = sample_free_origin(
+                    rng, (h, w), (gh, gw), occupied, chaos=placement_chaos,
+                )
+            else:
+                x = int(rng.integers(2, w - gw - 2))
+                y = int(rng.integers(2, h - gh - 2))
 
         alpha = glyph[:, :, 3].astype(np.float32) / 255
         ys, xs = np.nonzero(alpha > .1)
@@ -211,8 +258,9 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
             'target_vector': target_vec,
             'anchors': out_anchors,
             'rotation_degrees_image': angle,
+            'symbol_chaos': chaos_details,
             'source': {'kind': 'synthetic_composite', 'label_method': 'known_placement_transform',
-                       'glyph_scale': scale, 'placement_mode': 'wall_touching' if want_wall else 'free_space'},
+                       'glyph_scale': scale, 'placement_mode': 'wall_touching' if want_wall else placement_mode},
         })
     return page, placed
 
