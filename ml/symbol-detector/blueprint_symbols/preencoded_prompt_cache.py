@@ -87,3 +87,31 @@ def save_prompt_features(
     tmp = path.with_name(f'{path.stem}.{os.getpid()}.tmp.pt')
     torch.save({'schema': _CACHE_SCHEMA, 'features': saved}, str(tmp))
     tmp.replace(path)
+
+
+
+def resolve_model_weight_identity(model_id: str, commit_hash: str | None) -> str | None:
+    """Fingerprint checkpoint revision without reading multi-GB weight tensors.
+
+    Remote Hugging Face checkpoints use the hub's immutable commit hash.
+    A local checkpoint path uses weight-file metadata; its .safetensors
+    and/or .bin files must be present. If revision cannot be identified,
+    the caller must NOT reuse encoded prompt features.
+    """
+    if commit_hash:
+        return str(commit_hash)
+    path = Path(model_id)
+    if not path.is_dir():
+        return None
+    files = sorted(list(path.glob('*.safetensors')) +
+                   list(path.glob('*.bin')) +
+                   list(path.glob('*.safetensors.index.json')))
+    if not files:
+        return None
+    fingerprint = hashlib.sha256()
+    for file in files:
+        stat = file.stat()
+        fingerprint.update(file.name.encode('utf-8'))
+        fingerprint.update(str(stat.st_size).encode('ascii'))
+        fingerprint.update(str(stat.st_mtime_ns).encode('ascii'))
+    return 'local-stat-' + fingerprint.hexdigest()
