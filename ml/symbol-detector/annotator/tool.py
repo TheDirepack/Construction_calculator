@@ -16,7 +16,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -32,26 +34,43 @@ from annotator.model import Sheet, Instance, RotatedBox, SnapVector, discipline_
 from annotator.snapping import apply_snap_shrink
 
 
-def render_pdf_page(pdf_path: Path, page_index: int, dpi: int = 150) -> tuple[np.ndarray, Path]:
-    doc = fitz.open(str(pdf_path))
-    if page_index < 0 or page_index >= len(doc):
-        raise ValueError(f"Page index {page_index} out of range (0-{len(doc)-1})")
-    page = doc[page_index]
-    zoom = dpi / 72.0
-    mat = fitz.Matrix(zoom, zoom)
-    pix = page.get_pixmap(matrix=mat)
-    img_data = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-    if pix.n == 4:
-        img = cv2.cvtColor(img_data, cv2.COLOR_RGBA2BGR)
-    elif pix.n == 3:
-        img = cv2.cvtColor(img_data, cv2.COLOR_RGB2BGR)
-    else:
-        img = cv2.cvtColor(img_data, cv2.COLOR_GRAY2BGR)
-    
-    out_dir = Path("/tmp/opencode/annotator_cache")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    img_path = out_dir / f"{pdf_path.stem}_p{page_index}.png"
-    cv2.imwrite(str(img_path), img)
+def render_pdf_page(pdf_path: Path, page_index: int, dpi: int = 150,
+                    cache_dir: Path | None = None) -> tuple[np.ndarray, Path]:
+    """Render a page into a deterministic, output-relative local image cache.
+
+    The old hardcoded /tmp/opencode cache collided across same-named PDFs and
+    produced absolute paths that were not portable with the annotation JSON.
+    """
+    pdf_path = Path(pdf_path).resolve()
+    if dpi < 30 or dpi > 600:
+        raise ValueError("DPI must be between 30 and 600")
+    with fitz.open(str(pdf_path)) as doc:
+        if page_index < 0 or page_index >= len(doc):
+            raise ValueError(f"Page index {page_index} out of range (0-{len(doc)-1})")
+        page = doc[page_index]
+        zoom = dpi / 72.0
+        if page.rect.width * zoom * page.rect.height * zoom > 30_000_000:
+            zoom = (30_000_000 / (page.rect.width * page.rect.height)) ** .5
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        data = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+        if pix.n == 4:
+            img = cv2.cvtColor(data, cv2.COLOR_RGBA2BGR)
+        elif pix.n == 3:
+            img = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
+        else:
+            img = cv2.cvtColor(data, cv2.COLOR_GRAY2BGR)
+
+    output = Path(cache_dir).resolve() if cache_dir else Path.cwd() / ".annotator_cache"
+    output.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    with pdf_path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    source_digest = digest.hexdigest()[:12]
+    safe_stem = "".join(c if c.isalnum() or c in "_-" else "_" for c in pdf_path.stem)[:48]
+    img_path = output / f"{safe_stem}_{source_digest}_p{page_index + 1:04d}_{dpi}dpi.png"
+    if not cv2.imwrite(str(img_path), img):
+        raise OSError(f"Could not render {img_path}")
     return img, img_path
 
 
@@ -85,8 +104,10 @@ def main():
             print(f"Error: PDF file {args.pdf} not found", file=sys.stderr)
             sys.exit(1)
         print(f"Rendering PDF {args.pdf} page {args.page}...")
-        img, img_path = render_pdf_page(args.pdf, args.page)
-        rel_img_path = img_path.relative_to(Path.cwd()) if img_path.is_relative_to(Path.cwd()) else img_path
+        img, img_path = render_pdf_page(
+            args.pdf, args.page, cache_dir=args.output.parent / "images"
+        )
+        rel_img_path = img_path.relative_to(args.output.parent.resolve())
         sheet = Sheet(
             source_id=args.pdf.stem,
             document_id=args.pdf.name,
@@ -94,18 +115,35 @@ def main():
             image_path=str(rel_img_path),
             image_width=img.shape[1],
             image_height=img.shape[0],
+            image_sha256=hashlib.sha256(img_path.read_bytes()).hexdigest(),
             project_family_id=args.pdf.stem,
+            extra={
+                "exhaustive_families": [],
+                "annotation_completeness_verified": False,
+                "annotation_completeness": "partial",
+                "annotation_scope": "positive_only",
+            },
         )
         print(f"Created new sheet: {sheet.image_width}x{sheet.image_height} px")
     else:
         parser.error("Provide either --pdf or --edit")
 
     # Load image for snapping / preview
-    img_full_path = (Path(args.edit).parent / sheet.image_path) if args.edit else Path(sheet.image_path)
+    origin_dir = args.edit.parent if args.edit else args.output.parent
+    img_full_path = (origin_dir / sheet.image_path).resolve()
     if not img_full_path.exists() and args.pdf:
-        img_full_path, _ = render_pdf_page(args.pdf, args.page)
-    
+        _, img_full_path = render_pdf_page(
+            args.pdf, args.page, cache_dir=args.output.parent / "images"
+        )
+
     img = cv2.imread(str(img_full_path)) if img_full_path.exists() else None
+    if img is not None and (img.shape[1], img.shape[0]) != (
+            sheet.image_width, sheet.image_height):
+        raise ValueError("Rendered image dimensions differ from annotation sheet")
+    if img is not None and sheet.image_sha256:
+        observed = hashlib.sha256(img_full_path.read_bytes()).hexdigest()
+        if observed != sheet.image_sha256:
+            raise ValueError("Image checksum differs from the annotated raster")
 
     # Load walls if provided
     walls = []
@@ -163,9 +201,24 @@ def main():
             inst.snap = snap
             print(f"  Instance {inst.instance_id}: snap kind={snap.get('kind')}, note={snap.get('note')}")
 
-    # Save output
+    # Any label or snap change invalidates the prior whole-page coverage
+    # audit. The CLI, like the browser editor, cannot infer absent devices.
+    if any((args.classify, args.add_box, args.rotate,
+            args.snap_vector, args.run_snap)):
+        sheet.extra.update({
+            "exhaustive_families": [],
+            "annotation_completeness_verified": False,
+            "annotation_completeness": "partial",
+            "annotation_scope": "positive_only",
+        })
+
+    # Existing annotation files may be saved to another folder. Rebase
+    # the image reference so a new JSON never points at the wrong raster.
+    if img_full_path.is_file():
+        sheet.image_path = os.path.relpath(img_full_path, args.output.parent.resolve())
+    # Save output atomically (Sheet.save handles interrupted writes).
     sheet.save(args.output)
-    print(f"Successfully saved updated annotations to [annotation_output.json]({args.output.resolve()})")
+    print(f"Successfully saved updated annotations to {args.output.resolve()}")
 
 
 if __name__ == "__main__":

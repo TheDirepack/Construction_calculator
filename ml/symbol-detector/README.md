@@ -58,6 +58,59 @@ optional library (ezdxf, PyMuPDF, cairosvg) is missing.
 
 Install `ultralytics` separately on your 6 GB NVIDIA training machine. Ensure its release has `yolo26n-p2.yaml`; the P2 model is official, with stride-4 small-object detection. Install a CUDA-enabled PyTorch build for that GPU. The package does **not** download generic pretrained weights. See [Ultralytics P2 model YAML](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/cfg/models/26/yolo26-p2.yaml).
 
+## Manual labeling / SAM proposal review (local browser UI)
+
+The prior `annotator/tool.py` was a **command-line modifier**, not a
+graphical editor. For manual training labels, use the browser editor instead.
+It runs locally with only the existing CPU-side PyMuPDF dependencies and
+never calls an external annotation service:
+
+```bash
+cd ml/symbol-detector
+python -m pip install -r requirements-test.txt
+
+# Label PDF pages directly; a separate JSON + source raster is saved per page.
+python -m annotator.web --pdf /path/to/electrical_plan.pdf \
+  --out-dir annotated/electrical_plan --open-browser
+
+# Or inspect and correct untrusted SAM3 proposals against the source PDF:
+python -m annotator.web --pdf /path/to/electrical_plan.pdf \
+  --proposals /path/to/scanned_SAM3.json \
+  --out-dir annotated/electrical_plan --open-browser
+
+# Open a single existing annotation JSON and its paired image:
+python -m annotator.web --edit annotated/electrical_plan/electrical_plan_p0001.json \
+  --open-browser
+```
+
+The editor supports zoom at cursor, pan, drag-to-draw, move, corner resize,
+rotation, family/variant editing, spatial label list, pending/verified filter,
+individual verify/reject with audit history, undo/redo, and page navigation.
+Keyboard: `B` box, `V` select, hold Space to pan, `A` verify, `X` reject,
+`N` next pending, Ctrl+Z/Y undo/redo, Ctrl+S save, `[`/`]` pages, `0` fit.
+Leaving a page with unsaved edits requires explicit confirmation.
+
+**Review and safety:** Imported model proposals start `uncertain=true`,
+`verified_ground_truth=false`, and `review_status=unreviewed`. Only an
+explicit human Verify action promotes a box to a verified positive; Rejected
+proposals are moved to `rejected_proposals` and are **not** active labels.
+Manually drawn boxes also begin as drafts and require explicit
+verification of the class before becoming trusted positives; Box mode remains
+active for rapid consecutive drawings. **No page is automatically
+complete/exhaustive**, even when every proposal was reviewed
+or a page contains no devices. Editing an already attested page revokes
+previous completeness claims; re-attest separately after a whole-page audit.
+These positive-only JSONs are **not eligible for the standard exhaustive YOLO
+export until coverage is independently attested**.
+
+Images remain at the original rendered-page pixel coordinates; SAM PDF-point
+boxes are converted from PDF bottom-left to image top-left coordinates.
+The service binds only to `127.0.0.1`, requires a session token for edits,
+writes JSON atomically, and refuses stale revisions, mismatched PDF/image
+identities, invalid boxes or duplicate IDs. Cached rasters and JSON outputs
+are stored in `--out-dir`. For an unattended remote machine, use an SSH local
+port forward rather than binding the server to a public interface.
+
 ## 1. Import and normalize source annotations
 
 Keep source images, annotations, and generated datasets in local storage. Use the

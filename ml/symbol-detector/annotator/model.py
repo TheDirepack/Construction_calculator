@@ -19,6 +19,8 @@ from dataclasses import dataclass, field, asdict
 from typing import Any
 import math
 import json
+import os
+import tempfile
 
 
 FAMILY_DISCIPLINES: dict[str, str] = {
@@ -126,6 +128,9 @@ class Instance:
     is_truncated: bool = False
     is_occluded: bool = False
     uncertain: bool = False
+    # Preserve proposal provenance / review status and future annotation keys
+    # when a JSON file passes through the existing CLI after browser review.
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @property
     def discipline(self) -> str:
@@ -154,10 +159,18 @@ class Instance:
             d["snap"] = self.snap
         if self.snap_vector is not None:
             d["snap_vector"] = self.snap_vector.to_dict()
+        d.update(self.extra)
         return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Instance":
+        known = {
+            "instance_id", "symbol_family", "symbol_variant", "discipline",
+            "device_type", "bbox_xyxy", "bbox_rotated", "attributes_from_text",
+            "rotation_degrees", "is_truncated", "is_occluded", "uncertain",
+            "anchors", "snap", "snap_vector",
+        }
+        extra = {k: v for k, v in d.items() if k not in known}
         if "bbox_rotated" in d:
             rb = d["bbox_rotated"]
             box = RotatedBox(float(rb["cx"]), float(rb["cy"]), float(rb["w"]),
@@ -171,7 +184,7 @@ class Instance:
                             (float(s["direction"][0]), float(s["direction"][1])))
         return cls(
             instance_id=str(d["instance_id"]),
-            symbol_family=str(d.get("symbol_family", "unknown_symbol")),
+            symbol_family=str(d.get("symbol_family") or d.get("device_type") or "unknown_symbol"),
             symbol_variant=str(d.get("symbol_variant", "unspecified")),
             box=box,
             anchors=dict(d.get("anchors", {})),
@@ -181,6 +194,7 @@ class Instance:
             is_truncated=bool(d.get("is_truncated", False)),
             is_occluded=bool(d.get("is_occluded", False)),
             uncertain=bool(d.get("uncertain", False)),
+            extra=extra,
         )
 
 
@@ -247,4 +261,16 @@ class Sheet:
 
     def save(self, path) -> None:
         from pathlib import Path
-        Path(path).write_text(json.dumps(self.to_dict(), indent=2))
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        encoded = (json.dumps(self.to_dict(), indent=2) + "\n").encode("utf-8")
+        fd, temp = tempfile.mkstemp(prefix="." + path.name + ".", suffix=".tmp", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp, path)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
