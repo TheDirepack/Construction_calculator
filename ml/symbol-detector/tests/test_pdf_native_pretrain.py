@@ -413,8 +413,12 @@ def test_reused_labeled_raster_preserves_existing_device_pixels(tmp_path):
         labeled_focus_probability=1., return_metadata=True,
     )
     crops = []
+    accepted = 0
+    cache_hits = 0
     for index in range(12):
         _, clean, _, meta = dataset[index]
+        accepted += meta["symbol_stats"]["placed"]
+        cache_hits += bool(meta["base_crop"]["clean_crop_cache_hit"])
         raw = sample_label_guided_crop(
             img, 128, np.random.default_rng(meta["base_crop"]["seed"]),
             entry["boxes"], focus_probability=1.,
@@ -425,3 +429,6 @@ def test_reused_labeled_raster_preserves_existing_device_pixels(tmp_path):
         assert np.all(clean_bgr <= raw + 0)  # uint8 cannot overflow in this comparison.
         crops.append(meta["base_crop"]["seed"])
     assert len(set(crops)) == 1
+    assert accepted > 0
+    assert cache_hits >= 11
+    assert len(dataset._raster_crop_cache) == 1
