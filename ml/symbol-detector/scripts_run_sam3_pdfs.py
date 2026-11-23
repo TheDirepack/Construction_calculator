@@ -1160,10 +1160,25 @@ def main() -> None:
         finally:
             doc.close()
 
+        # The preview/review agent must use the SAME PDF revision that
+        # produced these boxes. Refuse an output if the source changed while
+        # the long-running inference was reading it.
+        finished_stat = pdf_path.stat()
+        if (finished_stat.st_size != source_stat.st_size or
+                finished_stat.st_mtime_ns != source_stat.st_mtime_ns):
+            raise RuntimeError(
+                f'source PDF changed during SAM inference: {pdf_path}; '
+                'discarding provisional detections for this run'
+            )
+
         payload = {
             'source_file': pdf_path.name,
             'source_pdf_relative': rel,
             'source_pdf_absolute': str(pdf_path),
+            'source_pdf_stat': {
+                'size_bytes': source_stat.st_size,
+                'mtime_ns': source_stat.st_mtime_ns,
+            },
             'model': f'{args.model_id} + NECA_100_2013_Vector_SVG ({len(glyphs)} visual prompts)',
             'status': 'provisional_detections_for_refinement',
             'render_dpi': args.dpi,
