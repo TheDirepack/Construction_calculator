@@ -10,6 +10,7 @@ from blueprint_symbols.reference_quality import reference_quality_reason
 from blueprint_symbols.neca_prompt_catalog import SamNecaPrompt, load_neca_sam_prompts
 from blueprint_symbols.preencoded_prompt_cache import (
     prompt_feature_cache_path, save_prompt_features, load_prompt_features,
+    resolve_model_weight_identity,
 )
 from blueprint_symbols.sam_precision_profile import (
     load_family_thresholds, threshold_for_family, validate_family_thresholds,
@@ -114,3 +115,29 @@ def test_exterior_circuit_label_trim_preserves_core_and_internal_letter():
         alpha, 'luminaire.track')
     assert changed is False
     np.testing.assert_array_equal(untrimmed, alpha)
+
+
+
+def test_local_sam_weights_identity_changes_when_checkpoint_replaced(tmp_path):
+    assert resolve_model_weight_identity('remote/sam3', None) is None
+    assert resolve_model_weight_identity(str(tmp_path), None) is None
+    assert resolve_model_weight_identity(str(tmp_path), 'hub-sha-123') == 'hub-sha-123'
+    first = tmp_path / 'model-00001-of-00002.safetensors'
+    first.write_bytes(b'checkpoint-v1')
+    identity_v1 = resolve_model_weight_identity(str(tmp_path), None)
+    assert identity_v1.startswith('local-stat-')
+    assert resolve_model_weight_identity(str(tmp_path), None) == identity_v1
+    first.write_bytes(b'checkpoint-replacement-v2')
+    identity_v2 = resolve_model_weight_identity(str(tmp_path), None)
+    assert identity_v2 != identity_v1
+    # The feature cache path must be invalidated when weights are replaced.
+    glyph = type('Glyph', (), {
+        'symbol_id': 'x', 'alpha': np.ones((5, 5), dtype=np.uint8)
+    })()
+    kwargs = dict(model_id=str(tmp_path), model_config='{}',
+                  dtype=torch.float32, target_px=44)
+    assert prompt_feature_cache_path(
+        tmp_path, [glyph], model_revision=identity_v1, **kwargs
+    ) != prompt_feature_cache_path(
+        tmp_path, [glyph], model_revision=identity_v2, **kwargs
+    )
