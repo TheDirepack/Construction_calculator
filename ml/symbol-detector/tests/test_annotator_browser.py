@@ -192,3 +192,367 @@ def test_browser_sam_class_alternative_is_not_automatically_verified(tmp_path):
         server.shutdown()
         server.server_close()
         worker.join(timeout=10)
+
+
+def test_browser_import_requires_source_match_and_unverifies(tmp_path):
+    """Mismatched-image imports cannot silently preserve human verification."""
+    from PIL import Image
+
+    image = tmp_path / "sheet.png"
+    Image.new("RGB", (400, 300), (245, 245, 245)).save(image)
+    annotations = tmp_path / "page.json"
+    annotations.write_text(json.dumps({
+        "image_path": "sheet.png", "image_width": 400, "image_height": 300,
+        "coordinate_system": "original_page_pixels_top_left_y_down", "instances": [],
+    }))
+    imported = tmp_path / "different_sheet.json"
+    imported.write_text(json.dumps({
+        "image_sha256": "0" * 64, "image_width": 400, "image_height": 300,
+        "coordinate_system": "original_page_pixels_top_left_y_down",
+        "instances": [{
+            "instance_id": "imported_1", "symbol_family": "receptacle",
+            "symbol_variant": "duplex", "bbox_xyxy": [115.0, 108.0, 145.0, 138.0],
+            "review_status": "accepted", "review_source": "human",
+            "verified_ground_truth": True, "uncertain": False,
+        }],
+        "rejected_proposals": [{
+            "instance_id": "rejected_1", "symbol_family": "switch",
+            "symbol_variant": "unspecified", "bbox_xyxy": [200.0, 200.0, 230.0, 230.0],
+            "review_status": "rejected", "review_source": "human",
+            "uncertain": True, "verified_ground_truth": False,
+        }],
+    }))
+
+    session = LabelingSession(edit=annotations)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1300, "height": 850})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function(
+                    "() => document.querySelector('#count')?.textContent?.includes('0 active')"
+                )
+                page.once("dialog", lambda dialog: dialog.dismiss())
+                page.locator("#importJsonFile").set_input_files(str(imported))
+                assert "0 active" in page.locator("#count").inner_text()
+
+                page.once("dialog", lambda dialog: dialog.accept())
+                page.locator("#importJsonFile").set_input_files(str(imported))
+                page.wait_for_function(
+                    "() => document.querySelector('#count')?.textContent?.includes('1 pending')"
+                )
+                assert "0 verified" in page.locator("#count").inner_text()
+                page.locator("#save").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#dirty').textContent === 'Saved'"
+                )
+                saved = json.loads(annotations.read_text())
+                assert saved["instances"][0]["review_status"] == "unreviewed"
+                assert saved["instances"][0]["review_source"] == "import"
+                assert saved["instances"][0]["verified_ground_truth"] is False
+                assert saved["instances"][0]["uncertain"] is True
+                assert saved["rejected_proposals"] == []
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
+
+
+def test_browser_invalid_import_keeps_current_verified_labels(tmp_path):
+    from PIL import Image
+    from annotator.web import sha256_file
+
+    image = tmp_path / "plan.png"
+    Image.new("RGB", (400, 300), (245, 245, 245)).save(image)
+    active = tmp_path / "labels.json"
+    active.write_text(json.dumps({
+        "image_path": image.name, "image_width": 400, "image_height": 300,
+        "coordinate_system": "original_page_pixels_top_left_y_down",
+        "instances": [{
+            "instance_id": "old_1", "symbol_family": "receptacle",
+            "symbol_variant": "duplex", "bbox_xyxy": [100, 100, 130, 130],
+            "review_status": "accepted", "review_source": "human",
+            "verified_ground_truth": True, "uncertain": False,
+        }],
+    }))
+    incoming = tmp_path / "incoming.json"
+    header = {"image_sha256": sha256_file(image), "image_width": 400,
+              "image_height": 300, "coordinate_system": "original_page_pixels_top_left_y_down"}
+    valid = {"instance_id": "new_1", "symbol_family": "receptacle",
+             "symbol_variant": "duplex", "bbox_xyxy": [140, 140, 170, 170],
+             "review_status": "unreviewed", "review_source": "import",
+             "verified_ground_truth": False, "uncertain": True,
+             "device_attributes": {"voltage_v": 120, "gfci": True}}
+    session = LabelingSession(edit=active)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    original_bytes = active.read_bytes()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1300, "height": 850})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function("() => document.querySelector('#count')?.textContent?.includes('1 active')")
+                assert "1 verified" in page.locator("#count").inner_text()
+                for instances, expected in [
+                    ([valid, dict(valid)], "unique"),
+                    ([dict(valid, device_attributes={"voltage_v": -4})], "device_attributes"),
+                    ([dict(valid, bbox_xyxy=[-1, 140, 170, 170])], "bbox"),
+                ]:
+                    incoming.write_text(json.dumps(dict(header, instances=instances)))
+                    page.locator("#importJsonFile").set_input_files(str(incoming))
+                    page.wait_for_function(
+                        "part => document.querySelector('#message')?.textContent?.includes(part)", arg=expected
+                    )
+                    assert "1 verified" in page.locator("#count").inner_text()
+                    assert page.locator("#dirty").inner_text() == "Saved"
+                    assert active.read_bytes() == original_bytes
+                incoming.write_text(json.dumps(dict(header, instances=[valid])))
+                page.locator("#importJsonFile").set_input_files(str(incoming))
+                page.wait_for_function("() => document.querySelector('#count')?.textContent?.includes('1 pending')")
+                assert "0 verified" in page.locator("#count").inner_text()
+                page.locator("#save").click()
+                page.wait_for_function("() => document.querySelector('#dirty').textContent === 'Saved'")
+                saved = json.loads(active.read_text())
+                assert saved["instances"][0]["instance_id"] == "new_1"
+                assert saved["instances"][0]["device_attributes"] == {"voltage_v": 120, "gfci": True}
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
+
+
+def test_browser_draft_restore_rejects_different_source_even_with_null_revision(tmp_path):
+    document = fitz.open()
+    document.new_page(width=400, height=300).draw_rect(
+        fitz.Rect(80, 80, 120, 120), color=(0, 0, 0)
+    )
+    pdf = tmp_path / "plan.pdf"
+    document.save(pdf)
+    document.close()
+    session = LabelingSession(pdf=pdf, out_dir=tmp_path / "labels", dpi=144)
+    state = session.page_state(0)
+    assert state["revision"] is None
+    source_doc = state["document"]
+    key = "blueprint_labeler_draft::" + state["json_path"]
+    box = {"instance_id": "draft_1", "symbol_family": "receptacle",
+           "symbol_variant": "duplex", "bbox_xyxy": [120, 100, 145, 125],
+           "review_status": "unreviewed", "review_source": "manual_draft",
+           "verified_ground_truth": False, "uncertain": True}
+    draft = {"revision": None, "image_sha256": "0" * 64,
+             "source_pdf_sha256": source_doc["source_pdf_sha256"],
+             "image_width": source_doc["image_width"],
+             "image_height": source_doc["image_height"],
+             "coordinate_system": source_doc["coordinate_system"],
+             "instances": [box], "rejected_proposals": []}
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1300, "height": 850})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function("() => document.querySelector('#count')?.textContent?.includes('0 active')")
+                def set_draft(payload):
+                    page.evaluate(
+                        "({key, payload}) => localStorage.setItem(key, JSON.stringify(payload))",
+                        {"key": key, "payload": payload}
+                    )
+                set_draft(draft)
+                page.reload()
+                page.wait_for_function("() => document.querySelector('#count')?.textContent?.includes('0 active')")
+                assert page.locator("#draftBanner").is_hidden()
+                page.evaluate("() => document.querySelector('#restoreDraftBtn').click()")
+                page.wait_for_function(
+                    "() => document.querySelector('#message')?.textContent?.includes('cannot be restored')"
+                )
+                assert "0 active" in page.locator("#count").inner_text()
+                assert page.evaluate("key => !!localStorage.getItem(key)", key)
+                set_draft(dict(draft, image_sha256=source_doc["image_sha256"]))
+                page.reload()
+                page.wait_for_function("() => document.querySelector('#count')?.textContent?.includes('0 active')")
+                assert page.locator("#draftBanner").is_visible()
+                page.locator("#restoreDraftBtn").click()
+                page.wait_for_function("() => document.querySelector('#count')?.textContent?.includes('1 pending')")
+                assert "0 verified" in page.locator("#count").inner_text()
+                assert not (tmp_path / "labels" / "plan_p0001.json").exists()
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
+
+
+def test_browser_verified_label_demoted_after_semantic_edits(tmp_path):
+    """Changing a previously reviewed target must require a fresh human acceptance."""
+    from PIL import Image
+    image = tmp_path / "plan.png"
+    Image.new("RGB", (400, 300), (245, 245, 245)).save(image)
+    annotations = tmp_path / "page.json"
+    annotations.write_text(json.dumps({
+        "image_path": image.name, "image_width": 400, "image_height": 300,
+        "coordinate_system": "original_page_pixels_top_left_y_down",
+        "instances": [{
+            "instance_id": "verified_1",
+            "symbol_family": "receptacle", "symbol_variant": "duplex",
+            "bbox_xyxy": [100, 100, 140, 140], "review_status": "accepted",
+            "review_source": "human", "verified_ground_truth": True, "uncertain": False,
+        }],
+    }))
+    session = LabelingSession(edit=annotations)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1420, "height": 900})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function(
+                    "() => document.querySelector('#count')?.textContent?.includes('1 verified')"
+                )
+                page.locator("#items button").first.click()
+                page.locator("#x0").fill("105")
+                page.locator("#x0").press("Tab")
+                assert "1 pending" in page.locator("#count").inner_text()
+                page.locator("#undo").click()
+                assert "1 verified" in page.locator("#count").inner_text()
+
+                page.locator("#angle").fill("25")
+                page.locator("#angle").press("Tab")
+                assert "1 pending" in page.locator("#count").inner_text()
+                page.locator("#accept").click()
+                assert "1 verified" in page.locator("#count").inner_text()
+
+                page.locator("#family").fill("switch")
+                page.locator("#family").press("Tab")
+                assert page.locator("#variant").input_value() == "unspecified"
+                assert "1 pending" in page.locator("#count").inner_text()
+                page.locator("#accept").click()
+                assert "1 verified" in page.locator("#count").inner_text()
+
+                page.locator("#deviceAttrSection summary").click()
+                page.locator("#customAttrKey").fill("gfci")
+                page.locator("#customAttrVal").fill("true")
+                page.locator("#addCustomAttr").click()
+                assert "1 pending" in page.locator("#count").inner_text()
+                page.locator("#save").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#dirty')?.textContent === 'Saved'"
+                )
+                saved = json.loads(annotations.read_text())
+                assert saved["instances"][0]["bbox_rotated"]["angle_deg"] == 25
+                assert saved["instances"][0]["symbol_family"] == "switch"
+                assert saved["instances"][0]["symbol_variant"] == "unspecified"
+                assert saved["instances"][0]["device_attributes"]["gfci"] is True
+                assert saved["instances"][0]["review_status"] == "unreviewed"
+                assert saved["instances"][0]["verified_ground_truth"] is False
+                page.locator("#accept").click()
+                page.locator("#save").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#dirty')?.textContent === 'Saved'"
+                )
+                assert json.loads(annotations.read_text())["instances"][0]["verified_ground_truth"] is True
+                # Quick class changes must not carry a subtype from the old class.
+                page.locator("#variant").fill("single_pole")
+                page.locator("#variant").press("Tab")
+                page.locator("#accept").click()
+                page.locator('.quick-family[data-family="receptacle"]').click()
+                assert page.locator("#variant").input_value() == "unspecified"
+                assert "1 pending" in page.locator("#count").inner_text()
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
+
+
+def test_browser_late_wall_snap_does_not_overwrite_other_selection(tmp_path):
+    """A result for box A must never be attached to box B after a selection change."""
+    from PIL import Image
+
+    image = tmp_path / "wall.png"
+    Image.new("RGB", (400, 300), (245, 245, 245)).save(image)
+    annotation = tmp_path / "wall_labels.json"
+    annotation.write_text(json.dumps({
+        "image_path": image.name, "image_width": 400, "image_height": 300,
+        "coordinate_system": "original_page_pixels_top_left_y_down",
+        "instances": [
+            {"instance_id": "a", "symbol_family": "receptacle",
+             "symbol_variant": "duplex", "bbox_xyxy": [70, 85, 105, 120],
+             "review_status": "accepted", "review_source": "human",
+             "verified_ground_truth": True, "uncertain": False},
+            {"instance_id": "b", "symbol_family": "switch",
+             "symbol_variant": "single_pole", "bbox_xyxy": [250, 85, 285, 120],
+             "review_status": "accepted", "review_source": "human",
+             "verified_ground_truth": True, "uncertain": False},
+        ],
+    }))
+    walls = tmp_path / "walls.json"
+    walls.write_text(json.dumps({"walls": [
+        {"start": [20, 125], "end": [380, 125]},
+    ]}))
+    session = LabelingSession(edit=annotation, walls=walls)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1420, "height": 900})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function(
+                    "() => document.querySelector('#count')?.textContent?.includes('2 verified')"
+                )
+                page.locator("#items button").first.click()
+                page.evaluate("""() => {
+                  const realFetch = window.fetch.bind(window);
+                  window.fetch = (url, options) => {
+                    if (typeof url === "string" && url.startsWith("/api/snap?")) {
+                      return new Promise(resolve => {
+                        window.__releaseSnap = () => resolve(new Response(
+                          JSON.stringify({snap: {
+                            kind: "wall_centerline_intersection",
+                            point: [88, 125], quality: "high"
+                          }}), {
+                            status: 200,
+                            headers: {"Content-Type": "application/json"}
+                          }));
+                      });
+                    }
+                    return realFetch(url, options);
+                  };
+                }""")
+                page.locator("#testWallSnap").click()
+                page.wait_for_function("() => typeof window.__releaseSnap === 'function'")
+                page.locator("#items button").nth(1).click()
+                page.evaluate("() => window.__releaseSnap()")
+                page.wait_for_function(
+                    "() => document.querySelector('#message')?.textContent?.includes('Discarded stale wall snap')"
+                )
+                assert "2 verified" in page.locator("#count").inner_text()
+                assert page.locator("#dirty").inner_text() == "Saved"
+                assert "Snap preview" not in page.locator("#snapPreviewInfo").inner_text()
+                assert all("snap" not in item for item in session.page_state(0)["document"]["instances"])
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
