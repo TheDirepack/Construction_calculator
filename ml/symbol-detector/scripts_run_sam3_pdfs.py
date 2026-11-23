@@ -336,7 +336,8 @@ def detect_page_sam3(
     min_ink_fraction: float = 0.018,
     max_ink_fraction: float = 0.85,
     coarse_family_limit: int = 50,
-    fine_family_limit: int = 80,
+    fine_family_limit: int = 24,
+    max_detections_per_tile: int = 64,
     family_thresholds: dict[str, dict[str, float]] | None = None,
     query_stats: Counter | None = None,
     max_box_px: float = 220.0,
@@ -354,7 +355,7 @@ def detect_page_sam3(
         raise ValueError('tile_size must exceed overlap; svg_batch must be positive')
     if fallback_every_tiles < 0 or not 0 <= fine_match_iou <= 1:
         raise ValueError('invalid hierarchical SAM fallback / geometry thresholds')
-    if coarse_family_limit < 0 or fine_family_limit < 0 or max_box_aspect < 1.0:
+    if coarse_family_limit < 0 or fine_family_limit < 0 or max_detections_per_tile < 0 or max_box_aspect < 1.0:
         raise ValueError('invalid SAM precision gate configuration')
     H, W = page_rgb.shape[:2]
     step = tile_size - overlap
@@ -487,6 +488,7 @@ def detect_page_sam3(
                         max_ink_fraction=max_ink_fraction,
                         minimum_box_size=min_box_px,
                         max_per_family=family_limit,
+                        max_total=max_detections_per_tile,
                         stats=query_stats,
                     )
 
@@ -612,8 +614,10 @@ def main() -> None:
     ap.add_argument('--max-ink-fraction', type=float, default=0.85)
     ap.add_argument('--coarse-family-limit', type=int, default=50,
                     help='Max raw family proposals per tile before class-gated fine search; 0 disables')
-    ap.add_argument('--fine-family-limit', type=int, default=80,
+    ap.add_argument('--fine-family-limit', type=int, default=24,
                     help='Max final proposals per family per tile before global NMS; 0 disables')
+    ap.add_argument('--max-detections-per-tile', type=int, default=64,
+                    help='Hard ceiling on initial proposals per tile after geometric/ink gating; 0 disables')
     ap.add_argument('--svg-dedup-sim', type=float, default=0.90,
                     help='Cosine similarity threshold in SAM3 prompt space to deduplicate near-identical SVG variants (1.0 disables)')
     ap.add_argument('--min-page-pts', type=float, default=900.0)
@@ -845,6 +849,7 @@ def main() -> None:
         'max_ink_fraction': args.max_ink_fraction,
         'coarse_family_limit': args.coarse_family_limit,
         'fine_family_limit': args.fine_family_limit,
+        'max_detections_per_tile': args.max_detections_per_tile,
         'sam_precision_version': 2,
         'sam_hierarchy_version': 1,
     }
@@ -915,6 +920,7 @@ def main() -> None:
                     max_ink_fraction=args.max_ink_fraction,
                     coarse_family_limit=args.coarse_family_limit,
                     fine_family_limit=args.fine_family_limit,
+                    max_detections_per_tile=args.max_detections_per_tile,
                     family_thresholds=family_thresholds,
                     query_stats=pdf_query_stats,
                     device='cuda', dtype=dtype,
