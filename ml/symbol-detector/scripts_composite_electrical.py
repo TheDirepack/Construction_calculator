@@ -13,12 +13,11 @@ learn receptacles *against* walls, doors, text and furniture, which blank
 sheets do not have. The page keeps its original project group, so every
 composite of a drawing stays in that drawing's split.
 
-`exhaustive_families` becomes the page's original list plus every electrical
-family this script can place. That claim assumes the background plans have
-no electrical symbols of their own. That holds for architectural sets like
-FloorPlanCAD and CubiCasa, but NOT for electrical, RCP or MEP sheets, so
-never run this on those. Pages with an electrical family already in
-`exhaustive_families` are refused for the same reason.
+Real background pages may contain unlabeled target symbols. Synthetic placements
+are guaranteed positives, but do NOT attest any missing original symbols. An
+unverified source retains only its existing exhaustive-family coverage and
+requires --allow-partial-training for class-masked detector loss. Only a source
+explicitly marked verified_no_symbols=true can yield newly exhaustive classes.
 """
 from __future__ import annotations
 
@@ -37,6 +36,7 @@ from blueprint_symbols.wall_alignment import (
     detect_wall_sites, wall_rotation_degrees, snap_symbol_to_wall,
 )
 from blueprint_symbols.placement_policy import wall_placement_probability
+from blueprint_symbols.composite_supervision import composite_supervision
 
 ELECTRICAL = tuple(DEFAULT_WEIGHTS)
 
@@ -293,7 +293,7 @@ def main() -> None:
     p.add_argument('--max-ink', type=float, default=.12,
                    help='skip spots whose box already has more than this fraction of dark pixels')
     p.add_argument('--negative', action='store_true',
-                   help='place nothing: pages pass through as verified electrical-free negatives')
+                   help='place nothing; requires verified_no_symbols=true on each source')
     p.add_argument('--wall-fraction', type=float, default=0.6,
                    help='fraction of placed symbols snapped touching a detected wall (with wall_connection_point & target_vector)')
     p.add_argument('--canonical-classes', action='store_true',
@@ -315,8 +315,11 @@ def main() -> None:
     wall_total = 0
     for n, path in enumerate(paths):
         doc = json.loads(path.read_text())
-        if set(doc.get('exhaustive_families', [])) & (set(ELECTRICAL) | set(out_electrical)):
-            raise SystemExit(f'{path}: already claims electrical families; refusing to composite')
+        # Preserve independently verified source class coverage, but do not
+        # infer symbol absence from the source's category or empty labels.
+        composite_supervision(doc, [], generated_families=out_electrical)
+        if a.negative and doc.get('verified_no_symbols') is not True:
+            raise SystemExit(f'{path}: --negative requires verified_no_symbols=true; refusing to create false negatives')
         src_img = (path.parent / doc['image_path']).resolve()
         image = cv2.imread(str(src_img), cv2.IMREAD_COLOR)
         if image is None:
@@ -347,10 +350,10 @@ def main() -> None:
                 'source_type': 'cad_raster_with_synthetic_electrical',
                 'image_path': png.name,
                 'image_sha256': hashlib.sha256(png.read_bytes()).hexdigest(),
-                'exhaustive_families': sorted(set(doc.get('exhaustive_families', [])) | set(out_electrical)),
-                'instances': list(doc['instances']) + placed,
+                **composite_supervision(doc, placed, generated_families=out_electrical),
                 'composite': {'background_annotation': str(path.resolve()), 'seed': seed,
-                              'electrical_families': list(out_electrical)},
+                              'electrical_families': list(out_electrical),
+                              'supervision': 'complete' if doc.get('verified_no_symbols') is True else 'positive_only'},
             })
             png.with_suffix('.json').write_text(json.dumps(new, indent=1))
             total += len(placed)
