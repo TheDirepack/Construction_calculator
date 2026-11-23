@@ -560,9 +560,10 @@ class BlueprintSSLDataset(Dataset):
     def _build_source_plan(self, epoch: int) -> np.ndarray:
         """Arrange consecutive *views* of a shared base crop.
 
-        Each burst uses one source page and crop-bank slot. Other sample RNGs
-        remain independent, so the same scanned/drawn pixels can be trained
-        with different synthetic symbols, rotations, warps and degradations.
+        Each burst uses one source page and crop-bank slot. PDF views keep
+        a common physical center but independently choose real 100–400 DPI
+        rasterization scales. Symbol, rotation, warp, and degradation RNGs
+        remain independent; raster scans use exact replayed source pixels.
         Small stable per-page banks get revisited across epochs; an optional
         fresh-site fraction prevents limited-bank spatial overfitting.
         """
@@ -686,6 +687,8 @@ class BlueprintSSLDataset(Dataset):
                         entry, self.size, crop_rng, crop_seed=crop_seed,
                         crop_slot=crop_slot if crop_slot >= 0 else None,
                         bank_size=self.crop_bank_size if crop_slot >= 0 else None,
+                        dpi_variant=index % self.crop_reuse_views,
+                        dpi_variants=self.crop_reuse_views,
                     )
                 except (OSError, ValueError, IndexError, RuntimeError):
                     continue
