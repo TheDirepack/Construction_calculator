@@ -143,8 +143,8 @@ def sample_label_guided_crop(
     x0, y0, x1, y1 = valid[int(rng.integers(len(valid)))]
     device_px = max(x1 - x0, y1 - y0)
     target_px = float(np.exp(rng.uniform(math.log(12), math.log(96))))
-    span = int(np.clip(round(size * device_px / target_px),
-                       max(64, math.ceil(device_px * 1.5)), max(h, w)))
+    min_span = min(max(h, w), max(64, math.ceil(device_px * 1.5)))
+    span = int(np.clip(round(size * device_px / target_px), min_span, max(h, w)))
     # Keep the selected box in the crop, even near source-image borders.
     left = max(0, math.ceil(x1 - span))
     right = min(max(0, w - span), math.floor(x0))
@@ -318,8 +318,7 @@ def apply_runtime_corruptions(
     if chance(0.12):
         # Quantization/banding in low-bit-depth scans.
         levels = int(rng.choice((4, 8, 16, 32)))
-        x = np.round(x.astype(np.float32) / 255 * (levels - 1) /
-                     1.0) * (255 / (levels - 1))
+        x = np.round(x.astype(np.float32) / 255 * (levels - 1)) * (255 / (levels - 1))
         x = np.clip(x, 0, 255).astype(np.uint8)
 
     # JPEG or WebP codec ringing/block artifacts.
@@ -328,7 +327,11 @@ def apply_runtime_corruptions(
         qmin = {"light": 75, "moderate": 48, "heavy": 27, "extreme": 12}[severity]
         quality = int(rng.integers(qmin, 96))
         key = cv2.IMWRITE_JPEG_QUALITY if codec == ".jpg" else cv2.IMWRITE_WEBP_QUALITY
-        ok, buffer = cv2.imencode(codec, x, [key, quality])
+        try:
+            ok, buffer = cv2.imencode(codec, x, [key, quality])
+        except cv2.error:
+            # Some headless OpenCV builds omit optional WebP codecs.
+            ok, buffer = cv2.imencode(".jpg", x, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if ok:
             decoded = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
             if decoded is not None:
