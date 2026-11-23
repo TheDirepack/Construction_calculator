@@ -86,6 +86,8 @@ exec "$PY" scripts_pretrain_ssl.py \
   --symbol-chaos-probability "${SSL_SYMBOL_CHAOS_PROBABILITY:-0.88}" \
   --symbol-chaos-strength "${SSL_SYMBOL_CHAOS_STRENGTH:-1.0}" \
   --placement-chaos "${SSL_PLACEMENT_CHAOS:-0.85}" \
+  --page-chaos-probability "${SSL_PAGE_CHAOS_PROBABILITY:-0.70}" \
+  --page-chaos-strength "${SSL_PAGE_CHAOS_STRENGTH:-1.0}" \
   --clean-fraction 0.20 \
   --labeled-focus-probability 0.65 \
   --workers "$SSL_WORKERS" \
