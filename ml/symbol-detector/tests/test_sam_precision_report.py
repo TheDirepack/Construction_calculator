@@ -1,7 +1,7 @@
 """Human proposal-precision reporting: never infer recall from candidates."""
 import pytest
 
-from scripts_sam_precision_report import summarize_sam_reviews
+from scripts_sam_precision_report import summarize_sam_reviews, scanned_page_rates
 
 
 def _item(index, status, keep, *, source='human',
@@ -100,3 +100,65 @@ def test_invalid_or_empty_input_is_rejected():
         summarize_sam_reviews([{}])
     with pytest.raises(ValueError, match='JSON objects'):
         summarize_sam_reviews([_batch([None])])
+
+
+
+def test_scanned_page_false_boxes_only_when_every_proposal_human_reviewed(tmp_path):
+    import json
+    proposal = tmp_path / 'scan_1_SAM3.json'
+    proposal.write_text(json.dumps({
+        'source_pdf_relative': 'project/plan.pdf',
+        'total_devices': 3,
+        'pages_scanned': 5,
+        'devices': [{}, {}, {}],
+    }))
+    batch = _batch([
+        _item(0, 'accepted', True),
+        _item(1, 'rejected', False),
+        _item(2, 'accepted', True),
+    ])
+    report = summarize_sam_reviews([batch])
+    rates = scanned_page_rates([batch], [proposal], report)
+    assert rates == {
+        'source_proposals_reconciled': 1,
+        'scanned_pages': 5,
+        'source_candidate_boxes': 3,
+        'candidate_boxes_per_scanned_page': .6,
+        'known_human_false_boxes_per_scanned_page_lower_bound': .2,
+        'human_review_complete': True,
+        'false_boxes_per_scanned_page': .2,
+    }
+    incomplete = _batch([
+        _item(0, 'accepted', True),
+        _item(1, 'rejected', False),
+        _item(2, 'accepted', True, source='vlm'),
+    ])
+    rpt = summarize_sam_reviews([incomplete])
+    partial = scanned_page_rates([incomplete], [proposal], rpt)
+    assert partial['human_review_complete'] is False
+    assert partial['false_boxes_per_scanned_page'] is None
+    assert partial['known_human_false_boxes_per_scanned_page_lower_bound'] == .2
+
+
+def test_page_rate_requires_all_source_proposals_and_consistent_pdf(tmp_path):
+    import json
+    proposal = tmp_path / 'scan_1_SAM3.json'
+    proposal.write_text(json.dumps({
+        'source_pdf_relative': 'project/plan.pdf',
+        'total_devices': 2,
+        'pages_scanned': 3,
+        'devices': [{}, {}],
+    }))
+    only_one_reviewed = _batch([_item(0, 'rejected', False)])
+    report = summarize_sam_reviews([only_one_reviewed])
+    with pytest.raises(ValueError, match='cover 1 proposals'):
+        scanned_page_rates([only_one_reviewed], [proposal], report)
+    fully_reviewed = _batch([
+        _item(0, 'accepted', True), _item(1, 'rejected', False),
+    ])
+    report = summarize_sam_reviews([fully_reviewed])
+    wrong_pdf = dict(fully_reviewed, source_pdf_relative='another/plan.pdf')
+    with pytest.raises(ValueError, match='source PDF mismatch'):
+        scanned_page_rates([wrong_pdf], [proposal], report)
+    with pytest.raises(ValueError, match='no matching source proposal'):
+        scanned_page_rates([fully_reviewed], [], report)
