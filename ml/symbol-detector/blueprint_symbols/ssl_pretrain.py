@@ -112,6 +112,55 @@ def sample_random_crop(image: np.ndarray, size: int, rng: np.random.Generator) -
     return best_crop if best_crop is not None else cv2.resize(image, (size, size), interpolation=cv2.INTER_AREA)
 
 
+def sample_label_guided_crop(
+    image: np.ndarray,
+    size: int,
+    rng: np.random.Generator,
+    boxes: list[list[float]] | None,
+    *,
+    focus_probability: float = 0.65,
+) -> np.ndarray:
+    """Prefer verified device neighborhoods while retaining random plan crops.
+
+    Boxes are optional positive-only annotations; no completeness assumption
+    is made. Scale selection targets roughly 12..96 output pixels for the
+    chosen glyph so small devices are not erased by wholesale page resize.
+    """
+    valid = []
+    h, w = image.shape[:2]
+    if boxes and rng.random() < focus_probability:
+        for item in boxes:
+            if len(item) != 4:
+                continue
+            x0, y0, x1, y1 = map(float, item)
+            if all(math.isfinite(v) for v in (x0, y0, x1, y1)) and (
+                0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h
+            ):
+                valid.append((x0, y0, x1, y1))
+    if not valid:
+        return sample_random_crop(image, size, rng)
+
+    x0, y0, x1, y1 = valid[int(rng.integers(len(valid)))]
+    device_px = max(x1 - x0, y1 - y0)
+    target_px = float(np.exp(rng.uniform(math.log(12), math.log(96))))
+    span = int(np.clip(round(size * device_px / target_px),
+                       max(64, math.ceil(device_px * 1.5)), max(h, w)))
+    # Keep the selected box in the crop, even near source-image borders.
+    left = max(0, math.ceil(x1 - span))
+    right = min(max(0, w - span), math.floor(x0))
+    top = max(0, math.ceil(y1 - span))
+    bottom = min(max(0, h - span), math.floor(y0))
+    cx0 = int(rng.integers(left, right + 1)) if right >= left else max(0, min(w - span, round(x0)))
+    cy0 = int(rng.integers(top, bottom + 1)) if bottom >= top else max(0, min(h - span, round(y0)))
+    patch = image[cy0:min(h, cy0 + span), cx0:min(w, cx0 + span)]
+    ph, pw = patch.shape[:2]
+    if ph != span or pw != span:
+        paper = tuple(int(v) for v in np.median(patch.reshape(-1, 3), axis=0))
+        patch = cv2.copyMakeBorder(patch, 0, span - ph, 0, span - pw,
+                                   cv2.BORDER_CONSTANT, value=paper)
+    return cv2.resize(patch, (size, size),
+                      interpolation=cv2.INTER_AREA if span > size else cv2.INTER_LINEAR)
+
 def apply_geometric_variability(clean: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     """Apply geometric transforms identically to the clean crop (target & input stay aligned)."""
     out = clean
@@ -315,6 +364,14 @@ class BlueprintSSLDataset(Dataset):
         items_per_epoch: int = 8192,
         seed: int = 2026,
         deterministic_eval: bool = False,
+        neca_dir: str | Path | None = None,
+        max_symbols: int = 16,
+        symbol_min_px: float = 12.0,
+        symbol_max_px: float = 80.0,
+        symbol_augment_probability: float = 0.80,
+        procedural_fraction: float = 0.25,
+        clean_fraction: float = 0.20,
+        labeled_focus_probability: float = 0.65,
     ) -> None:
         super().__init__()
         self.size = int(size)
@@ -322,10 +379,23 @@ class BlueprintSSLDataset(Dataset):
         self.seed = int(seed)
         self.epoch = 0
         self.deterministic_eval = bool(deterministic_eval)
+        if not 0 <= symbol_augment_probability <= 1 or not 0 <= clean_fraction <= 1 or not 0 <= labeled_focus_probability <= 1:
+            raise ValueError("invalid SSL sampling probabilities")
+        self.max_symbols = int(max_symbols)
+        self.symbol_min_px = float(symbol_min_px)
+        self.symbol_max_px = float(symbol_max_px)
+        self.symbol_augment_probability = float(symbol_augment_probability)
+        self.procedural_fraction = float(procedural_fraction)
+        self.clean_fraction = float(clean_fraction)
+        self.labeled_focus_probability = float(labeled_focus_probability)
+        self.neca_bank = None
+        if neca_dir is not None:
+            from .neca_svg_compositor import NecaSymbolBank
+            self.neca_bank = NecaSymbolBank(Path(neca_dir))
 
         self.bucket_names: list[str] = []
         self.bucket_weights: list[float] = []
-        self.bucket_groups: dict[str, list[list[str]]] = {}
+        self.bucket_groups: dict[str, list[list[str | dict]]] = {}
 
         for name, info in sorted(manifest['buckets'].items()):
             groups = [paths for paths in info['groups'].values() if paths]
@@ -372,7 +442,9 @@ class BlueprintSSLDataset(Dataset):
             b_idx = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
             groups = self.bucket_groups[self.bucket_names[b_idx]]
             group = groups[int(rng.integers(len(groups)))]
-            path = group[int(rng.integers(len(group)))]
+            entry = group[int(rng.integers(len(group)))]
+            path = entry["image_path"] if isinstance(entry, dict) else entry
+            boxes = entry.get("boxes") if isinstance(entry, dict) else None
             img = self._read_cached(path)
             if img is not None and min(img.shape[:2]) >= 64:
                 break
@@ -380,9 +452,23 @@ class BlueprintSSLDataset(Dataset):
         if img is None:
             raise RuntimeError('Failed to decode any blueprint image after 8 attempts')
 
-        clean = sample_random_crop(img, self.size, rng)
+        clean = sample_label_guided_crop(
+            img, self.size, rng, boxes,
+            focus_probability=self.labeled_focus_probability,
+        )
         clean = apply_geometric_variability(clean, rng)
-        degraded, mask = apply_runtime_corruptions(clean, rng)
+        if self.max_symbols > 0 and rng.random() < self.symbol_augment_probability:
+            from .ssl_augmentation import compose_ssl_symbols
+            clean, _ = compose_ssl_symbols(
+                clean, rng, neca_bank=self.neca_bank,
+                max_symbols=self.max_symbols,
+                min_size_px=self.symbol_min_px,
+                max_size_px=self.symbol_max_px,
+                procedural_fraction=self.procedural_fraction,
+            )
+        degraded, mask = apply_runtime_corruptions(
+            clean, rng, clean_fraction=self.clean_fraction,
+        )
 
         # BGR uint8 -> RGB float32 [0, 1] CHW
         clean_rgb = np.ascontiguousarray(clean[:, :, ::-1]).transpose(2, 0, 1)
