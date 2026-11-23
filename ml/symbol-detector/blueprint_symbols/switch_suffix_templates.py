@@ -94,6 +94,46 @@ def build_switch_suffix_templates(
     return refs
 
 
+def _suffix_hit_overlap(a: tuple, b: tuple) -> float:
+    _, _, (ax, ay), aw, ah = a
+    _, _, (bx, by), bw, bh = b
+    iw = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    ih = max(0, min(ay + ah, by + bh) - max(ay, by))
+    return iw * ih / max(1, min(aw * ah, bw * bh))
+
+
+def select_unambiguous_suffix_hits(
+    sorted_hits: list[tuple], *, min_margin: float,
+) -> list[tuple]:
+    """Reject entire ambiguous ink regions, including later lower-rank hits.
+
+    Previously the first conflicting pair was removed but a third
+    candidate for the SAME pixels could be accepted afterward.
+    """
+    selected: list[tuple] = []
+    blocked: list[tuple] = []
+    for hit in sorted_hits:
+        if any(_suffix_hit_overlap(hit, other) > .30 for other in blocked):
+            continue
+        collisions = [
+            old for old in selected if _suffix_hit_overlap(hit, old) > .30
+        ]
+        if not collisions:
+            selected.append(hit)
+            continue
+        score, ref = hit[0], hit[1]
+        if any(
+            ref.value != old[1].value and abs(score - old[0]) < min_margin
+            for old in collisions
+        ):
+            # Suppress ALL later marks at this ambiguous ink patch.
+            rejected_ids = {id(old) for old in collisions}
+            selected = [old for old in selected if id(old) not in rejected_ids]
+            blocked.extend(collisions)
+            blocked.append(hit)
+    return selected
+
+
 def search_switch_suffixes(
     page_rgb: np.ndarray, base_detections: list[dict],
     refs: list[SuffixTemplate], *, min_score: float = .92,
@@ -139,26 +179,7 @@ def search_switch_suffixes(
                 if value >= min_score:
                     best.append((float(value), ref, point, tw, th))
         best.sort(key=lambda x: -x[0])
-        selected = []
-        for hit in best:
-            score, ref, (xx, yy), ww, hh = hit
-            same_box = []
-            for prev in selected:
-                _, _, (px, py), pw, ph = prev
-                iw = max(0, min(xx+ww, px+pw) - max(xx, px))
-                ih = max(0, min(yy+hh, py+ph) - max(yy, py))
-                coverage = iw*ih / max(1, min(ww*hh, pw*ph))
-                if coverage > .30:
-                    same_box.append(prev)
-            if same_box:
-                # If two meanings fit the exact same ink equally well,
-                # neither is reliable enough for automatic attachment.
-                if any(ref.value != old[1].value and
-                       abs(score-old[0]) < min_margin for old in same_box):
-                    for old in same_box:
-                        selected.remove(old)
-                continue
-            selected.append(hit)
+        selected = select_unambiguous_suffix_hits(best, min_margin=min_margin)
         for score, ref, (xx, yy), ww, hh in selected[:4]:
             marks.append({
                 'box_px': [float(xa+xx), float(ya+yy),
