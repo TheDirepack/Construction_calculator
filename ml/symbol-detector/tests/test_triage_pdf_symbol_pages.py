@@ -62,6 +62,25 @@ def test_deterministic_and_no_annotation_mutation(tmp_path):
     assert not list(tmp_path.glob("*annotations*.json"))
 
 
+def test_raster_sheet_filename_only_increases_review_priority(tmp_path):
+    scanned = tmp_path / "FA-02.pdf"
+    _new_pdf(scanned, "scan")
+    page = triage_pdf(scanned)["pages"][0]
+    assert page["suggestion"] == "possible_symbols"
+    assert page["sheet_filename_risk"] is True
+    assert page["text_characters"] == 0
+    assert page["verified_no_symbols"] is False
+    assert page["eligible_as_supervised_negative"] is False
+
+
+def test_output_refuses_overwrite_without_explicit_consent(tmp_path):
+    path = tmp_path / "labels.json"
+    path.write_text('{"instances": []}')
+    with pytest.raises(FileExistsError):
+        write_json_atomic(path, {"kind": "triage"})
+    assert json.loads(path.read_text()) == {"instances": []}
+
+
 def test_corrupt_pdf_fails_closed(tmp_path):
     bad = tmp_path / "bad.pdf"
     bad.write_bytes(b"not-a-pdf")
