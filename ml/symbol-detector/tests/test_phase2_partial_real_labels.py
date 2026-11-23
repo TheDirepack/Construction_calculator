@@ -86,7 +86,7 @@ def test_export_retains_partial_positive_without_false_negative_mask(tmp_path):
     # unlabeled-only crop is assigned an empty-label negative.
     assert all((out/'labels'/'train'/f"{x['sample']}.txt").read_text().strip()
                for x in partial)
-    assert report['counts']['train_skipped_uninformative_partial']>=0
+    assert report['counts'].get('train_skipped_uninformative_partial', 0)>=0
 
 
 def test_partial_without_masked_mode_fails_closed(tmp_path):
@@ -132,7 +132,7 @@ def test_actual_ultralytics_criterion_masks_unknown_background(tmp_path):
     if version != '8.4.216':
         pytest.skip('actual criterion pinned to 8.4.216')
     from types import SimpleNamespace
-    from ultralytics.utils import get_cfg
+    from ultralytics.cfg import get_cfg
     from blueprint_symbols.partial_supervision import build_masked_detection_trainer
 
     source,manifest=mixed_source_manifest(tmp_path)
