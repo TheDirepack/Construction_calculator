@@ -81,3 +81,26 @@ def install_ssl_backbone(model: torch.nn.Module, checkpoint: Mapping) -> dict:
 
     return {"transferred_tensors": len(expected), "untrained_head_tensors": len(expected_missing),
             "architecture": ARCHITECTURE, "detect_layer_index": head_index}
+
+
+
+def build_ssl_detection_trainer(weights: str | Path):
+    """Return Ultralytics' actual trainer class with verified SSL initialization.
+
+    Tested via the real DetectionTrainer.get_model hook, not merely a separate
+    model used for a superficial preflight.
+    """
+    from ultralytics.models.yolo.detect import DetectionTrainer
+
+    checkpoint = read_ssl_backbone(weights)
+
+    class SSLDetectionTrainer(DetectionTrainer):
+        def get_model(self, cfg=None, weights=None, verbose=True):
+            # Ultralytics constructs a new class-count-specific detector here.
+            # Do not pass generic weights or rely on the temporary YOLO object.
+            model = super().get_model(cfg=cfg, weights=None, verbose=verbose)
+            report = install_ssl_backbone(model, checkpoint)
+            print(f"Verified SSL backbone transfer into actual YOLO trainer: {report}", flush=True)
+            return model
+
+    return SSLDetectionTrainer
