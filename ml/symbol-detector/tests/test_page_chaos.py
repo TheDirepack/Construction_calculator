@@ -112,14 +112,28 @@ def test_full_dataset_keeps_page_input_target_alignment(tmp_path):
         page_chaos_probability=1., page_chaos_strength=1.6,
         return_metadata=True,
     )
-    ops = set()
     for i in range(4):
         damaged, clean, mask, meta = ds[i]
-        assert torch.equal(clean, damaged)  # no input-only damage
+        assert torch.equal(clean, damaged)  # fully clean SSL view
         assert not mask.any()
+        assert meta["full_clean_view"]
         assert meta["page_chaos"]["box_count"] == 0
-        ops.update(meta["page_chaos"]["operations"])
-    assert ops
+        # End-to-end clean selection intentionally bypasses page chaos.
+        assert not meta["page_chaos"]["operations"]
+
+    # When geometry is enabled, it becomes the clean reconstruction target.
+    # An otherwise uncorrupted input is byte-identical to that warped target.
+    from blueprint_symbols.ssl_pretrain import apply_runtime_corruptions
+    warped, _, report = warp_whole_page(
+        drawing(), np.random.default_rng(72), probability=1.,
+        strength=1.6,
+    )
+    assert report["operations"]
+    degraded, mask = apply_runtime_corruptions(
+        warped, np.random.default_rng(73), clean_fraction=1.,
+    )
+    assert np.array_equal(degraded, warped)
+    assert not mask.any()
 
 
 def test_warp_reject_reasons_and_symbol_ink_retained_at_high_strength():
