@@ -112,6 +112,14 @@ def test_native_pdf_dataset_spans_many_pages_and_keeps_clean_alignment(tmp_path)
         manifest, size=128, items_per_epoch=96, seed=567,
         max_symbols=0, clean_fraction=1., return_metadata=True,
     )
+    plan = dataset._source_plan
+    assert plan is not None
+    # Adjacent pairs reuse the same source PDF *and page*, but produce
+    # independently randomized crops. One long project rotates through
+    # its pages instead of drawing the same few with replacement.
+    assert all(np.array_equal(plan[i], plan[i + 1])
+               for i in range(0, len(dataset), 2))
+    assert len({int(plan[i, 2]) for i in range(0, len(dataset), 2)}) == 48
     pages = set()
     clip_rects = set()
     for i in range(len(dataset)):
