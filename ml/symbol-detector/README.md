@@ -197,6 +197,151 @@ A changed image or annotation requires a deliberate new dataset snapshot; v8 wil
 
 The four training variants are: (1) original-resampled clean crop, (2) low-resolution-only crop, (3) randomly combined damage, and (4) optional contrast-cleaned crop. Change `--train-variants` to 3 for lower storage. Real scans/photos remain necessary: simulated damage alone is not real-world evaluation. Held-out stress includes downsample ratios 75%, 50%, 25%, independent blur/JPEG, stroke thinning/thickening, cleaned contrast, and compound degradation. Stroke morphology uses centered odd-size kernels to avoid intentional half-pixel shifts.
 
+## 3a. Mixed real, synthetic and partially annotated phase-two training
+
+The supervised dataset can combine normalized annotation JSON from:
+- fully reviewed real pages with positive symbols (exhaustive_families covers
+  every active class);
+- completely reviewed real negative pages (instances=[]; verified exhaustive
+  for every active class);
+- synthetically inserted devices on independently verified symbol-free
+  architectural backgrounds (only known placements are positives);
+- verified symbol-free source crops without inserted devices;
+- **partially annotated real pages**, where existing labeled positives are
+  trusted, but unlabeled regions may contain more devices.
+
+**Never infer label completeness from the absence of a bounding box.**
+For a partially annotated source, exhaustive_families must list *only* target
+classes proven to be exhaustively labeled over that source raster. An empty
+list is valid: known boxes still train, but missing detections are not
+punished as background. Uncertain/review-required candidate boxes are not
+positive truth. Existing manual label tool output may be partial.
+
+For example: one real page with manually confirmed receptacle boxes but
+other unlabeled receptacles has exhaustive_families=[]. A distinct fully
+reviewed wall-only page with no target devices may declare
+exhaustive_families=["receptacle","switch_sensor",...] and instances=[].
+Do not make completeness claims solely because a sheet is called
+"architectural" or "negative" in its file name.
+
+```bash
+python scripts_prepare_training_data.py \
+  --annotations 'normalized/real_verified/**/*.json' \
+                'normalized/real_partials/**/*.json' \
+                'generated/wall_phase2/wall_*.json' \
+  --output prepared/phase2_mixed \
+  --allow-partial-training \
+  --train-tiles-per-page 32 --train-variants 4
+
+python scripts_train_ultralytics.py prepared/phase2_mixed/yolo/data.yaml \
+  --weights work/blueprint_ssl_backbone.pt --batch 2
+# add --run only on the CUDA training machine after preflight
+```
+
+When --allow-partial-training is set:
+1. Original projects with *any* partially annotated page are forced into
+   train. Validation and locked test require independently verified fully
+   annotated source projects, including verified empty real pages.
+2. The exporter emits normal YOLO positive labels **plus**
+   yolo/phase2_supervision.json, mapping every train tile to class IDs for
+   which negative/background labels are independently verified.
+3. scripts_train_ultralytics.py detects this sidecar and automatically uses
+   the tested Ultralytics 8.4.216 YOLO26 class-masked loss (both one-to-many
+   and one-to-one heads). Assigned verified positive scores always train.
+   Unknown background anchors/classes have **zero negative gradient**.
+4. Incomplete tiles containing neither a verified positive nor any
+   exhaustive class are skipped. Real/synthetic negatives and confirmed
+   positives continue to train normally.
+5. YOLO geometric mosaic/mixup/cutmix are not permitted in this mode,
+   because they would invalidate image-level supervision masks. Existing
+   coordinate-preserving pre-export degradations remain enabled.
+
+The per-class mask is *image-level*. Region-level verification inside an
+incomplete class is not yet exploited as negative supervision; this
+conservative choice protects unlabeled devices from false-negative gradients.
+Fully annotated negative pages and synthetic exact-placement pages provide
+the needed hard-negative signal.
+
+The generated mixed dataset is still **not sufficient evidence** of detector
+precision/recall. Evaluate on fully audited independent real projects and
+full-page fused detections; keep incomplete real pages for training or
+unlabeled/qualitative tests rather than numerical mAP.
+
+## 3b. Phase-two supervised wall-only positives and hard negatives
+
+Verified wall-only drawings provide separate *detector* supervision: some
+views receive inserted symbols, while others intentionally remain empty.
+**Only inserted glyphs receive detection boxes**; the original walls, doors,
+text, and non-device geometry are not target instances.
+
+Use scripts_generate_phase2_wall_only.py rather than SSL negative-control
+buckets. An SSL negative tag only suppresses synthetic insertions during
+pretraining; it is not proof that the underlying page has no device. Every
+input source must attest absence of **all active target families** via
+verified_negative_families, and must have verified original-project grouping.
+Do not treat partially annotated electrical/MEP pages as verified negatives.
+
+Example wall-only source manifest (paths relative to the manifest):
+
+```json
+{
+  "sources": [
+    {
+      "image_path": "walls.png",
+      "project_family_id": "original-building-A",
+      "source_group_verified": true,
+      "verified_negative_families": [
+        "fire_alarm", "junction_box", "luminaire", "other_device",
+        "receptacle", "switch_sensor"
+      ]
+    },
+    {
+      "source_pdf": "wall-only.pdf",
+      "pdf_page_index": 0,
+      "project_family_id": "original-building-B",
+      "source_group_verified": true,
+      "verified_negative_families": [
+        "fire_alarm", "junction_box", "luminaire", "other_device",
+        "receptacle", "switch_sensor"
+      ]
+    }
+  ]
+}
+```
+
+```bash
+python scripts_generate_phase2_wall_only.py verified_wall_sources.json \
+    generated/wall_phase2 --copies 8 --empty-fraction .30 \
+    --max-symbols 32 --class-map detector_classes.json \
+    --reserved ../work/heldout_real_pdfs.json \
+    --neca-root /path/to/neca_svg_catalog
+
+python scripts_prepare_training_data.py \
+    --annotations 'verified_device_labels/**/*.json' 'generated/wall_phase2/wall_*.json' \
+    --output prepared/phase2 --train-tiles-per-page 32 \
+    --verified-wall-negative-fraction .65 --verified-wall-blank-fraction .12
+```
+
+The NECA SVG catalog is optional; procedural glyphs work without it. The
+class map can be a JSON list or name-to-ID dictionary of active model
+classes, including the six canonical generated classes. Every source's
+negative-family attestation must cover the whole map. The reserved manifest
+rejects listed evaluation project groups and PDFs, with its relative paths
+resolved against the reserved manifest's own parent folder.
+
+The generator independently selects positive/empty modes; with two or more
+copies and nontrivial empty fraction, it preserves both modes per source.
+Coordinate-preserving damage happens **after** compositing. Exact generated
+boxes, classes, original source project, crop region, and actual PDF render
+DPI are recorded. A failed symbol insertion is skipped, **not** silently
+converted to an empty negative. generation_report.json records counts.
+The detector exporter retains more verified nonblank wall-only negatives
+than incidental empty crops but limits near-blank examples.
+
+Keep original drawing/project groups together across train/val/test.
+Do not count synthetic copies as independent real evaluation samples, and
+never override completeness checks for unrelated partially annotated pages.
+
 ## 4. Optional: use the huge **unlabeled training** pool
 
 The package includes a lazy data generator for eventual self-supervised *blueprint-only* pretraining. It samples train-source drawings **and** separately verified unlabeled projects while excluding the validation/test groups and exact duplicate held-out raster hashes. It generates independent clean and damaged **pairs on demand**: no need to store many replicated megapixel images.

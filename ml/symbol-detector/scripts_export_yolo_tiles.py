@@ -82,8 +82,9 @@ def _ink_fraction(bgr: np.ndarray, threshold: int = 190) -> float:
 
 def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
         stress_val=False,stress_test=False,allow_unverified_completeness=False,
-        train_variants=3, eval_variants=None, train_negative_fraction=.12,
+        allow_partial_training=False, train_variants=3, eval_variants=None, train_negative_fraction=.12,
         blank_ink_threshold=.015, blank_negative_fraction=.02,
+        verified_wall_negative_fraction=.65, verified_wall_blank_fraction=.12,
         eval_empty_keep_fraction=.25, eval_blank_keep_fraction=.02) -> dict:
     mf=json.loads(manifest.read_text())
     validate_manifest_sources(mf)
@@ -95,23 +96,37 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
     classes=mf['class_ids']
     if sorted(classes.values()) != list(range(len(classes))):
         raise ValueError('class ids must be consecutive')
-    if samples < 1 or not 1 <= train_variants <= 12 or not scales or overlap < 0 or overlap >= 512 or not 0 <= train_negative_fraction <= 1:
+    if (samples < 1 or not 1 <= train_variants <= 12 or not scales or
+            overlap < 0 or overlap >= 512 or not 0 <= train_negative_fraction <= 1 or
+            not 0 <= verified_wall_negative_fraction <= 1 or
+            not 0 <= verified_wall_blank_fraction <= 1):
         raise ValueError('bad tiling options')
-    # Do not trust missing unlabeled objects as negatives in YOLO detection loss.
+    # Positive-only partial pages need a class-aware masked loss in phase two.
+    # The legacy unverified exploratory override must never bypass that requirement.
+    if allow_partial_training and allow_unverified_completeness:
+        raise ValueError('partial training cannot combine with unsafe completeness override')
     per_split={key:read_records(value) for key,value in splits.items()}
     paths={str(d['annotation']):d for d in mf.get('source_images',[])}
     unchecked=[]
+    incomplete_eval=[]
     for s in per_split:
         for path in splits[s]:
             data=json.loads(Path(path).read_text())
-            exhaustive=set(data.get('exhaustive_families',[]))
+            exhaustive=set(data.get('exhaustive_families', []))
             if not set(classes).issubset(exhaustive):
                 unchecked.append(path)
-    if unchecked and not allow_unverified_completeness:
+                if s in ('val', 'test'):
+                    incomplete_eval.append(path)
+    if allow_partial_training:
+        if incomplete_eval:
+            raise ValueError(f'{len(incomplete_eval)} incomplete validation/test pages; '
+                             'partial pages may only contribute training positives')
+    elif unchecked and not allow_unverified_completeness:
         raise ValueError(f'{len(unchecked)} pages lack exhaustive_families for all classes; '
-                         'use --allow-unverified-completeness for an exploratory export '
-                         '(risk: missing symbols become false negatives)')
+                         'use --allow-partial-training for a masked-loss export '
+                         'or --allow-unverified-completeness for UNSAFE exploratory export')
     count=Counter();groups={}; meta=[]
+    supervision={}
     evaluation_coverage={}
     for split,recs in per_split.items():
         for rec in recs:
@@ -127,13 +142,27 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
             count['train_skipped_ignore_regions']+=1
             continue
         image=cv2.cvtColor(rgb,cv2.COLOR_RGB2BGR)
+        complete_names=set(info['exhaustive_families'])
+        verified_class_ids=sorted(classes[k] for k in classes if k in complete_names)
+        partial_positive_only=len(verified_class_ids)<len(classes)
         is_empty=not targets
+        if allow_partial_training and is_empty and not verified_class_ids:
+            # This tile has neither a labeled positive nor any verified
+            # background class. Every classification gradient would be masked.
+            count['train_skipped_uninformative_partial']+=1
+            continue
         is_blank=is_empty and _ink_fraction(image) < blank_ink_threshold
         if is_empty:
             # Fully annotated symbol-free tiles are necessary hard negatives, but
             # mostly-white tiles with no/few lines are strongly devalued and get fewer variants.
             neg_seed=int.from_bytes(hashlib.sha256(f'{seed}/negative/{i}'.encode()).digest()[:8],'big')
-            keep_p=blank_negative_fraction if is_blank else train_negative_fraction
+            if info.get('verified_wall_background'):
+                # Empty crops from attested symbol-free sources are meaningful
+                # hard negatives; retain more without flooding on blank paper.
+                keep_p=(verified_wall_blank_fraction if is_blank
+                        else verified_wall_negative_fraction)
+            else:
+                keep_p=blank_negative_fraction if is_blank else train_negative_fraction
             if np.random.default_rng(neg_seed).random() >= keep_p:
                 count['train_skipped_blank' if is_blank else 'train_skipped_empty']+=1
                 continue
@@ -149,7 +178,12 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
             variant,damage=make_variant(image,np.random.default_rng(variant_seed),variant_name)
             name=f'train_{i:08d}_v{variant_index:02d}'
             _save_sample(out,'train',name,variant,targets,counters=count)
-            meta.append({'sample':name,'source':info['image_path'],'group':info['group'],
+            supervision[name]=verified_class_ids
+            count['train_partial_images' if partial_positive_only else 'train_complete_images']+=1
+            meta.append({'verified_negative_class_ids':verified_class_ids,
+                         'partial_positive_only':partial_positive_only,
+                         'source_type':info['source_type'],
+                         'sample':name,'source':info['image_path'],'group':info['group'],
                          'source_box':list(info['tile'].source_box),
                          'source_scale':info['tile'].source_scale,
                          'target_symbol_pixels':info['target_symbol_pixels'],
@@ -225,6 +259,14 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
                    f'val: images/{key}\n' + f'names:\n{names}\n')
             (eval_dir/f'{key}.yaml').write_text(lines)
     (out/'sample_provenance.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in meta))
+    # Separate file required by the actual training loader. Standard YOLO
+    # labels alone cannot encode positive-only supervision.
+    (out/'phase2_supervision.json').write_text(json.dumps({
+        'format_version':1,
+        'class_ids':classes,
+        'partial_training_enabled':allow_partial_training,
+        'samples':supervision,
+    },indent=2))
     report={'source_manifest':str(manifest.resolve()),'classes':classes,
             'counts':dict(count),'unverified_annotation_completeness':sorted(unchecked),
             'notes':['No training performed.','Only trusted class-labeled instances exported.',
@@ -234,7 +276,11 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
                      'Paired variants are correlated; report source-group-level metrics, not independent-sample confidence.'],
             'evaluation_source_instance_coverage':evaluation_coverage,
             'train_variants_per_base':train_variants,
+            'partial_training_enabled':allow_partial_training,
+            'train_incomplete_source_pages':[str(p) for p in unchecked if p not in incomplete_eval],
             'train_negative_fraction':train_negative_fraction,
+            'verified_wall_negative_fraction':verified_wall_negative_fraction,
+            'verified_wall_blank_fraction':verified_wall_blank_fraction,
             'evaluation_variants':list(eval_variants) if eval_variants is not None else list(EVAL_VARIANTS[1:])}
     (out/'export_report.json').write_text(json.dumps(report,indent=2))
     if count['train_images']==0 or count['val_images']==0 or count['test_images']==0:
@@ -248,17 +294,26 @@ def main():
     p.add_argument('--train-tiles-per-page',type=int,default=32)
     p.add_argument('--train-variants',type=int,default=3,help='clean + independently downsampled/damaged variants per crop')
     p.add_argument('--train-negative-fraction',type=float,default=.20,help='retain completely annotated symbol-free tiles')
+    p.add_argument('--verified-wall-negative-fraction',type=float,default=.65,
+                   help='retain nonblank empty tiles from verified wall-only backgrounds')
+    p.add_argument('--verified-wall-blank-fraction',type=float,default=.12,
+                   help='retain nearly blank empty tiles from verified wall-only backgrounds')
     p.add_argument('--eval-scales',default='1.0',help='comma-separated source pixels per model pixel')
     p.add_argument('--overlap',type=int,default=128)
     p.add_argument('--seed',type=int,default=2026)
     p.add_argument('--stress-val',action='store_true')
     p.add_argument('--stress-test',action='store_true')
     p.add_argument('--allow-unverified-completeness',action='store_true')
+    p.add_argument('--allow-partial-training',action='store_true',
+                   help='use class-masked loss for partial real positives; evaluation must be exhaustive')
     args=p.parse_args()
     report=run(args.manifest,args.output_dir,samples=args.train_tiles_per_page,
                seed=args.seed,scales=tuple(float(s) for s in args.eval_scales.split(',')),
                overlap=args.overlap,stress_val=args.stress_val,stress_test=args.stress_test,
                allow_unverified_completeness=args.allow_unverified_completeness,
-               train_variants=args.train_variants,train_negative_fraction=args.train_negative_fraction)
+               allow_partial_training=args.allow_partial_training,
+               train_variants=args.train_variants,train_negative_fraction=args.train_negative_fraction,
+               verified_wall_negative_fraction=args.verified_wall_negative_fraction,
+               verified_wall_blank_fraction=args.verified_wall_blank_fraction)
     print(json.dumps(report['counts'],indent=2))
 if __name__=='__main__':main()

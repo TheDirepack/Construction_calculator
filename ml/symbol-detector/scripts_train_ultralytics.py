@@ -83,6 +83,16 @@ def main():
     if args.weights:
         config["initialization"] = "blueprint_ssl_backbone_plus_random_detect_head"
         config["ssl_checkpoint"] = str(args.weights.expanduser().resolve())
+    # Standard YOLO loss incorrectly calls missing real-device labels
+    # background. Activate the actual per-class loss when sidecar says partial.
+    from blueprint_symbols.partial_supervision import read_supervision
+    supervision = read_supervision(args.data_yaml)
+    if supervision is not None:
+        config['supervision'] = ('masked_partial_real_labels'
+                                 if supervision['has_partial'] else 'complete_labels')
+        config['partial_training_images'] = sum(
+            len(v) < len(supervision['class_ids'])
+            for v in supervision['samples'].values())
     print(json.dumps(config, indent=2))
     if not args.run:
         print('PLAN ONLY. No training or model downloads performed.')
@@ -99,7 +109,10 @@ def main():
         parser.error('Install Ultralytics on your own training machine')
     model = YOLO(config['architecture'])
     ssl_trainer = None
-    if args.weights:
+    if supervision is not None and supervision['has_partial']:
+        from blueprint_symbols.partial_supervision import build_masked_detection_trainer
+        ssl_trainer = build_masked_detection_trainer(args.data_yaml, args.weights)
+    elif args.weights:
         # Model.train() constructs a NEW DetectionModel. Loading a state dict
         # into the YOLO(yaml) object here would silently discard those weights.
         # Instead inject the verified SSL tensors into the actual training model

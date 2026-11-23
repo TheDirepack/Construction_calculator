@@ -21,6 +21,7 @@ def compose_ssl_symbols(
     *,
     neca_bank: NecaSymbolBank | None = None,
     max_symbols: int = 16,
+    requested_symbols: int | None = None,
     min_size_px: float = 12.0,
     max_size_px: float = 80.0,
     procedural_fraction: float = 0.25,
@@ -31,6 +32,9 @@ def compose_ssl_symbols(
 ) -> tuple[np.ndarray, dict]:
     """Composite 0..max_symbols randomly scaled glyphs on a source crop.
 
+    requested_symbols forces an exact requested count for supervised generation;
+    None retains the original random count for SSL pretraining.
+
     NECA samples span every eligible symbol in the source catalog. Procedural
     glyphs cover seven electrical families; with no NECA bank they are used
     exclusively. Existing drawing symbols remain in the source image.
@@ -39,6 +43,10 @@ def compose_ssl_symbols(
     """
     if not 0 <= max_symbols <= 128:
         raise ValueError("max_symbols must be between 0 and 128")
+    if requested_symbols is not None and not (isinstance(requested_symbols, int) and
+                                              not isinstance(requested_symbols, bool) and
+                                              0 <= requested_symbols <= max_symbols):
+        raise ValueError("requested_symbols must be an integer in [0, max_symbols]")
     if not 0 < min_size_px <= max_size_px:
         raise ValueError("invalid symbol size range")
     if not 0 <= procedural_fraction <= 1:
@@ -56,7 +64,8 @@ def compose_ssl_symbols(
         (min_size_px, max_size_px), drawing_dpi, clean.shape[:2]
     )
 
-    requested = int(rng.integers(0, max_symbols + 1))
+    requested = (int(rng.integers(0, max_symbols + 1))
+                 if requested_symbols is None else requested_symbols)
     metadata = {"requested": requested, "placed": 0, "neca": 0,
                 "procedural": 0, "drawing_dpi": drawing_dpi,
                 "symbol_size_range_px": [round(glyph_min_px, 3),

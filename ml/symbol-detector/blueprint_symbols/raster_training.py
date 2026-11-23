@@ -31,6 +31,9 @@ class RasterRecord:
     width: int
     height: int
     instances: list[dict]
+    wall_only_background_verified: bool = False
+    exhaustive_families: frozenset[str] = frozenset()
+    source_type: str = 'unknown'
 
 
 def read_records(annotation_paths: list[str | Path]) -> list[RasterRecord]:
@@ -44,7 +47,12 @@ def read_records(annotation_paths: list[str | Path]) -> list[RasterRecord]:
         w, h = int(data['image_width']), int(data['image_height'])
         if w <= 0 or h <= 0:
             raise ValueError(f'invalid dimensions: {path}')
-        record=RasterRecord(image, str(data.get('project_family_id',data.get('source_id',path.stem))),w,h,data['instances'])
+        record=RasterRecord(image, str(data.get('project_family_id',data.get('source_id',path.stem))),
+                            w,h,data['instances'],
+                            bool(data.get('wall_only_background_verified', False) and
+                                 data.get('synthetic_targets_only', False)),
+                            frozenset(data.get('exhaustive_families', [])),
+                            str(data.get('source_type', 'unknown')))
         records.append(record)
     return records
 
@@ -186,6 +194,9 @@ class RasterTileDataset(Dataset):
                 # Never mislabel a clipped/uncertain component as background.
                 ignore.append(box)
         info={'tile':tile, 'ignore_boxes':ignore, 'group':rec.group,
+              'verified_wall_background':rec.wall_only_background_verified,
+              'exhaustive_families':sorted(rec.exhaustive_families),
+              'source_type':rec.source_type,
               'image_path':str(rec.image), 'target_symbol_pixels':target_px,
               'damage':damage_info}
         return np.ascontiguousarray(rgb),targets,info
