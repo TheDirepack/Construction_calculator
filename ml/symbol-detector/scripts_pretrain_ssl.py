@@ -621,7 +621,7 @@ def main() -> None:
                    help='Random number of synthetic symbols per crop: 0..N (inclusive)')
     p.add_argument('--symbol-min-px', type=float, default=12.0)
     p.add_argument('--symbol-max-px', type=float, default=80.0)
-    p.add_argument('--symbol-augment-probability', type=float, default=0.80)
+    p.add_argument('--symbol-augment-probability', type=float, default=1.00)
     p.add_argument('--procedural-fraction', type=float, default=0.25)
     p.add_argument('--clean-fraction', type=float, default=0.20)
     p.add_argument('--labeled-focus-probability', type=float, default=0.65)
