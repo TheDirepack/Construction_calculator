@@ -118,10 +118,10 @@ acceptable; never mark a partially annotated page as exhaustive.
 ### Audited NECA reference hierarchy
 
 The source vector library contains **466 SVG entries**. A full local visual
-audit classifies each source entry as: **251 base glyphs, 34 switch
-base-plus-suffix composites, 35 standalone/additive modifiers and 146
+audit classifies each source entry as: **250 base glyphs, 34 switch
+base-plus-suffix composites, 35 standalone/additive modifiers and 147
 excluded/non-device** (including routing symbols). The inspected base
-artwork is grouped into **165 visual groups**. These are reference grouping
+artwork is grouped into **166 visual groups**. These are reference grouping
 counts, **not verified model detections**. Use `--visual-audit-out` to export
 the full mapping of NECA ID → group, role, and known attributes.
 
@@ -139,8 +139,10 @@ the full mapping of NECA ID → group, role, and known attributes.
   in modifier-only sections do not produce independent device boxes.
 - **Detection/communications/control**: fire-alarm hexagons with changing
   internal letters, HVAC lettered circles/squares, security lettered
-  boxes, and other repeated shell shapes share a base group.
-  Internal letters still require subsequent VLM or OCR verification.
+  boxes, and other repeated shell shapes share a base group. Wide HVAC
+  HOA selectors and rectangular CCTV/control boxes remain separate from
+  square versions. Internal letters and external functional marks still
+  require subsequent VLM or OCR verification.
 - All uncommon standalone artwork remains in its own group by default;
   grouping never silently drops an unfamiliar shape solely due to a
   semantic name mismatch.
@@ -181,6 +183,10 @@ python scripts_run_sam3_pdfs.py --catalog-only \
 #   --scan-mode grouped --visual-prototypes-per-group 1
 #   --switch-suffix-score 0.92 --switch-suffix-margin 0.06
 #   --no-switch-suffixes         disables local modifier matching
+#   --no-core-crop              disables conservative cropping of outside
+#                               circuit/schedule labels from reference icons
+#   --max-detections-per-tile 64   hard ceiling on post-gated boxes
+#   --fine-family-limit 24     ceiling on boxes per device family
 #   --no-prompt-cache           disables local SVG and feature caches
 #   --family-thresholds FILE    per-family confidence overrides
 #   --prompt-allowlist FILE     explicit NECA references
