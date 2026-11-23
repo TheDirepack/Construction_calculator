@@ -65,7 +65,7 @@ def render_controls(
             if not isinstance(coords, list) or len(coords) != 4:
                 raise ValueError("rect_pt must contain four numbers")
             rect = fitz.Rect(*[float(v) for v in coords])
-            if (not rect.is_finite or rect.is_empty or
+            if (rect.is_infinite or rect.is_empty or
                     rect.width < 20 or rect.height < 20 or
                     not page.rect.contains(rect)):
                 raise ValueError(f"control {name} has invalid source crop")
