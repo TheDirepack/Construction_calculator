@@ -28,6 +28,8 @@ def test_preview_creates_aligned_pairs_and_count_audit(tmp_path):
     assert report["placed_total"] <= report["requested_total"] <= 5 * 16
     assert len(report["rows"]) == 5
     assert report["distinct_inserted_variants"] >= 0
+    assert sum(report["degradation_by_severity"].values()) == 5
+    assert isinstance(report["degradation_by_category"], dict)
     assert report["eligible_neca_svg_variants"] == 0  # procedural-only fixture
     assert sum(report["placed_by_family"].values()) == report["placed_total"]
     assert (out / "preview_report.json").is_file()
