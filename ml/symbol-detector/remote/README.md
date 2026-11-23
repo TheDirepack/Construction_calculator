@@ -109,79 +109,154 @@ run). Early stopping (patience 40) can end it before 300 epochs; that has not
 been measured yet.
 
 
-## SAM 3.1 hierarchical device proposals (2026-11-22)
+## Precision-first, self-hosted SAM 3.1 symbol proposals (2026-11-22)
 
-SAM 3/3.1 processes **multiple category prompts as independent batched
-queries** against a single cached image embedding. This is not a native
-joint multiclass decoder; the practical speed win is skipping unneeded
-fine queries after discovering which families occur on a tile.
+The GPU scanner is **local** and produces provisional device candidates. Its
+primary goal is to avoid flooding the downstream VLM with false boxes, **not**
+to label every device on every drawing. A small, fully reviewed evaluation set
+is still required before claiming real-world precision gains.
 
-The new default runs two stages on each nonblank blueprint tile:
+### Detection path
 
-1. **Coarse**: one/two representative visual exemplars per device family
-   (switch, receptacle, luminaire, data outlet, fire alarm, etc.). Output
-   has `subtype=unspecified`, even though a prototype was used.
-2. **Fine**: only families proposed by stage 1 get detailed NECA subtype
-   queries. Both stages share the *same* cached SAM image encoding. Fine
-   predictions must overlap the corresponding coarse-family proposal.
+1. Preflight the NECA glyphs: reject routing/legend modifiers, parent rows
+   with separately extracted alternatives, implausible sparsity/solid fills,
+   and fragmented visual references. Keep the original symbol IDs.
+2. Rasterize SVGs and encode reference geometry using persistent **local**
+   caches in `<out>/_sam_prompt_cache`. Group geometric reference encodings
+   in bounded batches; on 6GB GPUs reduce `--reference-geometry-batch` to
+   `1` or `2` if the default of `4` is too large.
+3. Encode each 1008px blueprint tile **once**. Query broad device families in
+   GPU batches, then query the 12 most representative subtype exemplars only
+   within active families (all variants are available with
+   `--fine-per-family 0`).
+4. Apply precision gates: **coarse-only boxes are not exported**; confirmed
+   fine hits require overlap with a coarse-family candidate. Reject boxes
+   from blank/fill-only areas, highly elongated routing strokes, duplicate
+   overlap tiles, and overactive families. De-duplicate nested, variable-sized
+   boxes after combining all tiles. Each reject reason is counted.
+5. Review candidate crops as a VLM/human. A completed review explicitly sets
+   `review_status` and `review_source`; unreviewed candidates never pass.
+   Approved outputs remain **provisional**, never exhaustive ground truth.
 
-A periodic full fine scan recovers candidates that coarse prompts might
-have missed. It is not a complete recall guarantee; the real-data
-benchmark must compare this pipeline against the original flat baseline.
-
-The source NECA 100 ZIP has 466 entries; the curated bank retains 284
-eligible exemplars across 16 source categories and 254 distinct
-category/subcategory pairs. The prompt metadata preserves all fine
-categories, including those not selected for a particular query.
+The NECA 100 source ZIP has 466 items; the catalog contains 284 eligible
+visual exemplars across 16 drawing-system categories and 254
+category/subcategory pairs before reference quality filtering. VLM subtype
+choices include the complete eligible taxonomy, not just queried exemplars.
 
 ```bash
-# Catalog preflight without model inference:
+# CPU category/index preflight (model still needs to be installed on the
+# GPU machine for the normal scan):
 python scripts_run_sam3_pdfs.py --catalog-only \
     --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
-    --data-root ../data/blueprints_and_libraries --out ../work/sam3_proposals
+    --data-root ../data/blueprints_and_libraries \
+    --out ../work/sam3_proposals
 
-# Hierarchical default: all curated subtypes available, 2 initial
-# exemplar prompts per family, gated fine prompts and 1/12 tile fallback:
+# Precision-first local GPU run:
 python scripts_run_sam3_pdfs.py \
     --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
-    --data-root ../data/blueprints_and_libraries --out ../work/sam3_proposals
+    --data-root ../data/blueprints_and_libraries \
+    --out ../work/sam3_proposals
 
-# Key tuning:
-# --scan-mode hierarchical --coarse-per-family 2
-# --coarse-score-thr 0.30 --score-thr 0.55
-# --fine-per-family 0         # 0 = all available variants within active family
-# --fallback-every-tiles 12   # 0 disables, 1 = full fine search on each tile
-# --scan-mode flat --max-prompts 96 --prompts-per-category 12
-# --scan-mode flat --max-prompts 0 --prompts-per-category 0
-# --native-only               # native vectors only; excludes some Annex A
-# --prompt-allowlist reviewed_ids.json
+# Effective defaults:
+#   --scan-mode hierarchical --coarse-per-family 2 --fine-per-family 12
+#   --coarse-score-thr 0.50 --score-thr 0.72
+#   --emit-generic OFF --fallback-every-tiles 0
+#   --max-box-aspect 6 --min-ink-fraction 0.018 --max-ink-fraction 0.85
+#   --coarse-family-limit 50 --fine-family-limit 80
+#   --reference-render-height 96 --reference-geometry-batch 4
+#
+# High-recall control comparison:
+#   --fine-per-family 0 --fallback-every-tiles 1 --score-thr 0.55
+# Flat reference comparison (same source and model):
+#   --scan-mode flat --max-prompts 96 --prompts-per-category 12
+#   --score-thr 0.55
+#
+# Cached geometry is versioned by resolved model revision, model
+# configuration, image glyph content and render parameters.
+#   --no-prompt-cache             bypass raster and geometry caches
+#   --no-reference-quality       bypass quality rejection for A/B tests
+#   --native-only                exclude raster-traced Annex A exemplars
+#   --prompt-allowlist PATH      explicitly approved NECA IDs
+#   --prompt-denylist PATH       locally reviewed false-positive NECA IDs
 ```
 
-**Performance:** Flat mode queries all configured prototypes on every tile.
-Hierarchical mode queries only the coarse family prototypes and variants
-from observed families. The output JSON reports `query_stats`: encoded tile
-count, coarse/fine prompt calls, fallback count, and coarse/fine proposal
-counts. Compare actual GPU time, proposal recall and accepted-label precision
-on an exhaustively reviewed *small* held-out electrical set before treating
-the hierarchical setting as more accurate/faster. The old low-level cached
-SAM geometry path still needs an installed-model compatibility test.
+**Family thresholds:** Create a local JSON file, e.g.:
 
-**Avoid combinatorial label explosion:** Device family and fine symbol
-form are separate from electrical attributes. A switch may be
-`pole_configuration=three_way` with
-`control_features=[dimmer,low_voltage]`. A receptacle may be duplex,
-GFCI-protected, emergency-fed and floor-mounted. Voltage, phase, amperage,
-NEMA configuration and circuit associations are optional *evidence-backed*
-properties read from the actual project's legend, adjacent notes or
-schedules; they are not inferred from stock NECA examples.
+```json
+{
+  "switch": {"coarse": 0.55, "fine": 0.80},
+  "receptacle": {"coarse": 0.53, "fine": 0.77},
+  "fire_alarm_detector": {"fine": 0.82}
+}
+```
 
-The VLM review batch contains NECA `taxonomy`,
-`category_taxonomy` and `device_attribute_schema`. Model reviewers must
-explicitly accept/reject/mark uncertain. Only accepted, valid
-geometry/type/attribute proposals are exported as *provisional* devices.
-Document-specific automatic proposals never imply exhaustive annotations.
-Output names are fingerprinted by model, source, prompt selections and
-tuning so old results are not silently reused.
+Pass `--family-thresholds my_thresholds.json`. These numbers are
+**illustrative only**, not empirically calibrated. The code validates
+family names and applies the family-specific thresholds on GPU before
+copying detection boxes back to the CPU.
+
+### Reference and prompt best practices
+
+- Favor a **small number of clean, distinct positives** (common base shapes
+  first) over many near-identical or text-heavy legend entries. No printed
+  definitions, annotations, table borders, circuit-routing arrows, or
+  full legend rows in an exemplar.
+- Inspect cropped reference images at the same approximate effective
+  pixel scale as plan symbols. Avoid ambiguous fragments; use a tight
+  bounding rectangle with a little surrounding paper. Include varied
+  drafting styles where justified by real positive samples.
+- Use a short **object-concept text prompt** (`electrical wall switch`,
+  `duplex receptacle`, etc.) for a controlled experiment. Compare
+  **text-only, exemplar-only, and combined text+exemplar** predictions.
+  Meta/Hugging Face support positive and negative exemplar boxes, but
+  **this runner's custom low-level off-image SVG embedding path does not
+  implement native negative prompt handling**. Do not mix unsupported
+  negative-box semantics into the cached geometry encoder.
+- Collect hard negatives specifically from text callouts, circuit routing,
+  grid bubbles, junction-box lookalikes, and symbol legends. Only
+  **human-verified** false-positive crops should drive automatic prompt
+  removal; the source page need not be completely annotated for this.
+- The NECA graphics are standardized symbols, not guaranteed matches for
+  each architect/engineer's custom legend. Confirm symbol meaning against
+  the **actual drawing's own legend** when a variant is unclear.
+
+To identify noisy NECA exemplars from existing contact-sheet reviews:
+
+```bash
+python scripts_sam_prompt_feedback.py \
+    --review-dir ../work/circuitnet_review_sheets \
+    --out ../work/sam_prompt_feedback.json \
+    --suggested-denylist ../work/sam_noisy_prompts_review.json
+# After inspecting the suggestions:
+# --prompt-denylist ../work/sam_noisy_prompts_review.json
+```
+
+The tool ranks human and VLM review results separately. It only proposes a
+denylist entry after at least 10 human-reviewed rejections spanning two
+source PDFs and no human-confirmed positive examples. It never applies the
+suggestions automatically.
+
+### Verification and expected tradeoffs
+
+For the **same** PDFs and model revision, compare `query_stats`, PDF run
+time, total emitted candidates, VLM/human rejection fraction, missed devices
+on a small exhaustively annotated test set, and class-by-class recall.
+Lower candidate count alone does **not** prove higher precision. The
+default thresholds and image-quality limits are engineering starting
+points, **not benchmarked optima**. The low-level SAM geometry/DETR encoder
+path, including the new multi-exemplar geometry batches, needs an
+end-to-end test on the installed Transformers/SAM 3.1 revision.
+
+The default `--dpi 150 --max-pixels 20000000` can downscale large sheets
+below the intended resolution. Inspect actual `render_size_px` to ensure
+small text-like device symbols remain legible. Raising render resolution
+can improve detection but increases page RAM, tile count and runtime.
+
+Electrical shape labels should not multiply into every possible voltage/
+phase combination. Switch pole/dimmer features, receptacle configuration,
+GFCI protection, mounting, emergency service, voltage, phase and NEMA
+configurations are independent VLM attributes supported only when the
+drawing/legend/schedule provides evidence.
 
 ### Partially annotated real drawings
 
