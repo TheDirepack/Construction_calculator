@@ -439,6 +439,9 @@ def composite_neca_page(
         raise ValueError("placement_chaos must be a probability")
     from .symbol_chaos import distort_symbol_alpha, sample_free_origin
     from .ink_style import local_drawing_ink_bgr, sized_symbol_range
+    from .wall_alignment import (
+        detect_wall_sites, wall_rotation_degrees, snap_symbol_to_wall,
+    )
 
     page = image.copy()
     reference = image if ink_reference is None else ink_reference
@@ -447,22 +450,11 @@ def composite_neca_page(
     h, w = page.shape[:2]
     gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
     ink_mask = (gray < 175).astype(np.uint8)
-    wall_mask = extract_wall_mask(gray)
-
+    wall_sites, fitted_wall_mask = detect_wall_sites(gray, rng)
+    wall_mask = np.maximum(extract_wall_mask(gray), fitted_wall_mask)
     ink_int = cv2.integral(ink_mask)
     wall_int = cv2.integral(wall_mask)
-
-    wall_ys, wall_xs = np.nonzero(wall_mask > 0)
-    has_walls = len(wall_xs) > 50
-
-    # Sample candidate wall points for wall-adjacent placements
-    if has_walls:
-        n_cand = min(1500, len(wall_xs))
-        c_idx = rng.choice(len(wall_xs), size=n_cand, replace=False)
-        cand_walls = list(zip(wall_xs[c_idx].tolist(), wall_ys[c_idx].tolist()))
-        rng.shuffle(cand_walls)
-    else:
-        cand_walls = []
+    has_walls = bool(wall_sites)
 
     ink_bgr = np.percentile(page[ink_mask.astype(bool)], 10, axis=0) if ink_mask.any() else np.zeros(3)
     occupied: list[list[float]] = [list(map(float, i['bbox_xyxy'])) for i in doc.get('instances', [])]
@@ -495,38 +487,11 @@ def composite_neca_page(
         chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
         placement_mode = "wall" if want_wall else "uniform"
 
-        if want_wall and cand_walls:
-            wx, wy = cand_walls[wall_cursor % len(cand_walls)]
+        if want_wall and wall_sites:
+            site = wall_sites[wall_cursor % len(wall_sites)]
             wall_cursor += 1
-            if wx < 20 or wx >= w - 20 or wy < 20 or wy >= h - 20:
-                continue
-
-            # Determine which orthogonal side of the wall is open space (lowest wall/ink density)
-            probe = max(16, int(round(target_px * 0.7)))
-            dirs = [
-                (0, -1, 0.0),    # above wall
-                (0, 1, 180.0),   # below wall
-                (-1, 0, 90.0),   # left of wall
-                (1, 0, 270.0),   # right of wall
-            ]
-            best_dir = None
-            best_score = 1e9
-            for dx, dy, ang in dirs:
-                px0 = max(0, min(w - 1, wx + (dx * probe if dx < 0 else (2 if dx > 0 else -probe // 2))))
-                px1 = max(px0 + 1, min(w, wx + (dx * probe if dx > 0 else (-2 if dx < 0 else probe // 2))))
-                py0 = max(0, min(h - 1, wy + (dy * probe if dy < 0 else (2 if dy > 0 else -probe // 2))))
-                py1 = max(py0 + 1, min(h, wy + (dy * probe if dy > 0 else (-2 if dy < 0 else probe // 2))))
-                area = max(1, (px1 - px0) * (py1 - py0))
-                w_cnt = _rect_sum(wall_int, px0, py0, px1, py1)
-                i_cnt = _rect_sum(ink_int, px0, py0, px1, py1)
-                score = (w_cnt * 10.0 + i_cnt) / area
-                if score < best_score:
-                    best_score = score
-                    best_dir = (dx, dy, ang)
-
-            if best_dir is None or best_score > 0.25:
-                continue
-            nx, ny, angle = best_dir
+            wx, wy = site.x, site.y
+            angle = wall_rotation_degrees(site.nx, site.ny)
             alpha = _resize_and_rotate_alpha(glyph.alpha, target_px, angle)
             if symbol_chaos_probability:
                 alpha, chaos_details = distort_symbol_alpha(
@@ -536,46 +501,15 @@ def composite_neca_page(
             gh, gw = alpha.shape
             if gw + 8 >= w or gh + 8 >= h:
                 continue
-
-            # Start centered on the wall point and SHIFT outward along (nx, ny) until:
-            # 1) ZERO wall pixels are inside the bounding box (no wall clipping!)
-            # 2) The back edge of the box sits cleanly touching the outside of the wall!
-            if ny == -1:
-                x0 = int(round(wx - gw / 2.0))
-                y0 = wy - gh
-            elif ny == 1:
-                x0 = int(round(wx - gw / 2.0))
-                y0 = wy
-            elif nx == -1:
-                x0 = wx - gw
-                y0 = int(round(wy - gh / 2.0))
-            else:
-                x0 = wx
-                y0 = int(round(wy - gh / 2.0))
-
-            # Shift outward up to 32 px until completely clear of the wall
-            shifted = False
-            max_shift = max(24, int(round(target_px * 0.6)))
-            for s in range(0, max_shift + 1):
-                cx0 = x0 + nx * s
-                cy0 = y0 + ny * s
-                cx1 = cx0 + gw
-                cy1 = cy0 + gh
-                if cx0 < 4 or cy0 < 4 or cx1 >= w - 4 or cy1 >= h - 4:
-                    break
-                if _rect_sum(wall_int, cx0, cy0, cx1, cy1) == 0:
-                    # Confirm shifting 1..3 px back toward the wall actually touches the wall!
-                    tx0 = max(0, cx0 - nx * 2)
-                    ty0 = max(0, cy0 - ny * 2)
-                    tx1 = min(w, cx1 - nx * 2)
-                    ty1 = min(h, cy1 - ny * 2)
-                    if _rect_sum(wall_int, tx0, ty0, tx1, ty1) > 0:
-                        x0, y0 = cx0, cy0
-                        shifted = True
-                    break
-            if not shifted:
+            # For non-orthogonal walls, an axis-aligned bounding rectangle
+            # intersects the line even when the *rotated ink* does not.
+            # Align the wallward ink edge and reject actual wall overlap.
+            position = snap_symbol_to_wall(
+                alpha, site, wall_mask, margin=4,
+            )
+            if position is None:
                 continue
-
+            x0, y0 = position
             box = [float(x0), float(y0), float(x0 + gw), float(y0 + gh)]
             if _overlaps(box, occupied):
                 continue
@@ -583,18 +517,10 @@ def composite_neca_page(
             if clutter > max_clutter_ink:
                 continue
 
-            # Exact contact point on the outside surface of the wall
             bcx = x0 + gw / 2.0
             bcy = y0 + gh / 2.0
-            if ny == -1:
-                contact = [bcx, float(y0 + gh)]
-            elif ny == 1:
-                contact = [bcx, float(y0)]
-            elif nx == -1:
-                contact = [float(x0 + gw), bcy]
-            else:
-                contact = [float(x0), bcy]
-            vec = [round(contact[0] - bcx, 2), round(contact[1] - bcy, 2)]
+            contact = [float(wx), float(wy)]
+            vec = [round(wx - bcx, 2), round(wy - bcy, 2)]
             is_wall = True
         else:
             # Free-space placement: NOT touching any wall -> extra vector in the center
@@ -672,7 +598,9 @@ def composite_neca_page(
                 'target_px': round(target_px, 2),
                 'drawing_dpi': drawing_dpi,
                 'ink_color_bgr': [int(round(v)) for v in ink_col],
-                'placement_mode': 'wall_touching_shifted' if is_wall else placement_mode,
+                'placement_mode': 'wall_aligned_raster' if is_wall else placement_mode,
+                'wall_angle_degrees_image': round(angle, 3) if is_wall else None,
+                'wall_contact_method': 'raster_line_fit' if is_wall else None,
             },
         })
 
