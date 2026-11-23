@@ -125,6 +125,10 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
     )
     full_clean_count = sum(bool(row.get("full_clean_view")) for row in rows)
     pdf_views = [row for row in rows if row.get("pdf_crop") is not None]
+    replay_counts = Counter(
+        (row["source"], row["base_crop"]["seed"]) for row in rows
+        if row.get("base_crop")
+    )
     pdf_page_ids = {
         (row["source"], row["pdf_crop"]["pdf_page_index"]) for row in pdf_views
     }
@@ -156,6 +160,15 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
             if g.get("ink_color_bgr") is not None
         }),
         "pdf_native_views": len(pdf_views),
+        "base_crop_unique_count": len(replay_counts),
+        "base_crop_repeated_view_count": sum(n - 1 for n in replay_counts.values()),
+        "base_crop_max_views": max(replay_counts.values(), default=0),
+        "base_crop_cache_hits": sum(
+            bool(row["pdf_crop"].get("clean_crop_cache_hit")) for row in pdf_views
+        ),
+        "fresh_base_crop_views": sum(
+            bool(row["base_crop"]["fresh"]) for row in rows if row.get("base_crop")
+        ),
         "pdf_unique_sources": len({row["source"] for row in pdf_views}),
         "pdf_unique_pages": len(pdf_page_ids),
         "pdf_unique_clips": len(pdf_clips),
