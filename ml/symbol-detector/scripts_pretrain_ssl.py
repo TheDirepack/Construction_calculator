@@ -23,6 +23,7 @@ import hashlib
 import json
 import math
 import time
+from contextlib import nullcontext
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -135,6 +136,47 @@ def build_pretrain_manifests(
         except Exception:
             pass
 
+    from scripts_index_real_pdfs import reserved_sources
+    reserved_file = work_root / "heldout_real_pdfs.json"
+    reserved_paths, reserved_groups = reserved_sources(
+        reserved_file if reserved_file.is_file() else None, data_root.resolve()
+    )
+
+    # Direct PDF page catalog: all eligible pages, no 24 MP intermediates.
+    # Exclude reserved/locked groups *before* either SSL training or validation.
+    pdf_index_file = work_root / "pdf_page_index" / "index.json"
+    indexed_pdf_paths: set[str] = set()
+    pdf_train: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    pdf_val: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    if pdf_index_file.is_file():
+        index = json.loads(pdf_index_file.read_text())
+        if index.get("format_version") != 1:
+            raise ValueError("Unsupported direct PDF page index version")
+        if Path(index.get("data_root", "")).resolve() != data_root.resolve():
+            raise ValueError("PDF index was built against a different data_root")
+        for rel, info in sorted(index.get("documents", {}).items()):
+            gid = str(info.get("project_family_id", "")).strip()
+            source = str((data_root / rel).resolve())
+            if not gid or gid in reserved_groups or source in reserved_paths:
+                continue
+            if gid in locked_eval_groups:
+                continue
+            pages = info.get("pages", [])
+            if not pages:
+                continue
+            # Include the actual source size/mtime in the training fingerprint
+            # so a replaced PDF with unchanged page count cannot silently
+            # change the image distribution during checkpoint resume.
+            pages = [
+                {**item, "pdf_source_signature": info.get("signature")}
+                for item in pages
+            ]
+            # Source PDF is the unit of train/validation isolation. Never split
+            # different pages from the same original PDF across partitions.
+            target = pdf_val if group_is_holdout(gid, val_fraction=pool_val_fraction) else pdf_train
+            target[gid].extend(pages)
+            indexed_pdf_paths.add(source)
+
     train_buckets: dict[str, dict[str, Any]] = {}
     val_buckets: dict[str, dict[str, Any]] = {}
     audit: dict[str, Any] = {
@@ -142,6 +184,11 @@ def build_pretrain_manifests(
         'included_counts': defaultdict(int),
         'val_monitor_counts': defaultdict(int),
         'locked_eval_groups_count': len(locked_eval_groups),
+        'explicit_reserved_pdf_groups_count': len(reserved_groups),
+        'explicit_reserved_pdf_paths_count': len(reserved_paths),
+        'direct_pdf_sources': len(indexed_pdf_paths),
+        'direct_pdf_pages_train': sum(len(p) for p in pdf_train.values()),
+        'direct_pdf_pages_val_monitor': sum(len(p) for p in pdf_val.values()),
     }
 
     # 1. Real construction drawings & curated pool (deduplicated by image_sha256)
@@ -179,6 +226,15 @@ def build_pretrain_manifests(
                 continue
             gid = str(doc.get('project_family_id') or jpath.stem)
             src_path = str((doc.get('pool') or {}).get('source_path') or jpath.name)
+            source_file = str((data_root / src_path).resolve())
+            if gid in reserved_groups or source_file in reserved_paths:
+                audit['excluded_counts']['explicit_reserved_raster_source'] += 1
+                continue
+            if source_file in indexed_pdf_paths:
+                # Prefer fresh PDF-native crops, avoid doubling the same page
+                # via its stale/capped raster representation.
+                audit['excluded_counts']['replaced_by_direct_pdf'] += 1
+                continue
             is_real = _is_real_construction(gid, src_path) or role == 'label_queue'
             # Locked detector val/test projects must never influence even SSL
             # checkpoint selection. They are excluded rather than moved to SSL val.
@@ -203,10 +259,24 @@ def build_pretrain_manifests(
                     other_tr[gid].append(str(img_path))
                     audit['included_counts']['pool_other_background'] += 1
 
+    if pdf_train:
+        train_buckets['real_pdf_pages'] = {'weight': 0.62, 'groups': dict(pdf_train)}
+        audit['included_counts']['direct_pdf_pages'] = sum(
+            len(v) for v in pdf_train.values()
+        )
+    if pdf_val:
+        val_buckets['real_pdf_pages'] = {'weight': 0.62, 'groups': dict(pdf_val)}
+        audit['val_monitor_counts']['direct_pdf_pages'] = sum(
+            len(v) for v in pdf_val.values()
+        )
     if real_tr:
-        train_buckets['real_construction_drawings'] = {'weight': 0.55, 'groups': dict(real_tr)}
+        train_buckets['real_construction_drawings'] = {
+            'weight': 0.30 if pdf_train else 0.55, 'groups': dict(real_tr)
+        }
     if real_va:
-        val_buckets['real_construction_drawings'] = {'weight': 0.55, 'groups': dict(real_va)}
+        val_buckets['real_construction_drawings'] = {
+            'weight': 0.30 if pdf_val else 0.55, 'groups': dict(real_va)
+        }
     if other_tr:
         train_buckets['pool_other_background'] = {'weight': 0.08, 'groups': dict(other_tr)}
     if other_va:
@@ -297,7 +367,7 @@ def build_pretrain_manifests(
             audit['excluded_counts']['unverified_labeled_group'] += 1
             continue
         gid = str(doc.get('project_family_id') or '').strip()
-        if not gid or gid in locked_eval_groups:
+        if not gid or gid in locked_eval_groups or gid in reserved_groups:
             audit['excluded_counts']['labeled_locked_or_missing_group'] += 1
             continue
         imgpath = (jpath.parent / str(doc.get('image_path', ''))).resolve()
@@ -383,16 +453,42 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
     byte. Dataset source-file provenance must still be independently managed.
     """
     fields = (
-        "imgsz", "batch", "epochs", "items_per_epoch", "val_items",
+        "imgsz", "batch", "microbatch", "epochs", "items_per_epoch", "val_items",
         "optimizer", "lr", "workers", "pool_val_fraction", "seed",
         "max_symbols", "symbol_min_px", "symbol_max_px",
         "symbol_augment_probability", "procedural_fraction",
         "clean_fraction", "labeled_focus_probability",
+        "symbol_chaos_probability", "symbol_chaos_strength", "placement_chaos",
+        "page_chaos_probability", "page_chaos_strength",
+        "crop_reuse_views", "crop_bank_size", "fresh_crop_probability",
     )
-    conf = {key: getattr(args, key) for key in fields}
+    # The defaults preserve callers constructing Namespace in older tests.
+    chaos_defaults = {"microbatch": min(4, args.batch),
+                      "symbol_chaos_probability": .88,
+                      "symbol_chaos_strength": 1.0,
+                      "placement_chaos": .85,
+                      "page_chaos_probability": .70,
+                      "page_chaos_strength": 1.0,
+                      "crop_reuse_views": 4,
+                      "crop_bank_size": 32,
+                      "fresh_crop_probability": 0.20}
+    conf = {key: getattr(args, key, chaos_defaults.get(key)) for key in fields}
+    conf["microbatch"] = configured_microbatch(args)
     # Changing loss weighting changes the trained representation; old
     # optimizer state must not be resumed across objective revisions.
     conf["ssl_objective"] = "ink-paper-balanced-v2"
+    conf["training_step_policy"] = "effective_batch_gradient_accumulation_v1"
+    conf["source_sampling_policy"] = "replayed_spatial_crop_bank_cycling_v3"
+    conf["native_pdf_rendering"] = "random_100_to_400_per_view_per_epoch_fixed_source_anchor_v6"
+    conf["neca_composition_policy"] = "standalone_figure_variants_v2"
+    conf["synthetic_placement_policy"] = "contextual_class_mount_odds_v1"
+    conf["wall_alignment_policy"] = "raster_hough_tangent_alpha_contact_v1"
+    conf["symbol_rendering_policy"] = "shared_200dpi_reference_and_local_ink_v1"
+    conf["symbol_geometry_augmentation"] = "bounded_chaos_v1"
+    conf["page_geometry_augmentation"] = "aligned_multiwarp_v2_ink_retention"
+    conf["scan_photometric_augmentation"] = "independent_bloom_contrast_mix_faint_line_rescue_v2"
+    conf["clean_sampling_policy"] = "end_to_end_undistorted_crop_v1"
+    conf["mask_visibility_policy"] = "known_inserted_symbols_max_60_percent_v1"
     conf["neca_svg_bank_sha256"] = neca_source_fingerprint(args.neca_dir)
     manifest = {"format": 1, "settings": conf,
                 "train": train_manifest, "validation": val_manifest}
@@ -473,10 +569,86 @@ def build_musgd_optimizer(model: torch.nn.Module, *, lr: float, momentum: float 
     return MuSGD(param_groups, lr=lr, momentum=momentum, nesterov=True)
 
 
+def configured_microbatch(args: argparse.Namespace) -> int:
+    """Default to a small GPU microbatch when only --batch was provided."""
+    size = getattr(args, "microbatch", None)
+    return min(2, args.batch) if size is None else size
+
+
+def resolve_batch_plan(effective_batch: int, microbatch: int) -> tuple[int, int]:
+    """Return the actual GPU batch and accumulation count for an optimizer step.
+
+    The 512px full-resolution SSL decoder is substantially heavier than the
+    ordinary YOLO detector head. A logical batch of 14 can be built from seven GPU microbatches of two
+    on a memory-limited card.
+    """
+    if (effective_batch < 1 or microbatch < 1
+            or microbatch > effective_batch or effective_batch % microbatch):
+        raise ValueError("microbatch must divide effective batch exactly")
+    return microbatch, effective_batch // microbatch
+
+
+def accumulated_training_update(
+    model: torch.nn.Module,
+    criterion: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+    microbatches,
+    *,
+    device: torch.device,
+    effective_batch: int,
+    grad_clip: float = 2.0,
+) -> dict[str, float]:
+    """One real optimizer step over an effective batch of independent views.
+
+    Keep FP16 gradients scaled across *all* microbatches, unscale and clip
+    once, then update once; this follows PyTorch's AMP accumulation rules.
+    The loss is weighted by microbatch sample count to preserve a proper
+    effective-batch average even with unequal chunk sizes.
+    """
+    optimizer.zero_grad(set_to_none=True)
+    total = 0
+    running = {"loss": 0.0, "l1": 0.0, "edge": 0.0}
+    for deg, clean, mask in microbatches:
+        n = int(deg.shape[0])
+        if n < 1 or total + n > effective_batch:
+            raise ValueError("microbatches exceed configured effective batch")
+        deg = deg.to(device, non_blocking=device.type == "cuda")
+        clean = clean.to(device, non_blocking=device.type == "cuda")
+        mask = mask.to(device, non_blocking=device.type == "cuda")
+        context = (torch.amp.autocast("cuda", dtype=torch.float16)
+                   if device.type == "cuda" else nullcontext())
+        with context:
+            pred = model(deg)
+            loss, stats = criterion(pred, clean, mask)
+        if not bool(torch.isfinite(loss.detach()).all()):
+            raise FloatingPointError("nonfinite SSL pretraining loss")
+        scaler.scale(loss * (n / effective_batch)).backward()
+        for key in running:
+            running[key] += float(stats[key]) * n
+        total += n
+    if total != effective_batch:
+        raise ValueError(
+            f"incomplete SSL effective batch: got {total}, expected {effective_batch}"
+        )
+    scaler.unscale_(optimizer)
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    scaler.step(optimizer)
+    scaler.update()
+    result = {key: value / effective_batch for key, value in running.items()}
+    result["grad_norm"] = float(grad_norm.detach().item())
+    result["samples"] = float(total)
+    return result
+
+
 def validate_pretrain_settings(args: argparse.Namespace) -> None:
     """Fail before building manifests or allocating a model for invalid runs."""
     if args.batch < 1 or args.items_per_epoch < args.batch:
         raise ValueError("items-per-epoch must be at least batch size")
+    microbatch = configured_microbatch(args)
+    resolve_batch_plan(args.batch, microbatch)
+    if args.items_per_epoch % args.batch:
+        raise ValueError("items-per-epoch must be divisible by effective batch size")
     if args.epochs < 1 or args.val_items < 1 or args.workers < 0:
         raise ValueError("invalid epochs/validation items/workers")
     if args.imgsz < 128 or args.imgsz % 32:
@@ -490,10 +662,20 @@ def validate_pretrain_settings(args: argparse.Namespace) -> None:
     if not 0 < args.symbol_min_px <= args.symbol_max_px:
         raise ValueError("invalid symbol size range")
     for key in ("symbol_augment_probability", "procedural_fraction",
-                "clean_fraction", "labeled_focus_probability"):
-        prob = getattr(args, key)
+                "clean_fraction", "labeled_focus_probability",
+                "symbol_chaos_probability", "placement_chaos",
+                "page_chaos_probability"):
+        defaults = {"symbol_chaos_probability": .88,
+                    "placement_chaos": .85, "page_chaos_probability": .70}
+        prob = getattr(args, key, defaults.get(key))
         if not math.isfinite(prob) or not 0 <= prob <= 1:
             raise ValueError(f"{key} must be a probability in [0,1]")
+    symbol_strength = getattr(args, "symbol_chaos_strength", 1.0)
+    page_strength = getattr(args, "page_chaos_strength", 1.0)
+    if not math.isfinite(symbol_strength) or not 0 <= symbol_strength <= 2:
+        raise ValueError("symbol_chaos_strength must be in [0,2]")
+    if not math.isfinite(page_strength) or not 0 <= page_strength <= 2:
+        raise ValueError("page_chaos_strength must be in [0,2]")
 
 
 def train(args: argparse.Namespace) -> None:
@@ -512,9 +694,26 @@ def train(args: argparse.Namespace) -> None:
     )
     identity = run_fingerprint(train_manifest, val_manifest, args)
     prior_fingerprint_file = out_dir / "run_fingerprint.txt"
-    if args.run and args.resume and prior_fingerprint_file.exists():
-        if prior_fingerprint_file.read_text().strip() != identity:
-            raise ValueError("SSL resume changes data or configuration; existing run files untouched")
+    existing_checkpoint = out_dir / "last_pretrain.pt"
+    # Fail BEFORE replacing existing audit/manifests. A wrong --out path or
+    # stale resume settings must not overwrite the last reproducible run's
+    # dataset records even if the optimizer itself is protected.
+    if args.run:
+        if args.resume:
+            if not existing_checkpoint.is_file():
+                raise FileNotFoundError("Resume requested but last_pretrain.pt is missing")
+            if not prior_fingerprint_file.is_file():
+                raise ValueError("SSL resume fingerprint file is missing; existing run files untouched")
+            if prior_fingerprint_file.read_text().strip() != identity:
+                raise ValueError("SSL resume changes data or configuration; existing run files untouched")
+        elif existing_checkpoint.exists() or prior_fingerprint_file.exists():
+            raise SystemExit("Existing SSL run found; use --resume or a fresh --out directory")
+        if args.init_weights and not args.init_weights.is_file():
+            raise FileNotFoundError(f"Initial weights do not exist: {args.init_weights}")
+        if args.neca_dir and not (args.neca_dir / "symbols.json").is_file():
+            raise FileNotFoundError(f"NECA SVG bank missing symbols.json: {args.neca_dir}")
+        if not torch.cuda.is_available():
+            raise SystemExit("CUDA GPU unavailable; refusing CPU pretraining")
 
     (out_dir / 'pretrain_audit.json').write_text(json.dumps(audit, indent=2))
     (out_dir / 'train_manifest.json').write_text(json.dumps(train_manifest))
@@ -525,17 +724,6 @@ def train(args: argparse.Namespace) -> None:
     if not args.run:
         print('PLAN ONLY. Pass --run to start GPU pretraining.', flush=True)
         return
-
-    if args.resume and not (out_dir / 'last_pretrain.pt').is_file():
-        raise FileNotFoundError('Resume requested but last_pretrain.pt is missing')
-    if not torch.cuda.is_available():
-        raise SystemExit('CUDA GPU unavailable; refusing CPU pretraining')
-    if (out_dir / 'last_pretrain.pt').exists() and not args.resume:
-        raise SystemExit('Existing SSL checkpoint found; use --resume or a fresh --out directory')
-    if args.init_weights and not args.init_weights.is_file():
-        raise FileNotFoundError(f'Initial weights do not exist: {args.init_weights}')
-    if args.neca_dir and not (args.neca_dir / 'symbols.json').is_file():
-        raise FileNotFoundError(f'NECA SVG bank missing symbols.json: {args.neca_dir}')
 
     (out_dir / "run_fingerprint.txt").write_text(identity + "\n")
     print(f'Pretrain run fingerprint: {identity}', flush=True)
@@ -553,6 +741,14 @@ def train(args: argparse.Namespace) -> None:
         'procedural_fraction': args.procedural_fraction,
         'clean_fraction': args.clean_fraction,
         'labeled_focus_probability': args.labeled_focus_probability,
+        'crop_reuse_views': getattr(args, 'crop_reuse_views', 4),
+        'crop_bank_size': getattr(args, 'crop_bank_size', 32),
+        'fresh_crop_probability': getattr(args, 'fresh_crop_probability', .20),
+        'symbol_chaos_probability': args.symbol_chaos_probability,
+        'symbol_chaos_strength': args.symbol_chaos_strength,
+        'placement_chaos': args.placement_chaos,
+        'page_chaos_probability': args.page_chaos_probability,
+        'page_chaos_strength': args.page_chaos_strength,
     }
     train_ds = BlueprintSSLDataset(
         train_manifest, size=args.imgsz, items_per_epoch=args.items_per_epoch,
@@ -563,16 +759,24 @@ def train(args: argparse.Namespace) -> None:
         seed=args.seed + 9999, deterministic_eval=True, **data_opts,
     ) if val_manifest['buckets'] else None
 
+    microbatch, accumulate = resolve_batch_plan(
+        args.batch, configured_microbatch(args)
+    )
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch, shuffle=True, num_workers=args.workers,
+        # Epoch-specific randomized source pairs are preplanned inside the
+        # dataset. Shuffling here would destroy consecutive PDF cache hits.
+        train_ds, batch_size=microbatch, shuffle=False, num_workers=args.workers,
         pin_memory=True, drop_last=True, worker_init_fn=_worker_init,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=args.batch, shuffle=False, num_workers=min(2, args.workers),
+        val_ds, batch_size=microbatch, shuffle=False, num_workers=min(2, args.workers),
         pin_memory=True, drop_last=False, worker_init_fn=_worker_init,
     ) if val_ds is not None else None
 
     model = Yolo26P2SSLModel('yolo26n-p2.yaml', imgsz=args.imgsz).to(device)
+    # Detect is never called during SSL reconstruction. Do not optimize its
+    # random head weights; only backbone, neck and SSL decoder are trained.
+    model.det_model.model[model.detect_idx].requires_grad_(False)
     if args.init_weights and args.init_weights.is_file() and not (args.resume and (out_dir / 'last_pretrain.pt').is_file()):
         init_ckpt = torch.load(args.init_weights, map_location=device, weights_only=False)
         if 'model' in init_ckpt:
@@ -621,10 +825,28 @@ def train(args: argparse.Namespace) -> None:
             torch.cuda.set_rng_state_all(ckpt['cuda_rng_state_all'])
         print(f'Resumed from epoch {start_epoch} (best_val={best_val:.5f})', flush=True)
 
-    total_params = sum(p.numel() for p in model.parameters())
-    bb_params = sum(p.numel() for k, p in model.det_model.named_parameters() if not k.startswith(f'model.{model.detect_idx}.'))
-    print(f'Model: YOLO26n-P2 SSL | backbone+neck={bb_params:,} params | total_with_decoder={total_params:,} params', flush=True)
-    print(f'Training: epochs={args.epochs}, items/epoch={args.items_per_epoch}, batch={args.batch}, opt={args.optimizer}, lr={args.lr}, workers={args.workers}', flush=True)
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    bb_params = sum(p.numel() for k, p in model.det_model.named_parameters()
+                    if not k.startswith(f'model.{model.detect_idx}.'))
+    frozen_detect_params = sum(
+        p.numel() for p in model.det_model.model[model.detect_idx].parameters()
+    )
+    optimizer_param_ids = [id(p) for group in optimizer.param_groups for p in group["params"]]
+    expected_param_ids = {id(p) for p in model.parameters() if p.requires_grad}
+    if len(optimizer_param_ids) != len(expected_param_ids) or set(optimizer_param_ids) != expected_param_ids:
+        raise ValueError("SSL optimizer must include every trainable model parameter exactly once")
+    print(
+        f'Model: YOLO26n-P2 SSL | backbone+neck={bb_params:,} params | '
+        f'trainable_with_decoder={trainable_params:,} | '
+        f'frozen_random_detect_head={frozen_detect_params:,} params',
+        flush=True,
+    )
+    print(
+        f'Training: epochs={args.epochs}, items/epoch={args.items_per_epoch}, '
+        f'effective_batch={args.batch}, gpu_microbatch={microbatch}, '
+        f'accumulation_steps={accumulate}, updates/epoch={len(train_loader) // accumulate}, '
+        f'opt={args.optimizer}, lr={args.lr}, workers={args.workers}', flush=True
+    )
 
     metrics_log = out_dir / 'metrics.jsonl'
 
@@ -635,33 +857,31 @@ def train(args: argparse.Namespace) -> None:
         tr_loss = tr_l1 = tr_edge = 0.0
         steps = 0
 
-        for step, (deg, clean, mask) in enumerate(train_loader, start=1):
-            deg = deg.to(device, non_blocking=True)
-            clean = clean.to(device, non_blocking=True)
-            mask = mask.to(device, non_blocking=True)
-
-            optimizer.zero_grad(set_to_none=True)
-            with torch.amp.autocast('cuda', dtype=torch.float16):
-                pred = model(deg)
-                loss, stats = criterion(pred, clean, mask)
-
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
-            scaler.step(optimizer)
-            scaler.update()
-
-            tr_loss += stats['loss']
-            tr_l1 += stats['l1']
-            tr_edge += stats['edge']
+        loader_iter = iter(train_loader)
+        updates_per_epoch = len(train_loader) // accumulate
+        for step in range(1, updates_per_epoch + 1):
+            # The DataLoader shuffles microbatches; each optimizer update sees
+            # exactly the requested logical batch, without needing 14 images
+            # and their full-resolution feature maps on the GPU at once.
+            stats = accumulated_training_update(
+                model, criterion, optimizer, scaler,
+                (next(loader_iter) for _ in range(accumulate)),
+                device=device, effective_batch=args.batch,
+            )
+            tr_loss += stats["loss"]
+            tr_l1 += stats["l1"]
+            tr_edge += stats["edge"]
             steps += 1
 
-            if step == 1 or step % 50 == 0 or step == len(train_loader):
+            if step == 1 or step % 50 == 0 or step == updates_per_epoch:
                 vram_mb = torch.cuda.max_memory_allocated(device) / (1024 * 1024)
+                reserved_mb = torch.cuda.max_memory_reserved(device) / (1024 * 1024)
                 print(
-                    f'  ep {epoch+1:03d}/{args.epochs} step {step:04d}/{len(train_loader)} '
+                    f'  ep {epoch+1:03d}/{args.epochs} update {step:04d}/{updates_per_epoch} '
                     f'loss={tr_loss/steps:.4f} l1={tr_l1/steps:.4f} edge={tr_edge/steps:.4f} '
-                    f'lr={optimizer.param_groups[0]["lr"]:.2e} vram={vram_mb:.0f}MB',
+                    f'grad_norm={stats["grad_norm"]:.3f} '
+                    f'lr={optimizer.param_groups[0]["lr"]:.2e} '
+                    f'vram_allocated={vram_mb:.0f}MB vram_reserved={reserved_mb:.0f}MB',
                     flush=True,
                 )
 
@@ -672,8 +892,8 @@ def train(args: argparse.Namespace) -> None:
         if val_loader is not None:
             model.eval()
             vl = vl1 = ve = 0.0
-            vsteps = 0
-            with torch.no_grad():
+            vitems = 0
+            with torch.inference_mode():
                 for deg, clean, mask in val_loader:
                     deg = deg.to(device, non_blocking=True)
                     clean = clean.to(device, non_blocking=True)
@@ -681,12 +901,13 @@ def train(args: argparse.Namespace) -> None:
                     with torch.amp.autocast('cuda', dtype=torch.float16):
                         pred = model(deg)
                         _, vstats = criterion(pred, clean, mask)
-                    vl += vstats['loss']
-                    vl1 += vstats['l1']
-                    ve += vstats['edge']
-                    vsteps += 1
-            if vsteps:
-                val_loss, val_l1, val_edge = vl / vsteps, vl1 / vsteps, ve / vsteps
+                    count = int(deg.shape[0])
+                    vl += vstats['loss'] * count
+                    vl1 += vstats['l1'] * count
+                    ve += vstats['edge'] * count
+                    vitems += count
+            if vitems:
+                val_loss, val_l1, val_edge = vl / vitems, vl1 / vitems, ve / vitems
 
         dt = time.time() - t0
         monitor = val_loss if math.isfinite(val_loss) else (tr_loss / max(1, steps))
@@ -734,9 +955,12 @@ def main() -> None:
                    help='Optional directory of extracted FloorPlanCAD train-only clean PNGs')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--imgsz', type=int, default=512)
-    p.add_argument('--batch', type=int, default=16)
+    p.add_argument('--batch', type=int, default=14,
+                   help='Effective examples per optimizer step (default 14)')
+    p.add_argument('--microbatch', type=int, default=None,
+                   help='Physical GPU images per forward/backward; defaults to min(2, batch)')
     p.add_argument('--epochs', type=int, default=60)
-    p.add_argument('--items-per-epoch', type=int, default=8192)
+    p.add_argument('--items-per-epoch', type=int, default=8190)
     p.add_argument('--val-items', type=int, default=512)
     p.add_argument('--optimizer', choices=('MuSGD', 'SGD'), default='MuSGD')
     p.add_argument('--lr', type=float, default=5e-3)
@@ -754,7 +978,23 @@ def main() -> None:
     p.add_argument('--symbol-augment-probability', type=float, default=1.00)
     p.add_argument('--procedural-fraction', type=float, default=0.25)
     p.add_argument('--clean-fraction', type=float, default=0.20)
+    p.add_argument('--crop-reuse-views', type=int, default=4,
+                   help='Independent augmentations of each exact source crop before selecting a new page/site')
+    p.add_argument('--crop-bank-size', type=int, default=32,
+                   help='Stable region slots per PDF page or source image; reused across epochs')
+    p.add_argument('--fresh-crop-probability', type=float, default=.20,
+                   help='Fraction of source bursts exploring an uncached new crop site')
     p.add_argument('--labeled-focus-probability', type=float, default=0.65)
+    p.add_argument('--symbol-chaos-probability', type=float, default=0.88,
+                   help='Probability each inserted symbol receives independent geometry/print corruption')
+    p.add_argument('--symbol-chaos-strength', type=float, default=1.0,
+                   help='Nonlinear warp/stroke severity multiplier 0..2')
+    p.add_argument('--placement-chaos', type=float, default=0.85,
+                   help='Mix uniform, edge, corner, cluster, and band placements 0..1')
+    p.add_argument('--page-chaos-probability', type=float, default=0.70,
+                   help='Probability of aligned whole-drawing geometry deformation 0..1')
+    p.add_argument('--page-chaos-strength', type=float, default=1.0,
+                   help='Amplitude of perspective, nonuniform scaling, folds, page curl and waves 0..2')
     p.add_argument('--init-weights', type=Path, default=None,
                    help='Optional prior SSL checkpoint (last_pretrain.pt or best_yolo26n_p2_backbone.pt) to warm-start from')
     p.add_argument('--resume', action='store_true')

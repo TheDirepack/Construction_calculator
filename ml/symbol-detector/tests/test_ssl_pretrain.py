@@ -1,6 +1,7 @@
 """Regression tests for blueprint-only runtime SSL pretraining pipeline."""
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 
@@ -147,6 +148,8 @@ def test_run_fingerprint_stable_and_detects_changed_configuration():
         symbol_min_px=12.0, symbol_max_px=80.0,
         symbol_augment_probability=1.0, procedural_fraction=0.25,
         clean_fraction=0.2, labeled_focus_probability=0.65,
+        symbol_chaos_probability=0.88, symbol_chaos_strength=1.0,
+        placement_chaos=0.85,
         neca_dir=None,
     )
     train = {"buckets": {"a": {"groups": {"project_a": ["a.png"]}}}}
@@ -277,3 +280,183 @@ def test_neca_source_fingerprint_tracks_actual_svg_strokes(tmp_path):
     }))
     with pytest.raises(ValueError, match="escapes"):
         neca_source_fingerprint(root)
+
+
+
+def test_new_warp_controls_change_resume_fingerprint():
+    import argparse
+    from scripts_pretrain_ssl import run_fingerprint
+
+    args = argparse.Namespace(
+        imgsz=512, batch=4, epochs=2, items_per_epoch=128, val_items=32,
+        optimizer="MuSGD", lr=.005, workers=0, pool_val_fraction=.1, seed=99,
+        max_symbols=16, symbol_min_px=12., symbol_max_px=80.,
+        symbol_augment_probability=1., procedural_fraction=.25,
+        clean_fraction=.2, labeled_focus_probability=.65,
+        symbol_chaos_probability=.88, symbol_chaos_strength=1.,
+        placement_chaos=.85, neca_dir=None,
+    )
+    manifest = {"buckets": {"real": {"groups": {"building": ["a.png"]}}}}
+    reference = run_fingerprint(manifest, {"buckets": {}}, args)
+    args.symbol_chaos_probability = .40
+    assert run_fingerprint(manifest, {"buckets": {}}, args) != reference
+    args.symbol_chaos_probability = .88
+    args.symbol_chaos_strength = 1.8
+    assert run_fingerprint(manifest, {"buckets": {}}, args) != reference
+    args.symbol_chaos_strength = 1.
+    args.placement_chaos = .20
+    assert run_fingerprint(manifest, {"buckets": {}}, args) != reference
+
+
+def test_clean_fraction_bypasses_symbol_page_and_scan_damage(tmp_path):
+    import cv2
+    import torch
+    from blueprint_symbols.ssl_pretrain import BlueprintSSLDataset
+
+    png = tmp_path / "sheet.png"
+    assert cv2.imwrite(str(png), _fake_blueprint(320, 320))
+    manifest = {"buckets": {"drawings": {"groups": {"project": [str(png)]}}}}
+    dataset = BlueprintSSLDataset(
+        manifest, size=256, items_per_epoch=12, seed=123,
+        clean_fraction=1.0, max_symbols=16, symbol_augment_probability=1.0,
+        symbol_chaos_probability=1.0, page_chaos_probability=1.0,
+        return_metadata=True,
+    )
+    placed_total = 0
+    for index in range(len(dataset)):
+        damaged, clean, mask, info = dataset[index]
+        assert info["full_clean_view"] is True
+        assert info["geometric_variability_enabled"] is False
+        assert torch.equal(clean, damaged)
+        assert not bool(mask.any())
+        assert info["page_chaos"]["operations"] == []
+        assert info["degradation"]["operations"] == []
+        placements = info["symbol_stats"].get("placements", [])
+        placed_total += len(placements)
+        assert all(not p["symbol_chaos"].get("operations") for p in placements)
+    assert placed_total > 0
+
+
+def test_no_clean_views_means_scans_and_page_warps_are_eligible(tmp_path):
+    import cv2
+    from blueprint_symbols.ssl_pretrain import BlueprintSSLDataset
+
+    png = tmp_path / "sheet.png"
+    assert cv2.imwrite(str(png), _fake_blueprint(320, 320))
+    manifest = {"buckets": {"drawings": {"groups": {"project": [str(png)]}}}}
+    dataset = BlueprintSSLDataset(
+        manifest, size=256, items_per_epoch=8, seed=492,
+        clean_fraction=0.0, max_symbols=0,
+        page_chaos_probability=1.0, page_chaos_strength=1.5,
+        return_metadata=True,
+    )
+    modes = set()
+    for index in range(len(dataset)):
+        _, _, _, info = dataset[index]
+        assert info["full_clean_view"] is False
+        assert info["degradation"]["severity"] != "clean"
+        assert info["degradation"]["operations"]
+        modes.update(info["page_chaos"]["operations"])
+    assert modes
+
+
+def test_masked_reconstruction_does_not_erase_known_inserted_symbols():
+    """Masking half a label can teach reconstruction; erasing all cannot."""
+    sheet = _fake_blueprint(256, 256)
+    boxes = [[18., 20., 52., 56.], [100., 92., 132., 124.],
+             [175., 173., 202., 197.]]
+    rescued = 0
+    for seed in range(32):
+        degraded, mask, meta = apply_runtime_corruptions(
+            sheet, np.random.default_rng(seed), mask_prob=1.0,
+            clean_fraction=0.0, return_metadata=True,
+            protected_boxes=boxes,
+        )
+        assert degraded.shape == sheet.shape
+        assert 0 <= float(mask.mean()) <= .65
+        for x0, y0, x1, y1 in boxes:
+            fraction = float(mask[int(y0):int(y1), int(x0):int(x1)].mean())
+            assert fraction <= .6001
+        rescued += "masked_symbol_visibility_guard" in meta["operations"]
+    assert rescued > 0
+
+
+def test_mask_visibility_guard_rejects_nonfinite_symbol_boxes():
+    sheet = _fake_blueprint(128, 128)
+    with pytest.raises(ValueError, match="protected symbol bbox"):
+        apply_runtime_corruptions(
+            sheet, np.random.default_rng(42), mask_prob=1.0,
+            clean_fraction=0.0,
+            protected_boxes=[[float("nan"), 1., 8., 8.]],
+        )
+
+
+def test_bloom_contrast_are_input_only_and_can_mix_with_other_damage():
+    """New optical degradation does not change the SSL clean target."""
+    source = _fake_blueprint(144, 144)
+    original = source.copy()
+    seen = set()
+    mixed = 0
+    examples = []
+    for seed in range(128):
+        degraded, mask, metadata = apply_runtime_corruptions(
+            source, np.random.default_rng(seed),
+            clean_fraction=0., mask_prob=0., return_metadata=True,
+        )
+        assert degraded.dtype == source.dtype
+        assert degraded.shape == source.shape
+        assert not mask.any()
+        ops = metadata["operations"]
+        seen.update(ops)
+        if "optical_highlight_bloom" in ops:
+            examples.append(degraded)
+            mixed += (
+                any("contrast" in name for name in ops) and
+                any(name in ops for name in
+                    ("illumination", "gamma_curve", "gaussian_blur",
+                     "sensor_noise", "resampling"))
+            )
+    assert np.array_equal(source, original)
+    assert len(examples) >= 5
+    assert mixed > 0
+    assert "optical_contrast_gain" in seen
+    assert len({a.tobytes() for a in examples}) >= 5
+    clean, mask, meta = apply_runtime_corruptions(
+        source, np.random.default_rng(0),
+        clean_fraction=1., mask_prob=0., return_metadata=True,
+    )
+    assert meta["operations"] == []
+    assert np.array_equal(clean, source)
+    assert not mask.any()
+
+
+def test_faint_blue_linework_is_rescued_after_severe_optical_washout(monkeypatch):
+    """White-background fixed black-ink threshold missed pale CAD strokes."""
+    import blueprint_symbols.scan_chaos as scan_chaos
+
+    def erase_lines(image, rng, *, strength=1.):
+        return np.full_like(image, 255), ["forced_qa_washout"]
+
+    monkeypatch.setattr(scan_chaos, "add_scan_chaos", erase_lines)
+    source = np.full((128, 128, 3), 255, dtype=np.uint8)
+    for y in range(16, 112, 18):
+        cv2.line(source, (6, y), (117, y), (223, 233, 243),
+                 2, cv2.LINE_AA)
+    baseline = source.copy()
+    degraded, mask, meta = apply_runtime_corruptions(
+        source, np.random.default_rng(11),
+        clean_fraction=0., mask_prob=0., return_metadata=True,
+    )
+    assert np.array_equal(source, baseline)
+    assert "line_contrast_rescue" in meta["operations"]
+    assert "forced_qa_washout" in meta["operations"]
+    assert not mask.any()
+    # If the rescue did not run, every pixel would be white.
+    assert int((cv2.cvtColor(degraded, cv2.COLOR_BGR2GRAY) < 251).sum()) >= 300
+
+    blank = np.full((128, 128, 3), 255, dtype=np.uint8)
+    _, _, plain_meta = apply_runtime_corruptions(
+        blank, np.random.default_rng(11),
+        clean_fraction=0., mask_prob=0., return_metadata=True,
+    )
+    assert "line_contrast_rescue" not in plain_meta["operations"]

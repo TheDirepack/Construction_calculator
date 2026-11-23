@@ -217,20 +217,154 @@ uses real construction drawings, CAD-derived layouts, optionally verified
 device-box annotations for crop targeting, NECA 100 vector SVG glyphs, and
 procedural electrical glyphs. None requires COCO or ImageNet weights.
 
-**Data sampling:** Balance by source bucket and original project group; random
-crops are mixed with device-centered crops when verified bounding boxes exist.
-Device boxes are *positive hints*, not evidence that all other symbols have
-been labeled. Avoid incorporating a reserved detector evaluation project into
-either SSL training or SSL checkpoint selection.
+**Data sampling:** Real construction PDFs are indexed by source PDF and
+individual page with `scripts_index_real_pdfs.py`—including documents with
+hundreds of pages. The SSL loader opens each source PDF lazily, caches at most
+three document handles and 96 tiny density thumbnails per worker, and renders
+only randomized crop rectangles at the selected training scale. It does **not**
+first rasterize each sheet at 150 DPI and downsample a 24 MP page to 512px.
+For each 512px training crop, randomly sample the **true PDF rasterization
+resolution uniformly between 100 and 400 DPI**, then compute its physical
+source clip size as `512 × 72 / DPI` PDF points. At 100 DPI the crop
+covers about 5.12 inches on a sheet; at 400 DPI it covers 1.28 inches.
+For smaller pages, restrict the lower bound just enough for the square to
+fit; reject a page if it cannot fit even at 400 DPI. The selected rectangle
+is rendered directly at that DPI; any final rounding to 512 pixels is at
+most the pixel-grid alignment of the PDF rasterizer. Mixed density-guided
+and uniform/stratified positions, fresh rotations, and degradations generate
+many distinct views from each available page. Original image/scan
+sources retain a bounded 96 MB LRU cache per worker. Source groups are
+weighted by 45% uniform plus 55% sqrt(page count), allowing longer sets more
+views without overwhelming small projects.
+
+The remote SSL launcher now **skips full-page PDF rasterization** in the
+generic pool builder; other programs retain its previous behavior. Earlier
+pool PNGs from the same indexed PDF are skipped to prevent double weighting.
+The dataset now deliberately **reuses the same physical source region**
+across multiple independent SSL views (default 4, configurable 1–32).
+Crucially, each PDF view chooses its **own randomized real rendering DPI**
+within 100–400. The four default views use independently randomized DPI
+values from different subranges to cover the full range, centered on the
+same source location in PDF coordinates. On subsequent epochs, each source
+region receives **new random DPI values**, not a permanently fixed set of
+four. The visible physical extent changes with DPI; the background is not
+a duplicated 512px raster. Inserted symbols
+receive that view's exact DPI and are independently randomized along with
+rotations, warps, masks, scan noise, and clean/degraded branches. Raster-only
+scans without trustworthy source DPI continue to reuse pixels without
+inventing a PDF scale. Each page/image has a stable spatially stratified crop
+bank (default 32), reused on later epochs with fresh augmentations. About 20% of source bursts explore a new
+crop site instead of a bank slot. Source pages continue to cycle without
+replacement between bursts, and repeat visits cycle through spatial slots
+rather than randomly resampling the same slot while others are unvisited.
+Bank slots form a page-aspect-ratio-aware grid, with ink-guided selection
+inside each region. The effective MuSGD batch remains 14. Per-worker
+LRU caches hold at most 32 rendered PDF crops and 24 MiB of base raster
+crops, with independent copies returned to augmentations. No full-page
+pre-rendering or on-disk cache is required.
+
+For visual validation on a real PDF, use the QA-only command:
+```bash
+python scripts_audit_real_pdf_crops.py /path/to/electrical.pdf \\
+  --pages 33 34 --samples-per-page 4 --repeat-region-dpis 4 \\
+  --max-symbols 8 --out work/real_pdf_multi_dpi_qa
+```
+The four side-by-side image pairs for each page share one physical PDF
+anchor, but their source clips are independently rasterized at different
+randomized 100–400 DPI scales. `--dpi-epoch 1` redraws new random scales
+without changing the anchor. The JSON report stores each actual DPI, source
+clip, source anchor and composited symbol DPI. QA runs are **not** training
+labels and do not alter the reserved PDF evaluation collection.
+
+Tuning: `SSL_CROP_REUSE_VIEWS`, `SSL_CROP_BANK_SIZE`, and
+`SSL_FRESH_CROP_PROBABILITY` control those distributions; the corresponding
+CLI flags are `--crop-reuse-views`, `--crop-bank-size`, and
+`--fresh-crop-probability`. A larger repeat count trades unique pages per
+epoch for more real DPI variants and randomized augmentations per sampled
+location; it also increases the number of PDF renders per source burst. Preview
+reports unique clean crops, repeated views, bank grid coordinates and cache hits. Any change
+invalidates the run fingerprint.
+
+Verified device-centered raster crops remain available. Existing receptacles,
+labels and other symbols remain in the original image and are valid **SSL**
+training content. New glyphs are additive and their generated boxes are
+tracked only to protect augmentation and support future review. Existing
+devices have **no inferred boxes or negative labels**. The later supervised
+Detect-head phase must merge independently verified real annotations and
+synthetic positives while enforcing completeness rules appropriate to
+detection; these SSL crop metadata are not exhaustive ground truth.
+
+Keep the approximately 100 reserved source PDFs outside the indexed input
+tree or list them in `../work/heldout_real_pdfs.json`:
+```json
+{"source_pdfs": ["1_blueprints/path/to/reserved.pdf"],
+ "project_family_ids": []}
+```
+Both the indexer and SSL manifest exclude these, plus already locked
+detector-evaluation project IDs. The separate 10% group-hashed SSL validation
+monitor is **not** the final reserved evaluation set. The remote launcher
+**fails closed** unless this manifest exists or
+`SSL_RESERVED_PDFS_OUTSIDE_DATA=1` explicitly confirms the reserved PDFs are
+physically outside the input root. Do not fold the final held-out set into
+SSL checkpoint selection.
 
 **Symbol augmentation:** When enabled, each selected crop receives a uniformly
 sampled *requested* count of 0–16 new symbols (actual placements may be lower
 in cluttered regions). SVG and procedural symbols are randomly scaled, rotated,
-wall-adjacent or freestanding. They are inserted **before degradation** and
+wall-adjacent or freestanding, with class-aware mounting preferences:
+switches and ordinary receptacles favor wall alignment; ceiling fixtures
+and floor receptacles prefer free space. They are inserted **before degradation** and
 thus appear in both the uncorrupted target and degraded model input. Existing
 symbols on original drawings are retained. The eligible NECA SVG bank contains
 the verified device sections, not routing arrows or standalone modifiers.
 The prior procedural glyph families supply additional variation.
+
+**DPI and ink consistency:** For PDF-native crops, both the NECA vector
+glyphs and procedural electrical symbols receive **the same sampled 100–400
+DPI** as the crop. Their apparent physical sizes use a common 200 DPI
+reference and scale by `sampled_dpi / 200`; they are clamped to fit at most
+38% of the crop's shorter side, and the normal placement checks reject
+wall overlaps, crowded regions, and off-page devices. This reference does
+**not** assert that the source SVGs have dimensionally calibrated physical
+device sizes. Each inserted symbol also samples nearby **original drafting
+line color** (including tinted blue/grey ink) rather than defaulting to
+black or using ink from previously composited symbols. Procedural ink
+weight is DPI-scaled with the symbol; independent fractional line-width
+randomization still applies. Raster images without known DPI do not
+receive a fabricated DPI label. Preview JSON reports DPI bins, symbol
+DPI mismatches, and distinct matched ink colors. These rendering changes
+invalidate old SSL checkpoint fingerprints and require a new run.
+
+**High-entropy symbol deformation (PR #9):** Each inserted device independently
+samples 1–4 geometric/print perturbations, with a default 0.88 activation
+probability. Effects include independent X/Y stretching, two-axis shear,
+rotation and keystone, elastic control-point meshes, crossing horizontal and
+vertical waves, folds, radial pinch/bulge with twist, stroke erosion or expansion, fractional **per-symbol line-width**
+variation, dry-pen dropouts, ink misregistration, low-DPI print, fading and
+defocus. Small/heavy/rare-extreme severity levels are sampled per symbol.
+Bounds and ink-retention guards reject severe collapse, but **human-recognizable
+class identity is not guaranteed** by a pixel-area test.
+
+**Whole-page geometric chaos:** After placing symbols, the entire image
+(background drawing **and** the inserted symbols) is independently warped with
+70% probability by default. Supported modes: anisotropic page stretch/shear
+and skew, quadrilateral perspective, smoothly elastic deformation, independent
+horizontal/vertical waves, paper-edge curling, fold creases, barrel/pincushion
+lens distortion, local wrinkles, and narrow scanner-feed slippage. Up to
+three independent modes are composed. All stages preserve output dimensions;
+extreme clipping/ink loss rejects a stage. Newly inserted symbol bounding boxes
+are transformed with a matching instance-ID mask, so preview boxes remain
+aligned with warped positions. Stage rejection checks cover box area,
+**actual symbol ink**, and local Jacobian foldovers; preview reports include
+rejection reasons and lowest measured retention. The warped drawing is the
+SSL *clean target* for augmented views; input-only scan degradation happens
+afterward. Whole-page effects do not create fake supervised labels.
+
+**Placement chaos:** The wall-attached/free-space mix varies by crop. Free
+placements can be uniform, near corners/edges, clustered near other devices,
+near the drawing center or in horizontal/vertical bands, while the existing
+wall clearance, ink density and collision checks still decide acceptance.
+Original supervised compositor behavior is unchanged unless chaos is enabled.
 
 **Pre-training objective:** Mask-aware line-art restoration using separately
 normalized dark-ink and background losses, combined 2:1 by default, plus
@@ -238,13 +372,65 @@ a Sobel edge term. A 1%-ink drawing no longer gets a nearly all-white
 reconstruction objective. This is a **learning-signal correction**, not
 evidence that downstream object detection has improved.
 
-**Degradation:** 20% true clean-view target by default; other views independently
+**Degradation:** 20% end-to-end uncorrupted source-geometry views by default
+(except optional sharp synthetic symbol insertion). The clean decision is
+sampled before all warps: no scan noise, symbol deformation, geometric skew,
+or page deformation applies to these examples. Other views independently
 sample light, moderate, heavy, and rare extreme corruption. Categories include
 illumination/paper tint and gradients, Gaussian/motion blur, sharpening,
 median/box filtering, thresholding/CLAHE, downsample/upsample aliasing, toner
 morphology, ink dropout/dust, scanner streaks, Gaussian noise, bit-depth
-banding, JPEG/WebP artifacts and optional masked blocks. Angles/flips are
-applied to *both* target and input before corruption.
+banding, JPEG/WebP artifacts and optional masked blocks. Extra whole-page
+photocopy/scan degradation includes gamma drift, local shadows and glare,
+fold creases, roller banding, moiré patterns, halftone dots, double-fed toner
+ghosts, toner bleed, feed scratches, local smears and asymmetric X/Y DPI loss.
+Bloom and contrast are now independently mixed: variable global contrast gain,
+toe/shoulder curves, local exposure-dependent contrast, localized light-scatter
+bloom and occasional dark-ink halation. These effects may co-occur with each
+other and with existing gamma, glare, photocopy, blur, noise and compression.
+Intensity and selection vary by corruption severity. They act only on the
+degraded SSL input, not the clean target or the source document; hard cases
+remain bounded by the existing original-line contrast rescue. This is a
+realism/robustness hypothesis, not a demonstrated accuracy gain.
+The input-only degradation stage retains a minimum line-contrast guard and
+caps MIM-block masking at 60% of every **known inserted symbol box** (unknown
+original devices cannot be protected this way). It does not reverse all
+damage or guarantee symbol readability. Whole-page geometry
+is applied to both target and input **before** image degradation.
+
+**Hard-negative controls (text, walls, sparse, blank):** Source entries
+may set `negative_control_kind` to `text_heavy`, `walls_only`,
+`sparse_lines`, `blank`, or `non_device_geometry`. These must be
+**fixed raster crops**, not a random PDF page/variable-DPI viewport:
+the loader rejects false page-level negative labels. Controls explicitly
+disable synthetic symbol insertion while preserving optional geometric and
+scanner degradation. An arbitrary PDF page may use
+`suppress_synthetic_symbols: true` to disable insertion without declaring
+the page a reviewed negative.
+
+To collect candidate controls from real construction PDFs, pass exact PDF
+top-left viewport coordinates to `scripts_audit_negative_controls.py`:
+
+```bash
+python scripts_audit_negative_controls.py work/negative_regions.json \\
+  --out work/negative_review --dpi 200 --size 512
+```
+
+These images are **visual QA candidates**, not certified detector negatives;
+the manifest explicitly sets `detector_negative_verified: false`. Only an
+independently exhaustively reviewed **exact raster** can be marked verified
+for the later Detect-head phase. The 100-PDF locked evaluation collection
+must remain separated from training. To measure unwanted device predictions
+after a detector checkpoint exists, supply one predictions record for each
+reviewed control to `scripts_score_negative_controls.py`. Unreviewed crops
+cannot be scored as false-positive ground truth without
+`--diagnostic-only`, which reports uncertainty. No detector false-positive
+rate can be claimed from SSL augmentation alone.
+
+**Faint drafting ink:** adaptive paper-relative line-contrast rescue now
+covers pale gray/blue wall strokes when bloom or contrast curves otherwise
+bleach them. This avoids the previous fixed `gray < 185` threshold that
+could miss weak original linework.
 
 For the remote 6 GB NVIDIA machine, start a **new** experiment (no prior
 weights and no automatic resume):
@@ -258,7 +444,8 @@ than overwriting the full experiment:
 
 ```bash
 SSL_OUT="$HOME/Projects/blueprint-symbols/work/pretrain_smoke_v3" \
-SSL_EPOCHS=1 SSL_ITEMS_PER_EPOCH=24 SSL_VAL_ITEMS=12 SSL_BATCH=2 \
+SSL_EPOCHS=1 SSL_ITEMS_PER_EPOCH=28 SSL_VAL_ITEMS=14 \
+SSL_BATCH=14 SSL_MICROBATCH=2 \
   bash remote/run_pretrain_v3.sh
 ```
 
@@ -273,10 +460,34 @@ loads the NECA SVG library, and generates 0..16 symbols per augmented crop.
 CLI tuning flags: `--clean-fraction`, `--max-symbols`,
 `--symbol-min-px`, `--symbol-max-px`,
 `--symbol-augment-probability`, `--procedural-fraction`,
-`--labeled-focus-probability`, `--labeled-annotations`, `--neca-dir`.
-The proposed batch size of 4 is conservative and **not yet profiled** for
-the reconstruction decoder. Existing checkpoints refuse accidental overwrite;
-use `--resume` explicitly after a compatible interruption.
+`--labeled-focus-probability`, `--labeled-annotations`, `--neca-dir`,
+`--symbol-chaos-probability`, `--symbol-chaos-strength`,
+`--placement-chaos`, `--page-chaos-probability`, `--page-chaos-strength`.
+The remote runner forwards `SSL_SYMBOL_CHAOS_PROBABILITY`,
+`SSL_SYMBOL_CHAOS_STRENGTH`, `SSL_PLACEMENT_CHAOS`,
+`SSL_PAGE_CHAOS_PROBABILITY`, and `SSL_PAGE_CHAOS_STRENGTH`.
+These settings enter the resume fingerprint; changing them requires a
+new run directory.
+**Pretraining settings (YOLO26n-P2):** after the reported batch-16
+capacity limit, use **effective/optimizer batch 14**, **physical GPU microbatch
+2**, and **seven accumulation passes** per MuSGD update. MuSGD remains the
+default; the detection head stays frozen, while backbone/neck and decoder
+train. Images remain 512×512, LR `0.005`, momentum `0.937`, weight decay
+`0.0005`; 60 epochs × 8,190 samples = **35,100 optimizer updates**.
+Three warmup epochs precede cosine decay. CUDA uses FP16 autocast and
+`GradScaler`, unscales/clips gradients once per logical 14 samples.
+Validation uses microbatch 2, preserving VRAM.
+
+The reported inability to fit 16 is not sufficient to establish that
+**14 physical images** fit the 6 GB RTX 2060 with this full-resolution SSL
+decoder. The effective batch is 14; the actual allocation remains two
+images per pass. Reduce `SSL_MICROBATCH` to 1 if required (still 14 optimizer
+samples). BatchNorm behavior changes with physical microbatch size, so
+accumulation is not numerically equivalent to a physical batch of 14.
+MuSGD suitability, learning rate and loss schedule for this specific SSL
+objective still require CUDA measurement and a downstream ablation.
+Prior batch-16 checkpoint runs cannot be resumed under the new settings;
+start a fresh output directory.
 
 Before running a long GPU job, inspect what the generator actually creates.
 After a manifest has been produced, run:
@@ -290,10 +501,20 @@ python scripts_preview_pretrain_ssl.py ../work/pretrain_v3/train_manifest.json \
 Each preview shows the clean target beside its degraded/masked input.
 `preview_report.json` counts **requested versus actually placed** symbols,
 including shortfalls on crowded pages, zero-symbol examples, symbols by
-family/variant, eligible NECA vocabulary coverage, and observed degradation
-severities/categories. A separate `sample_NNNN_overlay.png` draws boxes only
-around inserted symbols. Visually inspect symbol fidelity and near-invisible
-cases before increasing severity.
+family/variant, eligible NECA vocabulary coverage, observed PDF source/page/crop counts,
+PDF crop DPI range, generator p50/p95 latency, and degradation
+severities/categories, accepted/rejected whole-page warp modes,
+symbol-level warp categories and placement modes. A separate
+`sample_NNNN_overlay.png` marks inserted symbols in their new warped
+positions (red boxes for independently distorted symbols).
+`sample_NNNN_geometry.png` separately shows the symbol-composited crop
+before and after whole-page warping. Review these alongside the clean/degraded
+scan pairs to spot illegible symbols and excessive page distortion.
+
+Each pull-request CI run generates a deterministic **synthetic-only**
+16-crop audit as the `blueprint-chaos-visual-audit` GitHub Actions artifact,
+with montage images, detailed samples and JSON counts. It exercises the
+real generator, but does not establish readability on the real-plan corpus.
 
 For the second-stage supervised detector, **preflight actual weight transfer**
 rather than trusting that `model.load_state_dict` before `model.train` worked.

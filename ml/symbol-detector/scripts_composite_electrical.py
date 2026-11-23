@@ -33,6 +33,10 @@ import cv2
 import numpy as np
 
 from blueprint_symbols.electrical_glyphs import DEFAULT_WEIGHTS, rotate_glyph, sample_glyph
+from blueprint_symbols.wall_alignment import (
+    detect_wall_sites, wall_rotation_degrees, snap_symbol_to_wall,
+)
+from blueprint_symbols.placement_policy import wall_placement_probability
 
 ELECTRICAL = tuple(DEFAULT_WEIGHTS)
 
@@ -47,44 +51,10 @@ CANONICAL_ELECTRICAL_MAP = {
 }
 
 
-def _find_wall_sites(gray: np.ndarray, rng: np.random.Generator, max_sites: int = 800) -> list[tuple[int, int, int, int]]:
-    """Detect straight wall pixels and return (wx, wy, nx, ny) sites where (nx, ny) points into open space."""
-    h, w = gray.shape
-    scale = min(1.0, 1600.0 / max(h, w))
-    small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1.0 else gray
-    sh, sw = small.shape
-    ink = (small < 165).astype(np.uint8)
-    k = max(20, min(80, max(sh, sw) // 45))
-    long_h = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (k, 1)))
-    long_v = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, k)))
-
-    sites: list[tuple[int, int, int, int]] = []
-    hy, hx = np.nonzero(long_h > 0)
-    if len(hx):
-        idx = rng.choice(len(hx), size=min(max_sites // 2, len(hx)), replace=False)
-        for i in idx:
-            sx, sy = int(hx[i]), int(hy[i])
-            if sy < 12 or sy >= sh - 12 or sx < 12 or sx >= sw - 12:
-                continue
-            above = float(ink[max(0, sy - 14):max(1, sy - 2), max(0, sx - 6):min(sw, sx + 7)].mean())
-            below = float(ink[min(sh - 1, sy + 2):min(sh, sy + 14), max(0, sx - 6):min(sw, sx + 7)].mean())
-            ny = -1 if above <= below else 1
-            sites.append((int(round(sx / scale)), int(round(sy / scale)), 0, ny))
-
-    vy, vx = np.nonzero(long_v > 0)
-    if len(vx):
-        idx = rng.choice(len(vx), size=min(max_sites // 2, len(vx)), replace=False)
-        for i in idx:
-            sx, sy = int(vx[i]), int(vy[i])
-            if sy < 12 or sy >= sh - 12 or sx < 12 or sx >= sw - 12:
-                continue
-            left = float(ink[max(0, sy - 6):min(sh, sy + 7), max(0, sx - 14):max(1, sx - 2)].mean())
-            right = float(ink[max(0, sy - 6):min(sh, sy + 7), min(sw - 1, sx + 2):min(sw, sx + 14)].mean())
-            nx = -1 if left <= right else 1
-            sites.append((int(round(sx / scale)), int(round(sy / scale)), nx, 0))
-
-    rng.shuffle(sites)
-    return sites
+def _find_wall_sites(gray: np.ndarray, rng: np.random.Generator, max_sites: int = 800):
+    """Legacy site list; composite_page uses shared raster wall geometry."""
+    sites, _ = detect_wall_sites(gray, rng, max_sites=max_sites)
+    return [(site.x, site.y, site.nx, site.ny) for site in sites]
 
 
 def _overlaps(box, boxes, margin=3.0) -> bool:
@@ -112,59 +82,129 @@ def estimate_stroke(gray: np.ndarray) -> float:
 def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, per_page: int,
                    scale_range: tuple[float, float], max_ink: float, tag: str,
                    stroke_match: bool = True, wall_fraction: float = 0.6,
-                   canonical_classes: bool = False) -> tuple[np.ndarray, list[dict]]:
+                   canonical_classes: bool = False,
+                   symbol_chaos_probability: float = 0.0,
+                   symbol_chaos_strength: float = 1.0,
+                   placement_chaos: float = 0.0,
+                   drawing_dpi: float | None = None,
+                   match_local_ink: bool = False,
+                   ink_reference: np.ndarray | None = None) -> tuple[np.ndarray, list[dict]]:
+    from blueprint_symbols.symbol_chaos import distort_symbol_alpha, sample_free_origin
+    from blueprint_symbols.ink_style import local_drawing_ink_bgr
+
+    if drawing_dpi is not None and not (math.isfinite(drawing_dpi) and
+                                        100 <= drawing_dpi <= 400):
+        raise ValueError("drawing_dpi must be in [100,400]")
+    reference = image if ink_reference is None else ink_reference
+    if reference.shape != image.shape or reference.dtype != image.dtype:
+        raise ValueError("ink_reference must match input drawing shape/dtype")
+    if not 0 <= placement_chaos <= 1:
+        raise ValueError("placement_chaos must be in [0,1]")
     page = image.copy()
     h, w = page.shape[:2]
     gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
     dark = (gray < 160).astype(np.uint8)
     integral = cv2.integral(dark)
-    wall_sites = _find_wall_sites(gray, rng) if wall_fraction > 0 and per_page > 0 else []
+    wall_sites, wall_mask = (
+        detect_wall_sites(gray, rng)
+        if wall_fraction > 0 and per_page > 0
+        else ([], np.zeros((h, w), np.uint8))
+    )
     wall_cursor = 0
     # Match glyph line weight to the page so symbols sit at a plausible drawing scale.
-    base = estimate_stroke(gray) / GLYPH_STROKE_PX if stroke_match else 1.0
-    base = float(np.clip(base, .4, 6.0))
+    reference_scale = (drawing_dpi / 200.0) if drawing_dpi is not None else 1.0
+    base = (estimate_stroke(gray) / (GLYPH_STROKE_PX * reference_scale)
+            if stroke_match else 1.0)
+    base = float(np.clip(base, .65, 1.55)) if drawing_dpi is not None else float(
+        np.clip(base, .4, 6.0)
+    )
     ink_bgr = np.percentile(page[dark.astype(bool)], 10, axis=0) if dark.any() else np.zeros(3)
     occupied = [list(map(float, i['bbox_xyxy'])) for i in doc['instances']]
     placed = []
     attempts = 0
+    wall_probability = (
+        float(rng.uniform(.10, .90))
+        if placement_chaos and rng.random() < placement_chaos else wall_fraction
+    )
     while len(placed) < per_page and attempts < per_page * 50:
         attempts += 1
         family, variant, rgba, anchors = sample_glyph(rng)
         scale = base * float(np.exp(rng.uniform(*np.log(scale_range))))
+        if drawing_dpi is not None:
+            # Scale the complete procedural glyph at the crop's actual PDF
+            # rasterization DPI, using the same 200dpi size convention as
+            # the NECA SVG compositor. Preserve the glyph's physical scale
+            # across 100–400dpi drawings while bounding its on-canvas size.
+            scale *= drawing_dpi / 200.0
+            max_dim = max(rgba.shape[:2])
+            scale = min(scale, max(8.0, min(h, w) * .38) / max_dim)
 
-        want_wall = bool(wall_sites) and (rng.random() < wall_fraction)
+        glyph_wall_probability = wall_placement_probability(
+            family, variant, wall_probability
+        )
+        want_wall = bool(wall_sites) and (rng.random() < glyph_wall_probability)
+        chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
+        placement_mode = "wall" if want_wall else "uniform"
         if want_wall:
-            wx, wy, nx, ny = wall_sites[wall_cursor % len(wall_sites)]
+            site = wall_sites[wall_cursor % len(wall_sites)]
             wall_cursor += 1
-            # Orient symbol so its bottom/attachment edge touches the wall and body extends along (nx, ny)
-            if ny == -1:
-                angle = 0.0
-            elif ny == 1:
-                angle = 180.0
-            elif nx == -1:
-                angle = 90.0
-            else:
-                angle = 270.0
+            wx, wy = site.x, site.y
+            # The normal points from the wall toward the open side. Align
+            # the glyph baseline to the fitted tangent, not just 0/90 axes.
+            angle = wall_rotation_degrees(site.nx, site.ny)
             anchors_with_contact = dict(anchors)
             if 'wall_attachment' not in anchors_with_contact:
                 anchors_with_contact['wall_attachment'] = (0.5, 1.0)
             glyph, pts = rotate_glyph(rgba, anchors_with_contact, angle, scale)
+            if symbol_chaos_probability:
+                old_h, old_w = glyph.shape[:2]
+                warped, chaos_details = distort_symbol_alpha(
+                    glyph[:, :, 3], rng, probability=symbol_chaos_probability,
+                    strength=symbol_chaos_strength,
+                )
+                gh, gw = warped.shape
+                glyph = np.zeros((gh, gw, 4), dtype=np.uint8)
+                glyph[:, :, 3] = warped
+                pts = {key: (px * gw / old_w, py * gh / old_h)
+                       for key, (px, py) in pts.items()}
+                # Nonlinear chaos does not preserve the analytic attachment.
+                # Locate the new wallward *ink* edge instead, and suppress
+                # keypoint annotation below.
+                pts.pop('wall_attachment', None)
             gh, gw = glyph.shape[:2]
             if gw + 4 >= w or gh + 4 >= h:
                 continue
-            ax, ay = pts['wall_attachment']
-            x = int(round(wx - ax))
-            y = int(round(wy - ay))
-            if x < 2 or y < 2 or x + gw >= w - 2 or y + gh >= h - 2:
+            position = snap_symbol_to_wall(
+                glyph[:, :, 3], site, wall_mask,
+                attachment=pts.get('wall_attachment'), margin=3,
+            )
+            if position is None:
                 continue
+            x, y = position
         else:
             angle = float(rng.choice([0, 90, 180, 270])) if rng.random() < .8 else float(rng.uniform(-180, 180))
             glyph, pts = rotate_glyph(rgba, anchors, angle, scale)
+            if symbol_chaos_probability:
+                old_h, old_w = glyph.shape[:2]
+                warped, chaos_details = distort_symbol_alpha(
+                    glyph[:, :, 3], rng, probability=symbol_chaos_probability,
+                    strength=symbol_chaos_strength,
+                )
+                gh, gw = warped.shape
+                glyph = np.zeros((gh, gw, 4), dtype=np.uint8)
+                glyph[:, :, 3] = warped
+                pts = {key: (px * gw / old_w, py * gh / old_h)
+                       for key, (px, py) in pts.items()}
             gh, gw = glyph.shape[:2]
             if gw + 4 >= w or gh + 4 >= h:
                 continue
-            x = int(rng.integers(2, w - gw - 2))
-            y = int(rng.integers(2, h - gh - 2))
+            if placement_chaos and gw + 10 < w and gh + 10 < h:
+                x, y, placement_mode = sample_free_origin(
+                    rng, (h, w), (gh, gw), occupied, chaos=placement_chaos,
+                )
+            else:
+                x = int(rng.integers(2, w - gw - 2))
+                y = int(rng.integers(2, h - gh - 2))
 
         alpha = glyph[:, :, 3].astype(np.float32) / 255
         ys, xs = np.nonzero(alpha > .1)
@@ -182,7 +222,11 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
         roi = page[y:y + gh, x:x + gw].astype(np.float32)
         a = alpha[:, :, None]
         # Ink darkens paper (multiply), in the page's own ink colour, so photos stay tinted.
-        ink_col = np.clip(ink_bgr + rng.normal(0, 8, 3), 0, 200).astype(np.float32)
+        ink_col = (
+            np.asarray(local_drawing_ink_bgr(reference, box), dtype=np.float32)
+            if match_local_ink else
+            np.clip(ink_bgr + rng.normal(0, 8, 3), 0, 200).astype(np.float32)
+        )
         inked = roi * (1 - a) + np.minimum(roi, ink_col) * a
         page[y:y + gh, x:x + gw] = np.clip(inked, 0, 255).astype(np.uint8)
         occupied.append(box)
@@ -197,9 +241,16 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
             target_vec = [0.0, 0.0]
 
         out_family = CANONICAL_ELECTRICAL_MAP[family] if canonical_classes else family
-        out_anchors = {k: {'xy': [x + px, y + py], 'visible': True, 'annotated': True}
+        # A nonlinear glyph warp does not preserve the old analytic anchor
+        # coordinates. Keep approximate points for illustration but mark
+        # them unannotated to avoid supervised keypoint label pollution.
+        precise_anchors = not bool(chaos_details["operations"])
+        out_anchors = {k: {'xy': [x + px, y + py], 'visible': True,
+                           'annotated': precise_anchors}
                        for k, (px, py) in pts.items()}
-        out_anchors['wall_connection_point'] = {'xy': target_xy, 'visible': True, 'annotated': True}
+        out_anchors['wall_connection_point'] = {
+            'xy': target_xy, 'visible': True, 'annotated': precise_anchors,
+        }
 
         placed.append({
             'instance_id': f'elec_{tag}_{len(placed):03d}',
@@ -211,8 +262,15 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
             'target_vector': target_vec,
             'anchors': out_anchors,
             'rotation_degrees_image': angle,
-            'source': {'kind': 'synthetic_composite', 'label_method': 'known_placement_transform',
-                       'glyph_scale': scale, 'placement_mode': 'wall_touching' if want_wall else 'free_space'},
+            'symbol_chaos': chaos_details,
+            'source': {'kind': 'synthetic_composite', 'label_method': ('warped_bbox_only' if chaos_details["operations"]
+                                        else 'known_placement_transform'),
+                       'glyph_scale': scale, 'drawing_dpi': drawing_dpi,
+                       'ink_color_bgr': [int(round(v)) for v in ink_col],
+                       'placement_mode': 'wall_aligned_raster' if want_wall else placement_mode,
+                       'wall_angle_degrees_image': round(angle, 3) if want_wall else None,
+                       'wall_contact_method': 'raster_line_fit' if want_wall else None,
+                       'wall_sampling_probability': round(glyph_wall_probability, 4)},
         })
     return page, placed
 

@@ -52,3 +52,70 @@ def test_real_yolo26p2_ssl_forward_backward_cpu():
         assert not torch.equal(before, after)
     finally:
         torch.set_num_threads(previous_threads)
+
+
+def test_ssl_feature_probe_does_not_modify_batchnorm_statistics(monkeypatch):
+    """The channel discovery pass is not a training minibatch."""
+    import torch.nn as nn
+
+    original = Yolo26P2SSLModel.extract_neck_features
+    seen = []
+
+    def inspect(self, x):
+        bn = next(m for m in self.det_model.modules()
+                  if isinstance(m, nn.BatchNorm2d))
+        before = (bn.running_mean.clone(), bn.running_var.clone(),
+                  bn.num_batches_tracked.clone())
+        feats = original(self, x)
+        after = (bn.running_mean, bn.running_var, bn.num_batches_tracked)
+        seen.append((self.det_model.training, [
+            torch.equal(a, b) for a, b in zip(before, after)
+        ]))
+        return feats
+
+    monkeypatch.setattr(Yolo26P2SSLModel, "extract_neck_features", inspect)
+    model = Yolo26P2SSLModel("yolo26n-p2.yaml", imgsz=128)
+    assert seen and seen[0] == (False, [True, True, True])
+    assert model.det_model.training
+
+
+def test_real_yolo26n_p2_effective_batch16_musgd_cpu():
+    """Four real minibatches of 4 feed exactly one YOLO MuSGD update."""
+    from scripts_pretrain_ssl import accumulated_training_update
+
+    torch.manual_seed(97)
+    old_threads = torch.get_num_threads()
+    torch.set_num_threads(min(old_threads, 2))
+    try:
+        model = Yolo26P2SSLModel("yolo26n-p2.yaml", imgsz=128).train()
+        model.det_model.model[model.detect_idx].requires_grad_(False)
+        criterion = BlueprintSSLLoss()
+        optimizer = build_musgd_optimizer(model, lr=.005)
+        scaler = torch.amp.GradScaler("cpu", enabled=False)
+        assert type(optimizer).__name__ == "MuSGD"
+        assert all(not p.requires_grad
+                   for p in model.det_model.model[model.detect_idx].parameters())
+
+        first_conv = model.det_model.model[0].conv.weight
+        before = first_conv.detach().clone()
+
+        def make_batches():
+            for _ in range(4):
+                degraded = torch.rand(4, 3, 128, 128)
+                target = torch.rand(4, 3, 128, 128)
+                mask = torch.zeros(4, 1, 128, 128)
+                mask[:, :, 35:76, 40:91] = 1.0
+                yield degraded, target, mask
+
+        stats = accumulated_training_update(
+            model, criterion, optimizer, scaler, make_batches(),
+            device=torch.device("cpu"), effective_batch=16,
+        )
+        assert stats["samples"] == 16
+        assert torch.isfinite(torch.tensor(stats["loss"]))
+        assert torch.isfinite(torch.tensor(stats["grad_norm"]))
+        assert first_conv.grad is not None
+        assert not torch.equal(before, first_conv.detach())
+        assert torch.isfinite(first_conv).all()
+    finally:
+        torch.set_num_threads(old_threads)

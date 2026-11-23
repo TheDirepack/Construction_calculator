@@ -14,6 +14,7 @@ import copy
 import hashlib
 import json
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -200,6 +201,7 @@ def apply_runtime_corruptions(
     mask_prob: float = 0.85,
     clean_fraction: float = 0.20,
     return_metadata: bool = False,
+    protected_boxes: list[list[float]] | None = None,
 ) -> tuple:
     """Random, independent scan/camera/PDF corruptions at varying severity.
 
@@ -367,6 +369,38 @@ def apply_runtime_corruptions(
                 x = decoded
                 operations.append("jpeg" if codec == ".jpg" else "webp")
 
+    # Additional independent paper, plotter, copier and scan degradation:
+    # gamma curve, spotlight shadow/glare, fold crease, roller banding, moire,
+    # halftone, double-feed ghosting, toner bleed, blank feed band, localized
+    # smudge and asymmetric rasterization. Keep size/coordinates unchanged.
+    from .scan_chaos import add_scan_chaos
+    x, extra_operations = add_scan_chaos(x, rng, strength=strength)
+    operations.extend(extra_operations)
+
+    # Weak legibility floor: preserve a minimum fraction of original line
+    # contrast before masked-image modeling. This is NOT an OCR/semantic
+    # recognizability guarantee, but avoids completely bleached positives.
+    orig_gray = cv2.cvtColor(clean_bgr, cv2.COLOR_BGR2GRAY)
+    # Fixed <185 misses pale cyan/gray construction linework. Estimate paper
+    # brightness from the *clean* source and protect relative line contrast.
+    paper_level = float(np.percentile(orig_gray, 90))
+    ink_depth = paper_level - float(np.percentile(orig_gray, 2))
+    ink_threshold = paper_level - max(6., min(32., ink_depth * .24))
+    original_ink = orig_gray < ink_threshold
+    if int(original_ink.sum()) >= 32:
+        orig_contrast = float(
+            (paper_level - orig_gray[original_ink].astype(np.float32)).mean()
+        )
+        current_gray = cv2.cvtColor(x, cv2.COLOR_BGR2GRAY)
+        new_paper_level = float(np.percentile(current_gray, 90))
+        current_contrast = float(
+            (new_paper_level -
+             current_gray[original_ink].astype(np.float32)).mean()
+        )
+        if orig_contrast > 8. and current_contrast < orig_contrast * .30:
+            x = cv2.addWeighted(x, .60, clean_bgr, .40, 0)
+            operations.append("line_contrast_rescue")
+
     # Random masked reconstruction. The clean target includes the same
     # synthetic symbol additions but no corruption.
     if rng.random() < mask_prob:
@@ -375,7 +409,39 @@ def apply_runtime_corruptions(
         gh, gw = math.ceil(h / patch), math.ceil(w / patch)
         ratio = float(rng.uniform(.15, .55))
         grid = (rng.random((gh, gw)) < ratio).astype(np.float32)
-        mask = np.repeat(np.repeat(grid, patch, axis=0), patch, axis=1)[:h, :w]
+        mask = np.repeat(np.repeat(grid, patch, axis=0), patch, axis=1)[:h, :w].copy()
+        # MIM may hide *part* of a device, but erasing every stroke in a
+        # known synthetic symbol makes its class unrecoverable from the input.
+        # Cap masked area inside each warped symbol box at 60%. This does not
+        # protect unannotated devices and cannot guarantee readability after
+        # the independent optical/noise degradations.
+        protected_reduced = 0
+        for raw in protected_boxes or []:
+            if len(raw) != 4 or not all(math.isfinite(v) for v in raw):
+                raise ValueError("invalid protected symbol bbox")
+            x0, y0, x1, y1 = (
+                max(0, int(math.floor(raw[0]))),
+                max(0, int(math.floor(raw[1]))),
+                min(w, int(math.ceil(raw[2]))),
+                min(h, int(math.ceil(raw[3]))),
+            )
+            if x1 <= x0 or y1 <= y0:
+                continue
+            region = mask[y0:y1, x0:x1]
+            if float(region.mean()) > .60:
+                if rng.random() < .5:
+                    reveal = max(1, int(math.ceil((x1-x0) * .5)))
+                    region[:, :reveal] = 0
+                else:
+                    reveal = max(1, int(math.ceil((y1-y0) * .5)))
+                    region[:reveal, :] = 0
+                # Existing unmasked pixels might be concentrated on the
+                # revealed side; never restore *more* masking.
+                if float(region.mean()) > .60:
+                    region[:, :max(1, int(math.ceil((x1-x0) * .5)))] = 0
+                protected_reduced += 1
+        if protected_reduced:
+            operations.append("masked_symbol_visibility_guard")
         paper = np.median(x.reshape(-1, 3), axis=0).astype(np.float32)
         fill = np.clip(paper[None, None, :] + rng.normal(0, 4, x.shape), 0, 255).astype(np.uint8)
         x = np.where(mask[:, :, None] > .5, fill, x)
@@ -407,6 +473,9 @@ class BlueprintSSLDataset(Dataset):
         items_per_epoch: int = 8192,
         seed: int = 2026,
         deterministic_eval: bool = False,
+        crop_reuse_views: int = 4,
+        crop_bank_size: int = 32,
+        fresh_crop_probability: float = 0.20,
         neca_dir: str | Path | None = None,
         max_symbols: int = 16,
         symbol_min_px: float = 12.0,
@@ -415,7 +484,13 @@ class BlueprintSSLDataset(Dataset):
         procedural_fraction: float = 0.25,
         clean_fraction: float = 0.20,
         labeled_focus_probability: float = 0.65,
+        symbol_chaos_probability: float = 0.88,
+        symbol_chaos_strength: float = 1.0,
+        placement_chaos: float = 0.85,
+        page_chaos_probability: float = 0.70,
+        page_chaos_strength: float = 1.0,
         return_metadata: bool = False,
+        include_pre_page_preview: bool = False,
     ) -> None:
         super().__init__()
         self.size = int(size)
@@ -423,6 +498,13 @@ class BlueprintSSLDataset(Dataset):
         self.seed = int(seed)
         self.epoch = 0
         self.deterministic_eval = bool(deterministic_eval)
+        if not 1 <= crop_reuse_views <= 32 or not 1 <= crop_bank_size <= 128:
+            raise ValueError("invalid crop reuse views or crop bank size")
+        if not 0 <= fresh_crop_probability <= 1:
+            raise ValueError("fresh_crop_probability must be in [0,1]")
+        self.crop_reuse_views = int(crop_reuse_views)
+        self.crop_bank_size = int(crop_bank_size)
+        self.fresh_crop_probability = float(fresh_crop_probability)
         if not 0 <= symbol_augment_probability <= 1 or not 0 <= clean_fraction <= 1 or not 0 <= labeled_focus_probability <= 1:
             raise ValueError("invalid SSL sampling probabilities")
         self.max_symbols = int(max_symbols)
@@ -432,7 +514,19 @@ class BlueprintSSLDataset(Dataset):
         self.procedural_fraction = float(procedural_fraction)
         self.clean_fraction = float(clean_fraction)
         self.labeled_focus_probability = float(labeled_focus_probability)
+        if not 0 <= symbol_chaos_probability <= 1 or not 0 <= symbol_chaos_strength <= 2 or not 0 <= placement_chaos <= 1:
+            raise ValueError("Invalid per-symbol chaos controls")
+        self.symbol_chaos_probability = float(symbol_chaos_probability)
+        self.symbol_chaos_strength = float(symbol_chaos_strength)
+        self.placement_chaos = float(placement_chaos)
+        if not 0 <= page_chaos_probability <= 1 or not 0 <= page_chaos_strength <= 2:
+            raise ValueError("Invalid whole-page chaos controls")
+        self.page_chaos_probability = float(page_chaos_probability)
+        self.page_chaos_strength = float(page_chaos_strength)
         self.return_metadata = bool(return_metadata)
+        self.include_pre_page_preview = bool(include_pre_page_preview)
+        if self.include_pre_page_preview and not self.return_metadata:
+            raise ValueError("include_pre_page_preview requires return_metadata")
         self.neca_bank = None
         if neca_dir is not None:
             from .neca_svg_compositor import NecaSymbolBank
@@ -441,6 +535,7 @@ class BlueprintSSLDataset(Dataset):
         self.bucket_names: list[str] = []
         self.bucket_weights: list[float] = []
         self.bucket_groups: dict[str, list[list[str | dict]]] = {}
+        self.bucket_group_probs: dict[str, np.ndarray] = {}
 
         for name, info in sorted(manifest['buckets'].items()):
             groups = [paths for paths in info['groups'].values() if paths]
@@ -449,62 +544,230 @@ class BlueprintSSLDataset(Dataset):
             self.bucket_names.append(name)
             self.bucket_weights.append(float(info.get('weight', 1.0)))
             self.bucket_groups[name] = groups
+            # Mix per-project uniform coverage with square-root page-count
+            # weighting. Hundreds-page construction PDFs get sampled more,
+            # without monopolizing the epoch at the expense of short jobs.
+            sizes = np.sqrt(np.array([len(g) for g in groups], np.float64))
+            self.bucket_group_probs[name] = (
+                .45 / len(groups) + .55 * sizes / sizes.sum()
+            )
 
         if not self.bucket_names:
             raise ValueError('SSL manifest has no non-empty source buckets')
 
         total_w = sum(self.bucket_weights)
         self.bucket_probs = np.array([w / total_w for w in self.bucket_weights], dtype=np.float64)
-        self._cache_path: str | None = None
-        self._cache_img: np.ndarray | None = None
+        self._raster_cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._raster_cache_bytes = 0
+        self._raster_cache_budget = 96 * (1 << 20)  # per worker, not per rank
+        self._raster_crop_cache: OrderedDict[tuple, np.ndarray] = OrderedDict()
+        self._raster_crop_bytes = 0
+        self._raster_crop_budget = 24 * (1 << 20)  # worker-local, bounded
+        self._pdf_sampler = None
+        self._source_burst = self.crop_reuse_views
+        self._source_plan: np.ndarray | None = None
+        self.set_epoch(0)
+
+    def _build_source_plan(self, epoch: int) -> np.ndarray:
+        """Arrange consecutive *views* of a shared base crop.
+
+        Each burst uses one source page and crop-bank slot. PDF views keep
+        a common physical center but independently choose real 100–400 DPI
+        rasterization scales. Symbol, rotation, warp, and degradation RNGs
+        remain independent; raster scans use exact replayed source pixels.
+        Small stable per-page banks get revisited across epochs; an optional
+        fresh-site fraction prevents limited-bank spatial overfitting.
+        """
+        rng = np.random.default_rng(
+            np.random.SeedSequence([self.seed, epoch, 0x5A2CE])
+        )
+        count = self.items_per_epoch
+        # columns: bucket, project group, page/image, crop slot
+        plan = np.zeros((count, 4), dtype=np.int32)
+        cursors: dict[tuple[int, int], int] = {}
+        permutations: dict[tuple[int, int], np.ndarray] = {}
+        page_visits: dict[tuple[int, int, int], int] = {}
+        for offset in range(0, count, self._source_burst):
+            b = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
+            name = self.bucket_names[b]
+            g = int(rng.choice(len(self.bucket_groups[name]),
+                               p=self.bucket_group_probs[name]))
+            key = (b, g)
+            if key not in permutations:
+                entries = len(self.bucket_groups[name][g])
+                permutations[key] = rng.permutation(entries)
+                cursors[key] = int(rng.integers(entries))
+            order = permutations[key]
+            idx = int(order[cursors[key] % len(order)])
+            cursors[key] += 1
+            # Each visited page cycles across the full spatial slot bank
+            # without replacement *within this epoch*. Epoch offset changes
+            # the starting slot; long pages do not keep revisiting a handful
+            # of randomly chosen regions while others are never sampled.
+            visit_key = (b, g, idx)
+            visit = page_visits.get(visit_key, 0)
+            page_visits[visit_key] = visit + 1
+            if rng.random() < self.fresh_crop_probability:
+                # Fresh view is a new location outside the stable bank.
+                slot = -1 - offset
+            else:
+                page_id = f"{self.seed}/{b}/{g}/{idx}"
+                start = int.from_bytes(
+                    hashlib.sha256(page_id.encode()).digest()[:4], "big"
+                ) % self.crop_bank_size
+                slot = (start + epoch + visit) % self.crop_bank_size
+            plan[offset:min(count, offset + self._source_burst)] = (b, g, idx, slot)
+        return plan
+
+    def _base_crop_seed(self, source: str, page: int, slot: int,
+                        epoch: int) -> int:
+        """Stable 64-bit source crop seed, independent of worker/index RNG."""
+        scope = (f"{self.seed}/bank/{source}/{page}/{slot}/{self.size}"
+                 if slot >= 0 else
+                 f"{self.seed}/fresh/{epoch}/{source}/{page}/{slot}/{self.size}")
+        return int.from_bytes(hashlib.sha256(scope.encode()).digest()[:8],
+                              "big")
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
+        self._source_plan = self._build_source_plan(
+            0 if self.deterministic_eval else self.epoch
+        )
 
     def __len__(self) -> int:
         return self.items_per_epoch
 
     def _read_cached(self, path: str) -> np.ndarray | None:
-        if self._cache_path == path and self._cache_img is not None:
-            return self._cache_img
+        cached = self._raster_cache.get(path)
+        if cached is not None:
+            self._raster_cache.move_to_end(path)
+            return cached
         img = load_bgr_white_bg(path)
         if img is None:
             return None
-        if img.nbytes <= 24 * (1 << 20):
-            self._cache_path = path
-            self._cache_img = img
-        else:
-            self._cache_path = None
-            self._cache_img = None
+        if img.nbytes <= self._raster_cache_budget:
+            while (self._raster_cache and
+                   self._raster_cache_bytes + img.nbytes > self._raster_cache_budget):
+                _, old = self._raster_cache.popitem(last=False)
+                self._raster_cache_bytes -= old.nbytes
+            self._raster_cache[path] = img
+            self._raster_cache_bytes += img.nbytes
         return img
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         ep = 0 if self.deterministic_eval else self.epoch
         rng = np.random.default_rng(np.random.SeedSequence([self.seed, ep, index]))
 
-        img = None
-        for _ in range(8):
-            b_idx = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
-            groups = self.bucket_groups[self.bucket_names[b_idx]]
-            group = groups[int(rng.integers(len(groups)))]
-            entry = group[int(rng.integers(len(group)))]
+        clean = None
+        pdf_crop_meta = None
+        crop_cache_hit = False
+        path = ""
+        b_idx = 0
+        crop_slot = -1 - index
+        for attempt in range(8):
+            if attempt == 0 and self._source_plan is not None:
+                b_idx, group_idx, entry_idx, crop_slot = map(
+                    int, self._source_plan[index]
+                )
+            else:
+                crop_slot = -1 - index - attempt * self.items_per_epoch
+                b_idx = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
+                name = self.bucket_names[b_idx]
+                groups = self.bucket_groups[name]
+                group_idx = int(rng.choice(len(groups), p=self.bucket_group_probs[name]))
+                entry_idx = int(rng.integers(len(groups[group_idx])))
+            name = self.bucket_names[b_idx]
+            groups = self.bucket_groups[name]
+            group = groups[group_idx]
+            entry = group[entry_idx]
             path = entry["image_path"] if isinstance(entry, dict) else entry
+            crop_page = int(entry.get("pdf_page_index", -1)) if isinstance(entry, dict) else -1
+            crop_seed = self._base_crop_seed(
+                str(entry.get("source_pdf") or path) if isinstance(entry, dict)
+                else str(path), crop_page, crop_slot, ep
+            )
+            crop_rng = np.random.default_rng(crop_seed)
+            if isinstance(entry, dict) and "pdf_page_index" in entry:
+                # Clip-render at the final needed scale; never load a 24MP
+                # full-page raster merely to discard nearly all of it.
+                if self._pdf_sampler is None:
+                    from .pdf_crop import PdfCropSampler
+                    self._pdf_sampler = PdfCropSampler()
+                try:
+                    clean, pdf_crop_meta = self._pdf_sampler.sample(
+                        entry, self.size, crop_rng, crop_seed=crop_seed,
+                        crop_slot=crop_slot if crop_slot >= 0 else None,
+                        bank_size=self.crop_bank_size if crop_slot >= 0 else None,
+                        dpi_variant=index % self.crop_reuse_views,
+                        dpi_variants=self.crop_reuse_views,
+                        dpi_epoch=ep,
+                    )
+                except (OSError, ValueError, IndexError, RuntimeError):
+                    continue
+                break
             boxes = entry.get("boxes") if isinstance(entry, dict) else None
+            # Raster scans and verified-label crops also replay a stable
+            # physical region. Cache the *base* crop, never its augmented
+            # version, so every encounter still gets independent transforms.
+            crop_key = (str(path), int(self.size), int(crop_seed),
+                        self.labeled_focus_probability)
+            cached = self._raster_crop_cache.get(crop_key)
+            if cached is not None:
+                self._raster_crop_cache.move_to_end(crop_key)
+                clean = cached.copy()
+                crop_cache_hit = True
+                break
             img = self._read_cached(path)
             if img is not None and min(img.shape[:2]) >= 64:
+                clean = sample_label_guided_crop(
+                    img, self.size, crop_rng, boxes,
+                    focus_probability=self.labeled_focus_probability,
+                )
+                if clean.nbytes <= self._raster_crop_budget:
+                    self._raster_crop_cache[crop_key] = clean.copy()
+                    self._raster_crop_bytes += clean.nbytes
+                    while self._raster_crop_bytes > self._raster_crop_budget:
+                        _, removed = self._raster_crop_cache.popitem(last=False)
+                        self._raster_crop_bytes -= removed.nbytes
                 break
 
-        if img is None:
-            raise RuntimeError('Failed to decode any blueprint image after 8 attempts')
-
-        clean = sample_label_guided_crop(
-            img, self.size, rng, boxes,
-            focus_probability=self.labeled_focus_probability,
+        if clean is None:
+            raise RuntimeError('Failed to sample a blueprint after 8 attempts')
+        # Explicit QA/SSL controls must NOT receive added symbols, even if the
+        # same source can also serve as a synthetic-positive background.
+        # Do not infer a detector negative merely from 'no reviewed boxes'.
+        control_kind = (
+            entry.get("negative_control_kind") if isinstance(entry, dict)
+            else None
         )
-        clean = apply_geometric_variability(clean, rng)
+        allowed_controls = {
+            "text_heavy", "walls_only", "sparse_lines", "blank",
+            "non_device_geometry",
+        }
+        if control_kind is not None and control_kind not in allowed_controls:
+            raise ValueError(f"unknown negative control kind: {control_kind}")
+        if control_kind is not None and pdf_crop_meta is not None:
+            # Random DPI, changing physical field of view and random sites
+            # invalidate a reviewed *exact viewport*. Render/crop first to a
+            # fixed raster and review the pixels before classifying negatives.
+            raise ValueError(
+                "negative-control kind requires an exact raster crop; "
+                "random PDF crops can contain unreviewed devices"
+            )
+        suppress_synthetic = bool(control_kind is not None or (
+            isinstance(entry, dict) and
+            entry.get("suppress_synthetic_symbols", False)
+        ))
+        # Decide on a genuinely clean crop before any rotation/skew/page
+        # deformation. Truly clean examples retain the crop's source geometry,
+        # whereas the other examples receive all independent chaos stages.
+        full_clean_view = bool(rng.random() < self.clean_fraction)
+        if not full_clean_view:
+            clean = apply_geometric_variability(clean, rng)
         symbol_stats = {"requested": 0, "placed": 0, "shortfall": 0,
                         "neca": 0, "procedural": 0}
-        if self.max_symbols > 0 and rng.random() < self.symbol_augment_probability:
+        if (not suppress_synthetic and self.max_symbols > 0 and
+                rng.random() < self.symbol_augment_probability):
             from .ssl_augmentation import compose_ssl_symbols
             clean, symbol_stats = compose_ssl_symbols(
                 clean, rng, neca_bank=self.neca_bank,
@@ -512,14 +775,41 @@ class BlueprintSSLDataset(Dataset):
                 min_size_px=self.symbol_min_px,
                 max_size_px=self.symbol_max_px,
                 procedural_fraction=self.procedural_fraction,
+                symbol_chaos_probability=(
+                    0.0 if full_clean_view else self.symbol_chaos_probability
+                ),
+                symbol_chaos_strength=self.symbol_chaos_strength,
+                placement_chaos=self.placement_chaos,
+                drawing_dpi=(pdf_crop_meta["effective_dpi"]
+                             if pdf_crop_meta is not None else None),
             )
+
+        # Page-wide deformation happens after individual symbol composition.
+        # Geometrically warp the complete plan and its symbols, *before*
+        # creating the aligned degraded input and clean SSL target. The exact
+        # placed boxes are mapped through the same transforms for previews.
+        from .page_chaos import warp_whole_page
+        placements = symbol_stats.get("placements", [])
+        pre_page = clean.copy() if self.include_pre_page_preview else None
+        clean, warped_boxes, page_chaos_meta = warp_whole_page(
+            clean, rng,
+            boxes=[item["bbox_xyxy"] for item in placements],
+            probability=(0.0 if full_clean_view else self.page_chaos_probability),
+            strength=self.page_chaos_strength,
+        )
+        for item, warped_box in zip(placements, warped_boxes):
+            item["bbox_xyxy"] = warped_box
+
         if self.return_metadata:
             degraded, mask, degradation_meta = apply_runtime_corruptions(
-                clean, rng, clean_fraction=self.clean_fraction, return_metadata=True,
+                clean, rng, clean_fraction=(1.0 if full_clean_view else 0.0),
+                protected_boxes=[item["bbox_xyxy"] for item in placements],
+                return_metadata=True,
             )
         else:
             degraded, mask = apply_runtime_corruptions(
-                clean, rng, clean_fraction=self.clean_fraction,
+                clean, rng, clean_fraction=(1.0 if full_clean_view else 0.0),
+                protected_boxes=[item["bbox_xyxy"] for item in placements],
             )
 
         # BGR uint8 -> RGB float32 [0, 1] CHW
@@ -532,7 +822,28 @@ class BlueprintSSLDataset(Dataset):
         if self.return_metadata:
             details = {
                 "source": str(path), "bucket": self.bucket_names[b_idx],
+                "pdf_crop": pdf_crop_meta,
+                "base_crop": {
+                    "seed": crop_seed,
+                    "bank_slot": crop_slot if crop_slot >= 0 else None,
+                    "fresh": crop_slot < 0,
+                    "reuse_views": self.crop_reuse_views,
+                    "background_labels_exhaustive": False,
+                    "clean_crop_cache_hit": (
+                        bool(pdf_crop_meta.get("clean_crop_cache_hit"))
+                        if pdf_crop_meta is not None else crop_cache_hit
+                    ),
+                },
+                "full_clean_view": full_clean_view,
+                "negative_control_kind": control_kind,
+                "synthetic_suppressed": suppress_synthetic,
+                # Negative ground truth requires independent exhaustive
+                # human review of the *exact* final crop; PDF zoom and
+                # page deformation invalidate region-level assumptions.
+                "detector_negative_verified": False,
+                "geometric_variability_enabled": not full_clean_view,
                 "symbol_stats": symbol_stats,
+                "page_chaos": page_chaos_meta,
                 "degradation": degradation_meta,
                 "mask_fraction": float(mask.mean()),
                 "mean_absolute_degradation": float(
@@ -540,6 +851,8 @@ class BlueprintSSLDataset(Dataset):
                 ),
                 "index": int(index), "epoch": int(ep),
             }
+            if pre_page is not None:
+                details["pre_page_bgr"] = pre_page
             return deg_t, clean_t, mask_t, details
         return deg_t, clean_t, mask_t
 
@@ -574,11 +887,17 @@ class Yolo26P2SSLModel(nn.Module):
         self.tap_indices: list[int] = list(detect_layer.f)
         self.save_set: set[int] = set(self.det_model.save) | set(self.tap_indices)
 
-        # Probe output channel dimensions of P2..P5 neck taps dynamically.
-        with torch.no_grad():
-            dummy = torch.zeros(1, 3, imgsz, imgsz)
-            feats = self.extract_neck_features(dummy)
-        chs = [f.shape[1] for f in feats]
+        # Probe P2..P5 channel counts without contaminating BatchNorm running
+        # statistics. The zero-image probe is *not* a training example.
+        was_training = self.det_model.training
+        self.det_model.eval()
+        try:
+            with torch.inference_mode():
+                dummy = torch.zeros(1, 3, imgsz, imgsz)
+                feats = self.extract_neck_features(dummy)
+            chs = [f.shape[1] for f in feats]
+        finally:
+            self.det_model.train(was_training)
 
         dec_ch = 64
         self.projs = nn.ModuleList([

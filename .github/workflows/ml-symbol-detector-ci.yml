@@ -36,6 +36,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -r ml/symbol-detector/requirements-test.txt -r ml/symbol-detector/requirements-sam3.txt
+          # The complete suite also tests native YOLO26 MuSGD and imports
+          # ultralytics.optim, which the optional core requirements omit.
+          python -m pip install 'ultralytics==8.4.216'
       - name: Validate installed SAM 3.1 / torchvision API
         run: |
           python - <<'PY'

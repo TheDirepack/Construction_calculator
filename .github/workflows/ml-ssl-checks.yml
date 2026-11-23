@@ -36,3 +36,64 @@ jobs:
         run: bash -n remote/run_pretrain_v3.sh remote/run_phase2_train.sh
       - name: Run all ML regression tests
         run: python -m pytest -q tests
+      - name: Generate independent visual QA sample artifacts
+        if: github.event_name == 'pull_request'
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import cv2
+          import numpy as np
+          root = Path(os.environ["RUNNER_TEMP"]) / "chaos_review"
+          root.mkdir(parents=True, exist_ok=True)
+          page = np.full((640, 800, 3), 250, dtype=np.uint8)
+          cv2.rectangle(page, (35, 38), (760, 590), (18, 18, 18), 3)
+          for x in (190, 390, 630):
+              cv2.line(page, (x, 38), (x, 590), (34, 34, 34), 2)
+          for y in (225, 420):
+              cv2.line(page, (35, y), (760, y), (34, 34, 34), 2)
+          for i, x in enumerate((95, 245, 485, 690)):
+              cv2.putText(page, f"R{i+1}", (x, 130),
+                          cv2.FONT_HERSHEY_SIMPLEX, .65, (25, 25, 25), 1)
+          source = root / "synthetic_background.png"
+          assert cv2.imwrite(str(source), page)
+          (root / "manifest.json").write_text(json.dumps({
+              "buckets": {"synthetic_fixture": {
+                  "weight": 1.,
+                  "groups": {"single_test_project": [str(source)]},
+              }}
+          }))
+          PY
+          python scripts_preview_pretrain_ssl.py "$RUNNER_TEMP/chaos_review/manifest.json" \
+            --out "$RUNNER_TEMP/chaos_review/previews" --seed 41277 --samples 16 \
+            --max-symbols 16 --symbol-chaos-strength 1.3 \
+            --symbol-chaos-probability 0.95 --page-chaos-strength 1.3 \
+            --page-chaos-probability 0.9
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import cv2
+          import numpy as np
+          root = Path(os.environ["RUNNER_TEMP"]) / "chaos_review" / "previews"
+          for name, suffix in (("geometry", "_geometry"), ("scan", "")):
+              tiles = []
+              for i in range(16):
+                  im = cv2.imread(str(root / f"sample_{i:04d}{suffix}.png"))
+                  if im is None:
+                      raise FileNotFoundError(f"Missing chaos preview {i}: {name}")
+                  tile = cv2.resize(im, (512, 256), interpolation=cv2.INTER_AREA)
+                  cv2.putText(tile, f"sample {i}", (8, 18),
+                              cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 200), 1)
+                  tiles.append(tile)
+              rows = [np.hstack(tiles[i:i+2]) for i in range(0, len(tiles), 2)]
+              assert cv2.imwrite(str(root / f"{name}_montage.png"), np.vstack(rows))
+          PY
+      - name: Attach visual audit to PR CI run
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: blueprint-chaos-visual-audit
+          path: ${{ runner.temp }}/chaos_review/previews/
+          retention-days: 7
+

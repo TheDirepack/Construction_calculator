@@ -210,15 +210,18 @@ def map_neca_to_v7(section: str, name: str) -> tuple[str, str]:
     if 'box' in s:
         return 'junction_box', 'junction_box'
 
-    # Communications / teledata / AV
-    if 'teledata' in s or 'communications' in s:
-        if 'speaker' in n:
-            return 'speaker', 'speaker'
+    # Telecom jacks are data outlets; AV equipment (intercom, volume
+    # control, equipment rack, CATV, microphone) is not a data jack.
+    if 'teledata' in s:
         if 'telephone' in n and ('data' in n or 'combo' in n or 'combination' in n):
             return 'data_outlet', 'data_telephone'
         if 'telephone' in n or 'phone' in n:
             return 'data_outlet', 'telephone'
         return 'data_outlet', 'data'
+    if 'communications' in s:
+        if 'speaker' in n:
+            return 'speaker', 'speaker'
+        return 'other_device', 'unspecified'
 
     # Security
     if 'security' in s:
@@ -294,15 +297,37 @@ class NecaSymbolBank:
         meta = json.loads(meta_path.read_text())
         self.by_class: dict[str, list[NecaGlyph]] = {c: [] for c in CANONICAL_CLASSES}
 
-        for entry in meta.get('symbols', []):
+        entries = meta.get('symbols', [])
+        # Many NECA numbered-row SVGs contain two or more *alternatives*
+        # inside one cell. Never place that composite as one labeled device
+        # when individually extracted variants are available.
+        split_rows = {
+            (entry.get('section'), entry.get('code'))
+            for entry in entries if entry.get('kind') == 'printed_alternative'
+        }
+        annotation_sections = {
+            'Luminaires - Orientation Modifiers',
+            'Luminaires - Extended Modifiers',
+            'Luminaires - Emergency Modifiers',
+        }
+        for entry in entries:
             sec = entry.get('section', '')
             cls = NECA_SECTION_TO_CLASS.get(sec)
-            if cls is None or (not include_modifiers and 'modifier' in sec.lower()):
+            if cls is None or sec in annotation_sections:
                 continue
-            # For Raceways - Boxes and Busways, keep only actual box/pole devices (skip busways/trays)
+            if not include_modifiers and 'modifier' in sec.lower():
+                continue
+            kind = entry.get('kind', 'numbered_row')
+            if kind == 'numbered_row' and (sec, entry.get('code')) in split_rows:
+                continue
+            # Mounting-row figures are arrays of different mountings/shapes;
+            # only the isolated round/rectangular figure variants are devices.
+            if sec == 'Luminaires - Mounting Modifiers' and kind != 'printed_alternative':
+                continue
+            # Diagram annotations, raceway poles and busways are not boxes.
             if sec == 'Raceways - Boxes and Busways':
                 low_name = entry.get('name', '').lower()
-                if not any(k in low_name for k in ('box', 'pole', 'handhole')):
+                if not any(k in low_name for k in ('box', 'handhole')):
                     continue
             svg_path = self.library_root / entry['file']
             if not svg_path.is_file():
@@ -401,125 +426,102 @@ def composite_neca_page(
     wall_fraction: float = 0.60,
     size_px_range: tuple[float, float] = (20.0, 64.0),
     max_clutter_ink: float = 0.08,
+    symbol_chaos_probability: float = 0.0,
+    symbol_chaos_strength: float = 1.0,
+    placement_chaos: float = 0.0,
+    drawing_dpi: float | None = None,
+    match_local_ink: bool = False,
+    ink_reference: np.ndarray | None = None,
     tag: str = 'neca',
 ) -> tuple[np.ndarray, list[dict]]:
     """Composite NECA 100-2013 SVG devices onto a clean blueprint page with zero wall clipping."""
+    if not 0 <= placement_chaos <= 1:
+        raise ValueError("placement_chaos must be a probability")
+    from .symbol_chaos import distort_symbol_alpha, sample_free_origin
+    from .ink_style import local_drawing_ink_bgr, sized_symbol_range
+    from .placement_policy import wall_placement_probability
+    from .wall_alignment import (
+        detect_wall_sites, wall_rotation_degrees, snap_symbol_to_wall,
+    )
+
     page = image.copy()
+    reference = image if ink_reference is None else ink_reference
+    if reference.shape != image.shape or reference.dtype != image.dtype:
+        raise ValueError("ink_reference must match the source drawing shape/dtype")
     h, w = page.shape[:2]
     gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
     ink_mask = (gray < 175).astype(np.uint8)
-    wall_mask = extract_wall_mask(gray)
-
+    wall_sites, fitted_wall_mask = detect_wall_sites(gray, rng)
+    wall_mask = np.maximum(extract_wall_mask(gray), fitted_wall_mask)
     ink_int = cv2.integral(ink_mask)
     wall_int = cv2.integral(wall_mask)
-
-    wall_ys, wall_xs = np.nonzero(wall_mask > 0)
-    has_walls = len(wall_xs) > 50
-
-    # Sample candidate wall points for wall-adjacent placements
-    if has_walls:
-        n_cand = min(1500, len(wall_xs))
-        c_idx = rng.choice(len(wall_xs), size=n_cand, replace=False)
-        cand_walls = list(zip(wall_xs[c_idx].tolist(), wall_ys[c_idx].tolist()))
-        rng.shuffle(cand_walls)
-    else:
-        cand_walls = []
+    has_walls = bool(wall_sites)
 
     ink_bgr = np.percentile(page[ink_mask.astype(bool)], 10, axis=0) if ink_mask.any() else np.zeros(3)
     occupied: list[list[float]] = [list(map(float, i['bbox_xyxy'])) for i in doc.get('instances', [])]
 
     # Scale symbol range mildly with page resolution so 5000px sheets get appropriately sized symbols
-    res_factor = float(np.clip(max(h, w) / 2800.0, 0.70, 1.85))
-    lo_px = size_px_range[0] * res_factor
-    hi_px = size_px_range[1] * res_factor
+    if drawing_dpi is not None:
+        # SVG source has no authoritative physical size; choose an apparent
+        # symbol size at 200dpi, then scale at the exact PDF-render DPI.
+        lo_px, hi_px = sized_symbol_range(size_px_range, drawing_dpi, (h, w))
+    else:
+        res_factor = float(np.clip(max(h, w) / 2800.0, 0.70, 1.85))
+        lo_px = size_px_range[0] * res_factor
+        hi_px = size_px_range[1] * res_factor
 
     placed: list[dict] = []
     wall_cursor = 0
     attempts = 0
     max_attempts = max(200, per_page * 60)
+    wall_probability = (
+        float(rng.uniform(.08, .92))
+        if placement_chaos and rng.random() < placement_chaos else wall_fraction
+    )
 
     while len(placed) < per_page and attempts < max_attempts:
         attempts += 1
         glyph = bank.sample(rng)
         target_px = float(np.exp(rng.uniform(math.log(lo_px), math.log(hi_px))))
-        want_wall = has_walls and (rng.random() < wall_fraction)
+        # A common per-page preference is modulated by how devices usually
+        # mount: switches/receptacles near walls, troffers/downlights mostly
+        # in free/ceiling locations. All classes retain random variation.
+        # Some NECA floor-mounted receptacles have a generic v7 subtype,
+        # but their source legend text still identifies floor mounting.
+        placement_subtype = (
+            "floor" if glyph.device_type == "receptacle" and
+            "floor" in glyph.name.lower() else glyph.subtype
+        )
+        glyph_wall_probability = wall_placement_probability(
+            glyph.device_type, placement_subtype, wall_probability
+        )
+        want_wall = has_walls and (rng.random() < glyph_wall_probability)
+        chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
+        placement_mode = "wall" if want_wall else "uniform"
 
-        if want_wall and cand_walls:
-            wx, wy = cand_walls[wall_cursor % len(cand_walls)]
+        if want_wall and wall_sites:
+            site = wall_sites[wall_cursor % len(wall_sites)]
             wall_cursor += 1
-            if wx < 20 or wx >= w - 20 or wy < 20 or wy >= h - 20:
-                continue
-
-            # Determine which orthogonal side of the wall is open space (lowest wall/ink density)
-            probe = max(16, int(round(target_px * 0.7)))
-            dirs = [
-                (0, -1, 0.0),    # above wall
-                (0, 1, 180.0),   # below wall
-                (-1, 0, 90.0),   # left of wall
-                (1, 0, 270.0),   # right of wall
-            ]
-            best_dir = None
-            best_score = 1e9
-            for dx, dy, ang in dirs:
-                px0 = max(0, min(w - 1, wx + (dx * probe if dx < 0 else (2 if dx > 0 else -probe // 2))))
-                px1 = max(px0 + 1, min(w, wx + (dx * probe if dx > 0 else (-2 if dx < 0 else probe // 2))))
-                py0 = max(0, min(h - 1, wy + (dy * probe if dy < 0 else (2 if dy > 0 else -probe // 2))))
-                py1 = max(py0 + 1, min(h, wy + (dy * probe if dy > 0 else (-2 if dy < 0 else probe // 2))))
-                area = max(1, (px1 - px0) * (py1 - py0))
-                w_cnt = _rect_sum(wall_int, px0, py0, px1, py1)
-                i_cnt = _rect_sum(ink_int, px0, py0, px1, py1)
-                score = (w_cnt * 10.0 + i_cnt) / area
-                if score < best_score:
-                    best_score = score
-                    best_dir = (dx, dy, ang)
-
-            if best_dir is None or best_score > 0.25:
-                continue
-            nx, ny, angle = best_dir
+            wx, wy = site.x, site.y
+            angle = wall_rotation_degrees(site.nx, site.ny)
             alpha = _resize_and_rotate_alpha(glyph.alpha, target_px, angle)
+            if symbol_chaos_probability:
+                alpha, chaos_details = distort_symbol_alpha(
+                    alpha, rng, probability=symbol_chaos_probability,
+                    strength=symbol_chaos_strength,
+                )
             gh, gw = alpha.shape
             if gw + 8 >= w or gh + 8 >= h:
                 continue
-
-            # Start centered on the wall point and SHIFT outward along (nx, ny) until:
-            # 1) ZERO wall pixels are inside the bounding box (no wall clipping!)
-            # 2) The back edge of the box sits cleanly touching the outside of the wall!
-            if ny == -1:
-                x0 = int(round(wx - gw / 2.0))
-                y0 = wy - gh
-            elif ny == 1:
-                x0 = int(round(wx - gw / 2.0))
-                y0 = wy
-            elif nx == -1:
-                x0 = wx - gw
-                y0 = int(round(wy - gh / 2.0))
-            else:
-                x0 = wx
-                y0 = int(round(wy - gh / 2.0))
-
-            # Shift outward up to 32 px until completely clear of the wall
-            shifted = False
-            max_shift = max(24, int(round(target_px * 0.6)))
-            for s in range(0, max_shift + 1):
-                cx0 = x0 + nx * s
-                cy0 = y0 + ny * s
-                cx1 = cx0 + gw
-                cy1 = cy0 + gh
-                if cx0 < 4 or cy0 < 4 or cx1 >= w - 4 or cy1 >= h - 4:
-                    break
-                if _rect_sum(wall_int, cx0, cy0, cx1, cy1) == 0:
-                    # Confirm shifting 1..3 px back toward the wall actually touches the wall!
-                    tx0 = max(0, cx0 - nx * 2)
-                    ty0 = max(0, cy0 - ny * 2)
-                    tx1 = min(w, cx1 - nx * 2)
-                    ty1 = min(h, cy1 - ny * 2)
-                    if _rect_sum(wall_int, tx0, ty0, tx1, ty1) > 0:
-                        x0, y0 = cx0, cy0
-                        shifted = True
-                    break
-            if not shifted:
+            # For non-orthogonal walls, an axis-aligned bounding rectangle
+            # intersects the line even when the *rotated ink* does not.
+            # Align the wallward ink edge and reject actual wall overlap.
+            position = snap_symbol_to_wall(
+                alpha, site, wall_mask, margin=4,
+            )
+            if position is None:
                 continue
-
+            x0, y0 = position
             box = [float(x0), float(y0), float(x0 + gw), float(y0 + gh)]
             if _overlaps(box, occupied):
                 continue
@@ -527,28 +529,30 @@ def composite_neca_page(
             if clutter > max_clutter_ink:
                 continue
 
-            # Exact contact point on the outside surface of the wall
             bcx = x0 + gw / 2.0
             bcy = y0 + gh / 2.0
-            if ny == -1:
-                contact = [bcx, float(y0 + gh)]
-            elif ny == 1:
-                contact = [bcx, float(y0)]
-            elif nx == -1:
-                contact = [float(x0 + gw), bcy]
-            else:
-                contact = [float(x0), bcy]
-            vec = [round(contact[0] - bcx, 2), round(contact[1] - bcy, 2)]
+            contact = [float(wx), float(wy)]
+            vec = [round(wx - bcx, 2), round(wy - bcy, 2)]
             is_wall = True
         else:
             # Free-space placement: NOT touching any wall -> extra vector in the center
             angle = float(rng.choice([0.0, 90.0, 180.0, 270.0]))
             alpha = _resize_and_rotate_alpha(glyph.alpha, target_px, angle)
+            if symbol_chaos_probability:
+                alpha, chaos_details = distort_symbol_alpha(
+                    alpha, rng, probability=symbol_chaos_probability,
+                    strength=symbol_chaos_strength,
+                )
             gh, gw = alpha.shape
             if gw + 16 >= w or gh + 16 >= h:
                 continue
-            x0 = int(rng.integers(8, w - gw - 8))
-            y0 = int(rng.integers(8, h - gh - 8))
+            if placement_chaos:
+                x0, y0, placement_mode = sample_free_origin(
+                    rng, (h, w), (gh, gw), occupied, chaos=placement_chaos,
+                )
+            else:
+                x0 = int(rng.integers(8, w - gw - 8))
+                y0 = int(rng.integers(8, h - gh - 8))
             # Strictly ZERO wall pixels inside box AND at least 6px clearance from walls
             pad = 6
             if _rect_sum(wall_int, max(0, x0 - pad), max(0, y0 - pad), min(w, x0 + gw + pad), min(h, y0 + gh + pad)) > 0:
@@ -569,7 +573,11 @@ def composite_neca_page(
         # Blend cleanly onto the clean blueprint (before any noise/compression!)
         roi = page[y0:y0 + gh, x0:x0 + gw].astype(np.float32)
         a = (alpha.astype(np.float32) / 255.0)[:, :, None]
-        ink_col = np.clip(ink_bgr + rng.normal(0.0, 6.0, 3), 0.0, 180.0).astype(np.float32)
+        ink_col = (
+            np.asarray(local_drawing_ink_bgr(reference, box), dtype=np.float32)
+            if match_local_ink else
+            np.clip(ink_bgr + rng.normal(0.0, 6.0, 3), 0.0, 180.0).astype(np.float32)
+        )
         blended = roi * (1.0 - a) + np.minimum(roi, ink_col) * a
         page[y0:y0 + gh, x0:x0 + gw] = np.clip(blended, 0.0, 255.0).astype(np.uint8)
         occupied.append(box)
@@ -590,15 +598,22 @@ def composite_neca_page(
                 'wall_connection_point': {
                     'xy': [round(contact[0], 2), round(contact[1], 2)],
                     'visible': True,
-                    'annotated': True,
+                    'annotated': not bool(chaos_details["operations"]),
                 }
             },
             'rotation_degrees_image': angle,
+            'symbol_chaos': chaos_details,
             'source': {
                 'kind': 'neca_100_2013_svg_composite',
-                'label_method': 'known_placement_transform',
+                'label_method': ('warped_bbox_only' if chaos_details["operations"]
+                                 else 'known_placement_transform'),
                 'target_px': round(target_px, 2),
-                'placement_mode': 'wall_touching_shifted' if is_wall else 'free_space_center',
+                'drawing_dpi': drawing_dpi,
+                'ink_color_bgr': [int(round(v)) for v in ink_col],
+                'placement_mode': 'wall_aligned_raster' if is_wall else placement_mode,
+                'wall_angle_degrees_image': round(angle, 3) if is_wall else None,
+                'wall_contact_method': 'raster_line_fit' if is_wall else None,
+                'wall_sampling_probability': round(glyph_wall_probability, 4),
             },
         })
 
