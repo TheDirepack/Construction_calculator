@@ -143,6 +143,8 @@ def main() -> None:
     ap.add_argument('--max-pixels', type=int, default=20_000_000)
     ap.add_argument('--batch', type=int, default=16)
     ap.add_argument('--score-thr', type=float, default=0.35)
+    ap.add_argument('--include-routing-arrows', action='store_true',
+                    help='Include home-run arrows among device candidates (off by default; routing annotations are not devices)')
     ap.add_argument('--min-page-pts', type=float, default=900.0,
                     help='Skip standard letter-size (<900pt) text/spec pages unless PDF has <=10 pages')
     ap.add_argument('--limit-pdfs', type=int, default=0, help='Optional cap for smoke testing (0 = all)')
@@ -203,6 +205,7 @@ def main() -> None:
         pdf_devices: list[dict] = []
         pages_meta: list[dict] = []
         cls_counts: Counter = Counter()
+        excluded_routing: Counter = Counter()
         scanned_here = 0
 
         try:
@@ -234,6 +237,9 @@ def main() -> None:
                     cx = round(0.5 * (bx0 + bx1), 2)
                     cy = round(0.5 * (by0 + by1), 2)
                     cname = D.cname(int(d['cls']))
+                    if cname == 'homerun_arrow' and not args.include_routing_arrows:
+                        excluded_routing[cname] += 1
+                        continue
                     cls_counts[cname] += 1
                     page_dev_count += 1
                     pdf_devices.append({
@@ -265,6 +271,9 @@ def main() -> None:
             'status': 'provisional_detections_for_refinement',
             'render_dpi': args.dpi,
             'score_threshold': args.score_thr,
+            'excluded_routing_annotations': dict(excluded_routing),
+            'annotations_are_exhaustive': False,
+            'verified_ground_truth': False,
             'coordinate_system': {
                 'origin': 'bottom_left',
                 'units': 'PDF_points',
