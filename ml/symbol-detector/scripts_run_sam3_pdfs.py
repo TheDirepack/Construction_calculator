@@ -385,9 +385,11 @@ def detect_page_sam3(
                     found: list[dict[str, Any]] = []
                     if query_stats is not None:
                         query_stats[f'{stage}_prompts'] += len(indices)
-                    for s_start in range(0, len(indices), svg_batch):
-                        subset = indices[s_start:s_start + svg_batch]
+                    def run_batch(subset: list[int]) -> list[dict[str, Any]]:
+                        # Local scope releases intermediate activations if CUDA
+                        # runs out of memory, allowing a smaller retry.
                         B = len(subset)
+                        batch_found: list[dict[str, Any]] = []
                         idx_t = torch.tensor(subset, dtype=torch.long, device=geo_feats.device)
                         gf = geo_feats.index_select(0, idx_t)
                         gm = geo_masks.index_select(0, idx_t)
@@ -432,7 +434,7 @@ def detect_page_sam3(
                         else:
                             hits = torch.nonzero(scores >= threshold, as_tuple=False)
                         if hits.numel() == 0:
-                            continue
+                            return []
 
                         offsets = model.detr_decoder.box_head(dec.intermediate_hidden_states)[-1]
                         refs = dec.reference_boxes[-1] if dec.reference_boxes.ndim == 4 else dec.reference_boxes
@@ -457,7 +459,7 @@ def detect_page_sam3(
                             if gx1 - gx0 < min_box_px or gy1 - gy0 < min_box_px:
                                 continue
                             glyph = glyphs[subset[b_i]]
-                            found.append({
+                            batch_found.append({
                                 'box_px': [gx0, gy0, gx1, gy1],
                                 'score': float(scores_cpu[b_i, q_i]),
                                 'stage': stage,
@@ -474,6 +476,23 @@ def detect_page_sam3(
                                 'category': glyph.category,
                                 'subcategory': glyph.subcategory if stage not in ('coarse', 'visual_base') else 'unspecified',
                             })
+                        return batch_found
+
+                    active_batch = svg_batch
+                    start_index = 0
+                    while start_index < len(indices):
+                        subset = indices[start_index:start_index + active_batch]
+                        try:
+                            found.extend(run_batch(subset))
+                        except torch.cuda.OutOfMemoryError:
+                            if active_batch <= 1:
+                                raise
+                            active_batch = max(1, active_batch // 2)
+                            if query_stats is not None:
+                                query_stats['sam_inference_oom_retries'] += 1
+                            torch.cuda.empty_cache()
+                            continue
+                        start_index += len(subset)
                     return found
 
                 def gate(detections: list[dict[str, Any]], family_limit: int,
