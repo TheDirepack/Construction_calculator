@@ -6,6 +6,9 @@ the production scanner's real vision/geometry/DETR stack once end to end.
 """
 from __future__ import annotations
 
+import pytest
+pytest.importorskip("transformers", reason="SAM-only API tests need optional Transformers runtime")
+
 from collections import Counter
 from types import SimpleNamespace
 
