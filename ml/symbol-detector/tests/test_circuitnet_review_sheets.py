@@ -232,6 +232,7 @@ def test_sam3_visual_group_to_review_sheet_and_approved_pdf_roundtrip(tmp_path):
     import pymupdf
 
     from scripts_circuitnet_review_sheets import cmd_render, cmd_apply
+    from blueprint_symbols.sam_resume import file_sha256
 
     doc = pymupdf.open()
     page = doc.new_page(width=600, height=400)
@@ -246,6 +247,7 @@ def test_sam3_visual_group_to_review_sheet_and_approved_pdf_roundtrip(tmp_path):
         'source_file': 'drawing.pdf',
         'source_pdf_relative': 'drawing.pdf',
         'source_pdf_absolute': str(pdf_path),
+        'source_pdf_sha256': file_sha256(pdf_path),
         'prompt_taxonomy': {'switch': ['unspecified', 'three_way']},
         'prompt_category_taxonomy': {'lighting_control': ['unspecified']},
         'devices': [{
@@ -280,6 +282,9 @@ def test_sam3_visual_group_to_review_sheet_and_approved_pdf_roundtrip(tmp_path):
     assert len(reviewed) == 1
     batch = json.loads(reviewed[0].read_text())
     assert batch['schema'] == 'blueprint_device_refinement_batch_v2'
+    assert batch['source_pdf_sha256'] == file_sha256(pdf_path)
+    manifest = json.loads((reviewed[0].parent / 'manifest.json').read_text())
+    assert manifest['source_pdf_sha256'] == file_sha256(pdf_path)
     assert len(batch['items']) == 1
     item = batch['items'][0]
     assert item['review_status'] == 'unreviewed'
@@ -302,6 +307,7 @@ def test_sam3_visual_group_to_review_sheet_and_approved_pdf_roundtrip(tmp_path):
     results = list(output.glob('*_REFINED_DEVICES.json'))
     assert len(results) == 1
     result = json.loads(results[0].read_text())
+    assert result['source_pdf_sha256'] == file_sha256(pdf_path)
     assert result['summary']['kept_devices'] == 1
     device = result['devices'][0]
     assert device['visual_group'] == 'switch.base_letter_s'
