@@ -179,6 +179,17 @@ def apply_geometric_variability(clean: np.ndarray, rng: np.random.Generator) -> 
         mat = cv2.getRotationMatrix2D((w * 0.5, h * 0.5), angle, 1.0)
         out = cv2.warpAffine(out, mat, (w, h), flags=cv2.INTER_LINEAR,
                              borderMode=cv2.BORDER_CONSTANT, borderValue=border_val)
+    # Photo perspective / curled-sheet approximation. Transform BOTH SSL
+    # branches identically here; never warp only the reconstruction input.
+    if rng.random() < 0.22:
+        h, w = out.shape[:2]
+        src = np.float32([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]])
+        move = min(h, w) * float(rng.uniform(0.006, 0.035))
+        dst = src + rng.uniform(-move, move, src.shape).astype(np.float32)
+        mat = cv2.getPerspectiveTransform(src, dst)
+        paper = tuple(int(v) for v in np.median(out.reshape(-1, 3), axis=0))
+        out = cv2.warpPerspective(out, mat, (w, h), flags=cv2.INTER_LINEAR,
+                                  borderMode=cv2.BORDER_CONSTANT, borderValue=paper)
     return out
 
 
