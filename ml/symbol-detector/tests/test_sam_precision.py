@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from blueprint_symbols.sam_precision import (
-    evaluate_symbol_box, filter_sam_detections, owns_tile_center,
+    evaluate_symbol_box, filter_sam_detections, owns_tile_center, tile_origins,
 )
 
 
@@ -82,3 +82,19 @@ def test_global_tile_box_cap_is_independent_of_family_counts():
     )
     assert len(out) == 1
     assert stats['filtered_total_hit_cap'] == 1
+
+
+def test_minimal_tile_grid_covers_pages_without_redundant_tail():
+    assert tile_origins(100, 1008, 128) == [0]
+    assert tile_origins(1008, 1008, 128) == [0]
+    assert tile_origins(1800, 1008, 128) == [0, 880]
+    assert tile_origins(2000, 1008, 128) == [0, 880, 1760]
+    assert tile_origins(5000, 1008, 128)[-1] + 1008 >= 5000
+    for length in range(1, 3400, 139):
+        xs = tile_origins(length, 1008, 128)
+        assert xs[0] == 0
+        assert xs[-1] + 1008 >= length
+        assert all(a + 1008 >= b for a, b in zip(xs, xs[1:]))
+        assert len(xs) == len(set(xs))
+    with pytest.raises(ValueError):
+        tile_origins(0, 1008, 128)
