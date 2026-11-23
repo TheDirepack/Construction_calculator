@@ -151,3 +151,24 @@ def test_procedural_pixel_size_increases_with_source_pdf_dpi():
         x0, y0, x1, y1 = placed[0]["bbox_xyxy"]
         sizes.append(max(x1 - x0, y1 - y0))
     assert sizes[1] >= sizes[0] * 3.
+
+def test_ssl_procedural_uses_dpi_normalized_stroke_matching(monkeypatch):
+    """PDF-aware SSL must not bypass the compositor's line-weight matching."""
+    import scripts_composite_electrical as electrical
+
+    original = electrical.composite_page
+    seen = []
+
+    def checked_composite(*args, **kwargs):
+        seen.append((kwargs["stroke_match"], kwargs["drawing_dpi"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(electrical, "composite_page", checked_composite)
+    clean, _ = blue_drawing()
+    _, report = compose_ssl_symbols(
+        clean, np.random.default_rng(1), max_symbols=16,
+        drawing_dpi=175.0, procedural_fraction=1.0,
+        symbol_chaos_probability=0., placement_chaos=0.,
+    )
+    assert report["requested"] > 0
+    assert seen == [(True, 175.0)]
