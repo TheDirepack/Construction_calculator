@@ -345,6 +345,37 @@ def build_pretrain_manifests(
     return train_manifest, val_manifest, audit
 
 
+def neca_source_fingerprint(symbol_dir: Path | None) -> str | None:
+    """Fingerprint SVG geometry as well as symbols.json metadata.
+
+    A symbol's vector strokes may change without changing its metadata ID;
+    resuming with the same metadata hash alone would silently change the
+    denoising objective mid-run.
+    """
+    if symbol_dir is None:
+        return None
+    root = symbol_dir.resolve()
+    meta_path = root / "symbols.json"
+    catalog = json.loads(meta_path.read_text())
+    digest = hashlib.sha256()
+    digest.update(meta_path.read_bytes())
+    refs = sorted({str(item["file"]) for item in catalog.get("symbols", [])})
+    for relative in refs:
+        svg = (root / relative).resolve()
+        if not svg.is_relative_to(root):
+            raise ValueError(f"NECA symbol path escapes source bank: {relative}")
+        if not svg.is_file():
+            # NecaSymbolBank skips missing files, but a change in availability
+            # must still invalidate resume, not silently alter data sampling.
+            digest.update(f"MISSING:{relative}".encode())
+            continue
+        digest.update(relative.encode())
+        with svg.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1 << 20), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Namespace) -> str:
     """Fingerprint the source manifest and training settings for safe resume.
 
@@ -362,10 +393,7 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
     # Changing loss weighting changes the trained representation; old
     # optimizer state must not be resumed across objective revisions.
     conf["ssl_objective"] = "ink-paper-balanced-v2"
-    conf["neca_catalog_sha256"] = (
-        hashlib.sha256((args.neca_dir / "symbols.json").read_bytes()).hexdigest()
-        if args.neca_dir else None
-    )
+    conf["neca_svg_bank_sha256"] = neca_source_fingerprint(args.neca_dir)
     manifest = {"format": 1, "settings": conf,
                 "train": train_manifest, "validation": val_manifest}
     return hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
