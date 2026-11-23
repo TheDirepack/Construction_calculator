@@ -28,8 +28,9 @@ echo "=== INCREMENTAL BLUEPRINT SOURCE INGEST ==="
 "$PY" scripts_curate_pool.py "$WORK/pool"
 
 echo "=== BUILD DEVICE-POSITIVE CROP REFERENCES (NOT EXHAUSTIVE LABELS) ==="
-if [[ ! -d "$LABELS" ]]; then
+if [[ ! -f "$LABELS/.complete" ]]; then
   "$PY" adapters/import_standardized_devices.py "$DATA" "$LABELS" --dpi 200
+  touch "$LABELS/.complete"
 fi
 
 echo "=== FRESH BLUEPRINT-ONLY SSL TRAINING ==="
@@ -50,7 +51,7 @@ exec "$PY" scripts_pretrain_ssl.py \
   --max-symbols 16 \
   --symbol-min-px 12 \
   --symbol-max-px 80 \
-  --symbol-augment-probability 0.80 \
+  --symbol-augment-probability 1.00 \
   --procedural-fraction 0.25 \
   --clean-fraction 0.20 \
   --labeled-focus-probability 0.65 \
