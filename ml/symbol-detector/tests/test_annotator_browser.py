@@ -192,3 +192,73 @@ def test_browser_sam_class_alternative_is_not_automatically_verified(tmp_path):
         server.shutdown()
         server.server_close()
         worker.join(timeout=10)
+
+
+def test_browser_import_requires_source_match_and_unverifies(tmp_path):
+    """Mismatched-image imports cannot silently preserve human verification."""
+    from PIL import Image
+
+    image = tmp_path / "sheet.png"
+    Image.new("RGB", (400, 300), (245, 245, 245)).save(image)
+    annotations = tmp_path / "page.json"
+    annotations.write_text(json.dumps({
+        "image_path": "sheet.png", "image_width": 400, "image_height": 300,
+        "coordinate_system": "original_page_pixels_top_left_y_down", "instances": [],
+    }))
+    imported = tmp_path / "different_sheet.json"
+    imported.write_text(json.dumps({
+        "image_sha256": "0" * 64, "image_width": 400, "image_height": 300,
+        "coordinate_system": "original_page_pixels_top_left_y_down",
+        "instances": [{
+            "instance_id": "imported_1", "symbol_family": "receptacle",
+            "symbol_variant": "duplex", "bbox_xyxy": [115.0, 108.0, 145.0, 138.0],
+            "review_status": "accepted", "review_source": "human",
+            "verified_ground_truth": True, "uncertain": False,
+        }],
+        "rejected_proposals": [{
+            "instance_id": "rejected_1", "symbol_family": "switch",
+            "symbol_variant": "unspecified", "bbox_xyxy": [200.0, 200.0, 230.0, 230.0],
+            "review_status": "rejected", "review_source": "human",
+            "uncertain": True, "verified_ground_truth": False,
+        }],
+    }))
+
+    session = LabelingSession(edit=annotations)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1300, "height": 850})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function(
+                    "() => document.querySelector('#count')?.textContent?.includes('0 active')"
+                )
+                page.once("dialog", lambda dialog: dialog.dismiss())
+                page.locator("#importJsonFile").set_input_files(str(imported))
+                assert "0 active" in page.locator("#count").inner_text()
+
+                page.once("dialog", lambda dialog: dialog.accept())
+                page.locator("#importJsonFile").set_input_files(str(imported))
+                page.wait_for_function(
+                    "() => document.querySelector('#count')?.textContent?.includes('1 pending')"
+                )
+                assert "0 verified" in page.locator("#count").inner_text()
+                page.locator("#save").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#dirty').textContent === 'Saved'"
+                )
+                saved = json.loads(annotations.read_text())
+                assert saved["instances"][0]["review_status"] == "unreviewed"
+                assert saved["instances"][0]["review_source"] == "import"
+                assert saved["instances"][0]["verified_ground_truth"] is False
+                assert saved["instances"][0]["uncertain"] is True
+                assert saved["rejected_proposals"] == []
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)

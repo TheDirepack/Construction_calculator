@@ -2094,6 +2094,18 @@ async function importJsonFromFile(file) {
         `do not match current page (${state.doc.image_width}×${state.doc.image_height}).`
       );
     }
+    if (imported.coordinate_system && imported.coordinate_system !== state.doc.coordinate_system) {
+      throw new Error("Imported coordinates use a different coordinate system.");
+    }
+    // Matching dimensions alone cannot establish label alignment or human review
+    // provenance. A backup of the exact raster is safe; a different or
+    // unidentified source requires confirmation and new human verification.
+    const sameImage = Boolean(imported.image_sha256 && state.doc.image_sha256 &&
+      imported.image_sha256 === state.doc.image_sha256);
+    if (!sameImage && !window.confirm(
+      "This JSON does not identify the exact current image. Import as UNVERIFIED " +
+      "proposals and discard previous rejected marks? Review every box before accepting."
+    )) return;
     remember();
     state.doc.instances = imported.instances.map((raw, idx) => {
       const fam = String(raw.symbol_family || raw.device_type || "unknown_symbol");
@@ -2107,9 +2119,13 @@ async function importJsonFromFile(file) {
         attributes_from_text: Array.isArray(raw.attributes_from_text) ? raw.attributes_from_text : [],
         is_occluded: Boolean(raw.is_occluded),
         is_truncated: Boolean(raw.is_truncated),
+        ...(!sameImage ? {
+          review_status: "unreviewed", review_source: "import",
+          verified_ground_truth: false, uncertain: true,
+        } : {}),
       };
     });
-    state.doc.rejected_proposals = Array.isArray(imported.rejected_proposals)
+    state.doc.rejected_proposals = sameImage && Array.isArray(imported.rejected_proposals)
       ? imported.rejected_proposals : [];
     state.selectedId = null;
     editState();
