@@ -228,8 +228,10 @@ banding, JPEG/WebP artifacts and optional masked blocks. Extra whole-page
 photocopy/scan degradation includes gamma drift, local shadows and glare,
 fold creases, roller banding, moiré patterns, halftone dots, double-fed toner
 ghosts, toner bleed, feed scratches, local smears and asymmetric X/Y DPI loss.
-The input-only degradation stage retains a minimum line-contrast guard; it
-does not reverse all loss or guarantee symbol readability. Whole-page geometry
+The input-only degradation stage retains a minimum line-contrast guard and
+caps MIM-block masking at 60% of every **known inserted symbol box** (unknown
+original devices cannot be protected this way). It does not reverse all
+damage or guarantee symbol readability. Whole-page geometry
 is applied to both target and input **before** image degradation.
 
 For the remote 6 GB NVIDIA machine, start a **new** experiment (no prior
