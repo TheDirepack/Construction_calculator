@@ -164,11 +164,37 @@ uses real construction drawings, CAD-derived layouts, optionally verified
 device-box annotations for crop targeting, NECA 100 vector SVG glyphs, and
 procedural electrical glyphs. None requires COCO or ImageNet weights.
 
-**Data sampling:** Balance by source bucket and original project group; random
-crops are mixed with device-centered crops when verified bounding boxes exist.
-Device boxes are *positive hints*, not evidence that all other symbols have
-been labeled. Avoid incorporating a reserved detector evaluation project into
-either SSL training or SSL checkpoint selection.
+**Data sampling:** Real construction PDFs are indexed by source PDF and
+individual page with `scripts_index_real_pdfs.py`—including documents with
+hundreds of pages. The SSL loader opens each source PDF lazily, caches at most
+three document handles and 96 tiny density thumbnails per worker, and renders
+only randomized crop rectangles at the selected training scale. It does **not**
+first rasterize each sheet at 150 DPI and downsample a 24 MP page to 512px.
+Four logarithmic detail-to-overview scale bands, mixed density-guided and
+uniform/stratified positions, fresh rotations and degradations yield many
+different views from every available page across epochs. Original image/scan
+sources retain a bounded 96 MB LRU cache per worker. Source groups are
+weighted by 45% uniform plus 55% sqrt(page count), allowing longer sets more
+views without overwhelming small projects.
+
+The remote SSL launcher now **skips full-page PDF rasterization** in the
+generic pool builder; other programs retain its previous behavior. Earlier
+pool PNGs from the same indexed PDF are skipped to prevent double weighting.
+Verified device-centered raster crops remain available. Device boxes are
+*positive hints*, not proof of exhaustive labels.
+
+Keep the approximately 100 reserved source PDFs outside the indexed input
+tree or list them in `../work/heldout_real_pdfs.json`:
+```json
+{"source_pdfs": ["1_blueprints/path/to/reserved.pdf"],
+ "project_family_ids": []}
+```
+Both the indexer and SSL manifest exclude these, plus already locked
+detector-evaluation project IDs. The separate 10% group-hashed SSL validation
+monitor is **not** the final reserved evaluation set. Without an explicit
+reservation file or physically separate reserved directory, exclusion of the
+100 external held-out PDFs cannot be verified. Do not fold the final held-out
+set into SSL checkpoint selection.
 
 **Symbol augmentation:** When enabled, each selected crop receives a uniformly
 sampled *requested* count of 0–16 new symbols (actual placements may be lower
@@ -183,8 +209,8 @@ The prior procedural glyph families supply additional variation.
 samples 1–4 geometric/print perturbations, with a default 0.88 activation
 probability. Effects include independent X/Y stretching, two-axis shear,
 rotation and keystone, elastic control-point meshes, crossing horizontal and
-vertical waves, folds, radial pinch/bulge with twist, stroke erosion or
-expansion, dry-pen dropouts, ink misregistration, low-DPI print, fading and
+vertical waves, folds, radial pinch/bulge with twist, stroke erosion or expansion, fractional **per-symbol line-width** variation,
+dry-pen dropouts, ink misregistration, low-DPI print, fading and
 defocus. Small/heavy/rare-extreme severity levels are sampled per symbol.
 Bounds and ink-retention guards reject severe collapse, but **human-recognizable
 class identity is not guaranteed** by a pixel-area test.
@@ -246,8 +272,8 @@ than overwriting the full experiment:
 
 ```bash
 SSL_OUT="$HOME/Projects/blueprint-symbols/work/pretrain_smoke_v3" \
-SSL_EPOCHS=1 SSL_ITEMS_PER_EPOCH=32 SSL_VAL_ITEMS=16 \
-SSL_BATCH=16 SSL_MICROBATCH=2 \
+SSL_EPOCHS=1 SSL_ITEMS_PER_EPOCH=28 SSL_VAL_ITEMS=14 \
+SSL_BATCH=14 SSL_MICROBATCH=2 \
   bash remote/run_pretrain_v3.sh
 ```
 
@@ -270,28 +296,26 @@ The remote runner forwards `SSL_SYMBOL_CHAOS_PROBABILITY`,
 `SSL_PAGE_CHAOS_PROBABILITY`, and `SSL_PAGE_CHAOS_STRENGTH`.
 These settings enter the resume fingerprint; changing them requires a
 new run directory.
-**Pretraining settings (YOLO26n-P2):** default logical/optimizer batch
-**16**, physical GPU microbatch **4**, and **4 gradient-accumulation passes**
-per MuSGD optimizer update. This retains `--optimizer MuSGD` (the default)
-and uses the pinned Ultralytics implementation. The detection head stays
-random and frozen; backbone/neck and SSL decoder are trained. Data resolution
-remains 512 px, optimizer LR `0.005`, momentum `0.937`, weight decay
-`0.0005`, 60 epochs × 8192 samples = **30,720 optimizer updates**.
-Warmup uses three epochs, followed by cosine decay; FP16 autocast and
-`GradScaler` run on CUDA, with gradient unscale and clip **once per 16
-examples**. Validation also uses the physical microbatch (4) to avoid
-unnecessary VRAM spikes. MuSGD matches the model family, but the LR and
-loss schedule remain an **unmeasured starting recipe for this custom SSL
-objective**, not a reproduced official detection-training recipe.
+**Pretraining settings (YOLO26n-P2):** after the reported batch-16
+capacity limit, use **effective/optimizer batch 14**, **physical GPU microbatch
+2**, and **seven accumulation passes** per MuSGD update. MuSGD remains the
+default; the detection head stays frozen, while backbone/neck and decoder
+train. Images remain 512×512, LR `0.005`, momentum `0.937`, weight decay
+`0.0005`; 60 epochs × 8,190 samples = **35,100 optimizer updates**.
+Three warmup epochs precede cosine decay. CUDA uses FP16 autocast and
+`GradScaler`, unscales/clips gradients once per logical 14 samples.
+Validation uses microbatch 2, preserving VRAM.
 
-Use `SSL_BATCH=16 SSL_MICROBATCH=4` for the recommended initial profile.
-If the 6 GB RTX 2060 runs out of memory, use `SSL_MICROBATCH=2` or `1`
-with the same logical batch 16. BatchNorm statistics still follow the
-physical microbatch, so accumulation is **not strictly equivalent** to a
-physical batch of 16. The full-resolution SSL decoder has **not yet been
-profiled on this GPU**; the earlier 2 GB measurement was for the standard
-detection head. Existing checkpoints refuse accidental overwrite; use
-`--resume` explicitly after a compatible interruption.
+The reported inability to fit 16 is not sufficient to establish that
+**14 physical images** fit the 6 GB RTX 2060 with this full-resolution SSL
+decoder. The effective batch is 14; the actual allocation remains two
+images per pass. Reduce `SSL_MICROBATCH` to 1 if required (still 14 optimizer
+samples). BatchNorm behavior changes with physical microbatch size, so
+accumulation is not numerically equivalent to a physical batch of 14.
+MuSGD suitability, learning rate and loss schedule for this specific SSL
+objective still require CUDA measurement and a downstream ablation.
+Prior batch-16 checkpoint runs cannot be resumed under the new settings;
+start a fresh output directory.
 
 Before running a long GPU job, inspect what the generator actually creates.
 After a manifest has been produced, run:
