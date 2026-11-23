@@ -20,6 +20,7 @@ def _sha(path:Path) -> str:
 
 def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:float=.15,
                    require_verified_groups:bool=True,
+                   allow_partial_training:bool=False,
                    locked_manifest: dict | None = None) -> dict:
     """Stable group-aware partitions; same image in different groups is an error.
 
@@ -79,7 +80,8 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
                      'image':str(img),'image_sha256':digest,
                      'project_group':g,'source_type':data.get('source_type','unknown'),
                      'image_width':data['image_width'],'image_height':data['image_height'],
-                     'usable_families':sorted(seen)})
+                     'usable_families':sorted(seen),
+                     'exhaustive_families':sorted(set(data.get('exhaustive_families', [])))})
         by_group[g].append(docs[-1])
     if not docs: raise ValueError('no training annotation files found')
     groups=sorted(by_group,key=lambda g:hashlib.sha256(g.encode()).hexdigest())
@@ -112,7 +114,23 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     # mapped class. A purely random split can put all examples of a rare
     # electrical/HVAC symbol into validation, making that class unlearnable.
     remaining_classes=set(counts) if split_groups is None else set()
-    train_protected=[]
+    # A partially annotated project cannot be used for standard validation or
+    # test: missing truth would be counted as false positives.
+    partial_groups=set()
+    if allow_partial_training:
+        active=set(counts)
+        partial_groups={g for g in groups if any(
+            not active.issubset(set(row['exhaustive_families']))
+            for row in by_group[g]
+        )}
+        if len(groups)-len(partial_groups)<2 and locked_manifest is None:
+            raise ValueError('partial-label training requires at least two fully '
+                             'annotated independent source groups for val/test')
+        if locked_manifest is not None and any(g in partial_groups for g in (
+                locked_manifest['split_groups']['val']+
+                locked_manifest['split_groups']['test'])):
+            raise ValueError('locked evaluation includes a partially annotated group')
+    train_protected=sorted(partial_groups, key=groups.index)
     class_group_frequency={c:sum(bool(group_counts[g][c]) for g in groups) for c in counts}
     while remaining_classes:
         candidates=[g for g in groups if g not in train_protected]
@@ -136,7 +154,10 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     for split,needed in ([('val',nval),('test',ntest)] if remaining else []):
         covered=set()
         for _ in range(needed):
-            selected=max(remaining,key=lambda g:(sum(1/class_group_frequency[c]
+            eligible=[g for g in remaining if g not in partial_groups]
+            if not eligible:
+                raise ValueError('no fully annotated source group available for evaluation')
+            selected=max(eligible,key=lambda g:(sum(1/class_group_frequency[c]
                                                     for c in counts if group_counts[g][c] and c not in covered),
                                                 -groups.index(g)))
             split_groups[split].append(selected)
@@ -165,6 +186,7 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     return {'format_version':1,'splits':splits, 'split_groups':split_groups,
             'class_ids':classes,'per_split_class_instances':coverage,
             'source_images':docs,'warnings':warnings,
+            'partial_training_enabled':allow_partial_training,
             'verification':{'source_group_verified':require_verified_groups,
                             'all_images_hash_checked':True,
                             'training_performed':False}}
