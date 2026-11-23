@@ -648,7 +648,6 @@ class BlueprintSSLDataset(Dataset):
                 )
             else:
                 crop_slot = -1 - index - attempt * self.items_per_epoch
-            else:
                 b_idx = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
                 name = self.bucket_names[b_idx]
                 groups = self.bucket_groups[name]
