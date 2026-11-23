@@ -442,6 +442,7 @@ class BlueprintSSLDataset(Dataset):
         page_chaos_probability: float = 0.70,
         page_chaos_strength: float = 1.0,
         return_metadata: bool = False,
+        include_pre_page_preview: bool = False,
     ) -> None:
         super().__init__()
         self.size = int(size)
@@ -468,6 +469,9 @@ class BlueprintSSLDataset(Dataset):
         self.page_chaos_probability = float(page_chaos_probability)
         self.page_chaos_strength = float(page_chaos_strength)
         self.return_metadata = bool(return_metadata)
+        self.include_pre_page_preview = bool(include_pre_page_preview)
+        if self.include_pre_page_preview and not self.return_metadata:
+            raise ValueError("include_pre_page_preview requires return_metadata")
         self.neca_bank = None
         if neca_dir is not None:
             from .neca_svg_compositor import NecaSymbolBank
@@ -558,6 +562,7 @@ class BlueprintSSLDataset(Dataset):
         # placed boxes are mapped through the same transforms for previews.
         from .page_chaos import warp_whole_page
         placements = symbol_stats.get("placements", [])
+        pre_page = clean.copy() if self.include_pre_page_preview else None
         clean, warped_boxes, page_chaos_meta = warp_whole_page(
             clean, rng,
             boxes=[item["bbox_xyxy"] for item in placements],
@@ -595,6 +600,8 @@ class BlueprintSSLDataset(Dataset):
                 ),
                 "index": int(index), "epoch": int(ep),
             }
+            if pre_page is not None:
+                details["pre_page_bgr"] = pre_page
             return deg_t, clean_t, mask_t, details
         return deg_t, clean_t, mask_t
 
