@@ -49,7 +49,8 @@ def test_symbol_chaos_has_independent_axis_and_nonlinear_warp_modes():
     assert len(shapes) >= 20
     assert {"axis_stretch_shear", "perspective", "elastic_mesh", "cross_ripple",
             "fold", "pinch_twist", "stroke_gain", "dry_pen",
-            "misregistration", "low_dpi", "ink_fade", "blur"} <= operations
+            "misregistration", "low_dpi", "ink_fade", "blur",
+            "stroke_width"} <= operations
 
 
 def test_symbol_chaos_is_deterministic_and_zero_is_identity():
@@ -183,3 +184,21 @@ def test_symbol_rejects_fragmentation_and_missing_loop_despite_ink_survival():
     cv2.rectangle(broken, (28, 8), (36, 17), 0, -1)
     assert _valid(ring, ring)
     assert not _valid(broken, ring)
+
+
+def test_fractional_symbol_line_width_changes_without_losing_identity():
+    from blueprint_symbols.symbol_chaos import _print_damage, _valid
+    glyph = _device_mask()
+    area = (glyph > 64).sum()
+    changed, thicker, thinner = 0, 0, 0
+    for seed in range(120):
+        modified = _print_damage(
+            glyph, np.random.default_rng(seed), 0.9, "stroke_width"
+        )
+        assert modified.dtype == np.uint8 and modified.shape == glyph.shape
+        assert _valid(modified, glyph)
+        changed += not np.array_equal(glyph, modified)
+        thicker += (modified > 64).sum() > area
+        thinner += (modified > 64).sum() < area
+    assert changed > 100
+    assert thicker > 0 and thinner > 0
