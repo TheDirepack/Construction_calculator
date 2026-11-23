@@ -475,7 +475,7 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
     conf["ssl_objective"] = "ink-paper-balanced-v2"
     conf["training_step_policy"] = "effective_batch_gradient_accumulation_v1"
     conf["source_sampling_policy"] = "paired_source_locality_permuted_pages_v1"
-    conf["native_pdf_rendering"] = "uniform_physical_dpi_100_to_400_v1"
+    conf["native_pdf_rendering"] = "uniform_physical_dpi_100_to_400_ink_anchored_v2"
     conf["symbol_rendering_policy"] = "shared_200dpi_reference_and_local_ink_v1"
     conf["symbol_geometry_augmentation"] = "bounded_chaos_v1"
     conf["page_geometry_augmentation"] = "aligned_multiwarp_v2_ink_retention"
