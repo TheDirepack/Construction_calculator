@@ -619,14 +619,15 @@ def composite_neca_page(
                 'wall_connection_point': {
                     'xy': [round(contact[0], 2), round(contact[1], 2)],
                     'visible': True,
-                    'annotated': True,
+                    'annotated': not bool(chaos_details["operations"]),
                 }
             },
             'rotation_degrees_image': angle,
             'symbol_chaos': chaos_details,
             'source': {
                 'kind': 'neca_100_2013_svg_composite',
-                'label_method': 'known_placement_transform',
+                'label_method': ('warped_bbox_only' if chaos_details["operations"]
+                                 else 'known_placement_transform'),
                 'target_px': round(target_px, 2),
                 'placement_mode': 'wall_touching_shifted' if is_wall else placement_mode,
             },
