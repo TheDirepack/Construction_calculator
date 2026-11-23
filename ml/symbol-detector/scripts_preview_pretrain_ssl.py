@@ -27,6 +27,8 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
             symbol_chaos_probability: float = .88,
             symbol_chaos_strength: float = 1.0,
             placement_chaos: float = .85,
+            page_chaos_probability: float = .70,
+            page_chaos_strength: float = 1.0,
             clean_fraction: float = .20) -> dict:
     if samples < 1 or samples > 10000:
         raise ValueError("samples must be 1..10000")
@@ -36,7 +38,10 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         neca_dir=neca_dir, max_symbols=max_symbols, return_metadata=True,
         symbol_chaos_probability=symbol_chaos_probability,
         symbol_chaos_strength=symbol_chaos_strength,
-        placement_chaos=placement_chaos, clean_fraction=clean_fraction,
+        placement_chaos=placement_chaos,
+        page_chaos_probability=page_chaos_probability,
+        page_chaos_strength=page_chaos_strength,
+        clean_fraction=clean_fraction,
     )
     output.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -75,6 +80,10 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
     degradation_categories = Counter(
         operation for row in rows for operation in row["degradation"]["operations"]
     )
+    page_operations = Counter(
+        operation for row in rows for operation in row["page_chaos"]["operations"]
+    )
+    page_severities = Counter(row["page_chaos"]["severity"] for row in rows)
     warp_operations = Counter(
         operation for g in placements
         for operation in g.get("symbol_chaos", {}).get("operations", [])
@@ -91,6 +100,8 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         "samples": samples,
         "placed_by_family": dict(sorted(families.items())),
         "symbol_warp_operations": dict(sorted(warp_operations.items())),
+        "page_warp_operations": dict(sorted(page_operations.items())),
+        "page_warp_severity": dict(sorted(page_severities.items())),
         "warped_symbols": warped_symbols,
         "placement_modes": dict(sorted(placement_modes.items())),
         "degradation_by_severity": dict(sorted(severities.items())),
@@ -126,6 +137,8 @@ def main():
     parser.add_argument("--symbol-chaos-probability", type=float, default=.88)
     parser.add_argument("--symbol-chaos-strength", type=float, default=1.)
     parser.add_argument("--placement-chaos", type=float, default=.85)
+    parser.add_argument("--page-chaos-probability", type=float, default=.70)
+    parser.add_argument("--page-chaos-strength", type=float, default=1.0)
     parser.add_argument("--clean-fraction", type=float, default=.20)
     args = parser.parse_args()
     result = preview(args.manifest, args.out, neca_dir=args.neca_dir,
@@ -134,6 +147,8 @@ def main():
                      symbol_chaos_probability=args.symbol_chaos_probability,
                      symbol_chaos_strength=args.symbol_chaos_strength,
                      placement_chaos=args.placement_chaos,
+                     page_chaos_probability=args.page_chaos_probability,
+                     page_chaos_strength=args.page_chaos_strength,
                      clean_fraction=args.clean_fraction)
     print(json.dumps({k: v for k, v in result.items() if k != "rows"}, indent=2))
 
