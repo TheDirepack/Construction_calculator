@@ -442,7 +442,31 @@ def build_musgd_optimizer(model: torch.nn.Module, *, lr: float, momentum: float 
     return MuSGD(param_groups, lr=lr, momentum=momentum, nesterov=True)
 
 
+def validate_pretrain_settings(args: argparse.Namespace) -> None:
+    """Fail before building manifests or allocating a model for invalid runs."""
+    if args.batch < 1 or args.items_per_epoch < args.batch:
+        raise ValueError("items-per-epoch must be at least batch size")
+    if args.epochs < 1 or args.val_items < 1 or args.workers < 0:
+        raise ValueError("invalid epochs/validation items/workers")
+    if args.imgsz < 128 or args.imgsz % 32:
+        raise ValueError("imgsz must be a multiple of 32 and at least 128")
+    if not 0 <= args.pool_val_fraction < 1:
+        raise ValueError("pool-val-fraction must be in [0,1)")
+    if not math.isfinite(args.lr) or args.lr <= 0:
+        raise ValueError("learning rate must be finite and positive")
+    if not 0 <= args.max_symbols <= 128:
+        raise ValueError("max-symbols must be in [0,128]")
+    if not 0 < args.symbol_min_px <= args.symbol_max_px:
+        raise ValueError("invalid symbol size range")
+    for key in ("symbol_augment_probability", "procedural_fraction",
+                "clean_fraction", "labeled_focus_probability"):
+        prob = getattr(args, key)
+        if not math.isfinite(prob) or not 0 <= prob <= 1:
+            raise ValueError(f"{key} must be a probability in [0,1]")
+
+
 def train(args: argparse.Namespace) -> None:
+    validate_pretrain_settings(args)
     out_dir: Path = args.out.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
