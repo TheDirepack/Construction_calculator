@@ -162,3 +162,40 @@ def test_page_rate_requires_all_source_proposals_and_consistent_pdf(tmp_path):
         scanned_page_rates([wrong_pdf], [proposal], report)
     with pytest.raises(ValueError, match='no matching source proposal'):
         scanned_page_rates([fully_reviewed], [], report)
+
+
+
+def test_precision_report_cli_reconciles_review_and_sam_json(tmp_path, monkeypatch):
+    import json
+    import sys
+    from scripts_sam_precision_report import main
+
+    proposals = tmp_path / 'proposals'
+    reviews = tmp_path / 'reviews' / 'my_pdf'
+    proposals.mkdir()
+    reviews.mkdir(parents=True)
+    (proposals / 'scan_1_SAM3.json').write_text(json.dumps({
+        'source_pdf_relative': 'project/plan.pdf',
+        'total_devices': 2,
+        'pages_scanned': 4,
+        'devices': [{}, {}],
+    }))
+    (reviews / 'my_pdf_batch_001.json').write_text(json.dumps(_batch([
+        _item(0, 'accepted', True),
+        _item(1, 'rejected', False),
+    ])))
+    output = tmp_path / 'report.json'
+    monkeypatch.setattr(sys, 'argv', [
+        'scripts_sam_precision_report.py',
+        '--review-dir', str(reviews.parent),
+        '--proposals-dir', str(proposals),
+        '--out', str(output),
+    ])
+    main()
+    result = json.loads(output.read_text())
+    assert result['review_batch_files'] == 1
+    assert result['scanned_page_rates']['scanned_pages'] == 4
+    assert result['scanned_page_rates']['candidate_boxes_per_scanned_page'] == .5
+    assert result['scanned_page_rates']['false_boxes_per_scanned_page'] == .25
+    assert result['false_boxes_per_full_pdf_page'] is None
+    assert result['recall'] is None
