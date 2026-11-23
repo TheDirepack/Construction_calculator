@@ -151,6 +151,14 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
         attempts += 1
         family, variant, rgba, anchors = sample_glyph(rng)
         scale = base * float(np.exp(rng.uniform(*np.log(scale_range))))
+        if drawing_dpi is not None:
+            # Scale the complete procedural glyph at the crop's actual PDF
+            # rasterization DPI, using the same 200dpi size convention as
+            # the NECA SVG compositor. Preserve the glyph's physical scale
+            # across 100–400dpi drawings while bounding its on-canvas size.
+            scale *= drawing_dpi / 200.0
+            max_dim = max(rgba.shape[:2])
+            scale = min(scale, max(8.0, min(h, w) * .38) / max_dim)
 
         want_wall = bool(wall_sites) and (rng.random() < wall_probability)
         chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
