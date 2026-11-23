@@ -460,6 +460,7 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
         "clean_fraction", "labeled_focus_probability",
         "symbol_chaos_probability", "symbol_chaos_strength", "placement_chaos",
         "page_chaos_probability", "page_chaos_strength",
+        "crop_reuse_views", "crop_bank_size", "fresh_crop_probability",
     )
     # The defaults preserve callers constructing Namespace in older tests.
     chaos_defaults = {"microbatch": min(4, args.batch),
@@ -467,15 +468,18 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
                       "symbol_chaos_strength": 1.0,
                       "placement_chaos": .85,
                       "page_chaos_probability": .70,
-                      "page_chaos_strength": 1.0}
+                      "page_chaos_strength": 1.0,
+                      "crop_reuse_views": 4,
+                      "crop_bank_size": 6,
+                      "fresh_crop_probability": 0.20}
     conf = {key: getattr(args, key, chaos_defaults.get(key)) for key in fields}
     conf["microbatch"] = configured_microbatch(args)
     # Changing loss weighting changes the trained representation; old
     # optimizer state must not be resumed across objective revisions.
     conf["ssl_objective"] = "ink-paper-balanced-v2"
     conf["training_step_policy"] = "effective_batch_gradient_accumulation_v1"
-    conf["source_sampling_policy"] = "paired_source_locality_permuted_pages_v1"
-    conf["native_pdf_rendering"] = "uniform_physical_dpi_100_to_400_ink_anchored_v2"
+    conf["source_sampling_policy"] = "replayed_crop_bank_source_bursts_v2"
+    conf["native_pdf_rendering"] = "uniform_physical_dpi_100_to_400_ink_anchored_replay_v3"
     conf["neca_composition_policy"] = "standalone_figure_variants_v2"
     conf["wall_alignment_policy"] = "raster_hough_tangent_alpha_contact_v1"
     conf["symbol_rendering_policy"] = "shared_200dpi_reference_and_local_ink_v1"
@@ -735,6 +739,9 @@ def train(args: argparse.Namespace) -> None:
         'procedural_fraction': args.procedural_fraction,
         'clean_fraction': args.clean_fraction,
         'labeled_focus_probability': args.labeled_focus_probability,
+        'crop_reuse_views': getattr(args, 'crop_reuse_views', 4),
+        'crop_bank_size': getattr(args, 'crop_bank_size', 6),
+        'fresh_crop_probability': getattr(args, 'fresh_crop_probability', .20),
         'symbol_chaos_probability': args.symbol_chaos_probability,
         'symbol_chaos_strength': args.symbol_chaos_strength,
         'placement_chaos': args.placement_chaos,
@@ -947,7 +954,7 @@ def main() -> None:
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--imgsz', type=int, default=512)
     p.add_argument('--batch', type=int, default=14,
-                   help='Effective examples per optimizer step (default 16)')
+                   help='Effective examples per optimizer step (default 14)')
     p.add_argument('--microbatch', type=int, default=None,
                    help='Physical GPU images per forward/backward; defaults to min(2, batch)')
     p.add_argument('--epochs', type=int, default=60)
@@ -969,6 +976,12 @@ def main() -> None:
     p.add_argument('--symbol-augment-probability', type=float, default=1.00)
     p.add_argument('--procedural-fraction', type=float, default=0.25)
     p.add_argument('--clean-fraction', type=float, default=0.20)
+    p.add_argument('--crop-reuse-views', type=int, default=4,
+                   help='Independent augmentations of each exact source crop before selecting a new page/site')
+    p.add_argument('--crop-bank-size', type=int, default=6,
+                   help='Stable region slots per PDF page or source image; reused across epochs')
+    p.add_argument('--fresh-crop-probability', type=float, default=.20,
+                   help='Fraction of source bursts exploring an uncached new crop site')
     p.add_argument('--labeled-focus-probability', type=float, default=0.65)
     p.add_argument('--symbol-chaos-probability', type=float, default=0.88,
                    help='Probability each inserted symbol receives independent geometry/print corruption')
