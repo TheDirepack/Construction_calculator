@@ -98,11 +98,12 @@ def resolve_model_weight_identity(model_id: str, commit_hash: str | None) -> str
     and/or .bin files must be present. If revision cannot be identified,
     the caller must NOT reuse encoded prompt features.
     """
-    if commit_hash:
-        return str(commit_hash)
     path = Path(model_id)
     if not path.is_dir():
-        return None
+        # For Hub models only the immutable resolved commit is authoritative.
+        return str(commit_hash) if commit_hash else None
+    # Local checkpoint contents take precedence even if a copied HF config
+    # still contains the source model's original _commit_hash.
     files = sorted(list(path.glob('*.safetensors')) +
                    list(path.glob('*.bin')) +
                    list(path.glob('*.safetensors.index.json')))
