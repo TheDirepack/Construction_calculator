@@ -139,6 +139,9 @@ def test_chaotic_neca_compositing_preserves_valid_boxes_and_wall_clearance():
         assert 0 <= box[1] < box[3] <= original.shape[0]
         assert item["symbol_chaos"]["severity"]
         assert item["source"]["placement_mode"]
+        if item["symbol_chaos"]["operations"]:
+            assert item["source"]["label_method"] == "warped_bbox_only"
+            assert item["anchors"]["wall_connection_point"]["annotated"] is False
 
 
 def test_chaotic_procedural_compositing_preserves_boxes():
@@ -154,6 +157,9 @@ def test_chaotic_procedural_compositing_preserves_boxes():
     assert len(placed) >= 3
     for item in placed:
         assert item["symbol_chaos"]["severity"]
+        if item["symbol_chaos"]["operations"]:
+            assert item["source"]["label_method"] == "warped_bbox_only"
+            assert not any(anchor["annotated"] for anchor in item["anchors"].values())
         x0, y0, x1, y1 = item["bbox_xyxy"]
         assert x1 > x0 >= 0 and y1 > y0 >= 0
         assert x1 <= 512 and y1 <= 512
