@@ -59,8 +59,21 @@ class PdfCropSampler:
         pix = page.get_pixmap(matrix=fitz.Matrix(factor, factor),
                               colorspace=fitz.csGRAY, alpha=False)
         gray = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width)
-        integral = cv2.integral((gray < 190).astype(np.uint8))
-        result = integral, pix.width, pix.height
+        # At 384px across a construction sheet, antialiased thin/faint CAD
+        # strokes may be much lighter than 190. Estimate local paper level
+        # from the thumbnail instead of silently treating these as blank.
+        paper = float(np.percentile(gray, 90))
+        ink_depth = paper - float(np.percentile(gray, 2))
+        threshold = paper - max(6.0, min(32.0, ink_depth * .24))
+        ink = gray < threshold
+        integral = cv2.integral(ink.astype(np.uint8))
+        # A bounded per-page ink-anchor index finds small, isolated drawing
+        # regions which 8 uniform crop proposals routinely miss.
+        anchors = np.flatnonzero(ink).astype(np.int32)
+        if len(anchors) > 8192:
+            anchors = anchors[np.linspace(0, len(anchors) - 1, 8192,
+                                           dtype=np.intp)]
+        result = integral, pix.width, pix.height, anchors, round(threshold, 2)
         self._thumbs[key] = result
         while len(self._thumbs) > self.max_cached_thumbnails:
             self._thumbs.popitem(last=False)
@@ -108,12 +121,23 @@ class PdfCropSampler:
         max_x = max(0., width - span)
         max_y = max(0., height - span)
 
-        integral, sw, sh = self._density(pdf_path, page_index, page)
+        integral, sw, sh, anchors, ink_threshold = self._density(
+            pdf_path, page_index, page
+        )
         candidates = []
-        for attempt in range(8):
-            # Uniform coordinate sampling provides coverage; density-guided
-            # sampling rejects blank paper but does not fixate on title blocks.
-            if attempt == 0 or rng.random() < .60:
+        anchored_proposals = 0
+        for attempt in range(16):
+            # Mixed uniform and ink-anchored sites cover disconnected plan
+            # areas (especially on large, sparse multi-sheet drawings).
+            # Keep uniformly random sites so blank/margin views remain possible.
+            if attempt > 0 and len(anchors) and rng.random() < .58:
+                anchor = int(anchors[int(rng.integers(0, len(anchors)))])
+                ax = ((anchor % sw) + .5) * width / sw
+                ay = ((anchor // sw) + .5) * height / sh
+                x = float(np.clip(ax - rng.uniform(0, span), 0., max_x))
+                y = float(np.clip(ay - rng.uniform(0, span), 0., max_y))
+                anchored_proposals += 1
+            elif attempt == 0 or rng.random() < .60:
                 x, y = float(rng.uniform(0, max_x)), float(rng.uniform(0, max_y))
             else:
                 ix, iy = int(rng.integers(0, 4)), int(rng.integers(0, 4))
@@ -159,4 +183,7 @@ class PdfCropSampler:
             "physical_crop_size_points": round(span, 5),
             "profile": profile, "placement": placement,
             "thumbnail_ink_fraction": round(ink, 5),
+            "thumbnail_ink_threshold": ink_threshold,
+            "ink_anchored_proposals": anchored_proposals,
+            "sampling_policy": "adaptive_ink_guided_v2",
         }
