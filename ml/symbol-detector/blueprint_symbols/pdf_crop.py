@@ -21,7 +21,7 @@ class PdfCropSampler:
     def __init__(self, max_open_documents: int = 3,
                  max_cached_thumbnails: int = 96,
                  thumbnail_long_side: int = 384,
-                 max_cached_crops: int = 12):
+                 max_cached_crops: int = 32):
         if min(max_open_documents, max_cached_thumbnails, thumbnail_long_side,
                max_cached_crops) < 1:
             raise ValueError("PDF cache limits must be positive")
@@ -96,8 +96,36 @@ class PdfCropSampler:
                  - integral[y1, x0] + integral[y0, x0])
         return float(count) / max(1, (x1 - x0) * (y1 - y0))
 
+    @staticmethod
+    def _spatial_stratum(
+        slot: int, bank_size: int, max_x: float, max_y: float,
+        width: float, height: float,
+    ) -> tuple[tuple[float, float, float, float], tuple[int, int]]:
+        """Distribute stable crop slots across the whole drawable page.
+
+        Exact factor grids avoid vacant final-row cells (e.g. 32 -> 8x4 on
+        landscape, 4x8 on portrait). Coordinates describe valid crop origins,
+        not PDF image boundaries. All slots retain their own random DPI.
+        """
+        if not 1 <= bank_size <= 128 or not 0 <= slot < bank_size:
+            raise ValueError("invalid PDF crop bank slot")
+        divisors = [c for c in range(1, bank_size + 1)
+                    if bank_size % c == 0]
+        cols = min(divisors, key=lambda c: abs(math.log(
+            (c / (bank_size // c)) / max(.01, width / height)
+        )))
+        rows = bank_size // cols
+        col, row = slot % cols, slot // cols
+        return (
+            (max_x * col / cols, max_x * (col + 1) / cols,
+             max_y * row / rows, max_y * (row + 1) / rows),
+            (cols, rows),
+        )
+
     def sample(self, entry: dict, size: int, rng: np.random.Generator,
-               *, crop_seed: int | None = None) -> tuple[np.ndarray, dict]:
+               *, crop_seed: int | None = None,
+               crop_slot: int | None = None,
+               bank_size: int | None = None) -> tuple[np.ndarray, dict]:
         """Clip-render from PDF; optionally replay an exact clean PDF region.
 
         crop_seed controls *only* base crop selection. The caller must use
@@ -106,9 +134,18 @@ class PdfCropSampler:
         """
         if size < 32:
             raise ValueError("PDF training crop must be at least 32 pixels")
+        if (crop_slot is None) != (bank_size is None):
+            raise ValueError("crop_slot and bank_size must be set together")
+        if crop_slot is not None and not (
+            isinstance(bank_size, int) and 1 <= bank_size <= 128
+            and isinstance(crop_slot, int) and 0 <= crop_slot < bank_size
+            and crop_seed is not None
+        ):
+            raise ValueError("invalid seeded PDF spatial crop bank")
         pdf_path = str(entry.get("source_pdf") or entry["image_path"])
         page_index = int(entry["pdf_page_index"])
-        key = (pdf_path, page_index, int(size), int(crop_seed)) if crop_seed is not None else None
+        key = ((pdf_path, page_index, int(size), int(crop_seed),
+                crop_slot, bank_size) if crop_seed is not None else None)
         if key is not None and key in self._crops:
             self._crops.move_to_end(key)
             saved_image, saved_meta = self._crops[key]
@@ -143,19 +180,41 @@ class PdfCropSampler:
         integral, sw, sh, anchors, ink_threshold = self._density(
             pdf_path, page_index, page
         )
+        # Spatial strata prevent a 32-slot crop bank from accidentally
+        # concentrating most of its durable slots in the same small region.
+        # Fresh exploratory crops retain the legacy whole-page mix.
+        stratum = None
+        grid = None
+        local_anchors = anchors
+        if crop_slot is not None:
+            stratum, grid = self._spatial_stratum(
+                crop_slot, bank_size, max_x, max_y, width, height
+            )
+            left, right, top, bottom = stratum
+            if len(anchors):
+                ax = ((anchors % sw) + .5) * width / sw
+                ay = ((anchors // sw) + .5) * height / sh
+                valid = ((ax >= left) & (ax <= right + span)
+                         & (ay >= top) & (ay <= bottom + span))
+                local_anchors = anchors[valid]
         candidates = []
         anchored_proposals = 0
         for attempt in range(16):
             # Mixed uniform and ink-anchored sites cover disconnected plan
             # areas (especially on large, sparse multi-sheet drawings).
             # Keep uniformly random sites so blank/margin views remain possible.
-            if attempt > 0 and len(anchors) and rng.random() < .58:
-                anchor = int(anchors[int(rng.integers(0, len(anchors)))])
+            if attempt > 0 and len(local_anchors) and rng.random() < .58:
+                anchor = int(local_anchors[int(rng.integers(0, len(local_anchors)))])
                 ax = ((anchor % sw) + .5) * width / sw
                 ay = ((anchor // sw) + .5) * height / sh
-                x = float(np.clip(ax - rng.uniform(0, span), 0., max_x))
-                y = float(np.clip(ay - rng.uniform(0, span), 0., max_y))
+                lo_x, hi_x = (0., max_x) if stratum is None else stratum[:2]
+                lo_y, hi_y = (0., max_y) if stratum is None else stratum[2:]
+                x = float(np.clip(ax - rng.uniform(0, span), lo_x, hi_x))
+                y = float(np.clip(ay - rng.uniform(0, span), lo_y, hi_y))
                 anchored_proposals += 1
+            elif stratum is not None:
+                left, right, top, bottom = stratum
+                x, y = float(rng.uniform(left, right)), float(rng.uniform(top, bottom))
             elif attempt == 0 or rng.random() < .60:
                 x, y = float(rng.uniform(0, max_x)), float(rng.uniform(0, max_y))
             else:
@@ -204,7 +263,13 @@ class PdfCropSampler:
             "thumbnail_ink_fraction": round(ink, 5),
             "thumbnail_ink_threshold": ink_threshold,
             "ink_anchored_proposals": anchored_proposals,
-            "sampling_policy": "adaptive_ink_guided_v2",
+            "sampling_policy": (
+                "stratified_ink_guided_v3" if stratum is not None
+                else "adaptive_ink_guided_v2"
+            ),
+            "bank_slot": crop_slot,
+            "bank_size": bank_size,
+            "bank_grid": list(grid) if grid is not None else None,
             "clean_crop_seed": int(crop_seed) if crop_seed is not None else None,
             "clean_crop_cache_hit": False,
         }
