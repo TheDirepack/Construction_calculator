@@ -39,8 +39,13 @@ echo "=== INDEX ALL REAL PDF PAGES WITHOUT FULL-PAGE RASTERIZATION ==="
 RESERVED_ARGS=()
 if [[ -f "$WORK/heldout_real_pdfs.json" ]]; then
   RESERVED_ARGS=(--reserved-manifest "$WORK/heldout_real_pdfs.json")
+elif [[ "${SSL_RESERVED_PDFS_OUTSIDE_DATA:-0}" == "1" ]]; then
+  echo "Reserved evaluation PDFs confirmed outside $DATA by operator." >&2
 else
-  echo "NOTICE: no explicit $WORK/heldout_real_pdfs.json; only existing locked group and split exclusions can be verified." >&2
+  echo "Refusing to index training PDFs without proof of the ~100 reserved evaluation PDFs' exclusion." >&2
+  echo "Create $WORK/heldout_real_pdfs.json with source_pdfs/project_family_ids," >&2
+  echo "or set SSL_RESERVED_PDFS_OUTSIDE_DATA=1 if they physically live outside $DATA." >&2
+  exit 2
 fi
 "$PY" scripts_index_real_pdfs.py "$DATA" "$WORK/pdf_page_index/index.json" \
   --roles class_maps/page_roles.json "${RESERVED_ARGS[@]}"
