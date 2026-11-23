@@ -644,8 +644,10 @@ def main() -> None:
                             allowlist is None or p.symbol_id in allowlist]
             if allowlist is not None and len(grouped_bank) != len(allowlist):
                 ap.error('grouped allowlist includes unknown or excluded NECA IDs')
+            # Load one backup reference per group where available.
+            # Only the best surviving raster is queried at inference time.
             selected = choose_visual_base_prototypes(
-                grouped_bank, per_group=args.visual_prototypes_per_group)
+                grouped_bank, per_group=max(2, args.visual_prototypes_per_group))
         else:
             selected = choose_neca_prompts(
                 specs, per_subcategory=args.prompts_per_subcategory,
@@ -700,6 +702,13 @@ def main() -> None:
     )
     if not glyphs:
         ap.error('no usable NECA prompt SVGs after reference quality screening')
+    if args.scan_mode == 'grouped':
+        accepted_count = len(glyphs)
+        glyphs = choose_visual_base_prototypes(
+            glyphs, per_group=args.visual_prototypes_per_group)
+        print(f'Grouped references: {accepted_count} quality-accepted -> '
+              f'{len(glyphs)} model queries (one per silhouette by default)',
+              flush=True)
     print(f'NECA reference preflight: {len(glyphs)}/{len(selected)} usable; '
           f'details={dict(reference_stats)}', flush=True)
     t_enc = time.time()
@@ -779,7 +788,8 @@ def main() -> None:
     if args.scan_mode == 'grouped' and not args.no_switch_suffixes and any(
             g.device_type == 'switch' for g in glyphs):
         switch_suffix_refs = build_switch_suffix_templates(
-            args.neca_dir.resolve(), render_height=128)
+            args.neca_dir.resolve(), render_height=128,
+            cache_dir=None if args.no_prompt_cache else cache_root / 'suffix')
         print(f'Loaded {len(switch_suffix_refs)} local NECA switch suffix templates',
               flush=True)
 
