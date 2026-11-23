@@ -124,3 +124,30 @@ def test_ssl_metadata_preserves_dpi_ink_and_bounded_boxes():
             assert 0 <= x0 < x1 <= 512
             assert 0 <= y0 < y1 <= 512
     assert seen > 0
+
+
+
+def test_local_colour_preserves_faint_blue_grey_ink():
+    page = np.full((256, 256, 3), (246, 246, 246), np.uint8)
+    pale = (237, 235, 224)
+    cv2.line(page, (80, 105), (210, 105), pale, 3)
+    cv2.line(page, (115, 35), (115, 220), pale, 2)
+    matched = local_drawing_ink_bgr(page, [135, 115, 175, 155])
+    assert np.allclose(matched, pale, atol=6)
+
+
+def test_procedural_pixel_size_increases_with_source_pdf_dpi():
+    original, _ = blue_drawing()
+    sizes = []
+    for dpi in (100., 400.):
+        _, placed = composite_page(
+            {"instances": []}, original, np.random.default_rng(7),
+            per_page=1, scale_range=(.75, .75), max_ink=.16, tag="dpi",
+            wall_fraction=0., stroke_match=False,
+            drawing_dpi=dpi, match_local_ink=True, ink_reference=original,
+            symbol_chaos_probability=0.,
+        )
+        assert placed
+        x0, y0, x1, y1 = placed[0]["bbox_xyxy"]
+        sizes.append(max(x1 - x0, y1 - y0))
+    assert sizes[1] >= sizes[0] * 3.
