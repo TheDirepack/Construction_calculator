@@ -180,6 +180,11 @@ views without overwhelming small projects.
 The remote SSL launcher now **skips full-page PDF rasterization** in the
 generic pool builder; other programs retain its previous behavior. Earlier
 pool PNGs from the same indexed PDF are skipped to prevent double weighting.
+The dataset draws two different crops from the same page consecutively,
+which amortizes PDF file opens and the page-density thumbnail, then cycles
+through that source's pages without replacement within an epoch. Its
+training loader retains this randomized epoch plan instead of shuffling
+away PDF cache locality.
 Verified device-centered raster crops remain available. Device boxes are
 *positive hints*, not proof of exhaustive labels.
 
@@ -191,10 +196,11 @@ tree or list them in `../work/heldout_real_pdfs.json`:
 ```
 Both the indexer and SSL manifest exclude these, plus already locked
 detector-evaluation project IDs. The separate 10% group-hashed SSL validation
-monitor is **not** the final reserved evaluation set. Without an explicit
-reservation file or physically separate reserved directory, exclusion of the
-100 external held-out PDFs cannot be verified. Do not fold the final held-out
-set into SSL checkpoint selection.
+monitor is **not** the final reserved evaluation set. The remote launcher
+**fails closed** unless this manifest exists or
+`SSL_RESERVED_PDFS_OUTSIDE_DATA=1` explicitly confirms the reserved PDFs are
+physically outside the input root. Do not fold the final held-out set into
+SSL checkpoint selection.
 
 **Symbol augmentation:** When enabled, each selected crop receives a uniformly
 sampled *requested* count of 0–16 new symbols (actual placements may be lower
@@ -329,7 +335,8 @@ python scripts_preview_pretrain_ssl.py ../work/pretrain_v3/train_manifest.json \
 Each preview shows the clean target beside its degraded/masked input.
 `preview_report.json` counts **requested versus actually placed** symbols,
 including shortfalls on crowded pages, zero-symbol examples, symbols by
-family/variant, eligible NECA vocabulary coverage, and observed degradation
+family/variant, eligible NECA vocabulary coverage, observed PDF source/page/crop counts,
+PDF crop DPI range, generator p50/p95 latency, and degradation
 severities/categories, accepted/rejected whole-page warp modes,
 symbol-level warp categories and placement modes. A separate
 `sample_NNNN_overlay.png` marks inserted symbols in their new warped
