@@ -109,154 +109,129 @@ run). Early stopping (patience 40) can end it before 300 epochs; that has not
 been measured yet.
 
 
-## Precision-first, self-hosted SAM 3.1 symbol proposals (2026-11-22)
+## Grouped-shape SAM 3.1 proposals (self-hosted)
 
-The GPU scanner is **local** and produces provisional device candidates. Its
-primary goal is to avoid flooding the downstream VLM with false boxes, **not**
-to label every device on every drawing. A small, fully reviewed evaluation set
-is still required before claiming real-world precision gains.
+Goal: detect real electrical devices without flooding Nemotron VLM review with
+hundreds of overlapping or false bounding boxes. Missing rare objects is
+acceptable; never mark a partially annotated page as exhaustive.
 
-### Detection path
+### Audited NECA reference hierarchy
 
-1. Preflight the NECA glyphs: reject routing/legend modifiers, parent rows
-   with separately extracted alternatives, implausible sparsity/solid fills,
-   and fragmented visual references. Keep the original symbol IDs.
-2. Rasterize SVGs and encode reference geometry using persistent **local**
-   caches in `<out>/_sam_prompt_cache`. Group geometric reference encodings
-   in bounded batches; on 6GB GPUs reduce `--reference-geometry-batch` to
-   `1` or `2` if the default of `4` is too large.
-3. Encode each 1008px blueprint tile **once**. Query broad device families in
-   GPU batches, then query the 12 most representative subtype exemplars only
-   within active families (all variants are available with
-   `--fine-per-family 0`).
-4. Apply precision gates: **coarse-only boxes are not exported**; confirmed
-   fine hits require overlap with a coarse-family candidate. Reject boxes
-   from blank/fill-only areas, highly elongated routing strokes, duplicate
-   overlap tiles, and overactive families. De-duplicate nested, variable-sized
-   boxes after combining all tiles. Each reject reason is counted.
-5. Review candidate crops as a VLM/human. A completed review explicitly sets
-   `review_status` and `review_source`; unreviewed candidates never pass.
-   Approved outputs remain **provisional**, never exhaustive ground truth.
+The source vector library contains **466 SVG entries**. A full local visual
+audit classifies each source entry as: **251 base glyphs, 34 switch
+base-plus-suffix composites, 35 standalone/additive modifiers and 146
+excluded/non-device** (including routing symbols). The inspected base
+artwork is grouped into **165 visual groups**. These are reference grouping
+counts, **not verified model detections**. Use `--visual-audit-out` to export
+the full mapping of NECA ID → group, role, and known attributes.
 
-The NECA 100 source ZIP has 466 items; the catalog contains 284 eligible
-visual exemplars across 16 drawing-system categories and 254
-category/subcategory pairs before reference quality filtering. VLM subtype
-choices include the complete eligible taxonomy, not just queried exemplars.
+- **Switches**: `S` and dollar-form switch are separate base prototypes.
+  `S3`, `S4`, `SLV`, `SK`, `ST`, etc. reuse those bases;
+  trailing 3/4/LV/K/T/... marks represent attributes, not new devices.
+  Boxed D dimmers and diamond M occupancy sensors have genuinely
+  different core artwork and retain independent coarse references.
+- **Receptacles**: single, duplex, quad, emergency-filled, ceiling, floor,
+  specialty, multioutlet and junction-box geometries are separate groups.
+  Do not collapse them into one generic circle.
+- **Luminaires**: round/rectangular/triangular fixtures, strips, tracks,
+  spots, exit signs, emergency heads, pole and site luminaires preserve
+  visibly different silhouettes. Mounting, aiming and emergency markers
+  in modifier-only sections do not produce independent device boxes.
+- **Detection/communications/control**: fire-alarm hexagons with changing
+  internal letters, HVAC lettered circles/squares, security lettered
+  boxes, and other repeated shell shapes share a base group.
+  Internal letters still require subsequent VLM or OCR verification.
+- All uncommon standalone artwork remains in its own group by default;
+  grouping never silently drops an unfamiliar shape solely due to a
+  semantic name mismatch.
+
+### Production pipeline
+
+`--scan-mode grouped` is now the default. It queries up to one clean
+base reference per distinct visual group, including uncommon forms. An
+optional backup SVG is rasterized if the preferred reference fails quality
+checks. Suffix composites are not SAM queries. Only *base device* boxes
+are emitted. Detections are filtered for overlong routing lines, blank
+regions, image overlap duplicates, nested boxes and detection floods.
+
+For switches, the code also extracts the trailing label from each NECA
+switch SVG and tests those small templates in a bounded crop immediately
+beside already detected `S` or dollar-form switches. The local matching
+pass does **not run SAM again**; it attaches provisional marks to the
+base device by geometry. Multiple nonoverlapping marks may attach to one
+switch (e.g. three-way + low-voltage + dimmer). Ambiguous, conflicting or
+distant marks are not treated as trusted attributes, nor as new device
+boxes. Real drawing validation is mandatory, especially for custom
+symbols outside NECA's conventions.
 
 ```bash
-# CPU category/index preflight (model still needs to be installed on the
-# GPU machine for the normal scan):
-python scripts_run_sam3_pdfs.py --catalog-only \
-    --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
-    --data-root ../data/blueprints_and_libraries \
-    --out ../work/sam3_proposals
-
-# Precision-first local GPU run:
 python scripts_run_sam3_pdfs.py \
-    --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
-    --data-root ../data/blueprints_and_libraries \
-    --out ../work/sam3_proposals
+  --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
+  --data-root ../data/blueprints_and_libraries \
+  --out ../work/sam3_proposals
 
-# Effective defaults:
-#   --scan-mode hierarchical --coarse-per-family 2 --fine-per-family 12
-#   --coarse-score-thr 0.50 --score-thr 0.72
-#   --emit-generic OFF --fallback-every-tiles 0
-#   --max-box-aspect 6 --min-ink-fraction 0.018 --max-ink-fraction 0.85
-#   --coarse-family-limit 50 --fine-family-limit 80
-#   --reference-render-height 96 --reference-geometry-batch 4
-#
-# High-recall control comparison:
-#   --fine-per-family 0 --fallback-every-tiles 1 --score-thr 0.55
-# Flat reference comparison (same source and model):
+# Export complete 466-entry visual taxonomy without loading the model:
+python scripts_run_sam3_pdfs.py --catalog-only \
+  --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
+  --data-root ../data/blueprints_and_libraries \
+  --out ../work/sam3_proposals \
+  --visual-audit-out ../work/neca_visual_groups.json
+
+# Grouped settings: default per visual group 1, score 0.72
+#   --scan-mode grouped --visual-prototypes-per-group 1
+#   --switch-suffix-score 0.92 --switch-suffix-margin 0.06
+#   --no-switch-suffixes         disables local modifier matching
+#   --no-prompt-cache           disables local SVG and feature caches
+#   --family-thresholds FILE    per-family confidence overrides
+#   --prompt-allowlist FILE     explicit NECA references
+#   --prompt-denylist FILE      manually reviewed noisy reference IDs
+
+# Compare original hierarchical/flat queries:
+#   --scan-mode hierarchical --fine-per-family 12
 #   --scan-mode flat --max-prompts 96 --prompts-per-category 12
-#   --score-thr 0.55
-#
-# Cached geometry is versioned by resolved model revision, model
-# configuration, image glyph content and render parameters.
-#   --no-prompt-cache             bypass raster and geometry caches
-#   --no-reference-quality       bypass quality rejection for A/B tests
-#   --native-only                exclude raster-traced Annex A exemplars
-#   --prompt-allowlist PATH      explicitly approved NECA IDs
-#   --prompt-denylist PATH       locally reviewed false-positive NECA IDs
 ```
 
-**Family thresholds:** Create a local JSON file, e.g.:
+The grouped defaults are **engineering settings**, not benchmarked optima.
+The number of prompts per tile can be higher than a severely limited old
+hierarchical coarse pass because every visually distinct group is now
+represented; total runtime improvement is not guaranteed. However,
+compound switch variants no longer each trigger a costly model query,
+and modifiers do not generate extra bounding boxes.
 
-```json
-{
-  "switch": {"coarse": 0.55, "fine": 0.80},
-  "receptacle": {"coarse": 0.53, "fine": 0.77},
-  "fire_alarm_detector": {"fine": 0.82}
-}
-```
+Locally cached NECA rasters, modifier templates and SAM concept embeddings
+avoid re-preparing unchanged SVGs. Prompt embeddings are keyed to source
+content and model revision/configuration. GPU geometry-encoding batches
+shrink automatically after out-of-memory errors.
 
-Pass `--family-thresholds my_thresholds.json`. These numbers are
-**illustrative only**, not empirically calibrated. The code validates
-family names and applies the family-specific thresholds on GPU before
-copying detection boxes back to the CPU.
+### Precision, verification and review
 
-### Reference and prompt best practices
+The source PDF's symbol legend and schedule override any generic NECA
+description. Numeric voltage/phase/amperage attributes must have explicit
+drawing evidence. Proposed `analytic_attributes`, `modifier_evidence`
+and `visual_group` appear in the VLM batch JSON but are **not** auto-approved.
+The reviewer must visibly confirm every attribute before copying to the
+accepted output. The review gate rejects unreviewed/uncertain items.
 
-- Favor a **small number of clean, distinct positives** (common base shapes
-  first) over many near-identical or text-heavy legend entries. No printed
-  definitions, annotations, table borders, circuit-routing arrows, or
-  full legend rows in an exemplar.
-- Inspect cropped reference images at the same approximate effective
-  pixel scale as plan symbols. Avoid ambiguous fragments; use a tight
-  bounding rectangle with a little surrounding paper. Include varied
-  drafting styles where justified by real positive samples.
-- Use a short **object-concept text prompt** (`electrical wall switch`,
-  `duplex receptacle`, etc.) for a controlled experiment. Compare
-  **text-only, exemplar-only, and combined text+exemplar** predictions.
-  Meta/Hugging Face support positive and negative exemplar boxes, but
-  **this runner's custom low-level off-image SVG embedding path does not
-  implement native negative prompt handling**. Do not mix unsupported
-  negative-box semantics into the cached geometry encoder.
-- Collect hard negatives specifically from text callouts, circuit routing,
-  grid bubbles, junction-box lookalikes, and symbol legends. Only
-  **human-verified** false-positive crops should drive automatic prompt
-  removal; the source page need not be completely annotated for this.
-- The NECA graphics are standardized symbols, not guaranteed matches for
-  each architect/engineer's custom legend. Confirm symbol meaning against
-  the **actual drawing's own legend** when a variant is unclear.
-
-To identify noisy NECA exemplars from existing contact-sheet reviews:
+For false-positive exemplars, run:
 
 ```bash
 python scripts_sam_prompt_feedback.py \
-    --review-dir ../work/circuitnet_review_sheets \
-    --out ../work/sam_prompt_feedback.json \
-    --suggested-denylist ../work/sam_noisy_prompts_review.json
-# After inspecting the suggestions:
-# --prompt-denylist ../work/sam_noisy_prompts_review.json
+  --review-dir ../work/circuitnet_review_sheets \
+  --out ../work/sam_prompt_feedback.json \
+  --suggested-denylist ../work/sam_noisy_prompts_review.json
 ```
 
-The tool ranks human and VLM review results separately. It only proposes a
-denylist entry after at least 10 human-reviewed rejections spanning two
-source PDFs and no human-confirmed positive examples. It never applies the
-suggestions automatically.
+Manual denylist suggestions require at least 10 human rejections over two
+PDFs, with no human-confirmed positive. Model-only decisions never
+automatically eliminate references.
 
-### Verification and expected tradeoffs
-
-For the **same** PDFs and model revision, compare `query_stats`, PDF run
-time, total emitted candidates, VLM/human rejection fraction, missed devices
-on a small exhaustively annotated test set, and class-by-class recall.
-Lower candidate count alone does **not** prove higher precision. The
-default thresholds and image-quality limits are engineering starting
-points, **not benchmarked optima**. The low-level SAM geometry/DETR encoder
-path, including the new multi-exemplar geometry batches, needs an
-end-to-end test on the installed Transformers/SAM 3.1 revision.
-
-The default `--dpi 150 --max-pixels 20000000` can downscale large sheets
-below the intended resolution. Inspect actual `render_size_px` to ensure
-small text-like device symbols remain legible. Raising render resolution
-can improve detection but increases page RAM, tile count and runtime.
-
-Electrical shape labels should not multiply into every possible voltage/
-phase combination. Switch pole/dimmer features, receptacle configuration,
-GFCI protection, mounting, emergency service, voltage, phase and NEMA
-configurations are independent VLM attributes supported only when the
-drawing/legend/schedule provides evidence.
+**Still unverified:** GPU inference/accuracy/throughput for the installed
+SAM3.1 Transformers version and its custom cross-image concept-token path.
+CPU checks on source NECA switch art found correct 3/4/LV/K/T suffix splits,
+including a two-mark synthetic compound switch. This does not establish
+real blueprint accuracy. Validate group coverage, reference quality losses,
+candidate precision and missed true devices on a small fully audited held-out
+drawing set before merging this draft PR.
 
 ### Partially annotated real drawings
 
