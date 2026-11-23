@@ -394,3 +394,79 @@ def test_browser_draft_restore_rejects_different_source_even_with_null_revision(
         server.shutdown()
         server.server_close()
         worker.join(timeout=10)
+
+
+def test_browser_verified_label_demoted_after_semantic_edits(tmp_path):
+    """Changing a previously reviewed target must require a fresh human acceptance."""
+    from PIL import Image
+    image = tmp_path / "plan.png"
+    Image.new("RGB", (400, 300), (245, 245, 245)).save(image)
+    annotations = tmp_path / "page.json"
+    annotations.write_text(json.dumps({
+        "image_path": image.name, "image_width": 400, "image_height": 300,
+        "coordinate_system": "original_page_pixels_top_left_y_down",
+        "instances": [{
+            "instance_id": "verified_1",
+            "symbol_family": "receptacle", "symbol_variant": "duplex",
+            "bbox_xyxy": [100, 100, 140, 140], "review_status": "accepted",
+            "review_source": "human", "verified_ground_truth": True, "uncertain": False,
+        }],
+    }))
+    session = LabelingSession(edit=annotations)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1420, "height": 900})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function(
+                    "() => document.querySelector('#count')?.textContent?.includes('1 verified')"
+                )
+                page.locator("#items button").first.click()
+                page.locator("#x0").fill("105")
+                page.locator("#x0").press("Tab")
+                assert "1 pending" in page.locator("#count").inner_text()
+                page.locator("#undo").click()
+                assert "1 verified" in page.locator("#count").inner_text()
+
+                page.locator("#angle").fill("25")
+                page.locator("#angle").press("Tab")
+                assert "1 pending" in page.locator("#count").inner_text()
+                page.locator("#accept").click()
+                assert "1 verified" in page.locator("#count").inner_text()
+
+                page.locator("#family").fill("switch")
+                page.locator("#family").press("Tab")
+                assert "1 pending" in page.locator("#count").inner_text()
+                page.locator("#accept").click()
+                assert "1 verified" in page.locator("#count").inner_text()
+
+                page.locator("#customAttrKey").fill("gfci")
+                page.locator("#customAttrVal").fill("true")
+                page.locator("#addCustomAttr").click()
+                assert "1 pending" in page.locator("#count").inner_text()
+                page.locator("#save").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#dirty')?.textContent === 'Saved'"
+                )
+                saved = json.loads(annotations.read_text())
+                assert saved["instances"][0]["bbox_rotated"]["angle_deg"] == 25
+                assert saved["instances"][0]["symbol_family"] == "switch"
+                assert saved["instances"][0]["device_attributes"]["gfci"] is True
+                assert saved["instances"][0]["review_status"] == "unreviewed"
+                assert saved["instances"][0]["verified_ground_truth"] is False
+                page.locator("#accept").click()
+                page.locator("#save").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#dirty')?.textContent === 'Saved'"
+                )
+                assert json.loads(annotations.read_text())["instances"][0]["verified_ground_truth"] is True
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)

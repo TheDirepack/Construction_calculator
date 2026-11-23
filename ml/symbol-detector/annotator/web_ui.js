@@ -1340,14 +1340,38 @@ function checkBox(box) {
     box[3] <= state.doc.image_height;
 }
 
+const REVIEW_EVIDENCE_FIELDS = [
+  "bbox_xyxy", "bbox_rotated", "rotation_degrees",
+  "symbol_family", "symbol_variant", "discipline", "device_type",
+  "anchors", "snap_vector", "device_attributes", "attributes_from_text",
+  "is_occluded", "is_truncated",
+];
+
+function reviewEvidenceKey(item) {
+  return JSON.stringify(REVIEW_EVIDENCE_FIELDS.map(key => item[key] ?? null));
+}
+
+function invalidateReviewOnChange(item, before) {
+  if (reviewEvidenceKey(item) === before) return;
+  state.snapPreview = null; // A preview calculated for old geometry is stale.
+  if (item.verified_ground_truth === true) {
+    item.review_status = "unreviewed";
+    item.review_source = "manual_draft";
+    item.verified_ground_truth = false;
+    item.uncertain = true;
+  }
+}
+
 function modifySelection(callback) {
   if (state.busy) return;
   const item = chosen();
   if (!item) return;
+  const before = reviewEvidenceKey(item);
   remember();
   try {
     const ok = callback(item);
     if (ok === false) { state.undo.pop(); return; }
+    invalidateReviewOnChange(item, before);
     editState();
     refresh();
   } catch (error) {
@@ -1645,6 +1669,7 @@ function pointerDown(event) {
         rotBase,
         moved: false,
         selected: hit.item.instance_id,
+        reviewEvidence: reviewEvidenceKey(hit.item),
       };
     }
   }
@@ -1784,6 +1809,8 @@ function pointerUp(event) {
     }
   } else if (d.type !== "pan") {
     if (d.moved) {
+      const edited = state.doc.instances.find(x => x.instance_id === d.selected);
+      if (edited) invalidateReviewOnChange(edited, d.reviewEvidence);
       editState();
       refresh();
     } else {
@@ -2073,15 +2100,29 @@ function alignBoxToSnapVector() {
 }
 
 async function runWallSnapPreview() {
-  const item = chosen();
-  if (!item || state.busy) return;
+  if (state.busy) return;
   flushPendingInputs();
+  const item = chosen();
+  if (!item) return;
+  const request = {
+    page: state.page, revision: state.revision,
+    jsonPath: state.jsonPath, instanceId: item.instance_id,
+    evidence: reviewEvidenceKey(item),
+  };
   try {
-    const res = await api("/api/snap?page=" + state.page, {
+    const res = await api("/api/snap?page=" + request.page, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-      body: JSON.stringify({ instance: item }),
+      body: JSON.stringify({ instance: JSON.parse(JSON.stringify(item)) }),
     });
+    const current = chosen();
+    if (state.page !== request.page || state.revision !== request.revision ||
+        state.jsonPath !== request.jsonPath || !current ||
+        current.instance_id !== request.instanceId ||
+        reviewEvidenceKey(current) !== request.evidence) {
+      notify("Discarded stale wall snap: selection or geometry changed.", "warning");
+      return;
+    }
     state.snapPreview = res.snap;
     modifySelection(x => { x.snap = res.snap; });
     notify(`Wall snap resolved: ${res.snap.kind}.`, "saved");
