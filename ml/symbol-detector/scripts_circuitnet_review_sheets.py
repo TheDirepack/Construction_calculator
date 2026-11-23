@@ -361,21 +361,29 @@ def _sanitize_pdf_stem(name: str) -> str:
     return re.sub(r'[^a-zA-Z0-9._-]+', '_', Path(name).stem).strip('_').lower()
 
 
-def build_pdf_index(data_root: Path | None) -> dict[str, Path]:
-    """Index all PDFs under data_root by exact lowercase name and sanitized stem."""
-    idx: dict[str, Path] = {}
+def build_pdf_index(data_root: Path | None) -> dict[str, Path | None]:
+    """Map only UNIQUE names to PDFs; ambiguous fallback names are unusable.
+
+    Multiple construction projects can each contain `E1.pdf`. Silently
+    taking the first copy displays the wrong device crop and corrupts
+    reviewer decisions. Exact source-relative paths take precedence.
+    """
+    idx: dict[str, Path | None] = {}
     if data_root is None or not data_root.is_dir():
         return idx
     for p in sorted(data_root.rglob('*.pdf')):
-        idx.setdefault(p.name.lower(), p)
-        idx.setdefault(_sanitize_pdf_stem(p.name), p)
+        for key in (p.name.lower(), _sanitize_pdf_stem(p.name)):
+            if key not in idx:
+                idx[key] = p
+            elif idx[key] != p:
+                idx[key] = None
     return idx
 
 
 def resolve_pdf_path(
     payload: dict[str, Any],
     data_root: Path | None,
-    pdf_index: dict[str, Path] | None = None,
+    pdf_index: dict[str, Path | None] | None = None,
 ) -> Path | None:
     rel = payload.get('source_pdf_relative')
     if data_root is not None and rel:
@@ -390,8 +398,9 @@ def resolve_pdf_path(
     src_file = payload.get('source_file') or (Path(rel).name if rel else '')
     if src_file and pdf_index:
         for key in (src_file.lower(), _sanitize_pdf_stem(src_file)):
-            if key in pdf_index and pdf_index[key].is_file():
-                return pdf_index[key]
+            candidate = pdf_index.get(key)
+            if candidate is not None and candidate.is_file():
+                return candidate
     return None
 
 
