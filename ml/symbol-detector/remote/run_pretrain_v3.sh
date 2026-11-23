@@ -18,6 +18,7 @@ SSL_EPOCHS="${SSL_EPOCHS:-60}"
 SSL_ITEMS_PER_EPOCH="${SSL_ITEMS_PER_EPOCH:-8190}"
 SSL_VAL_ITEMS="${SSL_VAL_ITEMS:-512}"
 SSL_WORKERS="${SSL_WORKERS:-2}"
+SSL_MAX_MP="${SSL_MAX_MP:-8}"
 RESUME_ARGS=()
 if [[ "${SSL_RESUME:-0}" == "1" ]]; then
   RESUME_ARGS=(--resume)
@@ -52,7 +53,7 @@ fi
 
 echo "=== INCREMENTAL NON-PDF BLUEPRINT SOURCE INGEST ==="
 "$PY" scripts_build_page_pool.py "$DATA" "$WORK/pool" \
-  --roles class_maps/page_roles.json --workers 5 --skip-pdfs
+  --roles class_maps/page_roles.json --workers 5 --skip-pdfs --max-mp "$SSL_MAX_MP"
 "$PY" scripts_curate_pool.py "$WORK/pool"
 
 echo "=== TRAIN-SPLIT CAD/DRAWING LAYOUT BACKGROUNDS ==="
