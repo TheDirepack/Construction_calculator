@@ -398,7 +398,9 @@ def test_repeated_pdf_crop_gets_independent_synthetic_views(tmp_path):
         assert len(dataset._pdf_sampler._crops) == 4
         dataset.set_epoch(1)
         _, _, _, revisited = dataset[0]
-        assert tuple(revisited["pdf_crop"]["clip_rect_pt"]) == sources[0]
+        assert tuple(revisited["pdf_crop"]["region_anchor_pt"]) == anchors[0]
+        assert revisited["pdf_crop"]["dpi_epoch"] == 1
+        assert tuple(revisited["pdf_crop"]["clip_rect_pt"]) != sources[0]
     finally:
         if dataset._pdf_sampler is not None:
             dataset._pdf_sampler.close()
@@ -581,6 +583,16 @@ def test_multi_dpi_views_keep_physical_anchor_and_cover_range(tmp_path):
         assert old["clean_crop_cache_hit"]
         assert old["effective_dpi"] == meta[2]["effective_dpi"]
         assert len(sampler._crops) == 4
+        # Next epoch recomputes the same anchor at a new real DPI.
+        _, next_epoch = sampler.sample(
+            entry, 256, np.random.default_rng(0),
+            crop_seed=20261234, crop_slot=0, bank_size=32,
+            dpi_variant=2, dpi_variants=4, dpi_epoch=1,
+        )
+        assert next_epoch["dpi_epoch"] == 1
+        assert next_epoch["region_anchor_pt"] == meta[2]["region_anchor_pt"]
+        assert next_epoch["effective_dpi"] != meta[2]["effective_dpi"]
+        assert len(sampler._crops) == 5
         with pytest.raises(ValueError):
             sampler.sample(
                 entry, 256, np.random.default_rng(0), crop_seed=22,
