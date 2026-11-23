@@ -92,3 +92,23 @@ def test_every_source_entry_receives_exactly_one_role_and_group():
     assert sum(audit['roles'].values()) == len(entries)
     assert audit['visual_group_count'] == 2
     assert len(SWITCH_SUFFIX_ATTRIBUTES) >= 15
+
+
+def test_wide_control_rectangles_not_collapsed_into_square_core_prototypes():
+    hoa = classify_neca_artwork(
+        _entry('NECA_5_028','Motor and HVAC Controls',kind='numbered_row'))
+    square = classify_neca_artwork(
+        _entry('NECA_5_025','Motor and HVAC Controls',kind='numbered_row'))
+    assert hoa['visual_group'] != square['visual_group']
+    cctv = classify_neca_artwork(
+        _entry('NECA_6_002','Security',kind='numbered_row'))
+    keypad = classify_neca_artwork(
+        _entry('NECA_6_017','Security',kind='numbered_row'))
+    assert cctv['visual_group'] != keypad['visual_group']
+
+
+def test_busway_with_tap_box_is_routing_not_placeable_device():
+    busway = classify_neca_artwork(
+        _entry('NECA_1_208','Raceways - Boxes and Busways',
+               name='Busway with cable tap box'))
+    assert busway['role'] == 'excluded'
