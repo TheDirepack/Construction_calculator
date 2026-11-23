@@ -3,6 +3,7 @@ import numpy as np
 
 from blueprint_symbols.switch_suffix_templates import (
     SuffixTemplate, search_switch_suffixes, split_switch_suffix,
+    select_unambiguous_suffix_hits,
 )
 
 
@@ -59,3 +60,25 @@ def test_matching_ignores_unrelated_device_family():
     assert search_switch_suffixes(
         page, [{'device_type':'receptacle','box_px':[10,10,20,20],
                 'visual_group':'receptacle.wall_duplex_open'}], [ref]) == []
+
+
+
+def test_ambiguous_suffix_ink_cannot_reappear_as_third_lower_ranked_label():
+    pattern = np.ones((5, 5), dtype=np.uint8) * 255
+    refs = [
+        SuffixTemplate('S3', 'letter_s', 'pole_configuration', 'three_way', pattern, 26, 15),
+        SuffixTemplate('S4', 'letter_s', 'pole_configuration', 'four_way', pattern, 26, 15),
+        SuffixTemplate('ST', 'letter_s', 'control_features', 'timer', pattern, 26, 15),
+    ]
+    # These three meanings all hit the identical pixels. Removing the first
+    # two must also block the third, rather than incorrectly attaching it.
+    hits = [
+        (0.99, refs[0], (30, 20), 5, 5),
+        (0.98, refs[1], (30, 20), 5, 5),
+        (0.96, refs[2], (30, 20), 5, 5),
+        (0.95, refs[2], (60, 20), 5, 5),
+    ]
+    kept = select_unambiguous_suffix_hits(hits, min_margin=.06)
+    assert len(kept) == 1
+    assert kept[0][2] == (60, 20)
+    assert kept[0][1].value == 'timer'
