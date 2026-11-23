@@ -470,7 +470,7 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
                       "page_chaos_probability": .70,
                       "page_chaos_strength": 1.0,
                       "crop_reuse_views": 4,
-                      "crop_bank_size": 6,
+                      "crop_bank_size": 32,
                       "fresh_crop_probability": 0.20}
     conf = {key: getattr(args, key, chaos_defaults.get(key)) for key in fields}
     conf["microbatch"] = configured_microbatch(args)
@@ -478,8 +478,8 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
     # optimizer state must not be resumed across objective revisions.
     conf["ssl_objective"] = "ink-paper-balanced-v2"
     conf["training_step_policy"] = "effective_batch_gradient_accumulation_v1"
-    conf["source_sampling_policy"] = "replayed_crop_bank_source_bursts_v2"
-    conf["native_pdf_rendering"] = "uniform_physical_dpi_100_to_400_ink_anchored_replay_v3"
+    conf["source_sampling_policy"] = "replayed_spatial_crop_bank_cycling_v3"
+    conf["native_pdf_rendering"] = "uniform_physical_dpi_100_to_400_stratified_ink_bank_v4"
     conf["neca_composition_policy"] = "standalone_figure_variants_v2"
     conf["synthetic_placement_policy"] = "contextual_class_mount_odds_v1"
     conf["wall_alignment_policy"] = "raster_hough_tangent_alpha_contact_v1"
@@ -741,7 +741,7 @@ def train(args: argparse.Namespace) -> None:
         'clean_fraction': args.clean_fraction,
         'labeled_focus_probability': args.labeled_focus_probability,
         'crop_reuse_views': getattr(args, 'crop_reuse_views', 4),
-        'crop_bank_size': getattr(args, 'crop_bank_size', 6),
+        'crop_bank_size': getattr(args, 'crop_bank_size', 32),
         'fresh_crop_probability': getattr(args, 'fresh_crop_probability', .20),
         'symbol_chaos_probability': args.symbol_chaos_probability,
         'symbol_chaos_strength': args.symbol_chaos_strength,
@@ -979,7 +979,7 @@ def main() -> None:
     p.add_argument('--clean-fraction', type=float, default=0.20)
     p.add_argument('--crop-reuse-views', type=int, default=4,
                    help='Independent augmentations of each exact source crop before selecting a new page/site')
-    p.add_argument('--crop-bank-size', type=int, default=6,
+    p.add_argument('--crop-bank-size', type=int, default=32,
                    help='Stable region slots per PDF page or source image; reused across epochs')
     p.add_argument('--fresh-crop-probability', type=float, default=.20,
                    help='Fraction of source bursts exploring an uncached new crop site')
