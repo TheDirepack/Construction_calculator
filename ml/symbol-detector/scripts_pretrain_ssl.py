@@ -425,6 +425,12 @@ def train(args: argparse.Namespace) -> None:
             Path(f) for pattern in args.labeled_annotations for f in glob.glob(pattern, recursive=True)
         ],
     )
+    identity = run_fingerprint(train_manifest, val_manifest, args)
+    prior_fingerprint_file = out_dir / "run_fingerprint.txt"
+    if args.run and args.resume and prior_fingerprint_file.exists():
+        if prior_fingerprint_file.read_text().strip() != identity:
+            raise ValueError("SSL resume changes data or configuration; existing run files untouched")
+
     (out_dir / 'pretrain_audit.json').write_text(json.dumps(audit, indent=2))
     (out_dir / 'train_manifest.json').write_text(json.dumps(train_manifest))
     (out_dir / 'val_manifest.json').write_text(json.dumps(val_manifest))
@@ -446,7 +452,6 @@ def train(args: argparse.Namespace) -> None:
     if args.neca_dir and not (args.neca_dir / 'symbols.json').is_file():
         raise FileNotFoundError(f'NECA SVG bank missing symbols.json: {args.neca_dir}')
 
-    identity = run_fingerprint(train_manifest, val_manifest, args)
     (out_dir / "run_fingerprint.txt").write_text(identity + "\n")
     print(f'Pretrain run fingerprint: {identity}', flush=True)
 
