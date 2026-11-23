@@ -12,6 +12,7 @@ from collections import Counter
 import numpy as np
 
 from .neca_svg_compositor import NecaSymbolBank, composite_neca_page
+from .ink_style import sized_symbol_range
 
 
 def compose_ssl_symbols(
@@ -26,6 +27,7 @@ def compose_ssl_symbols(
     symbol_chaos_probability: float = 0.88,
     symbol_chaos_strength: float = 1.0,
     placement_chaos: float = 0.85,
+    drawing_dpi: float | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Composite 0..max_symbols randomly scaled glyphs on a source crop.
 
@@ -47,9 +49,18 @@ def compose_ssl_symbols(
         raise ValueError("placement_chaos must be in [0,1]")
     if clean.ndim != 3 or clean.shape[2] != 3 or clean.dtype != np.uint8:
         raise ValueError("expected uint8 BGR drawing crop")
+    # Reference sizes are specified at 200 dpi; use the PDF's actual sampled
+    # DPI for both NECA and procedural glyphs. Clamping keeps all candidates
+    # physically plausible inside the current crop.
+    glyph_min_px, glyph_max_px = sized_symbol_range(
+        (min_size_px, max_size_px), drawing_dpi, clean.shape[:2]
+    )
 
     requested = int(rng.integers(0, max_symbols + 1))
-    metadata = {"requested": requested, "placed": 0, "neca": 0, "procedural": 0}
+    metadata = {"requested": requested, "placed": 0, "neca": 0,
+                "procedural": 0, "drawing_dpi": drawing_dpi,
+                "symbol_size_range_px": [round(glyph_min_px, 3),
+                                         round(glyph_max_px, 3)]}
     if not requested:
         metadata["shortfall"] = 0
         metadata["placements"] = []
@@ -69,7 +80,11 @@ def compose_ssl_symbols(
         page, instances = composite_neca_page(
             {"instances": []}, page, neca_bank, rng,
             per_page=neca_count, wall_fraction=wall_fraction,
+            # Already scaled to the requested crop DPI: suppress the
+            # legacy page-dimension scale factor in the NECA compositor.
             size_px_range=(min_size_px, max_size_px), tag="ssl",
+            drawing_dpi=drawing_dpi, match_local_ink=True,
+            ink_reference=clean,
             symbol_chaos_probability=symbol_chaos_probability,
             symbol_chaos_strength=symbol_chaos_strength,
             placement_chaos=placement_chaos,
@@ -88,8 +103,11 @@ def compose_ssl_symbols(
         page, procedural = composite_page(
             {"instances": instances}, page, rng,
             per_page=proc_count,
-            scale_range=(min_size_px / 40.0, max_size_px / 40.0),
-            max_ink=0.16, tag="ssl", stroke_match=True,
+            scale_range=(glyph_min_px / 40.0, glyph_max_px / 40.0),
+            max_ink=0.16, tag="ssl",
+            stroke_match=(drawing_dpi is None),
+            drawing_dpi=drawing_dpi, match_local_ink=True,
+            ink_reference=clean,
             wall_fraction=wall_fraction, canonical_classes=True,
             symbol_chaos_probability=symbol_chaos_probability,
             symbol_chaos_strength=symbol_chaos_strength,
@@ -109,6 +127,10 @@ def compose_ssl_symbols(
             "generator": generator,
             "symbol_chaos": inst.get("symbol_chaos", {}),
             "placement_mode": inst["source"].get("placement_mode", "unknown"),
+            "drawing_dpi": inst["source"].get("drawing_dpi"),
+            "ink_color_bgr": inst["source"].get("ink_color_bgr"),
+            "target_size_px": inst["source"].get("target_px"),
+            "glyph_scale": inst["source"].get("glyph_scale"),
         }
         for inst, generator in combined
     ]
