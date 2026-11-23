@@ -255,6 +255,26 @@ Manual denylist suggestions require at least 10 human rejections over two
 PDFs, with no human-confirmed positive. Model-only decisions never
 automatically eliminate references.
 
+After reviewing and updating each `*_batch_NNN.json`, measure **the actual
+false-box burden** from those review decisions:
+
+```bash
+python scripts_sam_precision_report.py \
+  --review-dir "$SAM_OUTPUT/review" \
+  --out "$SAM_OUTPUT/review_precision.json"
+```
+
+The report separates human acceptance/rejection from VLM-only or unattributed
+decisions, includes human-review coverage and per-family, per-visual-group and
+score-band precision proxies, and counts high-score false proposals. It
+rejects duplicate candidate IDs so duplicate exports cannot inflate
+precision. **It never reports recall:** missing devices are absent from
+the candidate list and require a separate exhaustive human audit. A small or
+selectively reviewed sample should not be presented as general model
+precision. Review crop rendering now refuses ambiguous PDF filename matches
+and, for newly produced SAM outputs, mismatched source file size/mtime.
+If a project PDF was replaced, regenerate detections before reviewing.
+
 **Still unverified:** actual pretrained SAM3.1 checkpoint inference,
 accuracy, VRAM use and throughput on electrical drawings. The default uses
 same-image visual exemplars, as required by SAM3. CI runs the complete
@@ -302,6 +322,11 @@ python scripts_run_sam3_pdfs.py --scan-mode grouped \
 python scripts_circuitnet_review_sheets.py render \
   --proposals-dir "$SAM_OUTPUT" --data-root "$BLUEPRINT_ROOT" \
   --out "$SAM_OUTPUT/review" --limit-pdfs 1
+
+# AFTER humans confirm/reject each review item:
+python scripts_sam_precision_report.py \
+  --review-dir "$SAM_OUTPUT/review" \
+  --out "$SAM_OUTPUT/review_precision.json"
 ```
 
 **Merge only after** a weighted same-image SAM 3.1 run finishes
