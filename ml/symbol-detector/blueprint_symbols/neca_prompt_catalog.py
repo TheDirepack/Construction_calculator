@@ -13,6 +13,7 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
+from blueprint_symbols.neca_visual_groups import classify_neca_artwork, audit_neca_visual_groups
 
 SECTION_CATEGORIES = {
     'Luminaires': 'lighting_fixture',
@@ -53,6 +54,9 @@ class SamNecaPrompt:
     native_vectors: bool
     file: str
     alpha: object | None = None
+    visual_group: str = ''
+    prompt_role: str = 'base'
+    encoded_attributes: object | None = None
 
 
 def _slug(value: str, max_words: int = 9) -> str:
@@ -135,6 +139,7 @@ def list_neca_prompt_specs(library_root: Path, *, allow_raster_traces: bool = Tr
     entries = json.loads((root / 'symbols.json').read_text())['symbols']
     alternative_parents = {e['id'].split('__')[0] for e in entries
                            if e.get('kind') == 'printed_alternative'}
+    visual_audit = audit_neca_visual_groups(entries)
     found, skipped = [], Counter()
     for e in entries:
         section = e.get('section', '')
@@ -158,15 +163,23 @@ def list_neca_prompt_specs(library_root: Path, *, allow_raster_traces: bool = Tr
             skipped['missing_svg'] += 1
             continue
         category, subcat, dtype, subtype = _classification(e)
+        visual = classify_neca_artwork(e, alternative_parents)
         found.append(SamNecaPrompt(
             e['id'], e.get('code', ''), e.get('name', ''), section,
             category, dtype, subtype, category, subcat, e.get('kind', ''),
-            bool(e.get('native_vectors')), e['file']))
+            bool(e.get('native_vectors')), e['file'],
+            visual_group=visual['visual_group'],
+            prompt_role=visual['role'],
+            encoded_attributes=visual['attributes']))
     return found, {
         'total_entries': len(entries), 'eligible_entries': len(found),
         'excluded': dict(skipped),
         'eligible_by_category': dict(Counter(x.category for x in found)),
         'unique_subcategories': len({(x.category, x.subcategory) for x in found}),
+        'visual_shape_groups': len({x.visual_group for x in found if x.prompt_role=='base'}),
+        'reference_roles': dict(Counter(x.prompt_role for x in found)),
+        'all_source_roles': visual_audit['roles'],
+        'all_source_visual_groups': visual_audit['visual_group_count'],
     }
 
 
