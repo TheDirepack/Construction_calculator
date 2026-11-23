@@ -367,6 +367,27 @@ def apply_runtime_corruptions(
                 x = decoded
                 operations.append("jpeg" if codec == ".jpg" else "webp")
 
+    # Additional independent paper, plotter, copier and scan degradation:
+    # gamma curve, spotlight shadow/glare, fold crease, roller banding, moire,
+    # halftone, double-feed ghosting, toner bleed, blank feed band, localized
+    # smudge and asymmetric rasterization. Keep size/coordinates unchanged.
+    from .scan_chaos import add_scan_chaos
+    x, extra_operations = add_scan_chaos(x, rng, strength=strength)
+    operations.extend(extra_operations)
+
+    # Weak legibility floor: preserve a minimum fraction of original line
+    # contrast before masked-image modeling. This is NOT an OCR/semantic
+    # recognizability guarantee, but avoids completely bleached positives.
+    orig_gray = cv2.cvtColor(clean_bgr, cv2.COLOR_BGR2GRAY)
+    original_ink = orig_gray < 185
+    if int(original_ink.sum()) >= 32:
+        orig_contrast = float((255 - orig_gray[original_ink].astype(np.float32)).mean())
+        current_gray = cv2.cvtColor(x, cv2.COLOR_BGR2GRAY)
+        current_contrast = float((255 - current_gray[original_ink].astype(np.float32)).mean())
+        if orig_contrast > 20 and current_contrast < orig_contrast * .22:
+            x = cv2.addWeighted(x, .62, clean_bgr, .38, 0)
+            operations.append("line_contrast_rescue")
+
     # Random masked reconstruction. The clean target includes the same
     # synthetic symbol additions but no corruption.
     if rng.random() < mask_prob:
