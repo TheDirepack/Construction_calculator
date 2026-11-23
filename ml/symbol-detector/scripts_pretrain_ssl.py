@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import math
 import time
@@ -325,8 +326,15 @@ def save_checkpoints(
     history: list[dict[str, Any]],
     is_best: bool,
 ) -> None:
+    # Atomic same-directory replacements retain the previous complete
+    # checkpoint if the process dies during serialization.
+    def atomic_save(payload: dict, destination: Path) -> None:
+        temporary = destination.with_name(destination.name + '.tmp')
+        torch.save(payload, temporary)
+        temporary.replace(destination)
+
     # Full resumable pretraining state
-    torch.save({
+    atomic_save({
         'epoch': epoch,
         'best_val': best_val,
         'model': model.state_dict(),
@@ -345,9 +353,9 @@ def save_checkpoints(
         'detect_layer_index': model.detect_idx,
         'backbone_neck_state_dict': model.backbone_neck_state_dict(),
     }
-    torch.save(bb_payload, out_dir / 'last_yolo26n_p2_backbone.pt')
+    atomic_save(bb_payload, out_dir / 'last_yolo26n_p2_backbone.pt')
     if is_best:
-        torch.save(bb_payload, out_dir / 'best_yolo26n_p2_backbone.pt')
+        atomic_save(bb_payload, out_dir / 'best_yolo26n_p2_backbone.pt')
 
 
 def build_musgd_optimizer(model: torch.nn.Module, *, lr: float, momentum: float = 0.937, weight_decay: float = 5e-4) -> torch.optim.Optimizer:
@@ -401,11 +409,15 @@ def train(args: argparse.Namespace) -> None:
 
     if not torch.cuda.is_available():
         raise SystemExit('CUDA GPU unavailable; refusing CPU pretraining')
+    if (out_dir / 'last_pretrain.pt').exists() and not args.resume:
+        raise SystemExit('Existing SSL checkpoint found; use --resume or a fresh --out directory')
     if args.init_weights and not args.init_weights.is_file():
         raise FileNotFoundError(f'Initial weights do not exist: {args.init_weights}')
     if args.neca_dir and not (args.neca_dir / 'symbols.json').is_file():
         raise FileNotFoundError(f'NECA SVG bank missing symbols.json: {args.neca_dir}')
 
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
     device = torch.device('cuda:0')
 
     data_opts = {
