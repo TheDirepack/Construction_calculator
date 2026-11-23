@@ -199,7 +199,8 @@ def apply_runtime_corruptions(
     *,
     mask_prob: float = 0.85,
     clean_fraction: float = 0.20,
-) -> tuple[np.ndarray, np.ndarray]:
+    return_metadata: bool = False,
+) -> tuple:
     """Random, independent scan/camera/PDF corruptions at varying severity.
 
     A true, untouched clean-view fraction is intentionally retained. Other
@@ -212,11 +213,13 @@ def apply_runtime_corruptions(
     x = clean_bgr.copy()
     h, w = x.shape[:2]
     mask = np.zeros((h, w), np.float32)
+    operations: list[str] = []
 
     # Requested fully clean views are genuinely unmasked; mask_prob=1 is an
     # explicit testing/training override that still guarantees MIM masking.
     if rng.random() < clean_fraction and mask_prob < 1:
-        return x, mask
+        meta = {"severity": "clean", "operations": []}
+        return (x, mask, meta) if return_metadata else (x, mask)
 
     severity = str(rng.choice(("light", "moderate", "heavy", "extreme"),
                               p=(0.34, 0.37, 0.23, 0.06)))
@@ -228,24 +231,29 @@ def apply_runtime_corruptions(
 
     # Illumination, white balance, paper color, locally uneven exposure.
     if chance(0.68):
+        operations.append("illumination")
         gain = float(rng.uniform(1 - 0.22 * strength, 1 + 0.22 * strength))
         offset = float(rng.uniform(-18 * strength, 18 * strength))
         xf = x.astype(np.float32) * gain + offset
         if chance(0.46):
+            operations.append("uneven_lighting")
             gx = np.linspace(-1, 1, w, dtype=np.float32)[None, :]
             gy = np.linspace(-1, 1, h, dtype=np.float32)[:, None]
             theta = float(rng.uniform(-np.pi, np.pi))
             field = (gx * np.cos(theta) + gy * np.sin(theta)) * float(rng.uniform(5, 30)) * strength
             xf += field[:, :, None]
         if chance(0.28):
+            operations.append("white_balance")
             xf *= rng.uniform(1 - 0.08 * strength, 1 + 0.08 * strength, (1, 1, 3))
         x = np.clip(xf, 0, 255).astype(np.uint8)
 
     # Optical blur, including movement along arbitrary scan directions.
     if chance(0.52):
+        operations.append("gaussian_blur")
         sigma = float(rng.uniform(0.25, 1.4 * strength + 0.25))
         x = cv2.GaussianBlur(x, (0, 0), sigma)
     if chance(0.23):
+        operations.append("motion_blur")
         k = int(rng.choice((3, 5, 7, 9)))
         ker = np.zeros((k, k), np.float32)
         if rng.random() < 0.5:
@@ -257,6 +265,8 @@ def apply_runtime_corruptions(
     # Camera/software filtering, haloing, scanner despeckle, binary threshold.
     if chance(0.30):
         op = int(rng.integers(0, 5))
+        operations.append(("median_filter", "box_filter", "sharpen",
+                           "local_contrast", "thresholding")[op])
         if op == 0:
             x = cv2.medianBlur(x, 3)
         elif op == 1:
@@ -276,6 +286,7 @@ def apply_runtime_corruptions(
 
     # Simulate original low-DPI scans and interpolation artifacts.
     if chance(0.67):
+        operations.append("resampling")
         bands = {
             "light": (0.72, 0.96), "moderate": (0.48, 0.86),
             "heavy": (0.28, 0.73), "extreme": (0.16, 0.55),
@@ -289,18 +300,21 @@ def apply_runtime_corruptions(
 
     # Toner bleed, faded lines and broken print strokes.
     if chance(0.30):
+        operations.append("toner_morphology")
         kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
         x = (cv2.erode(x, kernel, iterations=1) if rng.random() < 0.5
              else cv2.dilate(x, kernel, iterations=1))
 
     # Missing/broken ink spots, paper speckles, dust and sensor impulse pixels.
     if chance(0.30):
+        operations.append("salt_pepper")
         n = int(h * w * rng.uniform(0.00003, 0.0012) * strength)
         if n:
             ys = rng.integers(0, h, n)
             xs = rng.integers(0, w, n)
             x[ys, xs] = 255 if rng.random() < 0.55 else 0
     if chance(0.20):
+        operations.append("dust_dropouts")
         n = int(rng.integers(1, 7))
         for _ in range(n):
             px = int(rng.integers(w))
@@ -311,6 +325,7 @@ def apply_runtime_corruptions(
 
     # Feed/scanner streaks and banding (both axes).
     if chance(0.20):
+        operations.append("scanner_streaks")
         axis = int(rng.integers(2))
         n = int(rng.integers(1, 4))
         for _ in range(n):
@@ -324,9 +339,11 @@ def apply_runtime_corruptions(
 
     # Grain, sensor and halftone noise.
     if chance(0.55):
+        operations.append("sensor_noise")
         sigma = float(rng.uniform(0.6, 9.0) * strength)
         x = np.clip(x.astype(np.float32) + rng.normal(0, sigma, x.shape), 0, 255).astype(np.uint8)
     if chance(0.12):
+        operations.append("bit_depth")
         # Quantization/banding in low-bit-depth scans.
         levels = int(rng.choice((4, 8, 16, 32)))
         x = np.round(x.astype(np.float32) / 255 * (levels - 1)) * (255 / (levels - 1))
@@ -342,15 +359,18 @@ def apply_runtime_corruptions(
             ok, buffer = cv2.imencode(codec, x, [key, quality])
         except cv2.error:
             # Some headless OpenCV builds omit optional WebP codecs.
+            codec = ".jpg"
             ok, buffer = cv2.imencode(".jpg", x, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if ok:
             decoded = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
             if decoded is not None:
                 x = decoded
+                operations.append("jpeg" if codec == ".jpg" else "webp")
 
     # Random masked reconstruction. The clean target includes the same
     # synthetic symbol additions but no corruption.
     if rng.random() < mask_prob:
+        operations.append("masked_blocks")
         patch = int(rng.choice((8, 16, 32, 64)))
         gh, gw = math.ceil(h / patch), math.ceil(w / patch)
         ratio = float(rng.uniform(.15, .55))
@@ -360,7 +380,8 @@ def apply_runtime_corruptions(
         fill = np.clip(paper[None, None, :] + rng.normal(0, 4, x.shape), 0, 255).astype(np.uint8)
         x = np.where(mask[:, :, None] > .5, fill, x)
 
-    return x, mask
+    meta = {"severity": severity, "operations": operations}
+    return (x, mask, meta) if return_metadata else (x, mask)
 
 
 class BlueprintSSLDataset(Dataset):
@@ -484,9 +505,14 @@ class BlueprintSSLDataset(Dataset):
                 max_size_px=self.symbol_max_px,
                 procedural_fraction=self.procedural_fraction,
             )
-        degraded, mask = apply_runtime_corruptions(
-            clean, rng, clean_fraction=self.clean_fraction,
-        )
+        if self.return_metadata:
+            degraded, mask, degradation_meta = apply_runtime_corruptions(
+                clean, rng, clean_fraction=self.clean_fraction, return_metadata=True,
+            )
+        else:
+            degraded, mask = apply_runtime_corruptions(
+                clean, rng, clean_fraction=self.clean_fraction,
+            )
 
         # BGR uint8 -> RGB float32 [0, 1] CHW
         clean_rgb = np.ascontiguousarray(clean[:, :, ::-1]).transpose(2, 0, 1)
@@ -499,6 +525,7 @@ class BlueprintSSLDataset(Dataset):
             details = {
                 "source": str(path), "bucket": self.bucket_names[b_idx],
                 "symbol_stats": symbol_stats,
+                "degradation": degradation_meta,
                 "mask_fraction": float(mask.mean()),
                 "mean_absolute_degradation": float(
                     np.abs(degraded.astype(np.float32) - clean.astype(np.float32)).mean()
