@@ -159,8 +159,12 @@ def classify_neca_artwork(entry: dict, alternative_parents: set[str] | None = No
             group = 'fire_notification.circular_light_'+number
         else:
             group = 'fire_notification.'+number
-    return {'symbol_id':sid, 'section':section, 'role':role, 'visual_group':group,
-            'attributes':attrs, 'reason':reason, 'parent':parent}
+    return {'symbol_id': sid, 'code': entry.get('code', ''),
+            'name': entry.get('name', ''), 'file': entry.get('file', ''),
+            'native_vectors': bool(entry.get('native_vectors', False)),
+            'kind': entry.get('kind', ''), 'section': section,
+            'role': role, 'visual_group': group, 'attributes': attrs,
+            'reason': reason, 'parent': parent}
 
 
 def audit_neca_visual_groups(entries: list[dict]) -> dict:
