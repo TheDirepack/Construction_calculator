@@ -415,6 +415,9 @@ class BlueprintSSLDataset(Dataset):
         procedural_fraction: float = 0.25,
         clean_fraction: float = 0.20,
         labeled_focus_probability: float = 0.65,
+        symbol_chaos_probability: float = 0.88,
+        symbol_chaos_strength: float = 1.0,
+        placement_chaos: float = 0.85,
         return_metadata: bool = False,
     ) -> None:
         super().__init__()
@@ -432,6 +435,11 @@ class BlueprintSSLDataset(Dataset):
         self.procedural_fraction = float(procedural_fraction)
         self.clean_fraction = float(clean_fraction)
         self.labeled_focus_probability = float(labeled_focus_probability)
+        if not 0 <= symbol_chaos_probability <= 1 or not 0 <= symbol_chaos_strength <= 2 or not 0 <= placement_chaos <= 1:
+            raise ValueError("Invalid per-symbol chaos controls")
+        self.symbol_chaos_probability = float(symbol_chaos_probability)
+        self.symbol_chaos_strength = float(symbol_chaos_strength)
+        self.placement_chaos = float(placement_chaos)
         self.return_metadata = bool(return_metadata)
         self.neca_bank = None
         if neca_dir is not None:
@@ -512,6 +520,9 @@ class BlueprintSSLDataset(Dataset):
                 min_size_px=self.symbol_min_px,
                 max_size_px=self.symbol_max_px,
                 procedural_fraction=self.procedural_fraction,
+                symbol_chaos_probability=self.symbol_chaos_probability,
+                symbol_chaos_strength=self.symbol_chaos_strength,
+                placement_chaos=self.placement_chaos,
             )
         if self.return_metadata:
             degraded, mask, degradation_meta = apply_runtime_corruptions(
