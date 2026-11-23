@@ -368,7 +368,7 @@ class BlueprintSSLDataset(Dataset):
         max_symbols: int = 16,
         symbol_min_px: float = 12.0,
         symbol_max_px: float = 80.0,
-        symbol_augment_probability: float = 0.80,
+        symbol_augment_probability: float = 1.00,
         procedural_fraction: float = 0.25,
         clean_fraction: float = 0.20,
         labeled_focus_probability: float = 0.65,
