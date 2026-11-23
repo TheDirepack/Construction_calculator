@@ -86,7 +86,7 @@ def audit_pdfs(
                             if not (0 <= bbox[0] < bbox[2] <= size
                                     and 0 <= bbox[1] < bbox[3] <= size):
                                 raise AssertionError("Composite symbol leaves crop")
-                            class_counts[item.get("device_type", "unknown")] += 1
+                            class_counts[item.get("symbol_family", "unknown")] += 1
                         pair = np.hstack((clean, composite))
                         file_name = (f"{pdf_path.stem[:48]}_p{index+1:03d}"
                                      f"_s{sample_id:03d}.png")
