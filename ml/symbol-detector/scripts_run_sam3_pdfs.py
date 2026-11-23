@@ -772,8 +772,9 @@ def main() -> None:
             print('Dropped visual groups: '+', '.join(missing_visual_groups), flush=True)
             if not args.allow_missing_visual_groups:
                 ap.error(
-                    'all 166 distinct core silhouette groups must survive quality '
-                    'screening; fix/reference-allowlist rejected SVGs, or explicitly '
+                    f'{len(missing_visual_groups)} of '
+                    f'{len({x.visual_group for x in selected})} distinct base groups '
+                    'failed reference screening; adjust the reference source, or '
                     'use --allow-missing-visual-groups for experimental partial scans'
                 )
     prompt_plan = None
