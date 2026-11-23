@@ -149,12 +149,31 @@ the full mapping of NECA ID → group, role, and known attributes.
 
 ### Production pipeline
 
-`--scan-mode grouped` is now the default. It queries up to one clean
-base reference per distinct visual group, including uncommon forms. An
-optional backup SVG is rasterized if the preferred reference fails quality
-checks. Suffix composites are not SAM queries. Only *base device* boxes
-are emitted. Detections are filtered for overlong routing lines, blank
-regions, image overlap duplicates, nested boxes and detection floods.
+`--scan-mode grouped` is the default and uses **same-image visual
+exemplars**, the supported SAM 3 prompting arrangement. A compact strip
+of quality-approved NECA SVGs is inserted at the right of **each tile**.
+The blueprint crop occupies the left; positive prompt boxes point only to
+reference glyphs in the strip. The model vision encoder processes the
+combined frame once, and each glyph reuses this frame's cached features.
+Predicted boxes are accepted only within the blueprint area; any box
+touching the reference strip is rejected. There is **no off-image geometry
+embedding transfer** on the default path.
+
+At the standard `1008×1008` resolution, 166 grouped references fit in
+six 36px-wide columns (24px maximum glyph size), leaving a `792×1008`
+blueprint crop. This uses more horizontal tiles than a full-page 1008px
+crop but avoids 166 separate vision encodes per tile. The reference strip
+and small glyph sizes may affect detection performance and remain a
+**required weighted-GPU evaluation item**. Any layout overflow fails
+preflight instead of dropping categories.
+
+It queries one base reference per visually distinct group. An optional
+backup SVG is rasterized if the first fails quality checks. Suffix
+composites are not SAM queries. Only *base device* boxes are emitted.
+Detections are filtered for routing lines, blank regions, tile-overlap
+duplicates, nested boxes and detection floods. Overlaps are merged
+**before** per-tile quotas so multiple references matching the same
+symbol don't crowd out distinct devices.
 
 For switches, the code also extracts the trailing label from each NECA
 switch SVG and tests those small templates in a bounded crop immediately
@@ -179,20 +198,21 @@ python scripts_run_sam3_pdfs.py --catalog-only \
   --out ../work/sam3_proposals \
   --visual-audit-out ../work/neca_visual_groups.json
 
-# Grouped settings: default per visual group 1, score 0.72
+# Grouped settings: one visual prompt per group, score 0.72
 #   --scan-mode grouped --visual-prototypes-per-group 1
+#   --shared-reference-px 24 --shared-slot-pitch 36
 #   --switch-suffix-score 0.92 --switch-suffix-margin 0.06
 #   --no-switch-suffixes         disables local modifier matching
 #   --no-core-crop              disables conservative cropping of outside
 #                               circuit/schedule labels from reference icons
 #   --max-detections-per-tile 64   hard ceiling on post-gated boxes
 #   --fine-family-limit 24     ceiling on boxes per device family
-#   --no-prompt-cache           disables local SVG and feature caches
+#   --no-prompt-cache           disables local SVG/suffix raster caches
 #   --family-thresholds FILE    per-family confidence overrides
 #   --prompt-allowlist FILE     explicit NECA references
 #   --prompt-denylist FILE      manually reviewed noisy reference IDs
 
-# Compare original hierarchical/flat queries:
+# Old UNVALIDATED off-image transfer modes, for research only:
 #   --scan-mode hierarchical --fine-per-family 12
 #   --scan-mode flat --max-prompts 96 --prompts-per-category 12
 ```
@@ -204,10 +224,14 @@ represented; total runtime improvement is not guaranteed. However,
 compound switch variants no longer each trigger a costly model query,
 and modifiers do not generate extra bounding boxes.
 
-Locally cached NECA rasters, modifier templates and SAM concept embeddings
-avoid re-preparing unchanged SVGs. Prompt embeddings are keyed to source
-content and model revision/configuration. GPU geometry-encoding batches
-shrink automatically after out-of-memory errors.
+NECA SVG rasterization and suffix templates are cached locally across
+runs. The grouped default computes geometry tokens **per tile from that
+tile's own vision features**; there is no cross-image feature cache.
+Experimental hierarchical/flat modes retain the legacy separately encoded
+SVG tokens for comparison, but such cross-image transfer is not officially
+supported by SAM 3 and must not be used as evidence of production quality.
+GPU geometry/DETR query batches shrink automatically on out-of-memory
+errors. The processor image resolution must match `--tile-size`.
 
 ### Precision, verification and review
 
