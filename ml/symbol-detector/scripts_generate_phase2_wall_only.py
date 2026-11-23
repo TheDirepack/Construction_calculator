@@ -201,14 +201,29 @@ def generate(
     sources = _read_sources(manifest, classes)  # check all attestations before writing
     if reserved is not None:
         held = json.loads(reserved.read_text())
-        reserved_groups = set(held.get("project_family_ids", []))
-        reserved_pdfs = {(reserved.parent / s).resolve() for s in held.get("source_pdfs", [])}
-        for entry, path, _ in sources:
-            if entry["project_family_id"] in reserved_groups or path in reserved_pdfs:
-                raise ValueError(f"held-out source used for phase-two training: {path}")
-    else:
-        reserved_groups = set()
-        reserved_pdfs = set()
+        if not isinstance(held, dict):
+            raise ValueError("reserved source manifest must be an object")
+        held_paths = held.get("source_pdfs", held.get("pdfs", []))
+        held_groups = held.get("project_family_ids", held.get("groups", []))
+        if not isinstance(held_paths, list) or not isinstance(held_groups, list):
+            raise ValueError("reserved source lists must be arrays")
+        reserved_groups = set(held_groups)
+        reserved_paths = [Path(s).expanduser() for s in held_paths]
+        for entry, path, is_pdf in sources:
+            if entry["project_family_id"] in reserved_groups:
+                raise ValueError(f"held-out project group used in phase-two training: {path}")
+            if is_pdf:
+                # Indexers typically list source_pdfs relative to the PDF
+                # collection root, not relative to the reserved JSON file.
+                # Match full relative path suffix as well as absolute paths.
+                # This can over-exclude same-name files, never under-exclude.
+                for reserved_pdf in reserved_paths:
+                    if (reserved_pdf.is_absolute() and path == reserved_pdf.resolve()) or (
+                        not reserved_pdf.is_absolute() and
+                        (path == (reserved.parent / reserved_pdf).resolve() or
+                         path.parts[-len(reserved_pdf.parts):] == reserved_pdf.parts)
+                    ):
+                        raise ValueError(f"held-out PDF used for phase-two training: {path}")
     neca = NecaSymbolBank(neca_root) if neca_root is not None else None
     counters = Counter()
     seen_images: set[str] = set()
