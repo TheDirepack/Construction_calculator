@@ -278,6 +278,7 @@ def load_neca_sam_prompts(
     render_height: int = 96,
     cache_dir: Path | None = None,
     check_quality: bool = True,
+    trim_external_labels: bool = True,
     reference_stats: Counter | None = None,
 ) -> list[SamNecaPrompt]:
     """Rasterize selected exemplars with content-addressed local PNG caching.
@@ -288,7 +289,9 @@ def load_neca_sam_prompts(
     """
     import cv2
     from blueprint_symbols.neca_svg_compositor import _rasterize_svg_alpha
-    from blueprint_symbols.reference_quality import reference_quality_reason
+    from blueprint_symbols.reference_quality import (
+        reference_quality_reason, trim_external_reference_annotations,
+    )
 
     root = Path(root)
     if cache_dir is not None:
@@ -325,6 +328,11 @@ def load_neca_sam_prompts(
             if reference_stats is not None:
                 reference_stats['unrenderable'] += 1
             continue
+        if trim_external_labels:
+            alpha, cropped = trim_external_reference_annotations(
+                alpha, p.visual_group)
+            if cropped and reference_stats is not None:
+                reference_stats['external_label_crops'] += 1
         if check_quality:
             reason = reference_quality_reason(alpha)
             if reason is not None:
