@@ -214,7 +214,10 @@ a Sobel edge term. A 1%-ink drawing no longer gets a nearly all-white
 reconstruction objective. This is a **learning-signal correction**, not
 evidence that downstream object detection has improved.
 
-**Degradation:** 20% true clean-view target by default; other views independently
+**Degradation:** 20% end-to-end uncorrupted source-geometry views by default
+(except optional sharp synthetic symbol insertion). The clean decision is
+sampled before all warps: no scan noise, symbol deformation, geometric skew,
+or page deformation applies to these examples. Other views independently
 sample light, moderate, heavy, and rare extreme corruption. Categories include
 illumination/paper tint and gradients, Gaussian/motion blur, sharpening,
 median/box filtering, thresholding/CLAHE, downsample/upsample aliasing, toner
