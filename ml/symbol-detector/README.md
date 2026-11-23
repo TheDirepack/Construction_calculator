@@ -208,9 +208,9 @@ Before running a long GPU job, inspect what the generator actually creates.
 After a manifest has been produced, run:
 
 ```bash
-python scripts_preview_pretrain_ssl.py work/pretrain_v3/train_manifest.json \
-  --neca-dir data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
-  --out work/pretrain_v3/previews --samples 32
+python scripts_preview_pretrain_ssl.py ../work/pretrain_v3/train_manifest.json \
+  --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
+  --out ../work/pretrain_v3/previews --samples 32
 ```
 
 Each preview shows the clean target beside its degraded/masked input.
@@ -227,7 +227,7 @@ checks a real YOLO26n-P2 model without GPU training first:
 
 ```bash
 python scripts_verify_ssl_transfer.py \
-  work/pretrain_v3/best_yolo26n_p2_backbone.pt --classes 6
+  ../work/pretrain_v3/best_yolo26n_p2_backbone.pt --classes 6
 ```
 
 The clean/augmented SSL generator does not change supervised YOLO exports.
