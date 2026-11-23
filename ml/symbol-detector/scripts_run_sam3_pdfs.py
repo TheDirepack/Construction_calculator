@@ -707,6 +707,8 @@ def main() -> None:
                     help='Cosine similarity threshold in SAM3 prompt space to deduplicate near-identical SVG variants (1.0 disables)')
     ap.add_argument('--min-page-pts', type=float, default=900.0)
     ap.add_argument('--limit-pdfs', type=int, default=0)
+    ap.add_argument('--max-pages-per-pdf', type=int, default=0,
+                    help='0=all; quick weighted smoke can process only N eligible electrical pages per PDF')
     args = ap.parse_args()
 
     specs, catalog_report = list_neca_prompt_specs(
@@ -958,6 +960,7 @@ def main() -> None:
         'prompt_ids': [g.symbol_id for g in glyphs],
         'render_dpi': args.dpi,
         'max_pixels': args.max_pixels,
+        'max_pages_per_pdf': args.max_pages_per_pdf,
         'tile_size': args.tile_size,
         'tile_overlap': args.overlap,
         'score_threshold': args.score_thr,
@@ -1051,6 +1054,8 @@ def main() -> None:
         skipped_reasons: Counter = Counter()
         try:
             for p0 in range(n_pages):
+                if args.max_pages_per_pdf > 0 and scanned_here >= args.max_pages_per_pdf:
+                    break
                 page = doc.load_page(p0)
                 keep_pg, reason = should_scan_page(page, p0, n_pages, min_page_pts=args.min_page_pts)
                 if not keep_pg:
@@ -1193,6 +1198,8 @@ def main() -> None:
             },
             'total_pdf_pages': n_pages,
             'pages_scanned': scanned_here,
+            'page_limit_applied': bool(args.max_pages_per_pdf and scanned_here >= args.max_pages_per_pdf),
+            'skip_reasons': dict(skipped_reasons),
             'pages_with_devices': len(pages_meta),
             'total_devices': len(pdf_devices),
             'by_class': dict(cls_counts),
