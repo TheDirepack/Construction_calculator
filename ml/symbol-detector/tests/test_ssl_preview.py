@@ -39,6 +39,10 @@ def test_preview_creates_aligned_pairs_and_count_audit(tmp_path):
         assert img is not None and img.shape == (512, 1024, 3)
         overlay = cv2.imread(str(out / f"sample_{i:04d}_overlay.png"))
         assert overlay is not None and overlay.shape == (512, 512, 3)
+        geometry = cv2.imread(str(out / f"sample_{i:04d}_geometry.png"))
+        assert geometry is not None and geometry.shape == (512, 1024, 3)
+        # Geometry pair includes the transformed clean page on the right.
+        assert np.array_equal(geometry[:, 512:, :], img[:, :512, :])
         placements = report["rows"][i]["symbol_stats"]["placements"]
         assert len(placements) == report["rows"][i]["symbol_stats"]["placed"]
         for placed in placements:
