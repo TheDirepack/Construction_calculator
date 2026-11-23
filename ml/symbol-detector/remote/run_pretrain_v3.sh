@@ -38,7 +38,9 @@ echo "=== INCREMENTAL BLUEPRINT SOURCE INGEST ==="
 
 echo "=== TRAIN-SPLIT CAD/DRAWING LAYOUT BACKGROUNDS ==="
 LAYOUT_DIR="$WORK/pool/background_layouts"
-if [[ -d "$DATA/5_datasets" ]] && ! find "$LAYOUT_DIR" -maxdepth 1 -name '*.json' -print -quit 2>/dev/null | grep -q .; then
+if [[ -d "$DATA/5_datasets" ]]; then
+  # Renderer skips existing pages by ID. Rerunning also completes a partially
+  # rendered dataset after a crash (existence of one JSON is not completion).
   mkdir -p "$LAYOUT_DIR"
   "$PY" adapters/render_layouts.py "$DATA/5_datasets" "$LAYOUT_DIR" \
     --train-only --limit 1500 --seed 11
