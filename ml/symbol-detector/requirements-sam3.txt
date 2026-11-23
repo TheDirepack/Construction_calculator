@@ -1,5 +1,8 @@
 # Self-hosted SAM 3.1 detector (install a CUDA-enabled PyTorch build
-# appropriate for the local GPU/driver FIRST, then install this file).
+# appropriate for the local GPU/driver, plus its MATCHING torchvision build,
+# FIRST. The SAM geometry encoder calls torchvision.ops.roi_align;
+# mixing CPU and CUDA wheel variants will fail or silently lose acceleration.
+# Then install this file).
 # Pin Transformers: the optimized scanner accesses geometry and DETR internals.
 -r requirements.txt
 cairosvg>=2.7,<3
