@@ -13,6 +13,107 @@ import cv2
 import numpy as np
 
 
+def add_optical_tone_mix(
+    image: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    strength: float = 1.0,
+    probability: float = 1.0,
+) -> tuple[np.ndarray, list[str]]:
+    """Independent bloom/contrast variations that can occur together.
+
+    Photometric only: dimensions and source coordinates are unchanged.
+    Contrast can increase or decrease, flatten highlights, or vary over
+    the page. Bloom simulates scattered bright paper light washing into
+    adjacent dark drawing strokes, not a geometric blur of the entire page.
+    This function is for the SSL *input* only, never the clean target.
+    """
+    if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
+        raise ValueError("expected uint8 BGR image")
+    if (not math.isfinite(strength) or not 0 <= strength <= 2
+            or not math.isfinite(probability) or not 0 <= probability <= 1):
+        raise ValueError("invalid optical tone parameters")
+    if strength == 0 or rng.random() >= probability:
+        return image.copy(), []
+
+    h, w = image.shape[:2]
+    out = image.astype(np.float32).copy()
+    operations: list[str] = []
+
+    # A real print/camera may have a lifted black point or crushed shadows
+    # even while its paper stays very nearly white. Pivot around the
+    # measured paper level rather than blindly shifting all RGB channels.
+    if rng.random() < .76:
+        paper = float(np.percentile(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), 85))
+        gain = float(np.exp(rng.uniform(-.42, .40) * strength))
+        gain = float(np.clip(gain, .45, 1.95))
+        out = paper + (out - paper) * gain
+        operations.append("optical_contrast_gain")
+
+    # Toe/shoulder curve: independently compress or expand middle tones.
+    # Interpolation keeps extreme cases from destroying all symbol strokes.
+    if rng.random() < .40:
+        u = np.clip(out / 255.0, 0.0, 1.0)
+        smooth = u * u * (3.0 - 2.0 * u)
+        blend = float(rng.uniform(-.70, .85) * min(strength, 1.6))
+        out = 255.0 * (u + (smooth - u) * blend)
+        operations.append("optical_contrast_curve")
+
+    # Slowly varying contrast, e.g. uneven scanner exposure or one side of
+    # a large photographed plan fading more than the other. No spatial warp.
+    if rng.random() < .36:
+        angle = float(rng.uniform(0.0, math.tau))
+        yy, xx = np.mgrid[:h, :w].astype(np.float32)
+        gradient = ((xx / max(1, w - 1) - .5) * math.cos(angle)
+                    + (yy / max(1, h - 1) - .5) * math.sin(angle))
+        magnitude = float(rng.uniform(.09, .40) * strength)
+        local_gain = np.clip(1.0 + magnitude * gradient, .65, 1.35)
+        out = 240.0 + (out - 240.0) * local_gain[:, :, None]
+        operations.append("optical_local_contrast")
+
+    # Optical bloom: in a bright/lensed region, white paper scatters into
+    # darker strokes. Locally blurred luminance controls the highlight gate
+    # while a separate broad envelope makes this a *localized* exposure.
+    # The original line geometry remains fixed; only its brightness changes.
+    if rng.random() < .58:
+        sigma = max(.6, float(rng.uniform(1.2, 6.0) * min(strength, 1.65)))
+        base = np.clip(out, 0, 255).astype(np.uint8)
+        glow = cv2.GaussianBlur(base, (0, 0), sigma)
+        glow_luma = cv2.cvtColor(glow, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        highlight_gate = np.clip((glow_luma - 165.0) / 80.0, 0.0, 1.0)
+        yy, xx = np.ogrid[:h, :w]
+        cx = float(rng.uniform(-.1 * w, 1.1 * w))
+        cy = float(rng.uniform(-.1 * h, 1.1 * h))
+        radius = max(4.0, float(rng.uniform(.18, .65) * max(w, h)))
+        envelope = np.exp(
+            -((xx - cx)**2 + (yy - cy)**2) / (2.0 * radius * radius)
+        ).astype(np.float32)
+        amount = float(rng.uniform(.09, .45) * min(strength, 1.65))
+        factor = (highlight_gate * envelope * amount)[:, :, None]
+        out += (255.0 - out) * factor
+        operations.append("optical_highlight_bloom")
+
+    # Rare localized shadow-ink halation provides the opposite optical
+    # behavior: dark lines softly bleed into adjacent light paper.
+    if rng.random() < .22:
+        gray = cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8),
+                            cv2.COLOR_BGR2GRAY).astype(np.float32)
+        ink = 255.0 - gray
+        halo = cv2.GaussianBlur(ink, (0, 0),
+                                float(rng.uniform(.8, 2.8) * strength))
+        halo = np.maximum(0.0, halo - ink * .55)
+        opacity = float(rng.uniform(.08, .30) * strength)
+        out -= halo[:, :, None] * opacity
+        operations.append("optical_ink_halation")
+
+    if not operations:
+        # When selected, avoid a no-op in the non-clean SSL path.
+        out = 242.0 + (out - 242.0) * float(rng.uniform(.83, 1.18))
+        operations.append("optical_contrast_gain")
+
+    return np.clip(out, 0, 255).astype(np.uint8), operations
+
+
 def add_scan_chaos(
     image: np.ndarray,
     rng: np.random.Generator,
@@ -39,6 +140,15 @@ def add_scan_chaos(
         lut = np.clip(((np.arange(256) / 255.) ** power) * 255., 0, 255).astype(np.uint8)
         out = cv2.LUT(out, lut)
         changes.append("gamma_curve")
+
+    # Independent optical response may combine bloom, localized/global
+    # contrast, a nonlinear tone curve and dark-line halation. Applying
+    # these after the existing photocopy gamma allows realistic mixtures.
+    if chance(.53):
+        out, optical_ops = add_optical_tone_mix(
+            out, rng, strength=strength, probability=1.0,
+        )
+        changes.extend(optical_ops)
 
     # Large-scale uneven shadow, curled paper, flashlight glare or lens hotspot.
     if chance(.29):
