@@ -1,7 +1,7 @@
 """Self-hosted scanner must not treat crash-truncated output as completed."""
 import json
 
-from blueprint_symbols.sam_resume import atomic_write_json, completed_sam_output
+from blueprint_symbols.sam_resume import atomic_write_json, completed_sam_output, file_sha256
 
 
 def _payload():
@@ -66,3 +66,31 @@ def test_empty_but_valid_page_scan_can_resume(tmp_path):
     payload['pages_scanned'] = 0
     atomic_write_json(path, payload)
     assert _done(path)
+
+
+
+def test_pdf_sha256_resume_detects_same_size_changed_contents(tmp_path):
+    import hashlib
+    source = tmp_path / 'plan.pdf'
+    source.write_bytes(b'AAA---X---BBB')
+    original = file_sha256(source, chunk_size=2)
+    assert original == hashlib.sha256(source.read_bytes()).hexdigest()
+    path = tmp_path / 'proposals.json'
+    payload = _payload()
+    payload['source_pdf_sha256'] = original
+    atomic_write_json(path, payload)
+    assert completed_sam_output(
+        path, run_config_hash='runtime-model-123',
+        source_pdf_relative='1_blueprints/a.pdf',
+        source_pdf_sha256=original,
+    )
+    source.write_bytes(b'AAA---Y---BBB')
+    changed = file_sha256(source, chunk_size=3)
+    assert changed != original
+    assert not completed_sam_output(
+        path, run_config_hash='runtime-model-123',
+        source_pdf_relative='1_blueprints/a.pdf',
+        source_pdf_sha256=changed,
+    )
+    with pytest.raises(ValueError):
+        file_sha256(source, chunk_size=0)
