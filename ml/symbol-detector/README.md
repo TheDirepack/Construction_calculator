@@ -345,6 +345,40 @@ original devices cannot be protected this way). It does not reverse all
 damage or guarantee symbol readability. Whole-page geometry
 is applied to both target and input **before** image degradation.
 
+**Hard-negative controls (text, walls, sparse, blank):** Source entries
+may set `negative_control_kind` to `text_heavy`, `walls_only`,
+`sparse_lines`, `blank`, or `non_device_geometry`. These must be
+**fixed raster crops**, not a random PDF page/variable-DPI viewport:
+the loader rejects false page-level negative labels. Controls explicitly
+disable synthetic symbol insertion while preserving optional geometric and
+scanner degradation. An arbitrary PDF page may use
+`suppress_synthetic_symbols: true` to disable insertion without declaring
+the page a reviewed negative.
+
+To collect candidate controls from real construction PDFs, pass exact PDF
+top-left viewport coordinates to `scripts_audit_negative_controls.py`:
+
+```bash
+python scripts_audit_negative_controls.py work/negative_regions.json \\
+  --out work/negative_review --dpi 200 --size 512
+```
+
+These images are **visual QA candidates**, not certified detector negatives;
+the manifest explicitly sets `detector_negative_verified: false`. Only an
+independently exhaustively reviewed **exact raster** can be marked verified
+for the later Detect-head phase. The 100-PDF locked evaluation collection
+must remain separated from training. To measure unwanted device predictions
+after a detector checkpoint exists, supply one predictions record for each
+reviewed control to `scripts_score_negative_controls.py`. Unreviewed crops
+cannot be scored as false-positive ground truth without
+`--diagnostic-only`, which reports uncertainty. No detector false-positive
+rate can be claimed from SSL augmentation alone.
+
+**Faint drafting ink:** adaptive paper-relative line-contrast rescue now
+covers pale gray/blue wall strokes when bloom or contrast curves otherwise
+bleach them. This avoids the previous fixed `gray < 185` threshold that
+could miss weak original linework.
+
 For the remote 6 GB NVIDIA machine, start a **new** experiment (no prior
 weights and no automatic resume):
 
