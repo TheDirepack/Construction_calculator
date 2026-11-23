@@ -38,7 +38,9 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
             try:
                 page = browser.new_page(viewport={"width": 1420, "height": 900})
                 page.goto(f"http://127.0.0.1:{server.server_port}/")
-                page.locator("#pageIndicator").get_by_text("Page 1 / 2").wait_for()
+                page.wait_for_function(
+                    "() => document.querySelector('#pageIndicator').textContent === 'Page 1 / 2'"
+                )
                 assert "0 active" in page.locator("#count").inner_text()
                 page.locator("#drawTool").click()
                 canvas = page.locator("#canvas").bounding_box()
@@ -82,7 +84,9 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
                 assert instance["bbox_rotated"]["angle_deg"] == 30
 
                 page.locator("#nextPage").click()
-                page.locator("#pageIndicator").get_by_text("Page 2 / 2").wait_for()
+                page.wait_for_function(
+                    "() => document.querySelector('#pageIndicator').textContent === 'Page 2 / 2'"
+                )
                 assert "0 active" in page.locator("#count").inner_text()
                 assert not (tmp_path / "labels" / "label_test_p0002.json").exists()
                 assert session.page_state(1)["document"]["annotation_completeness_verified"] is False
