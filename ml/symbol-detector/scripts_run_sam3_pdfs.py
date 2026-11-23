@@ -778,6 +778,17 @@ def main() -> None:
     t0 = time.time()
     model = Sam3Model.from_pretrained(args.model_id, dtype=dtype).to('cuda').eval()
     processor = Sam3Processor.from_pretrained(args.model_id)
+    expected_image_size = getattr(processor.image_processor, 'size', {})
+    if isinstance(expected_image_size, dict):
+        eh = expected_image_size.get('height')
+        ew = expected_image_size.get('width')
+        if eh is not None and ew is not None and (
+                int(eh) != args.tile_size or int(ew) != args.tile_size):
+            ap.error(
+                f'--tile-size={args.tile_size} does not match the SAM image '
+                f'processor input {ew}x{eh}; this runner requires identical '
+                'square input and model coordinates.'
+            )
     resolved_model_revision = resolve_model_weight_identity(
         args.model_id, getattr(model.config, '_commit_hash', None),
     )
