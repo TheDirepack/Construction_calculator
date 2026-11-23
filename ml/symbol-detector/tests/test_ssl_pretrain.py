@@ -232,3 +232,26 @@ def test_ssl_loss_rejects_invalid_region_weights():
         BlueprintSSLLoss(ink_weight=0)
     with pytest.raises(ValueError):
         BlueprintSSLLoss(mask_weight=-1)
+
+
+def test_corruption_metadata_tracks_clean_and_independent_categories():
+    image = _fake_blueprint(128, 128)
+    categories = set()
+    severities = set()
+    for seed in range(64):
+        degraded, mask, metadata = apply_runtime_corruptions(
+            image, np.random.default_rng(seed), clean_fraction=0.20,
+            return_metadata=True,
+        )
+        assert degraded.shape == image.shape
+        assert mask.shape == image.shape[:2]
+        assert metadata["severity"] in ("clean", "light", "moderate", "heavy", "extreme")
+        assert isinstance(metadata["operations"], list)
+        if metadata["severity"] == "clean":
+            assert not metadata["operations"] and np.array_equal(degraded, image)
+        else:
+            categories.update(metadata["operations"])
+        severities.add(metadata["severity"])
+    assert "clean" in severities
+    assert len(severities) >= 3
+    assert len(categories) >= 8
