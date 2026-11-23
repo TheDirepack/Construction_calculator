@@ -41,6 +41,9 @@ import cv2
 import numpy as np
 import pymupdf
 
+from blueprint_symbols.review_gate import review_decision
+from blueprint_symbols.electrical_device_attributes import ATTRIBUTE_SCHEMA, NUMERIC_ATTRIBUTES
+
 
 COORD_MAX = 1000.0
 
@@ -87,7 +90,46 @@ DEVICE_TAXONOMY_V7: dict[str, list[str]] = {
     'plumbing_fixture': ['sink', 'water_closet', 'floor_drain', 'floor_cleanout', 'valve', 'fixture_other'],
 }
 
+def merge_review_taxonomy(provisional: dict) -> dict[str, list[str]]:
+    """Extend the stable v7 choices with NECA-derived fine-grained classes.
+
+    The extension comes from source metadata before VLM review. A VLM must
+    not invent an arbitrary type simply because it resembles the glyph.
+    """
+    base = {name: set(subtypes) for name, subtypes in DEVICE_TAXONOMY_V7.items()}
+    for dtype, subtypes in provisional.get('prompt_taxonomy', {}).items():
+        if not isinstance(dtype, str) or not re.fullmatch(r'[a-z0-9_]+', dtype):
+            raise ValueError('invalid extended taxonomy type')
+        if not isinstance(subtypes, list):
+            raise ValueError('invalid extended taxonomy subtypes')
+        # Coarse-family detections must remain publishable as unspecified.
+        # Forcing a specific variant when invisible would invent training labels.
+        base.setdefault(dtype, set()).add('unspecified')
+        for sub in subtypes:
+            if not isinstance(sub, str) or not re.fullmatch(r'[a-z0-9_]+', sub):
+                raise ValueError('invalid extended taxonomy subtype')
+            base.setdefault(dtype, set()).add(sub)
+    return {key: sorted(values) for key, values in sorted(base.items())}
+
+
 REFINEMENT_INSTRUCTIONS = (
+    "Nothing is approved merely because it appears in the batch. Set review_source "
+    "to 'vlm' for model review or 'human' for human-confirmed review. "
+    "Set review_status to "
+    "accepted/rejected/uncertain, and keep=true ONLY after explicit visual review. "
+    "Unreviewed or uncertain detections are excluded from output. "
+    "Provisional analytic_attributes and modifier_evidence may reflect small NECA "
+    "suffixes near the base glyph; review them visually, copy only supported "
+    "attributes into attributes, and correct/remove false tag matches. "
+    "Never accept a device merely because a modifier template matched. "
+    "Independent electrical attributes may coexist: e.g. three_way + dimmer, "
+    "or duplex + GFCI + emergency. Do not invent every combination as a new subtype. "
+    "Assign voltage_v, phase_count, amperage_a, pole_count, NEMA, etc. ONLY when "
+    "the project's legend, nearby callout or schedule explicitly supplies them; "
+    "do not infer them from a stock NECA example or geometry alone. Add `evidence` "
+    "with provenance for each such electrical property. "
+    "When SAM includes NECA category/subcategory, preserve that hierarchy; "
+    "use the expanded taxonomy for fine-grained device_type/subtype choices. "
     "Each numbered cell (#01..#NN) shows a zoomed crop around one provisional detection "
     "(red box) on a 0..1000 coordinate grid (origin at top-left of the image area below the "
     "header bar; light grid lines at 250, 500, 750). For every item in `items`: "
@@ -319,37 +361,80 @@ def _sanitize_pdf_stem(name: str) -> str:
     return re.sub(r'[^a-zA-Z0-9._-]+', '_', Path(name).stem).strip('_').lower()
 
 
-def build_pdf_index(data_root: Path | None) -> dict[str, Path]:
-    """Index all PDFs under data_root by exact lowercase name and sanitized stem."""
-    idx: dict[str, Path] = {}
+def build_pdf_index(data_root: Path | None) -> dict[str, Path | None]:
+    """Map only UNIQUE names to PDFs; ambiguous fallback names are unusable.
+
+    Multiple construction projects can each contain `E1.pdf`. Silently
+    taking the first copy displays the wrong device crop and corrupts
+    reviewer decisions. Exact source-relative paths take precedence.
+    """
+    idx: dict[str, Path | None] = {}
     if data_root is None or not data_root.is_dir():
         return idx
     for p in sorted(data_root.rglob('*.pdf')):
-        idx.setdefault(p.name.lower(), p)
-        idx.setdefault(_sanitize_pdf_stem(p.name), p)
+        for key in (p.name.lower(), _sanitize_pdf_stem(p.name)):
+            if key not in idx:
+                idx[key] = p
+            elif idx[key] != p:
+                idx[key] = None
     return idx
+
+
+def _source_pdf_identity_matches(payload: dict[str, Any], candidate: Path) -> bool:
+    """Require identical PDF content when modern SAM outputs carry SHA256.
+
+    Full content hash permits moving/copying identical source drawings even
+    when their timestamps change. Older exports fall back to size+mtime.
+    """
+    expected_sha = payload.get('source_pdf_sha256')
+    if expected_sha is not None:
+        if (not isinstance(expected_sha, str) or len(expected_sha) != 64 or
+                any(ch not in '0123456789abcdef' for ch in expected_sha)):
+            return False
+        from blueprint_symbols.sam_resume import file_sha256
+        try:
+            return file_sha256(candidate) == expected_sha
+        except OSError:
+            return False
+    expected = payload.get('source_pdf_stat')
+    if expected is None:  # Legacy proposal exports lacked this metadata.
+        return True
+    if not isinstance(expected, dict):
+        return False
+    try:
+        actual = candidate.stat()
+        return (
+            type(expected.get('size_bytes')) is int
+            and type(expected.get('mtime_ns')) is int
+            and actual.st_size == expected['size_bytes']
+            and actual.st_mtime_ns == expected['mtime_ns']
+        )
+    except OSError:
+        return False
 
 
 def resolve_pdf_path(
     payload: dict[str, Any],
     data_root: Path | None,
-    pdf_index: dict[str, Path] | None = None,
+    pdf_index: dict[str, Path | None] | None = None,
 ) -> Path | None:
     rel = payload.get('source_pdf_relative')
     if data_root is not None and rel:
         cand = (data_root / rel).resolve()
-        if cand.is_file():
+        if cand.is_file() and _source_pdf_identity_matches(payload, cand):
             return cand
     abs_p = payload.get('source_pdf_absolute')
     if abs_p:
         cand = Path(abs_p)
-        if cand.is_file():
+        if cand.is_file() and _source_pdf_identity_matches(payload, cand):
             return cand
     src_file = payload.get('source_file') or (Path(rel).name if rel else '')
     if src_file and pdf_index:
         for key in (src_file.lower(), _sanitize_pdf_stem(src_file)):
-            if key in pdf_index and pdf_index[key].is_file():
-                return pdf_index[key]
+            candidate = pdf_index.get(key)
+            if (candidate is not None and candidate.is_file()
+                    and _source_pdf_identity_matches(payload, candidate)):
+                return candidate
     return None
 
 
@@ -393,7 +478,8 @@ Review the provisional bounding-box detections for **`{source_file}`** ({total_d
    - Set `"keep": false` for **anything that is not a real placed electrical device** on a floor/ceiling/power/lighting/fire-alarm plan:
      - Cover sheets, title blocks, PE stamps, logos, vicinity/location maps, sheet indexes, general notes, specifications, schedules, riser/one-line diagrams, and **symbol legend examples** (never keep a legend entry as a placed device!).
      - Ordinary text, room numbers, grid bubbles, dimension ticks, door/window tags, plumbing/civil/structural marks, or duplicate hits on the same symbol.
-   - Only set `"keep": true` for genuine placed electrical/low-voltage/fire-alarm devices.
+   - Set `"review_source": "vlm"` for model-only decisions, or `"review_source": "human"` only after a human confirms. Never misattribute model decisions.
+   - Only set `"review_status": "accepted"` and `"keep": true` after evaluating a real placed device. Set `"review_status": "rejected", "keep": false` for false positives; use `"review_status": "uncertain"` when identification is inconclusive. Missing status is never accepted.
 2. **Tight Bounding Box (`refined_bbox_cell`)**:
    - Update `"refined_bbox_cell": [x0, y0, x1, y1]` in `[0..1000]` tightly around the **actual device symbol graphic only** (exclude circuit home-run arrows, adjacent walls, and nearby text callouts unless the letter is part of the symbol itself, like `S`, `S3`, `SD`, `GFI`).
 3. **Exact Fine-Grained Classification (`refined_device_type`, `refined_subtype`, `attributes`)**:
@@ -408,7 +494,14 @@ Review the provisional bounding-box detections for **`{source_file}`** ({total_d
      - Set `"on_wall": false`.
      - Set `"wall_contact_cell": [cx, cy]` to the **exact center** of `refined_bbox_cell` (`[(x0+x1)/2, (y0+y1)/2]`).
 
-## Allowed `v7` Device Taxonomy (`refined_device_type` → `refined_subtype`)
+## Allowed Device Taxonomy (`refined_device_type` → `refined_subtype`)
+
+The list below is the standard v7 taxonomy. For SAM-generated review batches, the
+companion JSON's `taxonomy` also includes the complete NECA fine-grained device
+classes and is authoritative. Its `category_taxonomy` captures the separate
+discipline/category hierarchy. Use only allowed values; preserve distinct devices
+rather than folding them into `other_device`. Set `refined_category` and
+`refined_subcategory` when correcting SAM's proposed hierarchy.
 {taxonomy_lines}
 
 ## Expected Output Format
@@ -416,6 +509,7 @@ Return the updated `*_batch_NNN.json` file(s) with the **exact same filenames an
 ```json
 {{
   "slot": 1,
+  "review_status": "accepted",
   "keep": true,
   "refined_device_type": "switch",
   "refined_subtype": "three_way_dimmer",
@@ -425,7 +519,7 @@ Return the updated `*_batch_NNN.json` file(s) with the **exact same filenames an
   "wall_contact_cell": [500.0, 552.0]
 }}
 ```
-For rejected candidates, simply set `"keep": false` (you may leave the remaining fields as-is).
+For rejected candidates, set `"review_status": "rejected"` and `"keep": false`. These outputs are provisional VLM decisions, NOT validated ground-truth labels.
 """
 
 
@@ -544,18 +638,33 @@ def cmd_render(args: argparse.Namespace) -> None:
                         'provisional_device_type': dev.get('device_type'),
                         'provisional_subtype': dev.get('subtype', 'unspecified'),
                         'neca_name': dev.get('neca_name'),
+                        'neca_symbol_id': dev.get('neca_symbol_id'),
+                        'provisional_category': dev.get('category'),
+                        'provisional_subcategory': dev.get('subcategory'),
+                        'alternative_labels': dev.get('alternative_labels', []),
+                        'visual_group': dev.get('visual_group'),
+                        'analytic_attributes': dev.get('analytic_attributes', {}),
+                        'modifier_evidence': dev.get('modifier_evidence', []),
+                        'modifier_conflicts': dev.get('modifier_conflicts', []),
+                        'needs_class_review': dev.get('needs_class_review', False),
+                        'same_region_prompt_hits': dev.get('same_region_prompt_hits', 1),
+                        'proposal_status': dev.get('status'),
                         'score': dev.get('score'),
                         'crop_pdf_rect_bl': list(crop_bl),
                         'provisional_bbox_cell': bbox_cell,
                         'provisional_bbox_pdf_bl': bbox_bl,
                         # Fields for the refinement model to update (v7 taxonomy):
-                        'keep': True,
-                        'refined_device_type': dev.get('device_type'),
-                        'refined_subtype': dev.get('subtype', 'unspecified'),
+                        'review_status': 'unreviewed',
+                        'review_source': None,
+                        'keep': None,
+                        'refined_device_type': None,
+                        'refined_subtype': None,
+                        'refined_category': None,
+                        'refined_subcategory': None,
                         'attributes': {},
                         'refined_bbox_cell': bbox_cell,
                         'on_wall': None,
-                        'wall_contact_cell': [cx_cell, cy_cell],
+                        'wall_contact_cell': None,
                     })
 
                 sheet = compose_contact_sheet(tiles, cols=cols)
@@ -568,11 +677,15 @@ def cmd_render(args: argparse.Namespace) -> None:
 
                 batch_payload = {
                     'schema': 'blueprint_device_refinement_batch_v2',
-                    'taxonomy_version': '7.0',
-                    'taxonomy': DEVICE_TAXONOMY_V7,
+                    'taxonomy_version': '7.0+neca' if payload.get('prompt_taxonomy') else '7.0',
+                    'taxonomy': merge_review_taxonomy(payload),
+                    'category_taxonomy': payload.get('prompt_category_taxonomy', {}),
+                    'device_attribute_schema': ATTRIBUTE_SCHEMA,
+                    'numeric_attribute_fields': sorted(NUMERIC_ATTRIBUTES),
                     'source_file': payload.get('source_file'),
                     'source_pdf_relative': payload.get('source_pdf_relative'),
                     'source_pdf_absolute': payload.get('source_pdf_absolute'),
+                    'source_pdf_sha256': payload.get('source_pdf_sha256'),
                     'source_circuitnet_json': str(jpath),
                     'batch_index': b_idx + 1,
                     'total_batches_for_pdf': n_batches,
@@ -624,6 +737,7 @@ def cmd_render(args: argparse.Namespace) -> None:
             'pdf_folder': pdf_stem,
             'source_file': pdf_path.name,
             'source_pdf_relative': payload.get('source_pdf_relative'),
+            'source_pdf_sha256': payload.get('source_pdf_sha256'),
             'source_circuitnet_json': str(jpath),
             'pdf_included': pdf_included,
             'instructions_file': 'AGENTS.md',
@@ -686,16 +800,25 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
     first = batch_payloads[0]
     kept_devices: list[dict[str, Any]] = []
     removed_count = 0
+    unreviewed_count = 0
     wall_count = 0
     center_count = 0
 
     for batch in sorted(batch_payloads, key=lambda b: int(b.get('batch_index', 0))):
         for item in batch.get('items', []):
-            if not item.get('keep', True):
+            decision = review_decision(
+                item, batch.get('taxonomy', DEVICE_TAXONOMY_V7),
+                coord_max=COORD_MAX,
+                category_taxonomy=batch.get('category_taxonomy'),
+            )
+            if decision == 'rejected':
                 removed_count += 1
                 continue
+            if decision == 'pending':
+                unreviewed_count += 1
+                continue
             crop_bl = item['crop_pdf_rect_bl']
-            box_cell = item.get('refined_bbox_cell') or item['provisional_bbox_cell']
+            box_cell = item['refined_bbox_cell']
             bbox_bl = cell_box_to_pdf_bl(box_cell, crop_bl)
             cx = round(0.5 * (bbox_bl[0] + bbox_bl[2]), 2)
             cy = round(0.5 * (bbox_bl[1] + bbox_bl[3]), 2)
@@ -719,18 +842,29 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
                 'provisional_device_type': item.get('provisional_device_type'),
                 'provisional_subtype': item.get('provisional_subtype'),
                 'score': item.get('score'),
+                'neca_symbol_id': item.get('neca_symbol_id'),
+                'category': item.get('refined_category') or item.get('provisional_category'),
+                'subcategory': item.get('refined_subcategory') or item.get('provisional_subcategory'),
+                'alternative_labels': item.get('alternative_labels', []),
+                'visual_group': item.get('visual_group'),
+                'analytic_attributes_proposed': item.get('analytic_attributes', {}),
+                'modifier_evidence': item.get('modifier_evidence', []),
                 'symbol_bbox': bbox_bl,
                 'symbol_center': [cx, cy],
                 'on_wall': bool(on_wall) if on_wall is not None else False,
                 'wall_connection_point': wall_pt,
                 'target_vector_pts': vec_pts,
-                'status': 'refined_v7',
+                'status': 'reviewed_provisional',
+                'review_source': item.get('review_source') or 'unattributed',
+                'verified_ground_truth': False,
+                'geometry_verified': False,
             })
 
     return {
         'source_file': first.get('source_file'),
         'source_pdf_relative': first.get('source_pdf_relative'),
         'source_pdf_absolute': first.get('source_pdf_absolute'),
+        'source_pdf_sha256': first.get('source_pdf_sha256'),
         'source_circuitnet_json': first.get('source_circuitnet_json'),
         'coordinate_system': {
             'origin': 'bottom_left',
@@ -738,9 +872,12 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
             'reference': 'display_oriented_page_after_applying_pdf_rotation',
             'symbol_bbox_format': '[x_min,y_min,x_max,y_max]',
         },
+        'verified_ground_truth': False,
+        'exhaustive_families': [],
         'summary': {
             'kept_devices': len(kept_devices),
             'removed_false_positives': removed_count,
+            'skipped_unreviewed': unreviewed_count,
             'wall_mounted': wall_count,
             'free_space_center': center_count,
         },

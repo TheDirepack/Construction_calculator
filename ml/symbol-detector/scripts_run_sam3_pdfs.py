@@ -1,20 +1,19 @@
-"""GPU-accelerated SAM 3.1 + NECA 100-2013 SVG visual-prompt detector across all blueprint PDFs.
+"""Self-hosted SAM 3.1 provisional electrical-symbol proposals.
 
-Pre-encodes every NECA 100-2013 electrical symbol SVG's visual geometry prompt ONCE on
-startup using `unsloth/sam3.1` (FP16, ~2.2 GB VRAM), then encodes each non-blank
-1008x1008 blueprint tile ONCE and queries every NECA SVG one-by-one (batched in GPU
-mini-batches for speed with identical per-SVG results).
+Default: scan each distinct NECA base silhouette once per nonblank blueprint
+tile, without querying every compound switch/receptacle variant. Small switch
+suffix marks are matched locally and attached as provisional attributes to
+the SAME device bounding box. Keep all detected boxes/labels reviewable; never
+treat automatically generated proposals as exhaustive ground truth.
 
-Outputs one resume-safe `<stem>_<sha8>_SAM3.json` per PDF using the exact bottom-left
-PDF-point schema compatible with `scripts_circuitnet_review_sheets.py`.
+The tile image encoder runs once per tile and feeds batched exemplar-geometry
+queries. Reference rasters/embeddings and PDF resume outputs are stored locally.
+`--scan-mode flat` and `hierarchical` preserve explicit A/B controls.
+`--catalog-only --visual-audit-out ...` exports every NECA visual grouping.
 
-Usage:
-  python scripts_run_sam3_pdfs.py \
-      --neca-dir ../data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
-      --data-root ../data/blueprints_and_libraries \
-      --subdirs 1_blueprints \
-      --out ../work/sam3_proposals \
-      --dpi 150 --svg-batch 8 --score-thr 0.45
+Example:
+  python scripts_run_sam3_pdfs.py --neca-dir <NECA_Vector_Library> \\
+    --data-root <blueprint-root> --out <local-output>
 """
 from __future__ import annotations
 
@@ -36,7 +35,26 @@ from PIL import Image
 from transformers import Sam3Model, Sam3Processor
 from transformers.models.sam3.modeling_sam3 import box_cxcywh_to_xyxy, inverse_sigmoid
 
-from blueprint_symbols.neca_svg_compositor import NecaGlyph, NecaSymbolBank
+from blueprint_symbols.neca_prompt_catalog import (SamNecaPrompt, list_neca_prompt_specs,
+    choose_neca_prompts, load_neca_sam_prompts)
+from blueprint_symbols.proposal_fusion import merge_sam_proposals
+from blueprint_symbols.neca_visual_groups import choose_visual_base_prototypes, audit_neca_visual_groups
+from blueprint_symbols.switch_suffix_templates import (
+    build_switch_suffix_templates, search_switch_suffixes,
+)
+from blueprint_symbols.neca_modifier_attachment import attach_device_modifiers
+from blueprint_symbols.sam_precision import filter_sam_detections, tile_origins
+from blueprint_symbols.sam_shared_canvas import SharedCanvas, build_shared_canvas
+from blueprint_symbols.sam_resume import completed_sam_output, atomic_write_json, file_sha256
+from blueprint_symbols.sam_precision_profile import (
+    load_family_thresholds, threshold_for_family,
+)
+from blueprint_symbols.preencoded_prompt_cache import (
+    prompt_feature_cache_path, load_prompt_features, save_prompt_features,
+    resolve_model_weight_identity,
+)
+from blueprint_symbols.hierarchical_sam import (build_hierarchical_prompt_plan,
+    active_fine_indices, accepted_fine_match, explain_query_savings)
 
 
 SKIP_NAME_PATTERNS = (
@@ -94,9 +112,6 @@ def should_scan_page(page: pymupdf.Page, p0: int, n_pages: int, *, min_page_pts:
     for kw in _COVER_OR_INDEX_KEYWORDS:
         if kw in low:
             return False, f'cover_or_index:{kw}'
-    if n_pages >= 4 and p0 == 0:
-        return False, 'cover_page_1'
-
     # If page has almost no extractable text (scanned raster or stroked CAD font), keep it
     if len(low) < 40:
         return True, 'no_text_keep'
@@ -123,12 +138,12 @@ def should_scan_page(page: pymupdf.Page, p0: int, n_pages: int, *, min_page_pts:
 
 
 def deduplicate_svg_prompts(
-    glyphs: list[NecaGlyph],
+    glyphs: list[SamNecaPrompt],
     geo_feats: torch.Tensor,
     geo_masks: torch.Tensor,
     *,
     sim_threshold: float = 0.90,
-) -> tuple[list[NecaGlyph], torch.Tensor, torch.Tensor]:
+) -> tuple[list[SamNecaPrompt], torch.Tensor, torch.Tensor]:
     """Greedily keep distinct visual prototypes within each fine-grained (device_type, subtype)."""
     m = geo_masks.unsqueeze(-1).float()
     pooled = (geo_feats.float() * m).sum(dim=1) / m.sum(dim=1).clamp(min=1.0)
@@ -202,13 +217,14 @@ def _paste_glyph(canvas_rgb: np.ndarray, alpha: np.ndarray, cx: int, cy: int, ta
 def preencode_svg_prompts(
     model: Sam3Model,
     processor: Sam3Processor,
-    glyphs: list[NecaGlyph],
+    glyphs: list[SamNecaPrompt],
     *,
     device: str = 'cuda',
     dtype: torch.dtype = torch.float16,
     target_px: int = 44,
+    geometry_batch: int = 4,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Pre-encode all NECA SVG geometry prompts ONCE from clean 5x5 legend sheets.
+    """Pre-encode NECA geometry from a shared reference sheet in bounded GPU batches.
 
     Returns:
       geo_feats: [N_svg, L_geo, D] on GPU
@@ -247,23 +263,44 @@ def preencode_svg_prompts(
             s_fpn = s_ve.fpn_hidden_states[:-1]
             s_pos = s_ve.fpn_position_encoding[:-1]
 
-            for lb in boxes:
-                cx = (lb[0] + lb[2]) / 2.0 / 1008.0
-                cy = (lb[1] + lb[3]) / 2.0 / 1008.0
-                bw = (lb[2] - lb[0]) / 1008.0
-                bh = (lb[3] - lb[1]) / 1008.0
-                b_emb = torch.tensor([[[cx, cy, bw, bh]]], dtype=dtype, device=device)
-                b_lbl = torch.tensor([[1]], dtype=torch.long, device=device)
-                b_msk = torch.tensor([[True]], dtype=torch.bool, device=device)
-                geo = model.geometry_encoder(
-                    box_embeddings=b_emb,
-                    box_mask=b_msk,
-                    box_labels=b_lbl,
-                    img_feats=s_fpn,
-                    img_pos_embeds=s_pos,
-                )
+            # Each SVG previously triggered a separate geometry-encoder call.
+            # Batch prompt boxes against the SAME reference image embedding;
+            # small batches bound GPU VRAM on the self-hosted 6GB machine.
+            if geometry_batch < 1:
+                raise ValueError('geometry_batch must be positive')
+            box_start = 0
+            active_batch = geometry_batch
+            while box_start < len(boxes):
+                group = boxes[box_start:box_start + active_batch]
+                coords = []
+                for lb in group:
+                    cx = (lb[0] + lb[2]) / 2.0 / 1008.0
+                    cy = (lb[1] + lb[3]) / 2.0 / 1008.0
+                    bw = (lb[2] - lb[0]) / 1008.0
+                    bh = (lb[3] - lb[1]) / 1008.0
+                    coords.append([[cx, cy, bw, bh]])
+                B = len(group)
+                b_emb = torch.tensor(coords, dtype=dtype, device=device)
+                b_lbl = torch.ones((B, 1), dtype=torch.long, device=device)
+                b_msk = torch.ones((B, 1), dtype=torch.bool, device=device)
+                try:
+                    geo = model.geometry_encoder(
+                        box_embeddings=b_emb,
+                        box_mask=b_msk,
+                        box_labels=b_lbl,
+                        img_feats=[t.expand(B, *t.shape[1:]) for t in s_fpn],
+                        img_pos_embeds=[t.expand(B, *t.shape[1:]) for t in s_pos],
+                    )
+                except torch.cuda.OutOfMemoryError:
+                    if active_batch == 1:
+                        raise
+                    active_batch = max(1, active_batch // 2)
+                    torch.cuda.empty_cache()
+                    print(f'SAM reference geometry OOM: retrying with batch={active_batch}', flush=True)
+                    continue
                 geo_feat_list.append(geo.last_hidden_state.to(dtype))
                 geo_mask_list.append(geo.attention_mask.bool())
+                box_start += B
 
     geo_feats = torch.cat(geo_feat_list, dim=0)
     geo_masks = torch.cat(geo_mask_list, dim=0)
@@ -271,36 +308,18 @@ def preencode_svg_prompts(
 
 
 def nms_detections(dets: list[dict[str, Any]], iou_thr: float = 0.50) -> list[dict[str, Any]]:
-    """Greedy score-descending NMS over page detections (in pixel coordinates)."""
-    if len(dets) <= 1:
-        return dets
-    dets = sorted(dets, key=lambda d: d['score'], reverse=True)
-    boxes = np.array([d['box_px'] for d in dets], dtype=np.float32)
-    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-    areas = np.maximum(1.0, (x2 - x1) * (y2 - y1))
-    order = np.arange(len(dets))
-    keep_idx: list[int] = []
-    while order.size > 0:
-        i = int(order[0])
-        keep_idx.append(i)
-        if order.size == 1:
-            break
-        rest = order[1:]
-        xx1 = np.maximum(x1[i], x1[rest])
-        yy1 = np.maximum(y1[i], y1[rest])
-        xx2 = np.minimum(x2[i], x2[rest])
-        yy2 = np.minimum(y2[i], y2[rest])
-        inter = np.maximum(0.0, xx2 - xx1) * np.maximum(0.0, yy2 - yy1)
-        iou = inter / np.maximum(1e-6, areas[i] + areas[rest] - inter)
-        order = rest[iou <= iou_thr]
-    return [dets[i] for i in keep_idx]
+    """Consolidate prompt hits while retaining alternative semantic labels.
+
+    NECA exemplar prompt scores are provisional, not calibrated class confidence.
+    """
+    return merge_sam_proposals(dets, iou_threshold=iou_thr)
 
 
 def detect_page_sam3(
     model: Sam3Model,
     processor: Sam3Processor,
     page_rgb: np.ndarray,
-    glyphs: list[NecaGlyph],
+    glyphs: list[SamNecaPrompt],
     geo_feats: torch.Tensor,
     geo_masks: torch.Tensor,
     blank_text_feat: torch.Tensor,
@@ -309,115 +328,296 @@ def detect_page_sam3(
     tile_size: int = 1008,
     overlap: int = 128,
     svg_batch: int = 8,
-    score_thr: float = 0.45,
+    score_thr: float = 0.72,
+    coarse_score_thr: float = 0.50,
+    prompt_plan: dict[str, Any] | None = None,
+    shared_canvas: SharedCanvas | None = None,
+    fallback_every_tiles: int = 0,
+    fine_match_iou: float = 0.10,
+    emit_generic: bool = False,
+    max_box_aspect: float = 6.0,
+    min_ink_fraction: float = 0.018,
+    max_ink_fraction: float = 0.85,
+    coarse_family_limit: int = 50,
+    fine_family_limit: int = 24,
+    max_detections_per_tile: int = 64,
+    family_thresholds: dict[str, dict[str, float]] | None = None,
+    query_stats: Counter | None = None,
     max_box_px: float = 220.0,
     min_box_px: float = 10.0,
     device: str = 'cuda',
     dtype: torch.dtype = torch.float16,
 ) -> list[dict[str, Any]]:
-    """Run SAM 3.1 across all non-blank tiles of one page, querying every NECA SVG."""
-    H, W = page_rgb.shape[:2]
-    step = tile_size - overlap
-    n_svgs = len(glyphs)
-    raw_dets: list[dict[str, Any]] = []
+    """Cache a tile's vision embedding; batch broad families, then targeted variants.
 
-    ys = list(range(0, max(1, H - overlap), step))
-    xs = list(range(0, max(1, W - overlap), step))
+    With prompt_plan=None, preserve the original flat scan for A/B evaluation.
+    Each category is a separate prompt query *in a batch*, not a joint
+    multiclass SAM classification. Broad exemplar subtypes are never trusted.
+    """
+    if tile_size <= overlap or svg_batch < 1:
+        raise ValueError('tile_size must exceed overlap; svg_batch must be positive')
+    if fallback_every_tiles < 0 or not 0 <= fine_match_iou <= 1:
+        raise ValueError('invalid hierarchical SAM fallback / geometry thresholds')
+    if coarse_family_limit < 0 or fine_family_limit < 0 or max_detections_per_tile < 0 or max_box_aspect < 1.0:
+        raise ValueError('invalid SAM precision gate configuration')
+    H, W = page_rgb.shape[:2]
+    target_width = shared_canvas.target_width if shared_canvas is not None else tile_size
+    if shared_canvas is not None and shared_canvas.tile_size != tile_size:
+        raise ValueError('shared reference canvas does not match SAM tile size')
+    ys = tile_origins(H, tile_size, overlap)
+    xs = tile_origins(W, target_width, overlap)
+    raw_dets: list[dict[str, Any]] = []
+    tile_no = 0
 
     with torch.inference_mode():
         for y0 in ys:
             for x0 in xs:
                 ye = min(H, y0 + tile_size)
-                xe = min(W, x0 + tile_size)
+                xe = min(W, x0 + target_width)
                 sub = page_rgb[y0:ye, x0:xe]
                 if sub.size == 0 or sub.min() > 240:
-                    continue  # skip blank white tile
-
-                tile = np.full((tile_size, tile_size, 3), 255, dtype=np.uint8)
-                th, tw = sub.shape[:2]
-                tile[:th, :tw] = sub
-
+                    continue
+                tile_no += 1
+                if shared_canvas is None:
+                    tile = np.full((tile_size, tile_size, 3), 255, dtype=np.uint8)
+                    th, tw = sub.shape[:2]
+                    tile[:th, :tw] = sub
+                else:
+                    tile = shared_canvas.with_target(sub)
                 t_inp = processor(images=Image.fromarray(tile), return_tensors='pt')
+                # The expensive vision encoder executes ONCE per tile.
                 t_ve = model.get_vision_features(pixel_values=t_inp['pixel_values'].to(device, dtype))
                 t_fpn_last = t_ve.fpn_hidden_states[-2]
                 t_pos_last = t_ve.fpn_position_encoding[-2]
 
-                # Query every NECA SVG against this tile's cached vision features (batched for GPU speed)
-                for s_start in range(0, n_svgs, svg_batch):
-                    s_end = min(n_svgs, s_start + svg_batch)
-                    B = s_end - s_start
+                def query_indices(indices: list[int], stage: str, threshold: float) -> list[dict[str, Any]]:
+                    found: list[dict[str, Any]] = []
+                    if query_stats is not None:
+                        query_stats[f'{stage}_prompts'] += len(indices)
+                    def run_batch(subset: list[int]) -> list[dict[str, Any]]:
+                        # Local scope releases intermediate activations if CUDA
+                        # runs out of memory, allowing a smaller retry.
+                        B = len(subset)
+                        batch_found: list[dict[str, Any]] = []
+                        idx_t = torch.tensor(subset, dtype=torch.long, device=geo_feats.device)
+                        if shared_canvas is None:
+                            # Experimental legacy off-image prompt transfer.
+                            gf = geo_feats.index_select(0, idx_t)
+                            gm = geo_masks.index_select(0, idx_t)
+                        else:
+                            # Native SAM3 visual prompts reference the SAME
+                            # image whose features are searched by DETR.
+                            ref_boxes = torch.tensor(
+                                [shared_canvas.reference_boxes[i] for i in subset],
+                                dtype=dtype, device=device,
+                            ).unsqueeze(1)
+                            geometry = model.geometry_encoder(
+                                box_embeddings=ref_boxes,
+                                box_mask=torch.ones((B, 1), dtype=torch.bool, device=device),
+                                box_labels=torch.ones((B, 1), dtype=torch.long, device=device),
+                                img_feats=[
+                                    t.expand(B, *t.shape[1:])
+                                    for t in t_ve.fpn_hidden_states[:-1]
+                                ],
+                                img_pos_embeds=[
+                                    t.expand(B, *t.shape[1:])
+                                    for t in t_ve.fpn_position_encoding[:-1]
+                                ],
+                            )
+                            gf = geometry.last_hidden_state.to(dtype)
+                            gm = geometry.attention_mask.bool()
+                        tf = blank_text_feat.expand(B, -1, -1)
+                        tm = blank_text_mask.expand(B, -1)
+                        comb_feat = torch.cat([tf, gf], dim=1)
+                        comb_mask = torch.cat([tm, gm], dim=1)
+                        vf = t_fpn_last.expand(B, -1, -1, -1)
+                        vp = t_pos_last.expand(B, -1, -1, -1)
+                        enc = model.detr_encoder(
+                            vision_features=[vf],
+                            text_features=comb_feat,
+                            vision_pos_embeds=[vp],
+                            text_mask=comb_mask,
+                        )
+                        dec = model.detr_decoder(
+                            vision_features=enc.last_hidden_state,
+                            text_features=enc.text_features,
+                            vision_pos_encoding=enc.pos_embeds_flattened,
+                            text_mask=comb_mask,
+                            spatial_shapes=enc.spatial_shapes,
+                        )
+                        logits = model.dot_product_scoring(
+                            decoder_hidden_states=dec.intermediate_hidden_states,
+                            text_features=enc.text_features,
+                            text_mask=comb_mask,
+                        )[-1].squeeze(-1)
+                        pres = dec.presence_logits[-1].squeeze(-1)
+                        if pres.ndim == 1:
+                            pres = pres.unsqueeze(-1)
+                        scores = logits.sigmoid() * pres.sigmoid()
+                        if scores.ndim != 2 or scores.shape[0] != B or scores.shape[1] < 1:
+                            raise RuntimeError(
+                                f'SAM3 score tensor shape mismatch: expected [B,Q] '
+                                f'for batch {B}, got {tuple(scores.shape)}'
+                            )
+                        if family_thresholds:
+                            # Apply independent family cutoffs before CPU copy.
+                            thrs = torch.tensor([
+                                threshold_for_family(
+                                    glyphs[i].device_type, stage, threshold,
+                                    family_thresholds,
+                                )
+                                for i in subset
+                            ], dtype=scores.dtype, device=scores.device).unsqueeze(-1)
+                            hits = torch.nonzero(scores >= thrs, as_tuple=False)
+                        else:
+                            hits = torch.nonzero(scores >= threshold, as_tuple=False)
+                        if hits.numel() == 0:
+                            return []
 
-                    gf = geo_feats[s_start:s_end]
-                    gm = geo_masks[s_start:s_end]
-                    tf = blank_text_feat.expand(B, -1, -1)
-                    tm = blank_text_mask.expand(B, -1)
-                    comb_feat = torch.cat([tf, gf], dim=1)
-                    comb_mask = torch.cat([tm, gm], dim=1)
+                        offsets = model.detr_decoder.box_head(dec.intermediate_hidden_states)[-1]
+                        refs = dec.reference_boxes[-1] if dec.reference_boxes.ndim == 4 else dec.reference_boxes
+                        boxes = box_cxcywh_to_xyxy(
+                            (inverse_sigmoid(refs) + offsets).sigmoid()
+                        ) * float(tile_size)
+                        if boxes.ndim != 3 or boxes.shape[:2] != scores.shape or boxes.shape[-1] != 4:
+                            raise RuntimeError(
+                                f'SAM3 box tensor shape mismatch: expected '
+                                f'{tuple(scores.shape)} + [4], got {tuple(boxes.shape)}'
+                            )
+                        # Move ONLY threshold-surviving boxes and scores
+                        # to CPU in one packed transfer. Copying full [B,Q]
+                        # tensors adds unnecessary host traffic for rare hits.
+                        b_idx, q_idx = hits.unbind(dim=1)
+                        packed_hits = torch.cat((
+                            hits.float(),
+                            boxes[b_idx, q_idx].float(),
+                            scores[b_idx, q_idx, None].float(),
+                        ), dim=1).cpu().numpy()
+                        for raw_b, raw_q, bx0, by0, bx1, by1, hit_score in packed_hits:
+                            b_i = int(raw_b)
+                            if shared_canvas is not None and (
+                                bx0 < 0 or bx1 > target_width or bx0 >= target_width
+                            ):
+                                # Ref-strip detections aren't blueprint devices.
+                                if query_stats is not None:
+                                    query_stats['filtered_reference_strip'] += 1
+                                continue
+                            bw, bh = bx1 - bx0, by1 - by0
+                            if bw < min_box_px or bh < min_box_px or bw > max_box_px or bh > max_box_px:
+                                continue
+                            gx0 = max(0.0, min(float(W), x0 + bx0))
+                            gy0 = max(0.0, min(float(H), y0 + by0))
+                            gx1 = max(0.0, min(float(W), x0 + bx1))
+                            gy1 = max(0.0, min(float(H), y0 + by1))
+                            if gx1 - gx0 < min_box_px or gy1 - gy0 < min_box_px:
+                                continue
+                            glyph = glyphs[subset[b_i]]
+                            batch_found.append({
+                                'box_px': [gx0, gy0, gx1, gy1],
+                                'score': float(hit_score),
+                                'stage': stage,
+                                'visual_group': glyph.visual_group,
+                                'exemplar_attributes': glyph.encoded_attributes,
+                                'device_type': glyph.device_type,
+                                # Coarse stage is a family proposal, not a verified variant.
+                                'subtype': glyph.subtype if stage not in ('coarse', 'visual_base') else 'unspecified',
+                                'exemplar_subtype': glyph.subtype,
+                                'broad_family': glyph.canonical_class,
+                                'symbol_id': glyph.symbol_id,
+                                'neca_code': glyph.code,
+                                'neca_name': glyph.name,
+                                'category': glyph.category,
+                                'subcategory': glyph.subcategory if stage not in ('coarse', 'visual_base') else 'unspecified',
+                            })
+                        return batch_found
 
-                    vf = t_fpn_last.expand(B, -1, -1, -1)
-                    vp = t_pos_last.expand(B, -1, -1, -1)
-
-                    enc = model.detr_encoder(
-                        vision_features=[vf],
-                        text_features=comb_feat,
-                        vision_pos_embeds=[vp],
-                        text_mask=comb_mask,
-                    )
-                    dec = model.detr_decoder(
-                        vision_features=enc.last_hidden_state,
-                        text_features=enc.text_features,
-                        vision_pos_encoding=enc.pos_embeds_flattened,
-                        text_mask=comb_mask,
-                        spatial_shapes=enc.spatial_shapes,
-                    )
-                    logits = model.dot_product_scoring(
-                        decoder_hidden_states=dec.intermediate_hidden_states,
-                        text_features=enc.text_features,
-                        text_mask=comb_mask,
-                    )[-1].squeeze(-1)  # [B, Q]
-                    pres = dec.presence_logits[-1].squeeze(-1)  # [B, 1] or [B]
-                    if pres.ndim == 1:
-                        pres = pres.unsqueeze(-1)
-                    scores = (logits.sigmoid() * pres.sigmoid())  # [B, Q]
-
-                    # Filter above threshold on GPU before pulling to CPU
-                    hits = torch.nonzero(scores >= score_thr, as_tuple=False)
-                    if hits.numel() == 0:
-                        continue
-
-                    all_box_offsets = model.detr_decoder.box_head(dec.intermediate_hidden_states)[-1]
-                    ref_boxes = dec.reference_boxes[-1] if dec.reference_boxes.ndim == 4 else dec.reference_boxes
-                    ref_inv = inverse_sigmoid(ref_boxes)
-                    pred_boxes = box_cxcywh_to_xyxy((ref_inv + all_box_offsets).sigmoid()) * float(tile_size)
-
-                    hits_cpu = hits.cpu().tolist()
-                    scores_cpu = scores.float().cpu().numpy()
-                    boxes_cpu = pred_boxes.float().cpu().numpy()
-
-                    for b_i, q_i in hits_cpu:
-                        bx0, by0, bx1, by1 = boxes_cpu[b_i, q_i].tolist()
-                        bw, bh = bx1 - bx0, by1 - by0
-                        if bw < min_box_px or bh < min_box_px or bw > max_box_px or bh > max_box_px:
+                    active_batch = svg_batch
+                    start_index = 0
+                    while start_index < len(indices):
+                        subset = indices[start_index:start_index + active_batch]
+                        try:
+                            found.extend(run_batch(subset))
+                        except torch.cuda.OutOfMemoryError:
+                            if active_batch <= 1:
+                                raise
+                            active_batch = max(1, active_batch // 2)
+                            if query_stats is not None:
+                                query_stats['sam_inference_oom_retries'] += 1
+                            torch.cuda.empty_cache()
                             continue
-                        # Clip to actual non-padded tile region
-                        gx0 = max(0.0, min(float(W), x0 + bx0))
-                        gy0 = max(0.0, min(float(H), y0 + by0))
-                        gx1 = max(0.0, min(float(W), x0 + bx1))
-                        gy1 = max(0.0, min(float(H), y0 + by1))
-                        if gx1 - gx0 < min_box_px or gy1 - gy0 < min_box_px:
-                            continue
-                        g = glyphs[s_start + b_i]
-                        raw_dets.append({
-                            'box_px': [gx0, gy0, gx1, gy1],
-                            'score': float(scores_cpu[b_i, q_i]),
-                            'device_type': g.device_type,
-                            'subtype': g.subtype,
-                            'broad_family': g.canonical_class,
-                            'symbol_id': g.symbol_id,
-                            'neca_code': g.code,
-                            'neca_name': g.name,
-                        })
+                        start_index += len(subset)
+                    return found
 
+                def gate(detections: list[dict[str, Any]], family_limit: int,
+                         *, enforce_tile_owner: bool = True,
+                         apply_caps: bool = True):
+                    return filter_sam_detections(
+                        detections, page_rgb, tile_x=x0, tile_y=y0,
+                        tile_size=tile_size, overlap=overlap,
+                        use_owner=enforce_tile_owner,
+                        max_aspect_ratio=max_box_aspect,
+                        min_ink_fraction=min_ink_fraction,
+                        max_ink_fraction=max_ink_fraction,
+                        minimum_box_size=min_box_px,
+                        max_per_family=family_limit if apply_caps else 0,
+                        max_total=max_detections_per_tile if apply_caps else 0,
+                        tile_width=target_width,
+                        stats=query_stats,
+                    )
+
+                if prompt_plan is None:
+                    tile_dets = gate(
+                        query_indices(list(range(len(glyphs))), 'flat', score_thr),
+                        fine_family_limit,
+                    )
+                elif prompt_plan.get('mode') == 'grouped':
+                    # Exactly one pass over all visually distinct base shapes.
+                    # Switch S3/$3/etc are NOT extra queries; component
+                    # semantics are attached analytically downstream.
+                    candidates = gate(
+                        query_indices(list(range(len(glyphs))), 'visual_base', score_thr),
+                        fine_family_limit, apply_caps=False,
+                    )
+                    # Merge repeated physical matches BEFORE a hard quota.
+                    # Otherwise duplicate prompts at one symbol can exhaust
+                    # the cap and starve independent devices elsewhere.
+                    merged = nms_detections(candidates, iou_thr=0.50)
+                    tile_dets = gate(merged, fine_family_limit)
+                    if query_stats is not None:
+                        query_stats['grouped_raw_candidates'] += len(candidates)
+                        query_stats['grouped_after_tile_fusion'] += len(merged)
+                        query_stats['grouped_visual_proposals'] += len(tile_dets)
+                else:
+                    coarse = gate(
+                        query_indices(prompt_plan['coarse_indices'], 'coarse', coarse_score_thr),
+                        coarse_family_limit, enforce_tile_owner=False,
+                    )
+                    active_types = {d['device_type'] for d in coarse}
+                    fallback = bool(fallback_every_tiles and tile_no % fallback_every_tiles == 0)
+                    if query_stats is not None:
+                        query_stats['tiles'] += 1
+                        query_stats['fallback_tiles'] += int(fallback)
+                        query_stats['active_family_sum'] += len(active_types)
+                    fine_indices = active_fine_indices(
+                        prompt_plan, active_types, fallback_full=fallback)
+                    fine = query_indices(fine_indices, 'fine', score_thr)
+                    if not fallback:
+                        fine_matched = [d for d in fine if accepted_fine_match(
+                            d, coarse, min_iou=fine_match_iou)]
+                        if query_stats is not None:
+                            query_stats['filtered_no_coarse_family_match'] += len(fine) - len(fine_matched)
+                        fine = fine_matched
+                    fine = gate(fine, fine_family_limit)
+                    if query_stats is not None:
+                        query_stats['coarse_boxes'] += len(coarse)
+                        query_stats['fine_boxes'] += len(fine)
+                        query_stats['generic_boxes_suppressed'] += 0 if emit_generic else len(coarse)
+                    # Crucial precision default: coarse hits route fine queries,
+                    # but never become VLM candidates unless explicitly enabled.
+                    tile_dets = fine + (coarse if emit_generic else [])
+                raw_dets.extend(tile_dets)
+    if query_stats is not None:
+        query_stats['vision_encoded_tiles'] += tile_no
     return nms_detections(raw_dets, iou_thr=0.50)
 
 
@@ -443,43 +643,376 @@ def main() -> None:
     ap.add_argument('--tile-size', type=int, default=1008)
     ap.add_argument('--overlap', type=int, default=128)
     ap.add_argument('--svg-batch', type=int, default=12)
-    ap.add_argument('--score-thr', type=float, default=0.55)
+    ap.add_argument('--prompt-allowlist', type=Path, default=None,
+                    help='Optional JSON list of reviewed standalone NECA symbol IDs to use as prompts')
+    ap.add_argument('--prompt-denylist', type=Path, default=None,
+                    help='Optional local JSON list of known noisy / false-positive NECA reference IDs')
+    ap.add_argument('--prompts-per-subcategory', type=int, default=0)
+    ap.add_argument('--prompts-per-category', type=int, default=0)
+    ap.add_argument('--max-prompts', type=int, default=0,
+                    help='Catalog budget; default 0 loads all eligible fine exemplars for hierarchical mode. Flat mode: set 96 or 192 for speed')
+    ap.add_argument('--native-only', action='store_true',
+                    help='Exclude raster-traced NECA symbols; default retains traced Annex A alternatives')
+    ap.add_argument('--reference-geometry-batch', type=int, default=4,
+                    help='Bounded multi-exemplar geometry encoding on cached reference sheets (VRAM tradeoff)')
+    ap.add_argument('--shared-reference-px', type=int, default=24,
+                    help='Visual reference glyph pixels on same-image SAM tile (grouped mode)')
+    ap.add_argument('--shared-slot-pitch', type=int, default=36,
+                    help='Spacing for NECA glyphs on the same-image reference strip')
+    ap.add_argument('--reference-render-height', type=int, default=96,
+                    help='Height used when rasterizing individual NECA vectors before prompt encoding')
+    ap.add_argument('--no-reference-quality', action='store_true',
+                    help='Disable cluttered/filled reference glyph rejection for A/B comparison')
+    ap.add_argument('--no-core-crop', action='store_true',
+                    help='Disable automatic external circuit/schedule label cropping on known NECA device families')
+    ap.add_argument('--no-prompt-cache', action='store_true',
+                    help='Disable local raster and preencoded-geometry caches for debugging')
+    ap.add_argument('--catalog-only', action='store_true',
+                    help='Audit selected NECA categories and prompts, then exit without loading a model/GPU')
+    ap.add_argument('--visual-audit-out', type=Path, default=None,
+                    help='Write JSON classification for every NECA source SVG (including ignored/modifier entries)')
+    ap.add_argument('--visual-prototypes-per-group', type=int, default=1,
+                    help='Use one clean representative per visibly distinct base silhouette by default')
+    ap.add_argument('--allow-missing-visual-groups', action='store_true',
+                    help='Opt-in to dropping a distinct core silhouette if all its references fail quality screening')
+    ap.add_argument('--no-switch-suffixes', action='store_true',
+                    help='Disable fast local suffix templates for S3/S4/SLV and other compound switches')
+    ap.add_argument('--switch-suffix-score', type=float, default=0.92,
+                    help='Minimum local glyph-template correlation for switch modifiers')
+    ap.add_argument('--switch-suffix-margin', type=float, default=0.06,
+                    help='Reject similar-scoring ambiguous suffix interpretations')
+    ap.add_argument('--scan-mode', choices=['grouped', 'hierarchical', 'flat'], default='grouped',
+                    help='Grouped (default) uses supported same-image references; hierarchical/flat are experimental cross-image transfer baselines')
+    ap.add_argument('--coarse-per-family', type=int, default=2)
+    ap.add_argument('--fine-per-family', type=int, default=12,
+                    help='Subtype prompts per active family; 0 = all in catalog')
+    ap.add_argument('--coarse-score-thr', type=float, default=0.50,
+                    help='Lower proposal threshold for high-recall family gating (not calibrated)')
+    ap.add_argument('--fallback-every-tiles', type=int, default=0,
+                    help='Full fine scan every N nonblank tiles to recover coarse misses; 0 = disabled, 1 = every tile')
+    ap.add_argument('--fine-match-iou', type=float, default=0.10)
+    ap.add_argument('--score-thr', type=float, default=0.72,
+                    help='Final fine-instance threshold, higher by default to limit VLM false positives')
+    ap.add_argument('--family-thresholds', type=Path, default=None,
+                    help='Optional local JSON {device_family: {coarse: 0..1, fine: 0..1}} overrides')
+    ap.add_argument('--emit-generic', action='store_true',
+                    help='Export coarse-only candidates too (high-recall, many false positives)')
+    ap.add_argument('--max-box-aspect', type=float, default=6.0)
+    ap.add_argument('--min-ink-fraction', type=float, default=0.018)
+    ap.add_argument('--max-ink-fraction', type=float, default=0.85)
+    ap.add_argument('--coarse-family-limit', type=int, default=50,
+                    help='Max raw family proposals per tile before class-gated fine search; 0 disables')
+    ap.add_argument('--fine-family-limit', type=int, default=24,
+                    help='Max final proposals per family per tile before global NMS; 0 disables')
+    ap.add_argument('--max-detections-per-tile', type=int, default=64,
+                    help='Hard ceiling on initial proposals per tile after geometric/ink gating; 0 disables')
     ap.add_argument('--svg-dedup-sim', type=float, default=0.90,
                     help='Cosine similarity threshold in SAM3 prompt space to deduplicate near-identical SVG variants (1.0 disables)')
     ap.add_argument('--min-page-pts', type=float, default=900.0)
     ap.add_argument('--limit-pdfs', type=int, default=0)
+    ap.add_argument('--max-pages-per-pdf', type=int, default=0,
+                    help='0=all; quick weighted smoke can process only N eligible electrical pages per PDF')
     args = ap.parse_args()
+    if args.max_pages_per_pdf < 0:
+        ap.error('--max-pages-per-pdf must be nonnegative')
 
+    specs, catalog_report = list_neca_prompt_specs(
+        args.neca_dir.resolve(), allow_raster_traces=not args.native_only)
+    if args.prompt_denylist:
+        denied = json.loads(args.prompt_denylist.read_text())
+        if not isinstance(denied, list) or not all(isinstance(i, str) for i in denied):
+            ap.error('--prompt-denylist must be a JSON list of NECA symbol IDs')
+        denied_ids = set(denied)
+        unknown_ids = denied_ids - {g.symbol_id for g in specs}
+        if unknown_ids:
+            ap.error(f'unknown denied NECA symbols: {sorted(unknown_ids)[:12]}')
+        specs = [g for g in specs if g.symbol_id not in denied_ids]
+        catalog_report['manually_excluded_noisy_references'] = sorted(denied_ids)
+    allowlist = None
+    if args.prompt_allowlist:
+        ids = json.loads(args.prompt_allowlist.read_text())
+        if not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids):
+            ap.error('--prompt-allowlist must be a nonempty JSON array of NECA IDs')
+        allowlist = set(ids)
+    try:
+        if args.scan_mode == 'grouped':
+            grouped_bank = [p for p in specs if
+                            allowlist is None or p.symbol_id in allowlist]
+            if allowlist is not None and len(grouped_bank) != len(allowlist):
+                ap.error('grouped allowlist includes unknown or excluded NECA IDs')
+            # Load one backup reference per group where available.
+            # Only the best surviving raster is queried at inference time.
+            selected = choose_visual_base_prototypes(
+                grouped_bank, per_group=max(2, args.visual_prototypes_per_group))
+        else:
+            selected = choose_neca_prompts(
+                specs, per_subcategory=args.prompts_per_subcategory,
+                per_category=args.prompts_per_category, total=args.max_prompts,
+                allowlist=allowlist)
+    except ValueError as exc:
+        ap.error(str(exc))
+    if not selected:
+        ap.error('selected reference set empty (grouped mode excludes modifier/composite-only IDs)')
+    if args.visual_audit_out is not None:
+        all_entries = json.loads((args.neca_dir / 'symbols.json').read_text())['symbols']
+        args.visual_audit_out.parent.mkdir(parents=True, exist_ok=True)
+        args.visual_audit_out.write_text(json.dumps(
+            audit_neca_visual_groups(all_entries), indent=2,
+        ))
+    chosen_counts = dict(Counter(g.category for g in selected))
+    catalog_summary = {
+        **catalog_report,
+        'selected': len(selected),
+        'selected_by_category': chosen_counts,
+        'selected_subcategories': len({(g.category, g.subcategory) for g in selected}),
+        'selected_visual_groups': len({g.visual_group for g in selected}),
+        'selected_roles': dict(Counter(g.prompt_role for g in selected)),
+        'prompt_budgets': {
+            'per_subcategory': args.prompts_per_subcategory,
+            'per_category': args.prompts_per_category,
+            'total': args.max_prompts,
+        },
+        'selected_ids': [g.symbol_id for g in selected],
+    }
+    print(json.dumps(catalog_summary, indent=2), flush=True)
+    if args.catalog_only:
+        return
     if not torch.cuda.is_available():
-        raise SystemExit('CUDA GPU not available; refusing slow CPU SAM 3.1 scan')
+        raise SystemExit('CUDA GPU not available; use --catalog-only for CPU preflight')
 
-    dtype = torch.float16
+    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     print(f'Loading {args.model_id} in {dtype} on {torch.cuda.get_device_name(0)}...', flush=True)
     t0 = time.time()
     model = Sam3Model.from_pretrained(args.model_id, dtype=dtype).to('cuda').eval()
     processor = Sam3Processor.from_pretrained(args.model_id)
+    expected_image_size = getattr(processor.image_processor, 'size', {})
+    if isinstance(expected_image_size, dict):
+        eh = expected_image_size.get('height')
+        ew = expected_image_size.get('width')
+        if eh is not None and ew is not None and (
+                int(eh) != args.tile_size or int(ew) != args.tile_size):
+            ap.error(
+                f'--tile-size={args.tile_size} does not match the SAM image '
+                f'processor input {ew}x{eh}; this runner requires identical '
+                'square input and model coordinates.'
+            )
+    resolved_model_revision = resolve_model_weight_identity(
+        args.model_id, getattr(model.config, '_commit_hash', None),
+    )
+    if resolved_model_revision is None:
+        ap.error(
+            'cannot establish model weight revision; refusing stale resume '
+            'and reference embeddings. Load an immutable Hugging Face model '
+            'revision or a local model directory containing actual '
+            '.safetensors/.bin checkpoint shards.'
+        )
     print(f'Model loaded in {time.time() - t0:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
 
-    bank = NecaSymbolBank(args.neca_dir.resolve(), render_height=96)
-    glyphs: list[NecaGlyph] = [g for cls in bank.active_classes for g in bank.by_class[cls]]
-    print(f'Pre-encoding {len(glyphs)} NECA 100-2013 SVG visual prompts ({bank.summary()})...', flush=True)
-    t_enc = time.time()
-    geo_feats, geo_masks, blank_tf, blank_tm = preencode_svg_prompts(
-        model, processor, glyphs, device='cuda', dtype=dtype, target_px=44,
+    cache_root = args.out.resolve() / '_sam_prompt_cache'
+    reference_stats: Counter = Counter()
+    glyphs = load_neca_sam_prompts(
+        selected, args.neca_dir.resolve(),
+        render_height=args.reference_render_height,
+        cache_dir=None if args.no_prompt_cache else cache_root / 'raster',
+        check_quality=not args.no_reference_quality,
+        trim_external_labels=not args.no_core_crop,
+        reference_stats=reference_stats,
     )
-    if args.svg_dedup_sim < 1.0:
+    if not glyphs:
+        ap.error('no usable NECA prompt SVGs after reference quality screening')
+    if args.scan_mode == 'grouped':
+        accepted_count = len(glyphs)
+        glyphs = choose_visual_base_prototypes(
+            glyphs, per_group=args.visual_prototypes_per_group)
+        print(f'Grouped references: {accepted_count} quality-accepted -> '
+              f'{len(glyphs)} model queries (one per silhouette by default)',
+              flush=True)
+    print(f'NECA reference preflight: {len(glyphs)}/{len(selected)} usable; '
+          f'details={dict(reference_stats)}', flush=True)
+    t_enc = time.time()
+    shared_canvas = None
+    if args.scan_mode == 'grouped':
+        try:
+            shared_canvas = build_shared_canvas(
+                glyphs, tile_size=args.tile_size,
+                slot_pitch=args.shared_slot_pitch,
+                reference_px=args.shared_reference_px,
+            )
+        except ValueError as exc:
+            ap.error(f'unsupported shared NECA layout: {exc}')
+        # Supported SAM3 geometry prompts must refer to THIS tile's FPN,
+        # not cached prompt tokens from a different reference image.
+        visual_tokens = processor(text='visual', return_tensors='pt')
+        with torch.inference_mode():
+            blank_tf = model.get_text_features(
+                input_ids=visual_tokens['input_ids'].to('cuda'),
+                attention_mask=visual_tokens['attention_mask'].to('cuda'),
+                return_dict=True,
+            ).pooler_output.to(dtype)
+        blank_tm = visual_tokens['attention_mask'].to('cuda').bool()
+        geo_feats = torch.empty((0, 2, blank_tf.shape[-1]), device='cuda', dtype=dtype)
+        geo_masks = torch.empty((0, 2), device='cuda', dtype=torch.bool)
+        print(f'SAM same-image exemplar canvas: target_width={shared_canvas.target_width}; '
+              f'visual references={len(shared_canvas.reference_boxes)}; '
+              f'precomputed cross-image embeddings=0', flush=True)
+    else:
+        # Legacy experimental separate-image visual embeddings: not an
+        # officially supported cross-image exemplar feature.
+        feature_cache = None
+        cached_features = None
+        if not args.no_prompt_cache and resolved_model_revision is not None:
+            feature_cache = prompt_feature_cache_path(
+                cache_root / 'encoded', glyphs,
+                model_id=args.model_id,
+                model_revision=resolved_model_revision,
+                model_config=model.config.to_json_string(),
+                dtype=dtype, target_px=44,
+            )
+            cached_features = load_prompt_features(
+                feature_cache, glyph_count=len(glyphs), device='cuda', dtype=dtype,
+            )
+        if cached_features is not None:
+            print('Loaded experimental cross-image geometry embeddings', flush=True)
+            geo_feats, geo_masks, blank_tf, blank_tm = cached_features
+        else:
+            geo_feats, geo_masks, blank_tf, blank_tm = preencode_svg_prompts(
+                model, processor, glyphs, device='cuda', dtype=dtype,
+                target_px=44, geometry_batch=args.reference_geometry_batch,
+            )
+            if feature_cache is not None:
+                save_prompt_features(
+                    feature_cache, (geo_feats, geo_masks, blank_tf, blank_tm),
+                )
+                print('Cached experimental cross-image geometry embeddings', flush=True)
+    if args.scan_mode != 'grouped' and args.svg_dedup_sim < 1.0:
+        # Global cosine dedup can silently erase an entire visual group;
+        # grouped mode already deduplicates by *core silhouette* metadata.
         orig_n = len(glyphs)
         glyphs, geo_feats, geo_masks = deduplicate_svg_prompts(
             glyphs, geo_feats, geo_masks, sim_threshold=args.svg_dedup_sim,
         )
-        dedup_counts = dict(Counter(g.canonical_class for g in glyphs))
+        dedup_counts = dict(Counter(g.category for g in glyphs))
         print(
             f'Deduplicated SVGs in SAM3 prompt space (sim>={args.svg_dedup_sim}): '
             f'{orig_n} -> {len(glyphs)} distinct prototypes ({dedup_counts})',
             flush=True,
         )
-    print(f'Pre-encoded {len(glyphs)} active SVG prompts in {time.time() - t_enc:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
+    print(f'SAM visual prompt setup completed in {time.time() - t_enc:.1f}s '
+          f'(VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
+    if args.scan_mode == 'grouped':
+        missing_visual_groups = sorted(
+            {x.visual_group for x in selected} - {x.visual_group for x in glyphs}
+        )
+        print(f'SAM grouped coverage: {len({g.visual_group for g in glyphs})} '
+              f'active visual groups; {len(missing_visual_groups)} missing after raster screening',
+              flush=True)
+        if missing_visual_groups:
+            print('Dropped visual groups: '+', '.join(missing_visual_groups), flush=True)
+            if not args.allow_missing_visual_groups:
+                ap.error(
+                    f'{len(missing_visual_groups)} of '
+                    f'{len({x.visual_group for x in selected})} distinct base groups '
+                    'failed reference screening; adjust the reference source, or '
+                    'use --allow-missing-visual-groups for experimental partial scans'
+                )
+    prompt_plan = None
+    if args.scan_mode == 'grouped':
+        prompt_plan = {'mode': 'grouped',
+                       'families': sorted({g.device_type for g in glyphs})}
+    if args.scan_mode == 'hierarchical':
+        try:
+            prompt_plan = build_hierarchical_prompt_plan(
+                glyphs, coarse_per_family=args.coarse_per_family,
+                fine_per_family=args.fine_per_family)
+        except ValueError as exc:
+            ap.error(str(exc))
+        print(f'SAM hierarchical: {len(prompt_plan["families"])} device families; '
+              f'{prompt_plan["coarse_count"]} coarse queries per tile; '
+              f'{prompt_plan["fine_catalog_count"]} subtype prompts available for gated pass', flush=True)
 
+    try:
+        family_thresholds = load_family_thresholds(
+            args.family_thresholds, {g.device_type for g in glyphs},
+        )
+    except (ValueError, OSError, json.JSONDecodeError) as exc:
+        ap.error(f'family threshold file invalid: {exc}')
+
+    switch_suffix_refs = []
+    if args.scan_mode == 'grouped' and not args.no_switch_suffixes and any(
+            g.device_type == 'switch' for g in glyphs):
+        switch_suffix_refs = build_switch_suffix_templates(
+            args.neca_dir.resolve(), render_height=128,
+            cache_dir=None if args.no_prompt_cache else cache_root / 'suffix')
+        print(f'Loaded {len(switch_suffix_refs)} local NECA switch suffix templates',
+              flush=True)
+
+    # Prompt/model changes must invalidate resume cache; otherwise revised
+    # detectors silently read old labels and appear to run impossibly fast.
+    # Only inference-affecting inputs belong in this fingerprint.
+    # Cache statistics differ between first run and warm runs.
+    reference_digest = hashlib.sha256()
+    for ref in glyphs:
+        reference_digest.update(ref.symbol_id.encode('utf-8'))
+        reference_digest.update(hashlib.sha256(ref.alpha.tobytes()).digest())
+    run_config = {
+        'model_id': args.model_id,
+        'inference_dtype': str(dtype),
+        'model_resolved_revision': resolved_model_revision,
+        'model_config_hash': hashlib.sha256(
+            model.config.to_json_string().encode('utf-8')
+        ).hexdigest(),
+        'reference_ink_sha256': reference_digest.hexdigest(),
+        'prompt_ids': [g.symbol_id for g in glyphs],
+        'render_dpi': args.dpi,
+        'max_pixels': args.max_pixels,
+        'max_pages_per_pdf': args.max_pages_per_pdf,
+        'tile_size': args.tile_size,
+        'tile_overlap': args.overlap,
+        'score_threshold': args.score_thr,
+        'family_thresholds': family_thresholds,
+        'prompt_dedup_similarity': args.svg_dedup_sim,
+        'min_page_pts': args.min_page_pts,
+        'prompt_budgets': catalog_summary['prompt_budgets'],
+        'native_only': args.native_only,
+        'reference_render_height': args.reference_render_height,
+        'reference_geometry_batch': args.reference_geometry_batch,
+        'reference_quality': not args.no_reference_quality,
+        'trim_external_reference_labels': not args.no_core_crop,
+        'prompt_feature_cache_schema': 2,
+        'scan_mode': args.scan_mode,
+        'visual_prototypes_per_group': args.visual_prototypes_per_group,
+        'shared_image_prompting': shared_canvas is not None,
+        'shared_reference_px': args.shared_reference_px if shared_canvas else None,
+        'shared_slot_pitch': args.shared_slot_pitch if shared_canvas else None,
+        'shared_target_width': shared_canvas.target_width if shared_canvas else None,
+        'allow_missing_visual_groups': args.allow_missing_visual_groups,
+        'switch_suffix_refs': [t.symbol_id for t in switch_suffix_refs],
+        'switch_suffix_template_content_sha256': hashlib.sha256(
+            b''.join(hashlib.sha256(t.ink.tobytes()).digest()
+                     for t in switch_suffix_refs)
+        ).hexdigest() if switch_suffix_refs else None,
+        'switch_suffix_enabled': not args.no_switch_suffixes,
+        'switch_suffix_score': args.switch_suffix_score,
+        'switch_suffix_margin': args.switch_suffix_margin,
+        'active_visual_groups': [g.visual_group for g in glyphs],
+        'coarse_per_family': args.coarse_per_family,
+        'fine_per_family': args.fine_per_family,
+        'coarse_score_thr': args.coarse_score_thr,
+        'fallback_every_tiles': args.fallback_every_tiles,
+        'fine_match_iou': args.fine_match_iou,
+        'emit_generic': args.emit_generic,
+        'max_box_aspect': args.max_box_aspect,
+        'min_ink_fraction': args.min_ink_fraction,
+        'max_ink_fraction': args.max_ink_fraction,
+        'coarse_family_limit': args.coarse_family_limit,
+        'fine_family_limit': args.fine_family_limit,
+        'max_detections_per_tile': args.max_detections_per_tile,
+        'sam_precision_version': 2,
+        'sam_hierarchy_version': 1,
+    }
+    run_config_hash = hashlib.sha256(
+        json.dumps(run_config, sort_keys=True).encode('utf-8')
+    ).hexdigest()[:12]
     data_root = args.data_root.resolve()
     out_dir = args.out.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -496,11 +1029,21 @@ def main() -> None:
 
     for idx, pdf_path in enumerate(pdfs, start=1):
         rel = str(pdf_path.relative_to(data_root))
-        short_hash = hashlib.sha256(rel.encode()).hexdigest()[:8]
+        source_stat = pdf_path.stat()
+        # Full content digest also detects same-size, timestamp-preserving edits.
+        source_pdf_sha256 = file_sha256(pdf_path)
+        source_fingerprint = f'{rel}/{source_stat.st_size}/{source_stat.st_mtime_ns}/{source_pdf_sha256}'
+        short_hash = hashlib.sha256(source_fingerprint.encode('utf-8')).hexdigest()[:8]
         safe_stem = re.sub(r'[^a-zA-Z0-9._-]+', '_', pdf_path.stem)[:80]
-        out_json = out_dir / f'{safe_stem}_{short_hash}_SAM3.json'
-        if out_json.is_file():
+        out_json = out_dir / f'{safe_stem}_{short_hash}_{run_config_hash}_SAM3.json'
+        if completed_sam_output(
+                out_json, run_config_hash=run_config_hash,
+                source_pdf_relative=rel,
+                source_pdf_sha256=source_pdf_sha256):
             continue
+        if out_json.exists():
+            print(f'[{idx}/{len(pdfs)}] Recomputing incomplete/stale output '
+                  f'{out_json.name}', flush=True)
 
         t_pdf = time.time()
         try:
@@ -514,10 +1057,13 @@ def main() -> None:
         pages_meta: list[dict[str, Any]] = []
         cls_counts: Counter = Counter()
         scanned_here = 0
+        pdf_query_stats: Counter = Counter()
 
         skipped_reasons: Counter = Counter()
         try:
             for p0 in range(n_pages):
+                if args.max_pages_per_pdf > 0 and scanned_here >= args.max_pages_per_pdf:
+                    break
                 page = doc.load_page(p0)
                 keep_pg, reason = should_scan_page(page, p0, n_pages, min_page_pts=args.min_page_pts)
                 if not keep_pg:
@@ -531,8 +1077,33 @@ def main() -> None:
                     geo_feats, geo_masks, blank_tf, blank_tm,
                     tile_size=args.tile_size, overlap=args.overlap,
                     svg_batch=args.svg_batch, score_thr=args.score_thr,
+                    coarse_score_thr=args.coarse_score_thr,
+                    prompt_plan=prompt_plan,
+                    shared_canvas=shared_canvas,
+                    fallback_every_tiles=args.fallback_every_tiles,
+                    fine_match_iou=args.fine_match_iou,
+                    emit_generic=args.emit_generic,
+                    max_box_aspect=args.max_box_aspect,
+                    min_ink_fraction=args.min_ink_fraction,
+                    max_ink_fraction=args.max_ink_fraction,
+                    coarse_family_limit=args.coarse_family_limit,
+                    fine_family_limit=args.fine_family_limit,
+                    max_detections_per_tile=args.max_detections_per_tile,
+                    family_thresholds=family_thresholds,
+                    query_stats=pdf_query_stats,
                     device='cuda', dtype=dtype,
                 )
+                if switch_suffix_refs and dets:
+                    marks = search_switch_suffixes(
+                        rgb, dets, switch_suffix_refs,
+                        min_score=args.switch_suffix_score,
+                        min_margin=args.switch_suffix_margin,
+                    )
+                    dets, unmatched_marks = attach_device_modifiers(dets, marks)
+                    pdf_query_stats['switch_suffix_marks_found'] += len(marks)
+                    pdf_query_stats['switch_suffix_marks_unmatched'] += len(unmatched_marks)
+                    pdf_query_stats['switch_suffix_marks_attached'] += (
+                        len(marks) - len(unmatched_marks))
                 scanned_here += 1
                 total_pages += 1
                 print(
@@ -563,7 +1134,19 @@ def main() -> None:
                         'neca_symbol_id': d['symbol_id'],
                         'neca_code': d['neca_code'],
                         'neca_name': d['neca_name'],
+                        'category': d['category'],
+                        'subcategory': d['subcategory'],
                         'score': round(d['score'], 4),
+                        'alternative_labels': d.get('alternative_labels', []),
+                        'same_region_prompt_hits': d.get('same_region_prompt_hits', 1),
+                        'needs_class_review': d.get('needs_class_review', False),
+                        'detection_stage': d.get('stage', 'flat'),
+                        'exemplar_subtype': d.get('exemplar_subtype'),
+                        'visual_group': d.get('visual_group'),
+                        'analytic_attributes': d.get('analytic_attributes', {}),
+                        'modifier_evidence': d.get('modifier_evidence', []),
+                        'modifier_conflicts': d.get('modifier_conflicts', []),
+                        'verified_ground_truth': False,
                         'symbol_bbox': [bx0, by0, bx1, by1],
                         'symbol_center': [cx, cy],
                         'box_px_tl': [round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1)],
@@ -580,14 +1163,57 @@ def main() -> None:
         finally:
             doc.close()
 
+        # The preview/review agent must use the SAME PDF revision that
+        # produced these boxes. Refuse an output if the source changed while
+        # the long-running inference was reading it.
+        finished_stat = pdf_path.stat()
+        if (finished_stat.st_size != source_stat.st_size or
+                finished_stat.st_mtime_ns != source_stat.st_mtime_ns):
+            raise RuntimeError(
+                f'source PDF changed during SAM inference: {pdf_path}; '
+                'discarding provisional detections for this run'
+            )
+
         payload = {
             'source_file': pdf_path.name,
             'source_pdf_relative': rel,
             'source_pdf_absolute': str(pdf_path),
+            'source_pdf_sha256': source_pdf_sha256,
+            'source_pdf_stat': {
+                'size_bytes': source_stat.st_size,
+                'mtime_ns': source_stat.st_mtime_ns,
+            },
             'model': f'{args.model_id} + NECA_100_2013_Vector_SVG ({len(glyphs)} visual prompts)',
             'status': 'provisional_detections_for_refinement',
             'render_dpi': args.dpi,
             'score_threshold': args.score_thr,
+            'annotations_are_exhaustive': False,
+            'verified_ground_truth': False,
+            'prompt_selection': ('allowlisted' if args.prompt_allowlist
+                                 else 'visual_groups' if args.scan_mode == 'grouped'
+                                 else 'hierarchical_neca'),
+            'prompt_catalog': {
+                **catalog_summary,
+                'active_after_render_and_dedup': len(glyphs),
+                'reference_quality_stats': dict(reference_stats),
+            },
+            'run_config': run_config,
+            'run_config_hash': run_config_hash,
+            'query_stats': dict(pdf_query_stats),
+            'device_family_vocabulary': prompt_plan['families'] if prompt_plan else sorted({g.device_type for g in glyphs}),
+            'coarse_fine_policy': ('distinct_base_visual_groups_with_analytic_modifiers'
+                if args.scan_mode == 'grouped' else
+                'family_proposal_then_gated_variant_evidence'
+                if prompt_plan else 'all_prototypes'),
+            'prompt_taxonomy': {
+                dtype: sorted({g.subtype for g in specs if g.device_type == dtype})
+                for dtype in sorted({g.device_type for g in specs})
+            },
+            'prompt_category_taxonomy': {
+                category: sorted({g.subcategory for g in specs if g.category == category})
+                for category in sorted({g.category for g in specs})
+            },
+            'hierarchy': 'NECA: category > subcategory; separate from detector device_type > subtype',
             'coordinate_system': {
                 'origin': 'bottom_left',
                 'units': 'PDF_points',
@@ -596,13 +1222,15 @@ def main() -> None:
             },
             'total_pdf_pages': n_pages,
             'pages_scanned': scanned_here,
+            'page_limit_applied': bool(args.max_pages_per_pdf and scanned_here >= args.max_pages_per_pdf),
+            'skip_reasons': dict(skipped_reasons),
             'pages_with_devices': len(pages_meta),
             'total_devices': len(pdf_devices),
             'by_class': dict(cls_counts),
             'pages': pages_meta,
             'devices': pdf_devices,
         }
-        out_json.write_text(json.dumps(payload))
+        atomic_write_json(out_json, payload)
         total_devices += len(pdf_devices)
         dt = time.time() - t_pdf
         with summary_path.open('a') as sf:
