@@ -96,3 +96,72 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
         server.shutdown()
         server.server_close()
         worker.join(timeout=10)
+
+
+
+def test_browser_sam_class_alternative_is_not_automatically_verified(tmp_path):
+    from annotator.web import sha256_file
+
+    doc = fitz.open()
+    page = doc.new_page(width=400, height=300)
+    page.draw_rect(fitz.Rect(80, 80, 110, 110), color=(0, 0, 0))
+    pdf = tmp_path / "source.pdf"
+    doc.save(pdf)
+    doc.close()
+    proposals = tmp_path / "proposals_SAM3.json"
+    proposals.write_text(json.dumps({
+        "source_file": pdf.name,
+        "source_pdf_sha256": sha256_file(pdf),
+        "devices": [{
+            "pdf_page": 1, "device_type": "switch",
+            "subtype": "unspecified", "score": .88,
+            "symbol_bbox": [80, 190, 110, 220],
+            "neca_symbol_id": "NECA_SWITCH",
+            "visual_group": "switch.base_letter_s",
+            "alternative_labels": [
+                {"device_type": "receptacle", "subtype": "duplex", "score": .78}
+            ],
+        }],
+    }))
+    session = LabelingSession(pdf=pdf, proposals=proposals,
+                             out_dir=tmp_path / "review", dpi=144)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            try:
+                tab = browser.new_page(viewport={"width": 1420, "height": 900})
+                tab.goto(f"http://127.0.0.1:{server.server_port}/")
+                tab.wait_for_function(
+                    "() => document.querySelector('#count').textContent.includes('1 pending')"
+                )
+                tab.locator("#items button").first.click()
+                assert "NECA_SWITCH" in tab.locator("#modelSource").inner_text()
+                tab.locator("#proposalAlternatives button").first.click()
+                assert tab.locator("#family").input_value() == "receptacle"
+                assert tab.locator("#variant").input_value() == "duplex"
+                assert "0 verified" in tab.locator("#count").inner_text()
+                tab.locator("#save").click()
+                tab.wait_for_function(
+                    "() => document.querySelector('#dirty').textContent === 'Saved'"
+                )
+                pending = json.loads((tmp_path / "review" / "source_p0001.json").read_text())
+                assert pending["instances"][0]["uncertain"] is True
+                assert pending["instances"][0]["verified_ground_truth"] is False
+                assert pending["instances"][0]["symbol_family"] == "receptacle"
+                tab.locator("#accept").click()
+                tab.locator("#save").click()
+                tab.wait_for_function(
+                    "() => document.querySelector('#dirty').textContent === 'Saved'"
+                )
+                verified = json.loads((tmp_path / "review" / "source_p0001.json").read_text())
+                assert verified["instances"][0]["review_source"] == "human"
+                assert verified["instances"][0]["verified_ground_truth"] is True
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
