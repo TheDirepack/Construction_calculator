@@ -1286,6 +1286,13 @@ function setMode(mode) {
   draw();
 }
 
+function subtypeForChangedFamily(family, existingVariant) {
+  // A subtype such as 'duplex' must not survive a change to 'switch'.
+  // Keep cross-family variants only if the destination explicitly supports them.
+  const supported = state.variantsByFamily[family] || [];
+  return supported.includes(existingVariant) ? existingVariant : "unspecified";
+}
+
 function applyQuickFamily(family) {
   if (!family) return;
   state.lastFamily = family;
@@ -1294,6 +1301,9 @@ function applyQuickFamily(family) {
     return;
   }
   modifySelection(x => {
+    if (family !== x.symbol_family) {
+      x.symbol_variant = subtypeForChangedFamily(family, x.symbol_variant);
+    }
     x.symbol_family = family;
     x.discipline = disciplineFor(family);
     x.device_type = family;
@@ -1873,7 +1883,10 @@ function updateSelectedFields() {
     fillSelection();
     return;
   }
-  const family = $("family").value.trim(), variant = $("variant").value.trim();
+  const family = $("family").value.trim(), enteredVariant = $("variant").value.trim();
+  const variant = family !== item.symbol_family && enteredVariant === item.symbol_variant
+    ? subtypeForChangedFamily(family, enteredVariant)
+    : enteredVariant;
   if (!family || family.length > 100 || !variant || variant.length > 160) {
     notify("Enter a valid family and variant.", "error");
     fillSelection();

@@ -440,6 +440,7 @@ def test_browser_verified_label_demoted_after_semantic_edits(tmp_path):
 
                 page.locator("#family").fill("switch")
                 page.locator("#family").press("Tab")
+                assert page.locator("#variant").input_value() == "unspecified"
                 assert "1 pending" in page.locator("#count").inner_text()
                 page.locator("#accept").click()
                 assert "1 verified" in page.locator("#count").inner_text()
@@ -456,6 +457,7 @@ def test_browser_verified_label_demoted_after_semantic_edits(tmp_path):
                 saved = json.loads(annotations.read_text())
                 assert saved["instances"][0]["bbox_rotated"]["angle_deg"] == 25
                 assert saved["instances"][0]["symbol_family"] == "switch"
+                assert saved["instances"][0]["symbol_variant"] == "unspecified"
                 assert saved["instances"][0]["device_attributes"]["gfci"] is True
                 assert saved["instances"][0]["review_status"] == "unreviewed"
                 assert saved["instances"][0]["verified_ground_truth"] is False
@@ -465,6 +467,13 @@ def test_browser_verified_label_demoted_after_semantic_edits(tmp_path):
                     "() => document.querySelector('#dirty')?.textContent === 'Saved'"
                 )
                 assert json.loads(annotations.read_text())["instances"][0]["verified_ground_truth"] is True
+                # Quick class changes must not carry a subtype from the old class.
+                page.locator("#variant").fill("single_pole")
+                page.locator("#variant").press("Tab")
+                page.locator("#accept").click()
+                page.locator('.quick-family[data-family="receptacle"]').click()
+                assert page.locator("#variant").input_value() == "unspecified"
+                assert "1 pending" in page.locator("#count").inner_text()
             finally:
                 browser.close()
     finally:
