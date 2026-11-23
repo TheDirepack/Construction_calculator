@@ -19,6 +19,7 @@ import numpy as np
 
 from blueprint_symbols.neca_svg_compositor import CANONICAL_CLASSES, NecaSymbolBank, composite_neca_page
 from blueprint_symbols.composite_supervision import composite_supervision
+from blueprint_symbols.composite_output import source_stem, source_seed, create_output_dir
 
 
 def draw_preview(image: np.ndarray, placed: list[dict], out_path: Path) -> None:
@@ -61,11 +62,11 @@ def main() -> None:
     print('Loaded NECA 100-2013 SVG bank:', json.dumps(bank.summary()), flush=True)
 
     paths = sorted({
-        Path(f) for pat in a.backgrounds for f in glob.glob(pat, recursive=True)
+        Path(f).resolve() for pat in a.backgrounds for f in glob.glob(pat, recursive=True)
         if 'spec' not in Path(f).stem.lower()
     })
     if not paths:
-        paths = sorted({Path(f) for pat in a.backgrounds for f in glob.glob(pat, recursive=True)})
+        paths = sorted({Path(f).resolve() for pat in a.backgrounds for f in glob.glob(pat, recursive=True)})
     if not paths:
         raise SystemExit('no background page JSON matched')
     if a.limit > 0 and len(paths) > a.limit:
@@ -73,7 +74,7 @@ def main() -> None:
         idx = sorted(sel_rng.choice(len(paths), size=a.limit, replace=False))
         paths = [paths[i] for i in idx]
 
-    a.output.mkdir(parents=True, exist_ok=True)
+    create_output_dir(a.output)
     prev_dir = a.output / '_previews'
     if a.preview > 0:
         prev_dir.mkdir(parents=True, exist_ok=True)
@@ -91,8 +92,8 @@ def main() -> None:
             continue
 
         for copy in range(a.copies):
-            seed = int.from_bytes(hashlib.sha256(f'neca/{a.seed}/{path.name}/{copy}'.encode()).digest()[:8], 'big')
-            stem = f'{path.stem}_neca{copy}'
+            seed = source_seed(path, namespace='neca', seed=a.seed, copy=copy)
+            stem = source_stem(path, 'neca', copy)
             page, placed = composite_neca_page(
                 doc, image, bank, np.random.default_rng(seed),
                 per_page=a.per_page,

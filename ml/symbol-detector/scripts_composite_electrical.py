@@ -37,6 +37,7 @@ from blueprint_symbols.wall_alignment import (
 )
 from blueprint_symbols.placement_policy import wall_placement_probability
 from blueprint_symbols.composite_supervision import composite_supervision
+from blueprint_symbols.composite_output import source_stem, source_seed, create_output_dir
 
 ELECTRICAL = tuple(DEFAULT_WEIGHTS)
 
@@ -302,14 +303,14 @@ def main() -> None:
                    help='randomly subsample at most N input pages (0 = all)')
     p.add_argument('--seed', type=int, default=7)
     a = p.parse_args()
-    paths = sorted({Path(f) for pat in a.annotations for f in glob.glob(pat, recursive=True)})
+    paths = sorted({Path(f).resolve() for pat in a.annotations for f in glob.glob(pat, recursive=True)})
     if not paths:
         raise SystemExit('no annotation JSON matched')
     if a.limit > 0 and len(paths) > a.limit:
         sel_rng = np.random.default_rng(a.seed)
         idx = sorted(sel_rng.choice(len(paths), size=a.limit, replace=False))
         paths = [paths[i] for i in idx]
-    a.output.mkdir(parents=True, exist_ok=True)
+    create_output_dir(a.output)
     out_electrical = tuple(sorted(set(CANONICAL_ELECTRICAL_MAP.values()))) if a.canonical_classes else ELECTRICAL
     total = 0
     wall_total = 0
@@ -333,8 +334,8 @@ def main() -> None:
         mp = image.shape[0] * image.shape[1] / 1e6
         count = 0 if a.negative else (a.per_page or int(np.clip(round(a.per_mp * mp), 6, 300)))
         for copy in range(a.copies):
-            seed = int.from_bytes(hashlib.sha256(f'{a.seed}/{path.name}/{copy}'.encode()).digest()[:8], 'big')
-            stem = f'{path.stem}_el{copy}'
+            seed = source_seed(path, namespace='electrical', seed=a.seed, copy=copy)
+            stem = source_stem(path, 'el', copy)
             page, placed = composite_page(doc, image, np.random.default_rng(seed), per_page=count,
                                           scale_range=(a.scale_min, a.scale_max), max_ink=a.max_ink, tag=stem,
                                           stroke_match=not a.no_stroke_match,
@@ -346,7 +347,7 @@ def main() -> None:
                 raise OSError(png)
             new = dict(doc)
             new.update({
-                'document_id': f"{doc.get('document_id', path.stem)}_el{copy}",
+                'document_id': stem,
                 'source_type': 'cad_raster_with_synthetic_electrical',
                 'image_path': png.name,
                 'image_sha256': hashlib.sha256(png.read_bytes()).hexdigest(),
