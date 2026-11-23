@@ -614,9 +614,26 @@ def train(args: argparse.Namespace) -> None:
     )
     identity = run_fingerprint(train_manifest, val_manifest, args)
     prior_fingerprint_file = out_dir / "run_fingerprint.txt"
-    if args.run and args.resume and prior_fingerprint_file.exists():
-        if prior_fingerprint_file.read_text().strip() != identity:
-            raise ValueError("SSL resume changes data or configuration; existing run files untouched")
+    existing_checkpoint = out_dir / "last_pretrain.pt"
+    # Fail BEFORE replacing existing audit/manifests. A wrong --out path or
+    # stale resume settings must not overwrite the last reproducible run's
+    # dataset records even if the optimizer itself is protected.
+    if args.run:
+        if args.resume:
+            if not existing_checkpoint.is_file():
+                raise FileNotFoundError("Resume requested but last_pretrain.pt is missing")
+            if not prior_fingerprint_file.is_file():
+                raise ValueError("SSL resume fingerprint file is missing; existing run files untouched")
+            if prior_fingerprint_file.read_text().strip() != identity:
+                raise ValueError("SSL resume changes data or configuration; existing run files untouched")
+        elif existing_checkpoint.exists() or prior_fingerprint_file.exists():
+            raise SystemExit("Existing SSL run found; use --resume or a fresh --out directory")
+        if args.init_weights and not args.init_weights.is_file():
+            raise FileNotFoundError(f"Initial weights do not exist: {args.init_weights}")
+        if args.neca_dir and not (args.neca_dir / "symbols.json").is_file():
+            raise FileNotFoundError(f"NECA SVG bank missing symbols.json: {args.neca_dir}")
+        if not torch.cuda.is_available():
+            raise SystemExit("CUDA GPU unavailable; refusing CPU pretraining")
 
     (out_dir / 'pretrain_audit.json').write_text(json.dumps(audit, indent=2))
     (out_dir / 'train_manifest.json').write_text(json.dumps(train_manifest))
@@ -627,17 +644,6 @@ def train(args: argparse.Namespace) -> None:
     if not args.run:
         print('PLAN ONLY. Pass --run to start GPU pretraining.', flush=True)
         return
-
-    if args.resume and not (out_dir / 'last_pretrain.pt').is_file():
-        raise FileNotFoundError('Resume requested but last_pretrain.pt is missing')
-    if not torch.cuda.is_available():
-        raise SystemExit('CUDA GPU unavailable; refusing CPU pretraining')
-    if (out_dir / 'last_pretrain.pt').exists() and not args.resume:
-        raise SystemExit('Existing SSL checkpoint found; use --resume or a fresh --out directory')
-    if args.init_weights and not args.init_weights.is_file():
-        raise FileNotFoundError(f'Initial weights do not exist: {args.init_weights}')
-    if args.neca_dir and not (args.neca_dir / 'symbols.json').is_file():
-        raise FileNotFoundError(f'NECA SVG bank missing symbols.json: {args.neca_dir}')
 
     (out_dir / "run_fingerprint.txt").write_text(identity + "\n")
     print(f'Pretrain run fingerprint: {identity}', flush=True)
@@ -788,8 +794,8 @@ def train(args: argparse.Namespace) -> None:
         if val_loader is not None:
             model.eval()
             vl = vl1 = ve = 0.0
-            vsteps = 0
-            with torch.no_grad():
+            vitems = 0
+            with torch.inference_mode():
                 for deg, clean, mask in val_loader:
                     deg = deg.to(device, non_blocking=True)
                     clean = clean.to(device, non_blocking=True)
@@ -797,12 +803,13 @@ def train(args: argparse.Namespace) -> None:
                     with torch.amp.autocast('cuda', dtype=torch.float16):
                         pred = model(deg)
                         _, vstats = criterion(pred, clean, mask)
-                    vl += vstats['loss']
-                    vl1 += vstats['l1']
-                    ve += vstats['edge']
-                    vsteps += 1
-            if vsteps:
-                val_loss, val_l1, val_edge = vl / vsteps, vl1 / vsteps, ve / vsteps
+                    count = int(deg.shape[0])
+                    vl += vstats['loss'] * count
+                    vl1 += vstats['l1'] * count
+                    ve += vstats['edge'] * count
+                    vitems += count
+            if vitems:
+                val_loss, val_l1, val_edge = vl / vitems, vl1 / vitems, ve / vitems
 
         dt = time.time() - t0
         monitor = val_loss if math.isfinite(val_loss) else (tr_loss / max(1, steps))
