@@ -484,14 +484,17 @@ def detect_page_sam3(
                                 f'SAM3 box tensor shape mismatch: expected '
                                 f'{tuple(scores.shape)} + [4], got {tuple(boxes.shape)}'
                             )
-                        # Exactly one CPU synchronization per batch. Pulling
-                        # individual boxes/scores causes hundreds of tiny
-                        # cuda syncs on dense electrical sheets.
-                        hits_cpu = hits.cpu().tolist()
-                        boxes_cpu = boxes.float().cpu().numpy()
-                        scores_cpu = scores.float().cpu().numpy()
-                        for b_i, q_i in hits_cpu:
-                            bx0, by0, bx1, by1 = boxes_cpu[b_i, q_i].tolist()
+                        # Move ONLY threshold-surviving boxes and scores
+                        # to CPU in one packed transfer. Copying full [B,Q]
+                        # tensors adds unnecessary host traffic for rare hits.
+                        b_idx, q_idx = hits.unbind(dim=1)
+                        packed_hits = torch.cat((
+                            hits.float(),
+                            boxes[b_idx, q_idx].float(),
+                            scores[b_idx, q_idx, None].float(),
+                        ), dim=1).cpu().numpy()
+                        for raw_b, raw_q, bx0, by0, bx1, by1, hit_score in packed_hits:
+                            b_i = int(raw_b)
                             if shared_canvas is not None and (
                                 bx0 < 0 or bx1 > target_width or bx0 >= target_width
                             ):
@@ -511,7 +514,7 @@ def detect_page_sam3(
                             glyph = glyphs[subset[b_i]]
                             batch_found.append({
                                 'box_px': [gx0, gy0, gx1, gy1],
-                                'score': float(scores_cpu[b_i, q_i]),
+                                'score': float(hit_score),
                                 'stage': stage,
                                 'visual_group': glyph.visual_group,
                                 'exemplar_attributes': glyph.encoded_attributes,
