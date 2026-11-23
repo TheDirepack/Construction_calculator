@@ -43,6 +43,7 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
             train_variants: int = 3, seed: int = 2026, val_fraction: float = .15,
             test_fraction: float = .15, stress_val: bool = True,
             stress_test: bool = True, allow_unverified_completeness: bool = False,
+            allow_partial_training: bool = False,
             locked_manifest: Path | None = None,
             verified_wall_negative_fraction: float = .65,
             verified_wall_blank_fraction: float = .12,
@@ -54,14 +55,15 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
         raise ValueError('no valid normalized blueprint annotation JSON files found')
     lock=json.loads(locked_manifest.read_text()) if locked_manifest is not None else None
     manifest = build_manifest(paths, val_fraction=val_fraction, test_fraction=test_fraction,
-                              locked_manifest=lock)
+                              locked_manifest=lock, allow_partial_training=allow_partial_training)
     destination.mkdir(parents=True, exist_ok=True)
     mpath = destination / 'source_manifest.json'
     mpath.write_text(json.dumps(manifest, indent=2))
     dataset = destination / 'yolo'
     export = run(mpath, dataset, samples=train_tiles_per_page, train_variants=train_variants,
                  stress_val=stress_val, stress_test=stress_test,
-                 allow_unverified_completeness=allow_unverified_completeness, seed=seed,
+                 allow_unverified_completeness=allow_unverified_completeness,
+                 allow_partial_training=allow_partial_training, seed=seed,
                  verified_wall_negative_fraction=verified_wall_negative_fraction,
                  verified_wall_blank_fraction=verified_wall_blank_fraction,
                  scales=tuple(eval_scales), overlap=eval_overlap)
@@ -98,6 +100,8 @@ def main():
     p.add_argument('--stress-test', action='store_true', default=False)
     p.add_argument('--locked-manifest',type=Path,
                    help='Freeze the original val/test groups and class IDs when expanding training data')
+    p.add_argument('--allow-partial-training', action='store_true',
+                   help='train from labeled real positives without treating missing labels as negatives')
     p.add_argument('--allow-unverified-completeness', action='store_true',
                    help='EXPLORATORY ONLY: unannotated symbols may become false negatives')
     p.add_argument('--eval-scales', default='1',
@@ -111,6 +115,7 @@ def main():
                      test_fraction=a.test_fraction, seed=a.seed,
                      stress_val=a.stress_val, stress_test=a.stress_test,
                      allow_unverified_completeness=a.allow_unverified_completeness,
+                     allow_partial_training=a.allow_partial_training,
                      verified_wall_negative_fraction=a.verified_wall_negative_fraction,
                      verified_wall_blank_fraction=a.verified_wall_blank_fraction,
                      locked_manifest=a.locked_manifest,
