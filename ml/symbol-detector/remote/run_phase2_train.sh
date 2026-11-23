@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Phase 2 v2: Clean real *DEVICES.json (text proxies filtered) + wall-touching &
 # free-space composited electrical symbols onto real architectural sheets,
-# trained with YOLO26n-P2 MuSGD warm-started from Phase 1 SSL v2 backbone.
+# trained with YOLO26n-P2 MuSGD using our own freshly trained SSL v3 backbone.
 set -euo pipefail
 
 BASE="$HOME/Projects/blueprint-symbols"
 CODE="$BASE/code"
 DATA="$BASE/data/blueprints_and_libraries"
 POOL="$BASE/work/pool"
-WORK="$BASE/work/phase2_v2"
-PRETRAIN_WEIGHTS="$BASE/work/pretrain_v2/best_yolo26n_p2_backbone.pt"
+WORK="$BASE/work/phase2_v3"
+PRETRAIN_WEIGHTS="${PRETRAIN_WEIGHTS:-$BASE/work/pretrain_v3/best_yolo26n_p2_backbone.pt}"
 PY="$BASE/.venv/bin/python"
 
 export PYTHONPATH="$CODE"
@@ -64,7 +64,12 @@ if [[ ! -f "$WORK/prepared/verified.ok" ]]; then
   touch "$WORK/prepared/verified.ok"
 fi
 
-echo "=== [5/5] TRAIN YOLO26N-P2 (MuSGD, WARM-STARTED FROM PHASE 1 SSL BACKBONE) ==="
+echo "=== [5/5] VERIFY SSL BACKBONE TRANSFER, THEN TRAIN YOLO26N-P2 ==="
+if [[ ! -f "$PRETRAIN_WEIGHTS" ]]; then
+  echo "Missing fresh SSL checkpoint: $PRETRAIN_WEIGHTS" >&2
+  exit 1
+fi
+$PY scripts_verify_ssl_transfer.py "$PRETRAIN_WEIGHTS" --classes 6
 exec $PY scripts_train_ultralytics.py "$WORK/prepared/yolo/data.yaml" \
   --weights "$PRETRAIN_WEIGHTS" \
   --imgsz 512 \
@@ -78,6 +83,6 @@ exec $PY scripts_train_ultralytics.py "$WORK/prepared/yolo/data.yaml" \
   --translate 0.05 \
   --workers 2 \
   --project "$WORK/runs" \
-  --name phase2_mixed_musgd \
+  --name phase2_mixed_ssl_v3 \
   --exist-ok \
   --run
