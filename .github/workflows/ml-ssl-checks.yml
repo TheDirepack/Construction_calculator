@@ -32,5 +32,7 @@ jobs:
           python -m pip install "ultralytics==8.4.216"
       - name: Check import/compile syntax
         run: python -m compileall -q blueprint_symbols adapters tests scripts_pretrain_ssl.py scripts_train_ultralytics.py scripts_verify_ssl_transfer.py scripts_preview_pretrain_ssl.py
+      - name: Validate training launchers' shell syntax
+        run: bash -n remote/run_pretrain_v3.sh remote/run_phase2_train.sh
       - name: Run all ML regression tests
         run: python -m pytest -q tests
