@@ -116,6 +116,11 @@
         <label class="checkbox"><input id="occluded" type="checkbox"> Occluded</label>
         <label class="checkbox"><input id="truncated" type="checkbox"> Truncated</label>
         <p id="proposalHint" class="small"></p>
+        <div id="modelEvidence" hidden>
+          <h3>Model evidence (unverified)</h3>
+          <p id="modelSource" class="small"></p>
+          <div id="proposalAlternatives" class="row wrap" aria-label="Alternative model suggestions"></div>
+        </div>
         <div class="row wrap">
           <button id="accept" class="primary" title="Verify selected box (A)">Verify · A</button>
           <button id="reject" class="danger" title="Reject selected detection (X)">Reject · X</button>
