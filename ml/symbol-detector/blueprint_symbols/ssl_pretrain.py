@@ -681,11 +681,17 @@ class Yolo26P2SSLModel(nn.Module):
         self.tap_indices: list[int] = list(detect_layer.f)
         self.save_set: set[int] = set(self.det_model.save) | set(self.tap_indices)
 
-        # Probe output channel dimensions of P2..P5 neck taps dynamically.
-        with torch.no_grad():
-            dummy = torch.zeros(1, 3, imgsz, imgsz)
-            feats = self.extract_neck_features(dummy)
-        chs = [f.shape[1] for f in feats]
+        # Probe P2..P5 channel counts without contaminating BatchNorm running
+        # statistics. The zero-image probe is *not* a training example.
+        was_training = self.det_model.training
+        self.det_model.eval()
+        try:
+            with torch.inference_mode():
+                dummy = torch.zeros(1, 3, imgsz, imgsz)
+                feats = self.extract_neck_features(dummy)
+            chs = [f.shape[1] for f in feats]
+        finally:
+            self.det_model.train(was_training)
 
         dec_ch = 64
         self.projs = nn.ModuleList([
