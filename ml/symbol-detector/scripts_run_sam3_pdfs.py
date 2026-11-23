@@ -710,6 +710,8 @@ def main() -> None:
     ap.add_argument('--max-pages-per-pdf', type=int, default=0,
                     help='0=all; quick weighted smoke can process only N eligible electrical pages per PDF')
     args = ap.parse_args()
+    if args.max_pages_per_pdf < 0:
+        ap.error('--max-pages-per-pdf must be nonnegative')
 
     specs, catalog_report = list_neca_prompt_specs(
         args.neca_dir.resolve(), allow_raster_traces=not args.native_only)
