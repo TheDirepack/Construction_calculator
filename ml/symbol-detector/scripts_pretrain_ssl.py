@@ -400,6 +400,7 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
                       "page_chaos_probability": .70,
                       "page_chaos_strength": 1.0}
     conf = {key: getattr(args, key, chaos_defaults.get(key)) for key in fields}
+    conf["microbatch"] = configured_microbatch(args)
     # Changing loss weighting changes the trained representation; old
     # optimizer state must not be resumed across objective revisions.
     conf["ssl_objective"] = "ink-paper-balanced-v2"
@@ -488,6 +489,12 @@ def build_musgd_optimizer(model: torch.nn.Module, *, lr: float, momentum: float 
     return MuSGD(param_groups, lr=lr, momentum=momentum, nesterov=True)
 
 
+def configured_microbatch(args: argparse.Namespace) -> int:
+    """Default to a small GPU microbatch when only --batch was provided."""
+    size = getattr(args, "microbatch", None)
+    return min(4, args.batch) if size is None else size
+
+
 def resolve_batch_plan(effective_batch: int, microbatch: int) -> tuple[int, int]:
     """Return the actual GPU batch and accumulation count for an optimizer step.
 
@@ -558,7 +565,7 @@ def validate_pretrain_settings(args: argparse.Namespace) -> None:
     """Fail before building manifests or allocating a model for invalid runs."""
     if args.batch < 1 or args.items_per_epoch < args.batch:
         raise ValueError("items-per-epoch must be at least batch size")
-    microbatch = getattr(args, "microbatch", min(4, args.batch))
+    microbatch = configured_microbatch(args)
     resolve_batch_plan(args.batch, microbatch)
     if args.items_per_epoch % args.batch:
         raise ValueError("items-per-epoch must be divisible by effective batch size")
@@ -664,7 +671,7 @@ def train(args: argparse.Namespace) -> None:
     ) if val_manifest['buckets'] else None
 
     microbatch, accumulate = resolve_batch_plan(
-        args.batch, getattr(args, "microbatch", min(4, args.batch))
+        args.batch, configured_microbatch(args)
     )
     train_loader = DataLoader(
         train_ds, batch_size=microbatch, shuffle=True, num_workers=args.workers,
@@ -845,8 +852,8 @@ def main() -> None:
     p.add_argument('--imgsz', type=int, default=512)
     p.add_argument('--batch', type=int, default=16,
                    help='Effective examples per optimizer step (default 16)')
-    p.add_argument('--microbatch', type=int, default=4,
-                   help='Physical GPU images per forward/backward; must divide --batch')
+    p.add_argument('--microbatch', type=int, default=None,
+                   help='Physical GPU images per forward/backward; defaults to min(4, batch)')
     p.add_argument('--epochs', type=int, default=60)
     p.add_argument('--items-per-epoch', type=int, default=8192)
     p.add_argument('--val-items', type=int, default=512)
