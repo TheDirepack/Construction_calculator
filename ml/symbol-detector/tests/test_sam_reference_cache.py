@@ -121,11 +121,13 @@ def test_exterior_circuit_label_trim_preserves_core_and_internal_letter():
 def test_local_sam_weights_identity_changes_when_checkpoint_replaced(tmp_path):
     assert resolve_model_weight_identity('remote/sam3', None) is None
     assert resolve_model_weight_identity(str(tmp_path), None) is None
-    assert resolve_model_weight_identity(str(tmp_path), 'hub-sha-123') == 'hub-sha-123'
+    assert resolve_model_weight_identity(str(tmp_path), 'hub-sha-123') is None
+    assert resolve_model_weight_identity('remote/sam3', 'hub-sha-123') == 'hub-sha-123'
     first = tmp_path / 'model-00001-of-00002.safetensors'
     first.write_bytes(b'checkpoint-v1')
     identity_v1 = resolve_model_weight_identity(str(tmp_path), None)
     assert identity_v1.startswith('local-stat-')
+    assert resolve_model_weight_identity(str(tmp_path), 'stale-hub-sha') == identity_v1
     assert resolve_model_weight_identity(str(tmp_path), None) == identity_v1
     first.write_bytes(b'checkpoint-replacement-v2')
     identity_v2 = resolve_model_weight_identity(str(tmp_path), None)
