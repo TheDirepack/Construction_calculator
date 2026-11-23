@@ -145,6 +145,18 @@ The generated page's verified_no_symbols is true only when there are
 inserted boxes. The source's negative attestation does not override
 the final composite's labels.
 
+The older `scripts_composite_neca_svg.py` and
+`scripts_composite_electrical.py` follow the same rule. Unreviewed/partially
+annotated PDF backgrounds can still receive generated symbols, but those
+insertions add **verified positives only**: the scripts preserve original
+`exhaustive_families` without claiming the rest of the page is empty.
+Export these derivatives with `--allow-partial-training` so unknown original
+symbols are not trained as background. A background explicitly verified empty
+may produce exhaustive synthetic-positive samples; `--negative` in the
+procedural compositor refuses unverified sources entirely. Source
+`verified_no_symbols` becomes false on every final image containing inserts,
+while `source_background_verified_no_symbols` records its original state.
+
 ## 1. Import and normalize source annotations
 
 Keep source images, annotations, and generated datasets in local storage. Use the
