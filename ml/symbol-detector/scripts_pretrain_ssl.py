@@ -23,6 +23,7 @@ import hashlib
 import json
 import math
 import time
+from contextlib import nullcontext
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -383,7 +384,7 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
     byte. Dataset source-file provenance must still be independently managed.
     """
     fields = (
-        "imgsz", "batch", "epochs", "items_per_epoch", "val_items",
+        "imgsz", "batch", "microbatch", "epochs", "items_per_epoch", "val_items",
         "optimizer", "lr", "workers", "pool_val_fraction", "seed",
         "max_symbols", "symbol_min_px", "symbol_max_px",
         "symbol_augment_probability", "procedural_fraction",
@@ -392,7 +393,8 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
         "page_chaos_probability", "page_chaos_strength",
     )
     # The defaults preserve callers constructing Namespace in older tests.
-    chaos_defaults = {"symbol_chaos_probability": .88,
+    chaos_defaults = {"microbatch": min(4, args.batch),
+                      "symbol_chaos_probability": .88,
                       "symbol_chaos_strength": 1.0,
                       "placement_chaos": .85,
                       "page_chaos_probability": .70,
@@ -401,6 +403,7 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
     # Changing loss weighting changes the trained representation; old
     # optimizer state must not be resumed across objective revisions.
     conf["ssl_objective"] = "ink-paper-balanced-v2"
+    conf["training_step_policy"] = "effective_batch_gradient_accumulation_v1"
     conf["symbol_geometry_augmentation"] = "bounded_chaos_v1"
     conf["page_geometry_augmentation"] = "aligned_multiwarp_v2_ink_retention"
     conf["clean_sampling_policy"] = "end_to_end_undistorted_crop_v1"
@@ -485,10 +488,80 @@ def build_musgd_optimizer(model: torch.nn.Module, *, lr: float, momentum: float 
     return MuSGD(param_groups, lr=lr, momentum=momentum, nesterov=True)
 
 
+def resolve_batch_plan(effective_batch: int, microbatch: int) -> tuple[int, int]:
+    """Return the actual GPU batch and accumulation count for an optimizer step.
+
+    The 512px full-resolution SSL decoder is substantially heavier than the
+    ordinary YOLO detector head. A logical batch of 16 can safely be built
+    from four GPU microbatches of four on a memory-limited card.
+    """
+    if (effective_batch < 1 or microbatch < 1
+            or microbatch > effective_batch or effective_batch % microbatch):
+        raise ValueError("microbatch must divide effective batch exactly")
+    return microbatch, effective_batch // microbatch
+
+
+def accumulated_training_update(
+    model: torch.nn.Module,
+    criterion: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+    microbatches,
+    *,
+    device: torch.device,
+    effective_batch: int,
+    grad_clip: float = 2.0,
+) -> dict[str, float]:
+    """One real optimizer step over an effective batch of independent views.
+
+    Keep FP16 gradients scaled across *all* microbatches, unscale and clip
+    once, then update once; this follows PyTorch's AMP accumulation rules.
+    The loss is weighted by microbatch sample count to preserve a proper
+    effective-batch average even with unequal chunk sizes.
+    """
+    optimizer.zero_grad(set_to_none=True)
+    total = 0
+    running = {"loss": 0.0, "l1": 0.0, "edge": 0.0}
+    for deg, clean, mask in microbatches:
+        n = int(deg.shape[0])
+        if n < 1 or total + n > effective_batch:
+            raise ValueError("microbatches exceed configured effective batch")
+        deg = deg.to(device, non_blocking=device.type == "cuda")
+        clean = clean.to(device, non_blocking=device.type == "cuda")
+        mask = mask.to(device, non_blocking=device.type == "cuda")
+        context = (torch.amp.autocast("cuda", dtype=torch.float16)
+                   if device.type == "cuda" else nullcontext())
+        with context:
+            pred = model(deg)
+            loss, stats = criterion(pred, clean, mask)
+        if not bool(torch.isfinite(loss.detach()).all()):
+            raise FloatingPointError("nonfinite SSL pretraining loss")
+        scaler.scale(loss * (n / effective_batch)).backward()
+        for key in running:
+            running[key] += float(stats[key]) * n
+        total += n
+    if total != effective_batch:
+        raise ValueError(
+            f"incomplete SSL effective batch: got {total}, expected {effective_batch}"
+        )
+    scaler.unscale_(optimizer)
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    scaler.step(optimizer)
+    scaler.update()
+    result = {key: value / effective_batch for key, value in running.items()}
+    result["grad_norm"] = float(grad_norm.detach().item())
+    result["samples"] = float(total)
+    return result
+
+
 def validate_pretrain_settings(args: argparse.Namespace) -> None:
     """Fail before building manifests or allocating a model for invalid runs."""
     if args.batch < 1 or args.items_per_epoch < args.batch:
         raise ValueError("items-per-epoch must be at least batch size")
+    microbatch = getattr(args, "microbatch", min(4, args.batch))
+    resolve_batch_plan(args.batch, microbatch)
+    if args.items_per_epoch % args.batch:
+        raise ValueError("items-per-epoch must be divisible by effective batch size")
     if args.epochs < 1 or args.val_items < 1 or args.workers < 0:
         raise ValueError("invalid epochs/validation items/workers")
     if args.imgsz < 128 or args.imgsz % 32:
@@ -590,16 +663,22 @@ def train(args: argparse.Namespace) -> None:
         seed=args.seed + 9999, deterministic_eval=True, **data_opts,
     ) if val_manifest['buckets'] else None
 
+    microbatch, accumulate = resolve_batch_plan(
+        args.batch, getattr(args, "microbatch", min(4, args.batch))
+    )
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch, shuffle=True, num_workers=args.workers,
+        train_ds, batch_size=microbatch, shuffle=True, num_workers=args.workers,
         pin_memory=True, drop_last=True, worker_init_fn=_worker_init,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=args.batch, shuffle=False, num_workers=min(2, args.workers),
+        val_ds, batch_size=microbatch, shuffle=False, num_workers=min(2, args.workers),
         pin_memory=True, drop_last=False, worker_init_fn=_worker_init,
     ) if val_ds is not None else None
 
     model = Yolo26P2SSLModel('yolo26n-p2.yaml', imgsz=args.imgsz).to(device)
+    # Detect is never called during SSL reconstruction. Do not optimize its
+    # random head weights; only backbone, neck and SSL decoder are trained.
+    model.det_model.model[model.detect_idx].requires_grad_(False)
     if args.init_weights and args.init_weights.is_file() and not (args.resume and (out_dir / 'last_pretrain.pt').is_file()):
         init_ckpt = torch.load(args.init_weights, map_location=device, weights_only=False)
         if 'model' in init_ckpt:
@@ -651,7 +730,12 @@ def train(args: argparse.Namespace) -> None:
     total_params = sum(p.numel() for p in model.parameters())
     bb_params = sum(p.numel() for k, p in model.det_model.named_parameters() if not k.startswith(f'model.{model.detect_idx}.'))
     print(f'Model: YOLO26n-P2 SSL | backbone+neck={bb_params:,} params | total_with_decoder={total_params:,} params', flush=True)
-    print(f'Training: epochs={args.epochs}, items/epoch={args.items_per_epoch}, batch={args.batch}, opt={args.optimizer}, lr={args.lr}, workers={args.workers}', flush=True)
+    print(
+        f'Training: epochs={args.epochs}, items/epoch={args.items_per_epoch}, '
+        f'effective_batch={args.batch}, gpu_microbatch={microbatch}, '
+        f'accumulation_steps={accumulate}, updates/epoch={len(train_loader) // accumulate}, '
+        f'opt={args.optimizer}, lr={args.lr}, workers={args.workers}', flush=True
+    )
 
     metrics_log = out_dir / 'metrics.jsonl'
 
@@ -662,33 +746,31 @@ def train(args: argparse.Namespace) -> None:
         tr_loss = tr_l1 = tr_edge = 0.0
         steps = 0
 
-        for step, (deg, clean, mask) in enumerate(train_loader, start=1):
-            deg = deg.to(device, non_blocking=True)
-            clean = clean.to(device, non_blocking=True)
-            mask = mask.to(device, non_blocking=True)
-
-            optimizer.zero_grad(set_to_none=True)
-            with torch.amp.autocast('cuda', dtype=torch.float16):
-                pred = model(deg)
-                loss, stats = criterion(pred, clean, mask)
-
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
-            scaler.step(optimizer)
-            scaler.update()
-
-            tr_loss += stats['loss']
-            tr_l1 += stats['l1']
-            tr_edge += stats['edge']
+        loader_iter = iter(train_loader)
+        updates_per_epoch = len(train_loader) // accumulate
+        for step in range(1, updates_per_epoch + 1):
+            # The DataLoader shuffles microbatches; each optimizer update sees
+            # exactly the requested logical batch, without needing 16 images
+            # and their full-resolution feature maps on the GPU at once.
+            stats = accumulated_training_update(
+                model, criterion, optimizer, scaler,
+                (next(loader_iter) for _ in range(accumulate)),
+                device=device, effective_batch=args.batch,
+            )
+            tr_loss += stats["loss"]
+            tr_l1 += stats["l1"]
+            tr_edge += stats["edge"]
             steps += 1
 
-            if step == 1 or step % 50 == 0 or step == len(train_loader):
+            if step == 1 or step % 50 == 0 or step == updates_per_epoch:
                 vram_mb = torch.cuda.max_memory_allocated(device) / (1024 * 1024)
+                reserved_mb = torch.cuda.max_memory_reserved(device) / (1024 * 1024)
                 print(
-                    f'  ep {epoch+1:03d}/{args.epochs} step {step:04d}/{len(train_loader)} '
+                    f'  ep {epoch+1:03d}/{args.epochs} update {step:04d}/{updates_per_epoch} '
                     f'loss={tr_loss/steps:.4f} l1={tr_l1/steps:.4f} edge={tr_edge/steps:.4f} '
-                    f'lr={optimizer.param_groups[0]["lr"]:.2e} vram={vram_mb:.0f}MB',
+                    f'grad_norm={stats["grad_norm"]:.3f} '
+                    f'lr={optimizer.param_groups[0]["lr"]:.2e} '
+                    f'vram_allocated={vram_mb:.0f}MB vram_reserved={reserved_mb:.0f}MB',
                     flush=True,
                 )
 
@@ -761,7 +843,10 @@ def main() -> None:
                    help='Optional directory of extracted FloorPlanCAD train-only clean PNGs')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--imgsz', type=int, default=512)
-    p.add_argument('--batch', type=int, default=16)
+    p.add_argument('--batch', type=int, default=16,
+                   help='Effective examples per optimizer step (default 16)')
+    p.add_argument('--microbatch', type=int, default=4,
+                   help='Physical GPU images per forward/backward; must divide --batch')
     p.add_argument('--epochs', type=int, default=60)
     p.add_argument('--items-per-epoch', type=int, default=8192)
     p.add_argument('--val-items', type=int, default=512)
