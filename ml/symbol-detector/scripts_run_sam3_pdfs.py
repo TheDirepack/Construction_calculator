@@ -588,6 +588,8 @@ def main() -> None:
                     help='Write JSON classification for every NECA source SVG (including ignored/modifier entries)')
     ap.add_argument('--visual-prototypes-per-group', type=int, default=1,
                     help='Use one clean representative per visibly distinct base silhouette by default')
+    ap.add_argument('--allow-missing-visual-groups', action='store_true',
+                    help='Opt-in to dropping a distinct core silhouette if all its references fail quality screening')
     ap.add_argument('--no-switch-suffixes', action='store_true',
                     help='Disable fast local suffix templates for S3/S4/SLV and other compound switches')
     ap.add_argument('--switch-suffix-score', type=float, default=0.92,
@@ -768,6 +770,12 @@ def main() -> None:
               flush=True)
         if missing_visual_groups:
             print('Dropped visual groups: '+', '.join(missing_visual_groups), flush=True)
+            if not args.allow_missing_visual_groups:
+                ap.error(
+                    'all 166 distinct core silhouette groups must survive quality '
+                    'screening; fix/reference-allowlist rejected SVGs, or explicitly '
+                    'use --allow-missing-visual-groups for experimental partial scans'
+                )
     prompt_plan = None
     if args.scan_mode == 'grouped':
         prompt_plan = {'mode': 'grouped',
@@ -833,6 +841,7 @@ def main() -> None:
         'prompt_feature_cache_schema': 2,
         'scan_mode': args.scan_mode,
         'visual_prototypes_per_group': args.visual_prototypes_per_group,
+        'allow_missing_visual_groups': args.allow_missing_visual_groups,
         'switch_suffix_refs': [t.symbol_id for t in switch_suffix_refs],
         'switch_suffix_template_content_sha256': hashlib.sha256(
             b''.join(hashlib.sha256(t.ink.tobytes()).digest()
