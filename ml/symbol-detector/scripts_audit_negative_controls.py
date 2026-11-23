@@ -79,8 +79,23 @@ def render_controls(
             rgb = np.frombuffer(pix.samples, np.uint8).reshape(
                 pix.height, pix.width, 3
             )
-            interpolation = cv2.INTER_AREA if max(rgb.shape[:2]) > size else cv2.INTER_LINEAR
-            rgb = cv2.resize(rgb, (size, size), interpolation=interpolation)
+            # Keep the source geometry intact. Stretching a wide notes strip
+            # or narrow wall segment to a square creates unrealistic symbols
+            # and corrupts detector false-positive measurements.
+            source_h, source_w = rgb.shape[:2]
+            scale_to_canvas = min(size / source_w, size / source_h)
+            rendered_w = min(size, max(1, round(source_w * scale_to_canvas)))
+            rendered_h = min(size, max(1, round(source_h * scale_to_canvas)))
+            interpolation = (cv2.INTER_AREA if scale_to_canvas < 1
+                             else cv2.INTER_LINEAR)
+            resized = cv2.resize(
+                rgb, (rendered_w, rendered_h), interpolation=interpolation
+            )
+            pad_x = (size - rendered_w) // 2
+            pad_y = (size - rendered_h) // 2
+            rgb = np.full((size, size, 3), 255, np.uint8)
+            rgb[pad_y:pad_y + rendered_h,
+                pad_x:pad_x + rendered_w] = resized
         filename = hashlib.sha256(
             f"{source}|{page_idx}|{coords}|{name}".encode()
         ).hexdigest()[:16] + "_" + kind + ".png"
@@ -93,6 +108,11 @@ def render_controls(
             "id": name, "kind": kind, "source_pdf": str(source),
             "page": page_idx + 1, "rect_pt": [round(float(x), 4) for x in coords],
             "render_dpi": float(dpi), "output": filename,
+            "aspect_ratio_preserved": True,
+            "content_bbox_xyxy": [
+                pad_x, pad_y, pad_x + rendered_w, pad_y + rendered_h
+            ],
+            "display_resize_factor": round(float(scale_to_canvas), 6),
             "ink_fraction_lt_210": round(float(np.mean(gray < 210)), 6),
             "mean_luminance": round(float(gray.mean()), 3),
             # This is *only* a visual-review candidate, not a detector label.
