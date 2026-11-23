@@ -508,7 +508,8 @@ def detect_page_sam3(
                     return found
 
                 def gate(detections: list[dict[str, Any]], family_limit: int,
-                         *, enforce_tile_owner: bool = True):
+                         *, enforce_tile_owner: bool = True,
+                         apply_caps: bool = True):
                     return filter_sam_detections(
                         detections, page_rgb, tile_x=x0, tile_y=y0,
                         tile_size=tile_size, overlap=overlap,
@@ -517,8 +518,8 @@ def detect_page_sam3(
                         min_ink_fraction=min_ink_fraction,
                         max_ink_fraction=max_ink_fraction,
                         minimum_box_size=min_box_px,
-                        max_per_family=family_limit,
-                        max_total=max_detections_per_tile,
+                        max_per_family=family_limit if apply_caps else 0,
+                        max_total=max_detections_per_tile if apply_caps else 0,
                         stats=query_stats,
                     )
 
@@ -531,11 +532,18 @@ def detect_page_sam3(
                     # Exactly one pass over all visually distinct base shapes.
                     # Switch S3/$3/etc are NOT extra queries; component
                     # semantics are attached analytically downstream.
-                    tile_dets = gate(
+                    candidates = gate(
                         query_indices(list(range(len(glyphs))), 'visual_base', score_thr),
-                        fine_family_limit,
+                        fine_family_limit, apply_caps=False,
                     )
+                    # Merge repeated physical matches BEFORE a hard quota.
+                    # Otherwise duplicate prompts at one symbol can exhaust
+                    # the cap and starve independent devices elsewhere.
+                    merged = nms_detections(candidates, iou_thr=0.50)
+                    tile_dets = gate(merged, fine_family_limit)
                     if query_stats is not None:
+                        query_stats['grouped_raw_candidates'] += len(candidates)
+                        query_stats['grouped_after_tile_fusion'] += len(merged)
                         query_stats['grouped_visual_proposals'] += len(tile_dets)
                 else:
                     coarse = gate(
