@@ -540,12 +540,12 @@ class BlueprintSSLDataset(Dataset):
             img, self.size, rng, boxes,
             focus_probability=self.labeled_focus_probability,
         )
-        clean = apply_geometric_variability(clean, rng)
-        # This coin flip controls the *whole* degradation pipeline, not
-        # just input-side scan noise. A clean example retains sharp glyphs
-        # and original page geometry while other samples receive per-symbol,
-        # whole-page and input-only corruption independently.
+        # Decide on a genuinely clean crop before any rotation/skew/page
+        # deformation. Truly clean examples retain the crop's source geometry,
+        # whereas the other examples receive all independent chaos stages.
         full_clean_view = bool(rng.random() < self.clean_fraction)
+        if not full_clean_view:
+            clean = apply_geometric_variability(clean, rng)
         symbol_stats = {"requested": 0, "placed": 0, "shortfall": 0,
                         "neca": 0, "procedural": 0}
         if self.max_symbols > 0 and rng.random() < self.symbol_augment_probability:
@@ -600,6 +600,7 @@ class BlueprintSSLDataset(Dataset):
             details = {
                 "source": str(path), "bucket": self.bucket_names[b_idx],
                 "full_clean_view": full_clean_view,
+                "geometric_variability_enabled": not full_clean_view,
                 "symbol_stats": symbol_stats,
                 "page_chaos": page_chaos_meta,
                 "degradation": degradation_meta,
