@@ -340,6 +340,20 @@ def test_explicitly_pending_boxes_never_become_training_positives():
     assert not trusted_training_instance(pending)
     assert not trusted_training_instance(fake_accept)
     assert not trusted_training_instance(absent_status)
+    # Legacy model proposals still contain explicit model provenance even
+    # when a broken importer accidentally clears uncertain.
+    pseudo = dict(base, review_required=True, source={
+        'kind': 'teacher_pseudo_label', 'label_method': 'model_prediction',
+        'not_ground_truth': True,
+    })
+    assert not trusted_training_instance(pseudo)
+    assert not trusted_training_instance(dict(base, review_source='sam3',
+                                              verified_ground_truth=True))
+    assert not trusted_training_instance(dict(base, review_required='false'))
+    # The human-acceptance action overrides preserved original provenance.
+    reviewed_pseudo = dict(pseudo, review_status='accepted',
+                           review_source='human', verified_ground_truth=True)
+    assert trusted_training_instance(reviewed_pseudo)
     tile = SimpleNamespace(x=0, y=0, size=512, source_scale=1)
     for source in (pending, fake_accept, absent_status):
         targets, ignored = _export_annotations([source], tile, {'receptacle': 0})
@@ -348,6 +362,11 @@ def test_explicitly_pending_boxes_never_become_training_positives():
     for source in (legacy, accepted):
         targets, ignored = _export_annotations([source], tile, {'receptacle': 0})
         assert len(targets) == 1 and ignored == []
+    for source in (pseudo, dict(base, review_source='sam3', verified_ground_truth=True)):
+        targets, ignored = _export_annotations([source], tile, {'receptacle': 0})
+        assert targets == [] and ignored
+    targets, ignored = _export_annotations([reviewed_pseudo], tile, {'receptacle': 0})
+    assert len(targets) == 1 and ignored == []
 
 
 def test_manifest_class_count_ignores_malformed_explicit_review(tmp_path):
