@@ -689,6 +689,7 @@ class BlueprintSSLDataset(Dataset):
                         bank_size=self.crop_bank_size if crop_slot >= 0 else None,
                         dpi_variant=index % self.crop_reuse_views,
                         dpi_variants=self.crop_reuse_views,
+                        dpi_epoch=ep,
                     )
                 except (OSError, ValueError, IndexError, RuntimeError):
                     continue
