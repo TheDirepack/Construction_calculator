@@ -103,7 +103,7 @@ def merge_sam_proposals(detections: list[dict], *, iou_threshold: float = .50,
     for cluster in selected:
         cluster.pop('_label_scores')
         cluster['alternative_labels'] = cluster['alternative_labels'][:max_alternatives]
-        cluster['needs_class_review'] = bool(cluster['alternative_labels']) or cluster.get('stage') == 'coarse'
-        cluster['family_only'] = cluster.get('stage') == 'coarse'
+        cluster['needs_class_review'] = bool(cluster['alternative_labels']) or cluster.get('stage') in ('coarse', 'visual_base')
+        cluster['family_only'] = cluster.get('stage') in ('coarse', 'visual_base')
         cluster['verified_ground_truth'] = False
     return selected
