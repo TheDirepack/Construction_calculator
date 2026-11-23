@@ -2293,6 +2293,20 @@ async function loadPage(page, force = false) {
     state.pageCount = result.page_count;
     state.revision = result.revision;
     state.doc = result.document;
+    const presence = result.page_presence_suggestion;
+    const presenceHint = $("pagePresenceHint");
+    presenceHint.hidden = !presence;
+    if (presence) {
+      const labels = {
+        possible_symbols: "Possible symbols; inspect and label all target devices.",
+        review_required: "Unable to exclude symbols; visually inspect the entire page.",
+        blank_candidate: "No PDF content stream detected; still requires explicit full-page review.",
+      };
+      const terms = Array.isArray(presence.risk_terms) && presence.risk_terms.length
+        ? " Signals: " + presence.risk_terms.join(", ") : "";
+      presenceHint.textContent = "Automated suggestion (unverified): " +
+        (labels[presence.suggestion] || labels.review_required) + terms;
+    }
     state.image = img;
     state.selectedId = null;
     state.snapPreview = null;
