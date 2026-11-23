@@ -94,8 +94,10 @@ Leaving a page with unsaved edits requires explicit confirmation.
 `verified_ground_truth=false`, and `review_status=unreviewed`. Only an
 explicit human Verify action promotes a box to a verified positive; Rejected
 proposals are moved to `rejected_proposals` and are **not** active labels.
-Manually drawn boxes are human-authored positives, but **no page is
-automatically complete/exhaustive**, even when every proposal was reviewed
+Manually drawn boxes also begin as drafts and require explicit
+verification of the class before becoming trusted positives; Box mode remains
+active for rapid consecutive drawings. **No page is automatically
+complete/exhaustive**, even when every proposal was reviewed
 or a page contains no devices. Editing an already attested page revokes
 previous completeness claims; re-attest separately after a whole-page audit.
 These positive-only JSONs are **not eligible for the standard exhaustive YOLO
