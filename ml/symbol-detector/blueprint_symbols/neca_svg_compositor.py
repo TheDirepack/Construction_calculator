@@ -439,6 +439,7 @@ def composite_neca_page(
         raise ValueError("placement_chaos must be a probability")
     from .symbol_chaos import distort_symbol_alpha, sample_free_origin
     from .ink_style import local_drawing_ink_bgr, sized_symbol_range
+    from .placement_policy import wall_placement_probability
     from .wall_alignment import (
         detect_wall_sites, wall_rotation_degrees, snap_symbol_to_wall,
     )
@@ -482,8 +483,13 @@ def composite_neca_page(
         attempts += 1
         glyph = bank.sample(rng)
         target_px = float(np.exp(rng.uniform(math.log(lo_px), math.log(hi_px))))
-        # Per-page wall/free ratio; original supervised callers remain fixed.
-        want_wall = has_walls and (rng.random() < wall_probability)
+        # A common per-page preference is modulated by how devices usually
+        # mount: switches/receptacles near walls, troffers/downlights mostly
+        # in free/ceiling locations. All classes retain random variation.
+        glyph_wall_probability = wall_placement_probability(
+            glyph.device_type, glyph.subtype, wall_probability
+        )
+        want_wall = has_walls and (rng.random() < glyph_wall_probability)
         chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
         placement_mode = "wall" if want_wall else "uniform"
 
@@ -601,6 +607,7 @@ def composite_neca_page(
                 'placement_mode': 'wall_aligned_raster' if is_wall else placement_mode,
                 'wall_angle_degrees_image': round(angle, 3) if is_wall else None,
                 'wall_contact_method': 'raster_line_fit' if is_wall else None,
+                'wall_sampling_probability': round(glyph_wall_probability, 4),
             },
         })
 
