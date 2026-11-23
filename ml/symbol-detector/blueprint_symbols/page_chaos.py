@@ -14,6 +14,29 @@ import cv2
 import numpy as np
 
 
+def _locally_invertible_remap(grid_x: np.ndarray, grid_y: np.ndarray) -> bool:
+    """Reject foldovers where one drawn region maps onto another.
+
+    Inspect a downsampled inverse-coordinate grid. Its Jacobian must remain
+    positive and within a generous local scale budget. Pixel-retention alone
+    does not detect mirror reversals or extreme local squeezing.
+    """
+    if grid_x.shape != grid_y.shape or grid_x.ndim != 2:
+        raise ValueError("remap fields must share a two-dimensional shape")
+    h, w = grid_x.shape
+    if min(h, w) < 5:
+        return True
+    step = max(1, min(h, w) // 128)
+    x = grid_x[::step, ::step]
+    y = grid_y[::step, ::step]
+    dxx = np.gradient(x, float(step), axis=1)
+    dxy = np.gradient(x, float(step), axis=0)
+    dyx = np.gradient(y, float(step), axis=1)
+    dyy = np.gradient(y, float(step), axis=0)
+    det = dxx * dyy - dxy * dyx
+    return bool(np.isfinite(det).all() and det.min() > 0.12 and det.max() < 4.0)
+
+
 def warp_whole_page(
     image: np.ndarray,
     rng: np.random.Generator,
@@ -177,6 +200,13 @@ def warp_whole_page(
                     dx = np.zeros_like(dy)
             grid_x = (xx + dx).astype(np.float32)
             grid_y = (yy + dy).astype(np.float32)
+            if not _locally_invertible_remap(grid_x, grid_y):
+                meta["rejected"] += 1
+                reasons = meta["rejection_reasons"]
+                reasons["local_foldover_or_squeeze"] = (
+                    reasons.get("local_foldover_or_squeeze", 0) + 1
+                )
+                continue
 
         if mat2 is not None:
             candidate = cv2.warpAffine(out, mat2, (w, h), flags=cv2.INTER_LINEAR,
