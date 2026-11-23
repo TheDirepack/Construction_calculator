@@ -80,6 +80,35 @@ def _is_real_construction(gid: str, source_path: str) -> bool:
     return any(h in hay for h in REAL_CONSTRUCTION_HINTS)
 
 
+def assert_ssl_partition_isolation(train_manifest: dict, val_manifest: dict) -> None:
+    """Reject overlapping source project IDs or image paths across SSL splits.
+
+    A stable original-project mapping is still required when one drawing has
+    different renders, filenames, or resolutions. This gate detects exact
+    path/group conflicts, not perceptual near-duplicates.
+    """
+    def collect(manifest: dict) -> tuple[set[str], set[str]]:
+        groups: set[str] = set()
+        paths: set[str] = set()
+        for bucket in manifest.get("buckets", {}).values():
+            for gid, entries in bucket.get("groups", {}).items():
+                groups.add(str(gid))
+                for entry in entries:
+                    path = entry["image_path"] if isinstance(entry, dict) else entry
+                    paths.add(str(Path(path).expanduser().resolve()))
+        return groups, paths
+
+    train_groups, train_paths = collect(train_manifest)
+    val_groups, val_paths = collect(val_manifest)
+    group_overlap = train_groups & val_groups
+    path_overlap = train_paths & val_paths
+    if group_overlap or path_overlap:
+        raise ValueError(
+            "SSL train/validation source isolation violation: "
+            f"groups={sorted(group_overlap)[:8]}, paths={sorted(path_overlap)[:8]}"
+        )
+
+
 def build_pretrain_manifests(
     data_root: Path,
     work_root: Path,
@@ -312,6 +341,7 @@ def build_pretrain_manifests(
 
     train_manifest = {'kind': 'blueprint_ssl_train', 'buckets': train_buckets}
     val_manifest = {'kind': 'blueprint_ssl_val_readonly', 'buckets': val_buckets}
+    assert_ssl_partition_isolation(train_manifest, val_manifest)
     return train_manifest, val_manifest, audit
 
 
