@@ -541,6 +541,11 @@ class BlueprintSSLDataset(Dataset):
             focus_probability=self.labeled_focus_probability,
         )
         clean = apply_geometric_variability(clean, rng)
+        # This coin flip controls the *whole* degradation pipeline, not
+        # just input-side scan noise. A clean example retains sharp glyphs
+        # and original page geometry while other samples receive per-symbol,
+        # whole-page and input-only corruption independently.
+        full_clean_view = bool(rng.random() < self.clean_fraction)
         symbol_stats = {"requested": 0, "placed": 0, "shortfall": 0,
                         "neca": 0, "procedural": 0}
         if self.max_symbols > 0 and rng.random() < self.symbol_augment_probability:
@@ -551,7 +556,9 @@ class BlueprintSSLDataset(Dataset):
                 min_size_px=self.symbol_min_px,
                 max_size_px=self.symbol_max_px,
                 procedural_fraction=self.procedural_fraction,
-                symbol_chaos_probability=self.symbol_chaos_probability,
+                symbol_chaos_probability=(
+                    0.0 if full_clean_view else self.symbol_chaos_probability
+                ),
                 symbol_chaos_strength=self.symbol_chaos_strength,
                 placement_chaos=self.placement_chaos,
             )
@@ -566,7 +573,7 @@ class BlueprintSSLDataset(Dataset):
         clean, warped_boxes, page_chaos_meta = warp_whole_page(
             clean, rng,
             boxes=[item["bbox_xyxy"] for item in placements],
-            probability=self.page_chaos_probability,
+            probability=(0.0 if full_clean_view else self.page_chaos_probability),
             strength=self.page_chaos_strength,
         )
         for item, warped_box in zip(placements, warped_boxes):
@@ -574,11 +581,12 @@ class BlueprintSSLDataset(Dataset):
 
         if self.return_metadata:
             degraded, mask, degradation_meta = apply_runtime_corruptions(
-                clean, rng, clean_fraction=self.clean_fraction, return_metadata=True,
+                clean, rng, clean_fraction=(1.0 if full_clean_view else 0.0),
+                return_metadata=True,
             )
         else:
             degraded, mask = apply_runtime_corruptions(
-                clean, rng, clean_fraction=self.clean_fraction,
+                clean, rng, clean_fraction=(1.0 if full_clean_view else 0.0),
             )
 
         # BGR uint8 -> RGB float32 [0, 1] CHW
@@ -591,6 +599,7 @@ class BlueprintSSLDataset(Dataset):
         if self.return_metadata:
             details = {
                 "source": str(path), "bucket": self.bucket_names[b_idx],
+                "full_clean_view": full_clean_view,
                 "symbol_stats": symbol_stats,
                 "page_chaos": page_chaos_meta,
                 "degradation": degradation_meta,
