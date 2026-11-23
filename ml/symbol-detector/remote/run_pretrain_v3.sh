@@ -35,9 +35,19 @@ if [[ ! -f "$NECA/symbols.json" ]]; then
   exit 1
 fi
 
-echo "=== INCREMENTAL BLUEPRINT SOURCE INGEST ==="
+echo "=== INDEX ALL REAL PDF PAGES WITHOUT FULL-PAGE RASTERIZATION ==="
+RESERVED_ARGS=()
+if [[ -f "$WORK/heldout_real_pdfs.json" ]]; then
+  RESERVED_ARGS=(--reserved-manifest "$WORK/heldout_real_pdfs.json")
+else
+  echo "NOTICE: no explicit $WORK/heldout_real_pdfs.json; only existing locked group and split exclusions can be verified." >&2
+fi
+"$PY" scripts_index_real_pdfs.py "$DATA" "$WORK/pdf_page_index/index.json" \
+  --roles class_maps/page_roles.json "${RESERVED_ARGS[@]}"
+
+echo "=== INCREMENTAL NON-PDF BLUEPRINT SOURCE INGEST ==="
 "$PY" scripts_build_page_pool.py "$DATA" "$WORK/pool" \
-  --roles class_maps/page_roles.json --workers 5
+  --roles class_maps/page_roles.json --workers 5 --skip-pdfs
 "$PY" scripts_curate_pool.py "$WORK/pool"
 
 echo "=== TRAIN-SPLIT CAD/DRAWING LAYOUT BACKGROUNDS ==="
