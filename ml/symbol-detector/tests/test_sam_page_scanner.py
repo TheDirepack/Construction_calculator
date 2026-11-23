@@ -274,4 +274,4 @@ def test_same_image_reference_strip_cannot_generate_device_boxes(monkeypatch):
     )
     assert result == []
     assert stats['filtered_reference_strip'] == 1
-    assert model.visions == 2  # two 972-wide target tiles cover 1008px
+    assert model.visions == 1  # second right-edge tile is entirely blank
