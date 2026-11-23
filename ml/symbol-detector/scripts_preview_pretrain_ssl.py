@@ -137,6 +137,19 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
          tuple(row["pdf_crop"]["clip_rect_pt"]))
         for row in pdf_views
     }
+    pdf_bank_slots = {
+        (row["source"], row["pdf_crop"]["pdf_page_index"],
+         row["pdf_crop"]["bank_slot"])
+        for row in pdf_views if row["pdf_crop"].get("bank_slot") is not None
+    }
+    pdf_banked_pages = {
+        (row["source"], row["pdf_crop"]["pdf_page_index"])
+        for row in pdf_views if row["pdf_crop"].get("bank_slot") is not None
+    }
+    pdf_bank_grids = Counter(
+        "x".join(map(str, row["pdf_crop"]["bank_grid"]))
+        for row in pdf_views if row["pdf_crop"].get("bank_grid")
+    )
     pdf_dpis = [row["pdf_crop"]["effective_dpi"] for row in pdf_views]
     dpi_bins = ((100, 150), (150, 200), (200, 250),
                 (250, 300), (300, 350), (350, 400))
@@ -160,6 +173,9 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
             if g.get("ink_color_bgr") is not None
         }),
         "pdf_native_views": len(pdf_views),
+        "pdf_spatial_bank_unique_slots": len(pdf_bank_slots),
+        "pdf_spatial_bank_pages_sampled": len(pdf_banked_pages),
+        "pdf_spatial_bank_grid_histogram": dict(sorted(pdf_bank_grids.items())),
         "base_crop_unique_count": len(replay_counts),
         "base_crop_repeated_view_count": sum(n - 1 for n in replay_counts.values()),
         "base_crop_max_views": max(replay_counts.values(), default=0),
