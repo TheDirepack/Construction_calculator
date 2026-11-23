@@ -255,3 +255,25 @@ def test_corruption_metadata_tracks_clean_and_independent_categories():
     assert "clean" in severities
     assert len(severities) >= 3
     assert len(categories) >= 8
+
+
+def test_neca_source_fingerprint_tracks_actual_svg_strokes(tmp_path):
+    import json
+    from scripts_pretrain_ssl import neca_source_fingerprint
+
+    root = tmp_path / "bank"
+    root.mkdir()
+    (root / "one.svg").write_text('<svg><circle r="4"/></svg>')
+    (root / "symbols.json").write_text(json.dumps({
+        "symbols": [{"id": "symbol_1", "file": "one.svg"}],
+    }))
+    first = neca_source_fingerprint(root)
+    assert first == neca_source_fingerprint(root)
+    (root / "one.svg").write_text('<svg><circle r="6"/></svg>')
+    assert neca_source_fingerprint(root) != first
+
+    (root / "symbols.json").write_text(json.dumps({
+        "symbols": [{"id": "symbol_1", "file": "../outside.svg"}],
+    }))
+    with pytest.raises(ValueError, match="escapes"):
+        neca_source_fingerprint(root)
