@@ -43,6 +43,14 @@ if [[ ! -d "$WORK/composited_neca" ]]; then
 fi
 
 echo "=== [3/5] PREPARE BUILDING-ISOLATED YOLO DATASET (REAL + NECA COMPOSITED) ==="
+# *DEVICES.json is POSITIVE-ONLY, not exhaustively annotated. A supervised
+# detector can learn missed symbols as negatives. Fail closed by default;
+# allow incomplete annotations for an explicitly exploratory run only.
+COMPLETENESS_ARGS=()
+if [[ "${PHASE2_ALLOW_UNVERIFIED:-0}" == "1" ]]; then
+  echo "WARNING: EXPLORATORY ONLY: missing real device labels may become false negatives" >&2
+  COMPLETENESS_ARGS=(--allow-unverified-completeness)
+fi
 if [[ ! -f "$WORK/prepared/yolo/data.yaml" ]]; then
   rm -rf "$WORK/prepared"
   $PY scripts_prepare_training_data.py \
@@ -54,7 +62,7 @@ if [[ ! -f "$WORK/prepared/yolo/data.yaml" ]]; then
     --test-fraction 0.14 \
     --eval-scales 1,2,4,8,16 \
     --eval-overlap 256 \
-    --allow-unverified-completeness
+    "${COMPLETENESS_ARGS[@]}"
 fi
 
 echo "=== [4/5] VERIFY EXPORT & PREFLIGHT ==="
