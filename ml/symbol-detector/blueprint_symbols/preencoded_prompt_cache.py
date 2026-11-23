@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import pickle
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +73,8 @@ def load_prompt_features(
             txt.to(device=device, dtype=dtype),
             tm.to(device=device, dtype=torch.bool),
         )
-    except (OSError, ValueError, RuntimeError, TypeError, EOFError):
+    except (OSError, ValueError, RuntimeError, TypeError, EOFError,
+            pickle.UnpicklingError, KeyError, AttributeError):
         return None
 
 
@@ -81,6 +84,6 @@ def save_prompt_features(
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     saved = [t.detach().to('cpu').contiguous() for t in tensors]
-    tmp = path.with_suffix('.tmp.pt')
+    tmp = path.with_name(f'{path.stem}.{os.getpid()}.tmp.pt')
     torch.save({'schema': _CACHE_SCHEMA, 'features': saved}, str(tmp))
     tmp.replace(path)
