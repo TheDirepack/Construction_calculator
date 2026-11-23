@@ -471,3 +471,79 @@ def test_browser_verified_label_demoted_after_semantic_edits(tmp_path):
         server.shutdown()
         server.server_close()
         worker.join(timeout=10)
+
+
+def test_browser_late_wall_snap_does_not_overwrite_other_selection(tmp_path):
+    """A result for box A must never be attached to box B after a selection change."""
+    from PIL import Image
+
+    image = tmp_path / "wall.png"
+    Image.new("RGB", (400, 300), (245, 245, 245)).save(image)
+    annotation = tmp_path / "wall_labels.json"
+    annotation.write_text(json.dumps({
+        "image_path": image.name, "image_width": 400, "image_height": 300,
+        "coordinate_system": "original_page_pixels_top_left_y_down",
+        "instances": [
+            {"instance_id": "a", "symbol_family": "receptacle",
+             "symbol_variant": "duplex", "bbox_xyxy": [70, 85, 105, 120],
+             "review_status": "accepted", "review_source": "human",
+             "verified_ground_truth": True, "uncertain": False},
+            {"instance_id": "b", "symbol_family": "switch",
+             "symbol_variant": "single_pole", "bbox_xyxy": [250, 85, 285, 120],
+             "review_status": "accepted", "review_source": "human",
+             "verified_ground_truth": True, "uncertain": False},
+        ],
+    }))
+    walls = tmp_path / "walls.json"
+    walls.write_text(json.dumps({"walls": [
+        {"start": [20, 125], "end": [380, 125]},
+    ]}))
+    session = LabelingSession(edit=annotation, walls=walls)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1420, "height": 900})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function(
+                    "() => document.querySelector('#count')?.textContent?.includes('2 verified')"
+                )
+                page.locator("#items button").first.click()
+                page.evaluate("""() => {
+                  const realFetch = window.fetch.bind(window);
+                  window.fetch = (url, options) => {
+                    if (typeof url === "string" && url.startsWith("/api/snap?")) {
+                      return new Promise(resolve => {
+                        window.__releaseSnap = () => resolve(new Response(
+                          JSON.stringify({snap: {
+                            kind: "wall_centerline_intersection",
+                            point: [88, 125], quality: "high"
+                          }}), {
+                            status: 200,
+                            headers: {"Content-Type": "application/json"}
+                          }));
+                      });
+                    }
+                    return realFetch(url, options);
+                  };
+                }""")
+                page.locator("#testWallSnap").click()
+                page.wait_for_function("() => typeof window.__releaseSnap === 'function'")
+                page.locator("#items button").nth(1).click()
+                page.evaluate("() => window.__releaseSnap()")
+                page.wait_for_function(
+                    "() => document.querySelector('#message')?.textContent?.includes('Discarded stale wall snap')"
+                )
+                assert "2 verified" in page.locator("#count").inner_text()
+                assert page.locator("#dirty").inner_text() == "Saved"
+                assert "Snap preview" not in page.locator("#snapPreviewInfo").inner_text()
+                assert all("snap" not in item for item in session.page_state(0)["document"]["instances"])
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
