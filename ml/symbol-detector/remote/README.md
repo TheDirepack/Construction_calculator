@@ -261,6 +261,7 @@ false-box burden** from those review decisions:
 ```bash
 python scripts_sam_precision_report.py \
   --review-dir "$SAM_OUTPUT/review" \
+  --proposals-dir "$SAM_OUTPUT" \
   --out "$SAM_OUTPUT/review_precision.json"
 ```
 
@@ -268,7 +269,11 @@ The report separates human acceptance/rejection from VLM-only or unattributed
 decisions, includes human-review coverage and per-family, per-visual-group and
 score-band precision proxies, and counts high-score false proposals. It
 rejects duplicate candidate IDs so duplicate exports cannot inflate
-precision. **It never reports recall:** missing devices are absent from
+precision. With `--proposals-dir`, it reconciles every candidate against
+the original SAM JSON and reports candidate boxes per scanned page. A
+**complete human-only review** is required before publishing an actual
+false-boxes-per-scanned-page rate; partial reviews yield only a lower bound.
+**It never reports recall:** missing devices are absent from
 the candidate list and require a separate exhaustive human audit. A small or
 selectively reviewed sample should not be presented as general model
 precision. Review crop rendering now refuses ambiguous PDF filename matches
@@ -326,6 +331,7 @@ python scripts_circuitnet_review_sheets.py render \
 # AFTER humans confirm/reject each review item:
 python scripts_sam_precision_report.py \
   --review-dir "$SAM_OUTPUT/review" \
+  --proposals-dir "$SAM_OUTPUT" \
   --out "$SAM_OUTPUT/review_precision.json"
 ```
 
