@@ -93,3 +93,79 @@ def test_negative_generation_refuses_unverified_source(tmp_path, monkeypatch):
     ])
     with pytest.raises(SystemExit, match="requires verified_no_symbols"):
         main()
+
+def test_neca_writer_keeps_unreviewed_background_positive_only(tmp_path, monkeypatch):
+    import cv2
+    import numpy as np
+    import scripts_composite_neca_svg as script
+
+    image = tmp_path / "plan.png"
+    assert cv2.imwrite(str(image), np.full((256, 256, 3), 255, dtype=np.uint8))
+    annotation = tmp_path / "plan.json"
+    annotation.write_text(json.dumps({
+        "image_path": image.name, "project_family_id": "source-project",
+        "source_group_verified": True, "instances": [],
+        "exhaustive_families": [], "verified_no_symbols": False,
+    }))
+
+    class DummyBank:
+        def __init__(self, root):
+            pass
+
+        def summary(self):
+            return {}
+
+    glyph = {
+        "instance_id": "svg_1", "symbol_family": "receptacle",
+        "bbox_xyxy": [80, 80, 100, 100], "uncertain": False,
+        "on_wall": False, "wall_connection_point": [90, 90],
+    }
+
+    monkeypatch.setattr(script, "NecaSymbolBank", DummyBank)
+    monkeypatch.setattr(script, "composite_neca_page",
+                        lambda doc, image, bank, rng, **kw: (image.copy(), [glyph]))
+    monkeypatch.setattr(sys, "argv", [
+        "scripts_composite_neca_svg.py", "--neca-dir", str(tmp_path),
+        "--backgrounds", str(annotation), "--output", str(tmp_path / "neca"),
+        "--preview", "0",
+    ])
+    script.main()
+    output = json.loads(next((tmp_path / "neca").glob("*.json")).read_text())
+    assert output["instances"] == [glyph]
+    assert output["verified_no_symbols"] is False
+    assert output["exhaustive_families"] == []
+    assert output["annotation_scope"] == "positive_only"
+    assert output["source_background_verified_no_symbols"] is False
+
+
+def test_procedural_writer_cannot_promote_unknown_background(tmp_path, monkeypatch):
+    import cv2
+    import numpy as np
+    import scripts_composite_electrical as script
+
+    image = tmp_path / "plan.png"
+    assert cv2.imwrite(str(image), np.full((256, 256, 3), 255, dtype=np.uint8))
+    annotation = tmp_path / "plan.json"
+    annotation.write_text(json.dumps({
+        "image_path": image.name, "project_family_id": "source-project",
+        "source_group_verified": True, "instances": [],
+        "exhaustive_families": [], "verified_no_symbols": False,
+    }))
+    glyph = {
+        "instance_id": "proc_1", "symbol_family": "receptacle",
+        "bbox_xyxy": [80, 80, 100, 100], "uncertain": False,
+        "on_wall": False,
+    }
+    monkeypatch.setattr(script, "composite_page",
+                        lambda doc, img, rng, **kw: (img.copy(), [glyph]))
+    monkeypatch.setattr(sys, "argv", [
+        "scripts_composite_electrical.py", str(annotation), str(tmp_path / "proc"),
+        "--per-page", "1",
+    ])
+    script.main()
+    output = json.loads(next((tmp_path / "proc").glob("*.json")).read_text())
+    assert output["instances"] == [glyph]
+    assert output["verified_no_symbols"] is False
+    assert output["exhaustive_families"] == []
+    assert output["annotation_completeness_verified"] is False
+    assert output["annotation_scope"] == "positive_only"
