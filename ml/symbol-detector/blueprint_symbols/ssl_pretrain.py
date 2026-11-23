@@ -14,6 +14,7 @@ import copy
 import hashlib
 import json
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -513,6 +514,7 @@ class BlueprintSSLDataset(Dataset):
         self.bucket_names: list[str] = []
         self.bucket_weights: list[float] = []
         self.bucket_groups: dict[str, list[list[str | dict]]] = {}
+        self.bucket_group_probs: dict[str, np.ndarray] = {}
 
         for name, info in sorted(manifest['buckets'].items()):
             groups = [paths for paths in info['groups'].values() if paths]
@@ -521,14 +523,23 @@ class BlueprintSSLDataset(Dataset):
             self.bucket_names.append(name)
             self.bucket_weights.append(float(info.get('weight', 1.0)))
             self.bucket_groups[name] = groups
+            # Mix per-project uniform coverage with square-root page-count
+            # weighting. Hundreds-page construction PDFs get sampled more,
+            # without monopolizing the epoch at the expense of short jobs.
+            sizes = np.sqrt(np.array([len(g) for g in groups], np.float64))
+            self.bucket_group_probs[name] = (
+                .45 / len(groups) + .55 * sizes / sizes.sum()
+            )
 
         if not self.bucket_names:
             raise ValueError('SSL manifest has no non-empty source buckets')
 
         total_w = sum(self.bucket_weights)
         self.bucket_probs = np.array([w / total_w for w in self.bucket_weights], dtype=np.float64)
-        self._cache_path: str | None = None
-        self._cache_img: np.ndarray | None = None
+        self._raster_cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._raster_cache_bytes = 0
+        self._raster_cache_budget = 96 * (1 << 20)  # per worker, not per rank
+        self._pdf_sampler = None
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
@@ -537,42 +548,60 @@ class BlueprintSSLDataset(Dataset):
         return self.items_per_epoch
 
     def _read_cached(self, path: str) -> np.ndarray | None:
-        if self._cache_path == path and self._cache_img is not None:
-            return self._cache_img
+        cached = self._raster_cache.get(path)
+        if cached is not None:
+            self._raster_cache.move_to_end(path)
+            return cached
         img = load_bgr_white_bg(path)
         if img is None:
             return None
-        if img.nbytes <= 24 * (1 << 20):
-            self._cache_path = path
-            self._cache_img = img
-        else:
-            self._cache_path = None
-            self._cache_img = None
+        if img.nbytes <= self._raster_cache_budget:
+            while (self._raster_cache and
+                   self._raster_cache_bytes + img.nbytes > self._raster_cache_budget):
+                _, old = self._raster_cache.popitem(last=False)
+                self._raster_cache_bytes -= old.nbytes
+            self._raster_cache[path] = img
+            self._raster_cache_bytes += img.nbytes
         return img
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         ep = 0 if self.deterministic_eval else self.epoch
         rng = np.random.default_rng(np.random.SeedSequence([self.seed, ep, index]))
 
-        img = None
+        clean = None
+        pdf_crop_meta = None
+        path = ""
+        b_idx = 0
         for _ in range(8):
             b_idx = int(rng.choice(len(self.bucket_names), p=self.bucket_probs))
-            groups = self.bucket_groups[self.bucket_names[b_idx]]
-            group = groups[int(rng.integers(len(groups)))]
+            name = self.bucket_names[b_idx]
+            groups = self.bucket_groups[name]
+            group_idx = int(rng.choice(len(groups), p=self.bucket_group_probs[name]))
+            group = groups[group_idx]
             entry = group[int(rng.integers(len(group)))]
             path = entry["image_path"] if isinstance(entry, dict) else entry
+            if isinstance(entry, dict) and "pdf_page_index" in entry:
+                # Clip-render at the final needed scale; never load a 24MP
+                # full-page raster merely to discard nearly all of it.
+                if self._pdf_sampler is None:
+                    from .pdf_crop import PdfCropSampler
+                    self._pdf_sampler = PdfCropSampler()
+                try:
+                    clean, pdf_crop_meta = self._pdf_sampler.sample(entry, self.size, rng)
+                except (OSError, ValueError, IndexError, RuntimeError):
+                    continue
+                break
             boxes = entry.get("boxes") if isinstance(entry, dict) else None
             img = self._read_cached(path)
             if img is not None and min(img.shape[:2]) >= 64:
+                clean = sample_label_guided_crop(
+                    img, self.size, rng, boxes,
+                    focus_probability=self.labeled_focus_probability,
+                )
                 break
 
-        if img is None:
-            raise RuntimeError('Failed to decode any blueprint image after 8 attempts')
-
-        clean = sample_label_guided_crop(
-            img, self.size, rng, boxes,
-            focus_probability=self.labeled_focus_probability,
-        )
+        if clean is None:
+            raise RuntimeError('Failed to sample a blueprint after 8 attempts')
         # Decide on a genuinely clean crop before any rotation/skew/page
         # deformation. Truly clean examples retain the crop's source geometry,
         # whereas the other examples receive all independent chaos stages.
@@ -634,6 +663,7 @@ class BlueprintSSLDataset(Dataset):
         if self.return_metadata:
             details = {
                 "source": str(path), "bucket": self.bucket_names[b_idx],
+                "pdf_crop": pdf_crop_meta,
                 "full_clean_view": full_clean_view,
                 "geometric_variability_enabled": not full_clean_view,
                 "symbol_stats": symbol_stats,
