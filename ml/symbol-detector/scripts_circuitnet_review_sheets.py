@@ -118,6 +118,10 @@ REFINEMENT_INSTRUCTIONS = (
     "Set review_status to "
     "accepted/rejected/uncertain, and keep=true ONLY after explicit visual review. "
     "Unreviewed or uncertain detections are excluded from output. "
+    "Provisional analytic_attributes and modifier_evidence may reflect small NECA "
+    "suffixes near the base glyph; review them visually, copy only supported "
+    "attributes into attributes, and correct/remove false tag matches. "
+    "Never accept a device merely because a modifier template matched. "
     "Independent electrical attributes may coexist: e.g. three_way + dimmer, "
     "or duplex + GFCI + emergency. Do not invent every combination as a new subtype. "
     "Assign voltage_v, phase_count, amperage_a, pole_count, NEMA, etc. ONLY when "
@@ -595,6 +599,10 @@ def cmd_render(args: argparse.Namespace) -> None:
                         'provisional_category': dev.get('category'),
                         'provisional_subcategory': dev.get('subcategory'),
                         'alternative_labels': dev.get('alternative_labels', []),
+                        'visual_group': dev.get('visual_group'),
+                        'analytic_attributes': dev.get('analytic_attributes', {}),
+                        'modifier_evidence': dev.get('modifier_evidence', []),
+                        'modifier_conflicts': dev.get('modifier_conflicts', []),
                         'needs_class_review': dev.get('needs_class_review', False),
                         'same_region_prompt_hits': dev.get('same_region_prompt_hits', 1),
                         'proposal_status': dev.get('status'),
@@ -793,6 +801,9 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
                 'category': item.get('refined_category') or item.get('provisional_category'),
                 'subcategory': item.get('refined_subcategory') or item.get('provisional_subcategory'),
                 'alternative_labels': item.get('alternative_labels', []),
+                'visual_group': item.get('visual_group'),
+                'analytic_attributes_proposed': item.get('analytic_attributes', {}),
+                'modifier_evidence': item.get('modifier_evidence', []),
                 'symbol_bbox': bbox_bl,
                 'symbol_center': [cx, cy],
                 'on_wall': bool(on_wall) if on_wall is not None else False,
