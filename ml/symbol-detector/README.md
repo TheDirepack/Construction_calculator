@@ -179,6 +179,35 @@ symbols on original drawings are retained. The eligible NECA SVG bank contains
 the verified device sections, not routing arrows or standalone modifiers.
 The prior procedural glyph families supply additional variation.
 
+**High-entropy symbol deformation (PR #9):** Each inserted device independently
+samples 1–4 geometric/print perturbations, with a default 0.88 activation
+probability. Effects include independent X/Y stretching, two-axis shear,
+rotation and keystone, elastic control-point meshes, crossing horizontal and
+vertical waves, folds, radial pinch/bulge with twist, stroke erosion or
+expansion, dry-pen dropouts, ink misregistration, low-DPI print, fading and
+defocus. Small/heavy/rare-extreme severity levels are sampled per symbol.
+Bounds and ink-retention guards reject severe collapse, but **human-recognizable
+class identity is not guaranteed** by a pixel-area test.
+
+**Whole-page geometric chaos:** After placing symbols, the entire image
+(background drawing **and** the inserted symbols) is independently warped with
+70% probability by default. Supported modes: anisotropic page stretch/shear
+and skew, quadrilateral perspective, smoothly elastic deformation, independent
+horizontal/vertical waves, paper-edge curling, fold creases, barrel/pincushion
+lens distortion, local wrinkles, and narrow scanner-feed slippage. Up to
+three independent modes are composed. All stages preserve output dimensions;
+extreme clipping/ink loss rejects a stage. Newly inserted symbol bounding boxes
+are transformed with a matching instance-ID mask, so preview boxes remain
+aligned with warped positions. The warped drawing is the SSL *clean target*;
+input-only image degradation happens afterward. Whole-page effects do not
+create fake supervised labels.
+
+**Placement chaos:** The wall-attached/free-space mix varies by crop. Free
+placements can be uniform, near corners/edges, clustered near other devices,
+near the drawing center or in horizontal/vertical bands, while the existing
+wall clearance, ink density and collision checks still decide acceptance.
+Original supervised compositor behavior is unchanged unless chaos is enabled.
+
 **Pre-training objective:** Mask-aware line-art restoration using separately
 normalized dark-ink and background losses, combined 2:1 by default, plus
 a Sobel edge term. A 1%-ink drawing no longer gets a nearly all-white
@@ -190,8 +219,13 @@ sample light, moderate, heavy, and rare extreme corruption. Categories include
 illumination/paper tint and gradients, Gaussian/motion blur, sharpening,
 median/box filtering, thresholding/CLAHE, downsample/upsample aliasing, toner
 morphology, ink dropout/dust, scanner streaks, Gaussian noise, bit-depth
-banding, JPEG/WebP artifacts and optional masked blocks. Angles/flips are
-applied to *both* target and input before corruption.
+banding, JPEG/WebP artifacts and optional masked blocks. Extra whole-page
+photocopy/scan degradation includes gamma drift, local shadows and glare,
+fold creases, roller banding, moiré patterns, halftone dots, double-fed toner
+ghosts, toner bleed, feed scratches, local smears and asymmetric X/Y DPI loss.
+The input-only degradation stage retains a minimum line-contrast guard; it
+does not reverse all loss or guarantee symbol readability. Whole-page geometry
+is applied to both target and input **before** image degradation.
 
 For the remote 6 GB NVIDIA machine, start a **new** experiment (no prior
 weights and no automatic resume):
@@ -220,7 +254,14 @@ loads the NECA SVG library, and generates 0..16 symbols per augmented crop.
 CLI tuning flags: `--clean-fraction`, `--max-symbols`,
 `--symbol-min-px`, `--symbol-max-px`,
 `--symbol-augment-probability`, `--procedural-fraction`,
-`--labeled-focus-probability`, `--labeled-annotations`, `--neca-dir`.
+`--labeled-focus-probability`, `--labeled-annotations`, `--neca-dir`,
+`--symbol-chaos-probability`, `--symbol-chaos-strength`,
+`--placement-chaos`, `--page-chaos-probability`, `--page-chaos-strength`.
+The remote runner forwards `SSL_SYMBOL_CHAOS_PROBABILITY`,
+`SSL_SYMBOL_CHAOS_STRENGTH`, `SSL_PLACEMENT_CHAOS`,
+`SSL_PAGE_CHAOS_PROBABILITY`, and `SSL_PAGE_CHAOS_STRENGTH`.
+These settings enter the resume fingerprint; changing them requires a
+new run directory.
 The proposed batch size of 4 is conservative and **not yet profiled** for
 the reconstruction decoder. Existing checkpoints refuse accidental overwrite;
 use `--resume` explicitly after a compatible interruption.
@@ -238,8 +279,10 @@ Each preview shows the clean target beside its degraded/masked input.
 `preview_report.json` counts **requested versus actually placed** symbols,
 including shortfalls on crowded pages, zero-symbol examples, symbols by
 family/variant, eligible NECA vocabulary coverage, and observed degradation
-severities/categories. A separate `sample_NNNN_overlay.png` draws boxes only
-around inserted symbols. Visually inspect symbol fidelity and near-invisible
+severities/categories, accepted/rejected whole-page warp modes,
+symbol-level warp categories and placement modes. A separate
+`sample_NNNN_overlay.png` marks inserted symbols in their new warped
+positions (red boxes for independently distorted symbols). Visually inspect symbol fidelity and near-invisible
 cases before increasing severity.
 
 For the second-stage supervised detector, **preflight actual weight transfer**
