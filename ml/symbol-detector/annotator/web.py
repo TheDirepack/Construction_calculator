@@ -5,6 +5,7 @@ Run from ml/symbol-detector:
     python -m annotator.web --edit labels/page.json --open-browser
     python -m annotator.web --edit labels/ --walls walls.json --open-browser
     python -m annotator.web --pdf plans.pdf --proposals scan_SAM3.json
+    python -m annotator.web --pdf plans.pdf --page-presence review_queue.json
 
 All coordinates are original rendered-page pixels, top-left origin. Pages
 remain positive-only and non-exhaustive by default. SAM proposals are
@@ -570,6 +571,7 @@ class LabelingSession:
         self, *, pdf: Path | None = None, edit: Path | None = None,
         out_dir: Path | None = None, page: int = 0, dpi: int = 150,
         proposals: Path | None = None, walls: Path | None = None, neca_catalog: Path | None = None,
+        page_presence: Path | None = None,
     ) -> None:
         if (pdf is None) == (edit is None):
             raise LabelingError("specify exactly one of --pdf or --edit")
@@ -615,6 +617,36 @@ class LabelingSession:
                         Path.cwd() / "annotations" / f"{name}_{self.source_hash[:12]}" if self.pdf else
                         self.edit.parent)
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        # Read-only, source-hash-matched heuristics. They never attest negatives.
+        self.page_presence: dict[int, dict] = {}
+        if page_presence is not None:
+            if not self.pdf:
+                raise LabelingError("--page-presence requires --pdf")
+            queue = json.loads(Path(page_presence).read_text(encoding="utf-8"))
+            if (not isinstance(queue, dict) or queue.get("format_version") != 1
+                    or queue.get("purpose") != "page_symbol_presence_review_queue"
+                    or not isinstance(queue.get("documents"), list)):
+                raise LabelingError("invalid page presence review queue")
+            matches = [row for row in queue["documents"]
+                       if isinstance(row, dict) and row.get("source_pdf_sha256") == self.source_hash]
+            if len(matches) != 1 or not isinstance(matches[0].get("pages"), list):
+                raise LabelingError("page presence queue does not uniquely match selected PDF SHA256")
+            for row in matches[0]["pages"]:
+                if not isinstance(row, dict):
+                    raise LabelingError("invalid page presence suggestion")
+                idx = row.get("page_index")
+                status = row.get("suggestion")
+                if (type(idx) is not int or not 0 <= idx < self.page_count
+                        or idx in self.page_presence
+                        or status not in ("possible_symbols", "review_required", "blank_candidate")
+                        or row.get("verified_no_symbols") is not False
+                        or row.get("eligible_as_supervised_negative") is not False):
+                    raise LabelingError("untrusted or inconsistent page presence suggestion")
+                self.page_presence[idx] = {
+                    "suggestion": status,
+                    "risk_terms": [str(x)[:80] for x in row.get("risk_terms", [])[:32]]
+                    if isinstance(row.get("risk_terms", []), list) else [],
+                }
         self.proposals = None
         if proposals is not None:
             if not self.pdf:
@@ -854,6 +886,7 @@ class LabelingSession:
                 "variants_by_family": self.variants_by_family,
                 "attribute_schema": _attribute_schema_payload(),
                 "proposals_enabled": self.proposals is not None,
+                "page_presence_suggestion": self.page_presence.get(index),
                 "mode": "edit" if self.edit else "pdf",
                 "json_filename": json_path.name,
                 "json_path": str(json_path),
@@ -1080,6 +1113,8 @@ def main() -> None:
     mode.add_argument("--edit", type=Path, help="Existing annotation JSON file or directory of JSON files")
     parser.add_argument("--out-dir", type=Path)
     parser.add_argument("--proposals", type=Path)
+    parser.add_argument("--page-presence", type=Path,
+                        help="Read-only page candidates from scripts_triage_pdf_symbol_pages.py")
     parser.add_argument("--walls", type=Path, help="Optional JSON file with verified wall centerlines for snap guidance")
     parser.add_argument("--neca-catalog", type=Path, help="Optional NECA symbol library directory to populate live subtypes")
     parser.add_argument("--page", type=int, default=0, help="Initial 0-based page/file index")
@@ -1089,7 +1124,8 @@ def main() -> None:
     args = parser.parse_args()
     session = LabelingSession(
         pdf=args.pdf, edit=args.edit, out_dir=args.out_dir, page=args.page,
-        dpi=args.dpi, proposals=args.proposals, walls=args.walls, neca_catalog=args.neca_catalog,
+        dpi=args.dpi, proposals=args.proposals, walls=args.walls,
+        neca_catalog=args.neca_catalog, page_presence=args.page_presence,
     )
     with ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(session)) as server:
         link = f"http://127.0.0.1:{server.server_port}/"
