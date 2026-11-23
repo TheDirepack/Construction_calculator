@@ -198,9 +198,11 @@ lens distortion, local wrinkles, and narrow scanner-feed slippage. Up to
 three independent modes are composed. All stages preserve output dimensions;
 extreme clipping/ink loss rejects a stage. Newly inserted symbol bounding boxes
 are transformed with a matching instance-ID mask, so preview boxes remain
-aligned with warped positions. The warped drawing is the SSL *clean target*;
-input-only image degradation happens afterward. Whole-page effects do not
-create fake supervised labels.
+aligned with warped positions. Stage rejection checks cover box area,
+**actual symbol ink**, and local Jacobian foldovers; preview reports include
+rejection reasons and lowest measured retention. The warped drawing is the
+SSL *clean target* for augmented views; input-only scan degradation happens
+afterward. Whole-page effects do not create fake supervised labels.
 
 **Placement chaos:** The wall-attached/free-space mix varies by crop. Free
 placements can be uniform, near corners/edges, clustered near other devices,
@@ -289,6 +291,11 @@ positions (red boxes for independently distorted symbols).
 `sample_NNNN_geometry.png` separately shows the symbol-composited crop
 before and after whole-page warping. Review these alongside the clean/degraded
 scan pairs to spot illegible symbols and excessive page distortion.
+
+Each pull-request CI run generates a deterministic **synthetic-only**
+16-crop audit as the `blueprint-chaos-visual-audit` GitHub Actions artifact,
+with montage images, detailed samples and JSON counts. It exercises the
+real generator, but does not establish readability on the real-plan corpus.
 
 For the second-stage supervised detector, **preflight actual weight transfer**
 rather than trusting that `model.load_state_dict` before `model.train` worked.
