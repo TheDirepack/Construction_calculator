@@ -19,7 +19,9 @@ concurrency:
 jobs:
   browser:
     name: PDF labeler / real Chromium smoke
-    runs-on: ubuntu-latest
+    # Playwright 1.56 browser dependency installer supports Ubuntu 24.04;
+    # GitHub's moving ubuntu-latest has already moved to Ubuntu 26.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
