@@ -124,11 +124,18 @@ def classify_neca_artwork(entry: dict, alternative_parents: set[str] | None = No
             group = 'security.door_signal_'+number
         elif number == '016':
             group = 'security.push_button'
+        elif number in ('002', '003', '014'):
+            # CCTV/MTV/SCP have wide rectangular cores; most security
+            # control glyphs are square. Keep BOTH coarse silhouettes.
+            group = 'security.labeled_box_wide'
         else:
-            group = 'security.labeled_box'
+            group = 'security.labeled_box_square'
     elif section == 'Motor and HVAC Controls':
         if number.isdigit() and 18 <= int(number) <= 24:
             group = 'hvac_control.circle_letter'
+        elif number == '028':
+            # HOA is a wider selector rectangle, unlike 25-27/29-34.
+            group = 'hvac_control.wide_selector_hoa'
         elif number.isdigit() and 25 <= int(number) <= 34:
             group = 'hvac_control.square_letter'
         elif number in ('004','005','009','010'):
