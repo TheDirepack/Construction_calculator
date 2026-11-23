@@ -96,7 +96,7 @@ exec "$PY" scripts_pretrain_ssl.py \
   --epochs "$SSL_EPOCHS" \
   --items-per-epoch "$SSL_ITEMS_PER_EPOCH" \
   --crop-reuse-views "${SSL_CROP_REUSE_VIEWS:-4}" \
-  --crop-bank-size "${SSL_CROP_BANK_SIZE:-6}" \
+  --crop-bank-size "${SSL_CROP_BANK_SIZE:-32}" \
   --fresh-crop-probability "${SSL_FRESH_CROP_PROBABILITY:-0.20}" \
   --val-items "$SSL_VAL_ITEMS" \
   --optimizer MuSGD \
