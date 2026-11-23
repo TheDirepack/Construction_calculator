@@ -103,6 +103,9 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
                 saved = json.loads((tmp_path / "labels" / "label_test_p0001.json").read_text())
                 assert saved["exhaustive_families"] == []
                 assert saved["annotation_completeness_verified"] is False
+                page.locator("#verifiedNoSymbols").click()
+                assert not page.locator("#verifiedNoSymbols").is_checked()
+                assert "Reject or remove" in page.locator("#message").inner_text()
                 instance = saved["instances"][0]
                 assert instance["symbol_family"] == "switch"
                 assert instance["symbol_variant"] == "three_way"
@@ -117,6 +120,19 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
                 assert "0 active" in page.locator("#count").inner_text()
                 assert not (tmp_path / "labels" / "label_test_p0002.json").exists()
                 assert session.page_state(1)["document"]["annotation_completeness_verified"] is False
+                page.on("dialog", lambda dialog: dialog.accept())
+                page.locator("#verifiedNoSymbols").check()
+                page.locator("#save").click()
+                page.wait_for_function("() => document.querySelector('#dirty').textContent === 'Saved'")
+                saved_negative = json.loads((tmp_path / "labels" / "label_test_p0002.json").read_text())
+                assert saved_negative["verified_no_symbols"] is True
+                assert saved_negative["instances"] == []
+                page.locator("#prevPage").click()
+                page.wait_for_function("() => document.querySelector('#pageIndicator').textContent === 'Page 1 / 2'")
+                assert not page.locator("#verifiedNoSymbols").is_checked()
+                page.locator("#nextPage").click()
+                page.wait_for_function("() => document.querySelector('#pageIndicator').textContent === 'Page 2 / 2'")
+                assert page.locator("#verifiedNoSymbols").is_checked()
             finally:
                 browser.close()
     finally:
