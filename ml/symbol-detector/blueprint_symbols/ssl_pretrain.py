@@ -439,6 +439,8 @@ class BlueprintSSLDataset(Dataset):
         symbol_chaos_probability: float = 0.88,
         symbol_chaos_strength: float = 1.0,
         placement_chaos: float = 0.85,
+        page_chaos_probability: float = 0.70,
+        page_chaos_strength: float = 1.0,
         return_metadata: bool = False,
     ) -> None:
         super().__init__()
@@ -461,6 +463,10 @@ class BlueprintSSLDataset(Dataset):
         self.symbol_chaos_probability = float(symbol_chaos_probability)
         self.symbol_chaos_strength = float(symbol_chaos_strength)
         self.placement_chaos = float(placement_chaos)
+        if not 0 <= page_chaos_probability <= 1 or not 0 <= page_chaos_strength <= 2:
+            raise ValueError("Invalid whole-page chaos controls")
+        self.page_chaos_probability = float(page_chaos_probability)
+        self.page_chaos_strength = float(page_chaos_strength)
         self.return_metadata = bool(return_metadata)
         self.neca_bank = None
         if neca_dir is not None:
@@ -545,6 +551,22 @@ class BlueprintSSLDataset(Dataset):
                 symbol_chaos_strength=self.symbol_chaos_strength,
                 placement_chaos=self.placement_chaos,
             )
+
+        # Page-wide deformation happens after individual symbol composition.
+        # Geometrically warp the complete plan and its symbols, *before*
+        # creating the aligned degraded input and clean SSL target. The exact
+        # placed boxes are mapped through the same transforms for previews.
+        from .page_chaos import warp_whole_page
+        placements = symbol_stats.get("placements", [])
+        clean, warped_boxes, page_chaos_meta = warp_whole_page(
+            clean, rng,
+            boxes=[item["bbox_xyxy"] for item in placements],
+            probability=self.page_chaos_probability,
+            strength=self.page_chaos_strength,
+        )
+        for item, warped_box in zip(placements, warped_boxes):
+            item["bbox_xyxy"] = warped_box
+
         if self.return_metadata:
             degraded, mask, degradation_meta = apply_runtime_corruptions(
                 clean, rng, clean_fraction=self.clean_fraction, return_metadata=True,
@@ -565,6 +587,7 @@ class BlueprintSSLDataset(Dataset):
             details = {
                 "source": str(path), "bucket": self.bucket_names[b_idx],
                 "symbol_stats": symbol_stats,
+                "page_chaos": page_chaos_meta,
                 "degradation": degradation_meta,
                 "mask_fraction": float(mask.mean()),
                 "mean_absolute_degradation": float(
