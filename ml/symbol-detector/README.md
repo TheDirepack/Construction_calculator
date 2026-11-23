@@ -187,13 +187,33 @@ views without overwhelming small projects.
 The remote SSL launcher now **skips full-page PDF rasterization** in the
 generic pool builder; other programs retain its previous behavior. Earlier
 pool PNGs from the same indexed PDF are skipped to prevent double weighting.
-The dataset draws two different crops from the same page consecutively,
-which amortizes PDF file opens and the page-density thumbnail, then cycles
-through that source's pages without replacement within an epoch. Its
-training loader retains this randomized epoch plan instead of shuffling
-away PDF cache locality.
-Verified device-centered raster crops remain available. Device boxes are
-*positive hints*, not proof of exhaustive labels.
+The dataset now deliberately **replays one exact source crop across multiple
+independent SSL views** (default 4, configurable 1–32). Each page/image has a
+stable small crop bank (default 6) so the same pixel region can recur in later
+epochs with completely new symbols, counts, orientations, warps, masks, scan
+noise and clean/degraded branches. About 20% of source bursts explore a new
+crop site instead of a bank slot. Source pages continue to cycle without
+replacement between bursts; the effective MuSGD batch remains 14. Per-worker
+LRU caches hold at most 12 rendered PDF crops and 24 MiB of base raster
+crops, with independent copies returned to augmentations. No full-page
+pre-rendering or on-disk cache is required.
+
+Tuning: `SSL_CROP_REUSE_VIEWS`, `SSL_CROP_BANK_SIZE`, and
+`SSL_FRESH_CROP_PROBABILITY` control those distributions; the corresponding
+CLI flags are `--crop-reuse-views`, `--crop-bank-size`, and
+`--fresh-crop-probability`. A larger repeat count trades unique pages per
+epoch for more randomized training views from each sampled location. Preview
+reports unique clean crops, repeated views and cache hits. Any change
+invalidates the run fingerprint.
+
+Verified device-centered raster crops remain available. Existing receptacles,
+labels and other symbols remain in the original image and are valid **SSL**
+training content. New glyphs are additive and their generated boxes are
+tracked only to protect augmentation and support future review. Existing
+devices have **no inferred boxes or negative labels**. The later supervised
+Detect-head phase must merge independently verified real annotations and
+synthetic positives while enforcing completeness rules appropriate to
+detection; these SSL crop metadata are not exhaustive ground truth.
 
 Keep the approximately 100 reserved source PDFs outside the indexed input
 tree or list them in `../work/heldout_real_pdfs.json`:
@@ -212,7 +232,9 @@ SSL checkpoint selection.
 **Symbol augmentation:** When enabled, each selected crop receives a uniformly
 sampled *requested* count of 0–16 new symbols (actual placements may be lower
 in cluttered regions). SVG and procedural symbols are randomly scaled, rotated,
-wall-adjacent or freestanding. They are inserted **before degradation** and
+wall-adjacent or freestanding, with class-aware mounting preferences:
+switches and ordinary receptacles favor wall alignment; ceiling fixtures
+and floor receptacles prefer free space. They are inserted **before degradation** and
 thus appear in both the uncorrupted target and degraded model input. Existing
 symbols on original drawings are retained. The eligible NECA SVG bank contains
 the verified device sections, not routing arrows or standalone modifiers.
