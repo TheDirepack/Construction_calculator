@@ -204,10 +204,37 @@ The proposed batch size of 4 is conservative and **not yet profiled** for
 the reconstruction decoder. Existing checkpoints refuse accidental overwrite;
 use `--resume` explicitly after a compatible interruption.
 
-The clean/augmented sampling policy is independent of supervised YOLO data
-export. A detector checkpoint must demonstrably contain the learned SSL
-backbone weights: this transfer has **not** passed a full end-to-end GPU
-verification and should be validated before long downstream training.
+Before running a long GPU job, inspect what the generator actually creates.
+After a manifest has been produced, run:
+
+```bash
+python scripts_preview_pretrain_ssl.py work/pretrain_v3/train_manifest.json \
+  --neca-dir data/blueprints_and_libraries/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library \
+  --out work/pretrain_v3/previews --samples 32
+```
+
+Each preview shows the clean target beside its degraded/masked input.
+`preview_report.json` counts **requested versus actually placed** symbols,
+including shortfalls on crowded pages and zero-symbol examples. Visually
+inspect symbol fidelity and near-invisible cases before increasing severity.
+
+For the second-stage supervised detector, **preflight actual weight transfer**
+rather than trusting that `model.load_state_dict` before `model.train` worked.
+Ultralytics recreates the training model. The launcher now loads SSL weights
+in the subclassed `DetectionTrainer.get_model` and checks all backbone and
+neck tensors. The six-class Phase 2 launcher defaults to `pretrain_v3` and
+checks a real YOLO26n-P2 model without GPU training first:
+
+```bash
+python scripts_verify_ssl_transfer.py \
+  work/pretrain_v3/best_yolo26n_p2_backbone.pt --classes 6
+```
+
+The clean/augmented SSL generator does not change supervised YOLO exports.
+Random initial weights are used for SSL itself; only our own SSL checkpoint
+is eligible for detector initialization. Actual GPU pretraining, downstream
+detector accuracy improvement, and target-phone deployment still require
+measurements.
 
 ## 5. Optional: specialist teachers, held-out scoring, and training
 
