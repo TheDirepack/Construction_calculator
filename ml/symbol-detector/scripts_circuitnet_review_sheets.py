@@ -380,8 +380,22 @@ def build_pdf_index(data_root: Path | None) -> dict[str, Path | None]:
     return idx
 
 
-def _source_pdf_stat_matches(payload: dict[str, Any], candidate: Path) -> bool:
-    """Prevent review crops from silently using a modified source PDF."""
+def _source_pdf_identity_matches(payload: dict[str, Any], candidate: Path) -> bool:
+    """Require identical PDF content when modern SAM outputs carry SHA256.
+
+    Full content hash permits moving/copying identical source drawings even
+    when their timestamps change. Older exports fall back to size+mtime.
+    """
+    expected_sha = payload.get('source_pdf_sha256')
+    if expected_sha is not None:
+        if (not isinstance(expected_sha, str) or len(expected_sha) != 64 or
+                any(ch not in '0123456789abcdef' for ch in expected_sha)):
+            return False
+        from blueprint_symbols.sam_resume import file_sha256
+        try:
+            return file_sha256(candidate) == expected_sha
+        except OSError:
+            return False
     expected = payload.get('source_pdf_stat')
     if expected is None:  # Legacy proposal exports lacked this metadata.
         return True
@@ -407,19 +421,19 @@ def resolve_pdf_path(
     rel = payload.get('source_pdf_relative')
     if data_root is not None and rel:
         cand = (data_root / rel).resolve()
-        if cand.is_file() and _source_pdf_stat_matches(payload, cand):
+        if cand.is_file() and _source_pdf_identity_matches(payload, cand):
             return cand
     abs_p = payload.get('source_pdf_absolute')
     if abs_p:
         cand = Path(abs_p)
-        if cand.is_file() and _source_pdf_stat_matches(payload, cand):
+        if cand.is_file() and _source_pdf_identity_matches(payload, cand):
             return cand
     src_file = payload.get('source_file') or (Path(rel).name if rel else '')
     if src_file and pdf_index:
         for key in (src_file.lower(), _sanitize_pdf_stem(src_file)):
             candidate = pdf_index.get(key)
             if (candidate is not None and candidate.is_file()
-                    and _source_pdf_stat_matches(payload, candidate)):
+                    and _source_pdf_identity_matches(payload, candidate)):
                 return candidate
     return None
 
