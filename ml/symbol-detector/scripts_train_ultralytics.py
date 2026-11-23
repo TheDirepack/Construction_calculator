@@ -80,6 +80,9 @@ def main():
                   optimizer=args.optimizer, imgsz=args.imgsz, workers=args.workers,
                   lr0=args.lr0, fliplr=args.fliplr, flipud=args.flipud,
                   scale=args.scale, translate=args.translate)
+    if args.weights:
+        config["initialization"] = "blueprint_ssl_backbone_plus_random_detect_head"
+        config["ssl_checkpoint"] = str(args.weights.expanduser().resolve())
     print(json.dumps(config, indent=2))
     if not args.run:
         print('PLAN ONLY. No training or model downloads performed.')
