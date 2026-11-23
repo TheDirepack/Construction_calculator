@@ -225,7 +225,11 @@ def generate(
                     ):
                         raise ValueError(f"held-out PDF used for phase-two training: {path}")
     neca = NecaSymbolBank(neca_root) if neca_root is not None else None
-    counters = Counter()
+    counters = Counter({
+        "positive_views": 0, "negative_views": 0,
+        "inserted_symbols": 0, "total_views": 0, "pdf_views": 0,
+        "skipped_unplaceable_positive": 0, "skipped_duplicate_raster": 0,
+    })
     seen_images: set[str] = set()
     output.mkdir(parents=True, exist_ok=True)
     sampler = PdfCropSampler()
