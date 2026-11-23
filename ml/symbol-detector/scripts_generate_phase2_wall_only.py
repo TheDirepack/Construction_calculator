@@ -99,12 +99,14 @@ def _read_sources(manifest: Path, classes: set[str]) -> list[tuple[dict, Path, b
         if not isinstance(group, str) or not group.strip() or entry.get("source_group_verified") is not True:
             raise ValueError("wall-only source requires verified project_family_id")
         attested = entry.get("verified_negative_families")
-        if not isinstance(attested, list) or len(attested) != len(set(map(str, attested))):
+        if (not isinstance(attested, list) or
+                any(not isinstance(name, str) or not name.strip() for name in attested) or
+                len(attested) != len(set(attested))):
             raise ValueError("verified_negative_families must be a unique family list")
         missing = classes - set(attested)
         if missing:
             raise ValueError(f"{group}: not verified negative for all detector classes: {sorted(missing)}")
-        if entry.get("calibration_verified") is False:
+        if "calibration_verified" in entry and entry["calibration_verified"] is not True:
             raise ValueError(f"{group}: unverified raster alignment")
         path, pdf = _source_path(entry, manifest.parent)
         key = (str(path), entry["pdf_page_index"] if pdf else None)

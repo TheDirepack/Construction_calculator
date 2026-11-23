@@ -246,7 +246,13 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
                          'do not report incomplete tile metrics as complete.')
     out.mkdir(parents=True,exist_ok=True)
     names='\n'.join(f'  {v}: {json.dumps(k)}' for k,v in sorted(classes.items(),key=lambda x:x[1]))
-    (out/'data.yaml').write_text(f'path: {out.resolve()}\ntrain: images/train\nval: images/val\ntest: images/test\nnames:\n{names}\n')
+    # Signal that this export requires the supervision sidecar even if it is
+    # accidentally removed. The training launcher must fail rather than
+    # silently falling back to all-background YOLO labels.
+    (out/'data.yaml').write_text(
+        f'path: {out.resolve()}\ntrain: images/train\nval: images/val\n'
+        f'test: images/test\nphase2_supervision: phase2_supervision.json\nnames:\n{names}\n'
+    )
     # Each diagnostic set has a separate YAML. No stress images become training
     # examples; test is NEVER used by the training launcher or early stopping.
     eval_dir=out/'evaluation_configs'
