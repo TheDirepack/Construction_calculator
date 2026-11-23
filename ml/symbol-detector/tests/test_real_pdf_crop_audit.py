@@ -74,3 +74,33 @@ def test_audit_identically_named_pdfs_keep_separate_output_images(tmp_path):
     filenames = [row["output"] for row in result["records"]]
     assert len(set(filenames)) == 2
     assert all((output / name).is_file() for name in filenames)
+
+
+def test_real_pdf_qa_multi_dpi_same_region(tmp_path):
+    source = tmp_path / "electrical_plan.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=1200, height=900)
+    page.draw_rect(fitz.Rect(80, 90, 1050, 780),
+                   color=(.18, .24, .32), width=2)
+    page.draw_circle(fitz.Point(550, 330), 22,
+                     color=(.18, .24, .32), width=2)
+    doc.save(source)
+    doc.close()
+
+    report = audit_pdfs(
+        [source], tmp_path / "multi_dpi", pages=[1],
+        samples_per_page=4, size=128, max_symbols=6,
+        repeat_region_dpis=4, dpi_epoch=2,
+    )
+    assert report["repeat_region_dpis"] == 4
+    assert report["dpi_epoch"] == 2
+    views = [row["pdf_crop"] for row in report["records"]]
+    assert len({tuple(x["region_anchor_pt"]) for x in views}) == 1
+    assert len({x["effective_dpi"] for x in views}) == 4
+    assert {x["dpi_variant"] for x in views} == set(range(4))
+    assert all(x["dpi_epoch"] == 2 for x in views)
+    assert all(100 <= x["effective_dpi"] <= 400 for x in views)
+    for row in report["records"]:
+        for glyph in row["placements"]:
+            assert glyph["drawing_dpi"] == row["pdf_crop"]["effective_dpi"]
+        assert (tmp_path / "multi_dpi" / row["output"]).is_file()
