@@ -10,6 +10,7 @@ import pytest
 
 from blueprint_symbols.dataset_manifest import build_manifest
 from blueprint_symbols.raster_training import read_records
+from blueprint_symbols.ssl_data import build_ssl_sources
 from blueprint_symbols.partial_supervision import read_supervision
 from scripts_export_yolo_tiles import run
 
@@ -63,6 +64,24 @@ def test_verified_negative_attestation_is_class_complete(tmp_path):
     partial = next(row for row in manifest["source_images"] if row["project_group"] == "building-0")
     assert partial["verified_no_symbols"] is False
     assert not read_records([partial["annotation"]], classes=manifest["class_ids"])[0].exhaustive_families
+
+
+def test_verified_negative_samples_keep_training_and_pretraining_coverage(tmp_path):
+    source, manifest = mixed_source_manifest(tmp_path)
+    negative = next(row for row in manifest["source_images"] if row["verified_no_symbols"])
+    assert negative["project_group"] in manifest["split_groups"]["train"]
+    ssl = build_ssl_sources(manifest)
+    assert any(row["image_path"] == negative["image"] for row in ssl["sources"])
+    dest = tmp_path / "export"
+    run(source, dest, samples=5, train_variants=1, allow_partial_training=True,
+        verified_wall_negative_fraction=1., verified_wall_blank_fraction=1.,
+        train_negative_fraction=1., blank_negative_fraction=1.)
+    provenance = [json.loads(line) for line in (dest / "sample_provenance.jsonl").read_text().splitlines()]
+    negatives = [row for row in provenance if row.get("verified_page_negative")]
+    assert negatives, "verified symbol-free pages must contribute negative training tiles"
+    coverage = json.loads((dest / "phase2_supervision.json").read_text())["samples"]
+    assert all(row["verified_negative_class_ids"] == [0] and coverage[row["sample"]] == [0]
+               for row in negatives)
 
 
 def test_forged_page_negative_with_active_symbols_fails(tmp_path):
