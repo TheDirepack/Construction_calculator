@@ -29,6 +29,8 @@ def test_preview_creates_aligned_pairs_and_count_audit(tmp_path):
     assert len(report["rows"]) == 5
     assert report["distinct_inserted_variants"] >= 0
     assert sum(report["degradation_by_severity"].values()) == 5
+    assert sum(report["page_warp_severity"].values()) == 5
+    assert isinstance(report["page_warp_operations"], dict)
     assert isinstance(report["degradation_by_category"], dict)
     assert report["eligible_neca_svg_variants"] == 0  # procedural-only fixture
     assert sum(report["placed_by_family"].values()) == report["placed_total"]
