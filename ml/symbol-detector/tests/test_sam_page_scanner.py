@@ -176,3 +176,35 @@ def test_decoder_oom_retry_reuses_image_embedding_and_preserves_queries(monkeypa
     assert stats['sam_inference_oom_retries'] == 1
     assert stats['visual_base_prompts'] == 2
     assert len(dets) == 1  # two label proposals fuse into one location
+
+
+
+def test_grouped_cap_counts_objects_not_duplicate_prompt_hits(monkeypatch):
+    scanner = _load_scanner_with_fake_transformers(monkeypatch)
+    image = np.full((1008, 1008, 3), 255, dtype=np.uint8)
+    cv2.circle(image, (504, 504), 24, (0, 0, 0), 3)
+    glyphs = [
+        _glyph('NECA_S', 'switch', 'switch.base_letter_s'),
+        _glyph('NECA_R', 'receptacle', 'receptacle.wall_duplex_open'),
+    ]
+    model = FakeSam3()
+    stats = Counter()
+    dets = scanner.detect_page_sam3(
+        model, FakeProcessor(), image, glyphs,
+        torch.zeros(2, 1, 4), torch.ones(2, 1, dtype=torch.bool),
+        torch.zeros(1, 1, 4), torch.ones(1, 1, dtype=torch.bool),
+        prompt_plan={'mode': 'grouped'},
+        max_detections_per_tile=1, fine_family_limit=1,
+        svg_batch=2, query_stats=stats,
+        device='cpu', dtype=torch.float32,
+    )
+    assert len(dets) == 1
+    assert dets[0]['same_region_prompt_hits'] == 2
+    assert len(dets[0]['alternative_labels']) == 1
+    assert {dets[0]['device_type'],
+            dets[0]['alternative_labels'][0]['device_type']} == {
+        'switch', 'receptacle',
+    }
+    assert stats['grouped_raw_candidates'] == 2
+    assert stats['grouped_after_tile_fusion'] == 1
+    assert stats['grouped_visual_proposals'] == 1
