@@ -105,6 +105,32 @@ def test_verified_no_symbols_roundtrip_and_conflict_rejection(tmp_path):
     assert doc["annotation_scope"] == "positive_only"
 
 
+def test_page_presence_proposals_are_read_only_and_source_hash_bound(tmp_path):
+    from scripts_triage_pdf_symbol_pages import scan_pdfs
+    pdf = _pdf(tmp_path / "source.pdf")
+    queue = scan_pdfs([pdf])
+    suggestions = tmp_path / "page_presence.json"
+    suggestions.write_text(json.dumps(queue))
+    session = LabelingSession(pdf=pdf, out_dir=tmp_path / "labels",
+                              page_presence=suggestions)
+    page = session.page_state(0)
+    assert page["page_presence_suggestion"]["suggestion"] == "possible_symbols"
+    assert page["document"]["verified_no_symbols"] is False
+    assert not (tmp_path / "labels" / "source_p0001.json").exists()
+    forged = json.loads(suggestions.read_text())
+    forged["documents"][0]["pages"][0]["verified_no_symbols"] = True
+    suggestions.write_text(json.dumps(forged))
+    with pytest.raises(LabelingError, match="untrusted"):
+        LabelingSession(pdf=pdf, out_dir=tmp_path / "another",
+                        page_presence=suggestions)
+    forged["documents"][0]["pages"][0]["verified_no_symbols"] = False
+    forged["documents"][0]["source_pdf_sha256"] = "0" * 64
+    suggestions.write_text(json.dumps(forged))
+    with pytest.raises(LabelingError, match="SHA256"):
+        LabelingSession(pdf=pdf, out_dir=tmp_path / "different",
+                        page_presence=suggestions)
+
+
 def test_reject_unreviewed_proposals_and_preserve_provenance(tmp_path):
     pdf = _pdf(tmp_path / "plan.pdf", pages=1)
     proposals = tmp_path / "detected_SAM3.json"
