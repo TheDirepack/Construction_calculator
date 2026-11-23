@@ -11,7 +11,8 @@ import pytest
 fitz = pytest.importorskip("fitz")
 
 from blueprint_symbols.pdf_crop import PdfCropSampler
-from blueprint_symbols.ssl_pretrain import BlueprintSSLDataset, group_is_holdout
+from blueprint_symbols.ssl_pretrain import (BlueprintSSLDataset, group_is_holdout,
+                                            sample_label_guided_crop)
 from scripts_index_real_pdfs import index_pdf_pages, reserved_sources
 from scripts_pretrain_ssl import build_pretrain_manifests
 
