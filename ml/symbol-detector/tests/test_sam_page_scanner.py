@@ -54,12 +54,25 @@ class FakeSam3:
         self.detr_decoder = self
         self.batch = 1
         self.fail_large_batches = False
+        self.geometry_batches = 0
+        self.center_x = .50
 
     def get_vision_features(self, pixel_values):
         self.visions += 1
         t = torch.zeros(1, 4, 8, 8)
         return SimpleNamespace(fpn_hidden_states=(t, t, t),
                                fpn_position_encoding=(t, t, t))
+
+    def geometry_encoder(self, **kwargs):
+        self.geometry_batches += 1
+        boxes = kwargs['box_embeddings']
+        assert boxes.shape[1:] == (1, 4)
+        assert torch.all(boxes[..., 0] > .50)
+        n = boxes.shape[0]
+        return SimpleNamespace(
+            last_hidden_state=torch.zeros(n, 2, 4),
+            attention_mask=torch.ones(n, 2, dtype=torch.bool),
+        )
 
     def detr_encoder(self, **kwargs):
         self.batch = kwargs['text_features'].shape[0]
@@ -72,7 +85,7 @@ class FakeSam3:
                                spatial_shapes=torch.tensor([[1, 1]]))
 
     def __call__(self, **kwargs):
-        ref = torch.tensor([.50, .50, .06, .06]).reshape(1, 1, 1, 4)
+        ref = torch.tensor([self.center_x, .50, .06, .06]).reshape(1, 1, 1, 4)
         self.reference_boxes = ref.expand(1, self.batch, 1, 4)
         return SimpleNamespace(
             intermediate_hidden_states=torch.zeros(1, self.batch, 1, 4),
@@ -98,6 +111,7 @@ def _glyph(sym, family, group):
         device_type=family, subtype='duplex', canonical_class=family,
         category='power_outlet', subcategory='duplex',
         visual_group=group, encoded_attributes={},
+        alpha=np.full((18, 18), 160, dtype=np.uint8),
     )
 
 
@@ -208,3 +222,56 @@ def test_grouped_cap_counts_objects_not_duplicate_prompt_hits(monkeypatch):
     assert stats['grouped_raw_candidates'] == 2
     assert stats['grouped_after_tile_fusion'] == 1
     assert stats['grouped_visual_proposals'] == 1
+
+
+
+def test_same_image_grouped_scanner_encodes_reference_and_target_once(monkeypatch):
+    scanner = _load_scanner_with_fake_transformers(monkeypatch)
+    from blueprint_symbols.sam_shared_canvas import build_shared_canvas
+    glyphs = [
+        _glyph('NECA_S', 'switch', 'switch.base_letter_s'),
+        _glyph('NECA_R', 'receptacle', 'receptacle.wall_duplex_open'),
+    ]
+    layout = build_shared_canvas(glyphs)
+    assert layout.target_width == 972
+    image = np.full((1008, 1400, 3), 255, dtype=np.uint8)
+    for x in (504, 1348):
+        cv2.circle(image, (x, 504), 24, (0,0,0), 3)
+    model = FakeSam3()
+    stats = Counter()
+    result = scanner.detect_page_sam3(
+        model, FakeProcessor(), image, glyphs,
+        torch.empty(0, 2, 4), torch.empty(0, 2, dtype=torch.bool),
+        torch.zeros(1, 1, 4), torch.ones(1, 1, dtype=torch.bool),
+        prompt_plan={'mode': 'grouped'}, shared_canvas=layout,
+        query_stats=stats, svg_batch=2, device='cpu',
+        dtype=torch.float32,
+    )
+    assert model.visions == 2
+    assert model.geometry_batches == 2
+    assert model.query_batches == 2
+    assert len(result) == 2
+    assert all(d['needs_class_review'] for d in result)
+    assert all(d['same_region_prompt_hits'] == 2 for d in result)
+
+
+def test_same_image_reference_strip_cannot_generate_device_boxes(monkeypatch):
+    scanner = _load_scanner_with_fake_transformers(monkeypatch)
+    from blueprint_symbols.sam_shared_canvas import build_shared_canvas
+    glyphs = [_glyph('NECA_S', 'switch', 'switch.base_letter_s')]
+    layout = build_shared_canvas(glyphs)
+    image = np.full((1008, 1008, 3), 255, dtype=np.uint8)
+    cv2.circle(image, (504,504), 24, (0,0,0), 3)
+    model = FakeSam3()
+    model.center_x = .99
+    stats = Counter()
+    result = scanner.detect_page_sam3(
+        model, FakeProcessor(), image, glyphs,
+        torch.empty(0, 2, 4), torch.empty(0, 2, dtype=torch.bool),
+        torch.zeros(1, 1, 4), torch.ones(1, 1, dtype=torch.bool),
+        prompt_plan={'mode': 'grouped'}, shared_canvas=layout,
+        query_stats=stats, device='cpu', dtype=torch.float32,
+    )
+    assert result == []
+    assert stats['filtered_reference_strip'] == 1
+    assert model.visions == 2  # two 972-wide target tiles cover 1008px
