@@ -62,3 +62,24 @@ def test_neca_bank_skips_composite_parent_rows_and_annotation_modifiers(tmp_path
     assert found_no_modifiers == {
         "switch_single", "plain_receptacle", "pull_box"
     }
+
+def test_neca_teledata_vs_av_equipment_mapping():
+    from blueprint_symbols.neca_svg_compositor import map_neca_to_v7
+
+    assert map_neca_to_v7("Communications - Teledata", "Data outlet") == (
+        "data_outlet", "data"
+    )
+    assert map_neca_to_v7(
+        "Communications - Teledata", "Telephone/data outlet"
+    ) == ("data_outlet", "data_telephone")
+    assert map_neca_to_v7(
+        "Communications - Audio-Visual", "Speaker—wall mounted"
+    ) == ("speaker", "speaker")
+    for name in ("Volume control", "Master intercom and directory unit",
+                 "Microphone outlet—wall mounted", "Cable antenna system outlet"):
+        assert map_neca_to_v7("Communications - Audio-Visual", name) == (
+            "other_device", "unspecified"
+        )
+    assert map_neca_to_v7(
+        "Communications - Equipment", "Equipment rack—wall mounted"
+    ) == ("other_device", "unspecified")
