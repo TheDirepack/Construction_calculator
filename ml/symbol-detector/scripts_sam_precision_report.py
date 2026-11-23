@@ -219,7 +219,7 @@ def scanned_page_rates(
         raise ValueError('summarized review count differs from reconciled proposals')
     rejected = report['human_candidate_precision']['rejected']
     human_complete = (
-        report['human_review_coverage'] == 1.0
+        report['human_candidate_precision']['decided'] == report['total_candidates']
         and report['inconsistent_decisions'] == 0
         and report['pending_or_uncertain'] == 0
     )
@@ -249,9 +249,6 @@ def main() -> None:
         originals = sorted(args.proposals_dir.glob('*_SAM3.json'))
         originals += sorted(args.proposals_dir.glob('*_CIRCUITNET.json'))
         report['scanned_page_rates'] = scanned_page_rates(batches, originals, report)
-        report['false_boxes_per_full_pdf_page'] = (
-            report['scanned_page_rates']['false_boxes_per_scanned_page']
-        )
     report['review_batch_files'] = len(files)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2) + '\n')
