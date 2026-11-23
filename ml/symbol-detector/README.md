@@ -97,11 +97,15 @@ proposals are moved to `rejected_proposals` and are **not** active labels.
 Manually drawn boxes also begin as drafts and require explicit
 verification of the class before becoming trusted positives; Box mode remains
 active for rapid consecutive drawings. **No page is automatically
-complete/exhaustive**, even when every proposal was reviewed
-or a page contains no devices. Editing an already attested page revokes
-previous completeness claims; re-attest separately after a whole-page audit.
-These positive-only JSONs are **not eligible for the standard exhaustive YOLO
-export until coverage is independently attested**.
+complete/exhaustive**, even when every proposal was reviewed or a page
+contains no devices. After visually inspecting the entire page, use the
+**Verified no target symbols** checkbox to explicitly save
+`"verified_no_symbols": true` (requires no active boxes). This attests a
+whole-page negative for all currently trained detector classes; removing the
+check revokes the attestation. Unchecked/legacy pages remain unknown, never
+implicit negatives. The page can still serve as a real-PDF background for
+synthetic symbol insertion in pretraining. For positive pages, the usual
+independent exhaustive-family review requirement remains.
 
 Images remain at the original rendered-page pixel coordinates; SAM PDF-point
 boxes are converted from PDF bottom-left to image top-left coordinates.
@@ -219,8 +223,10 @@ positive truth. Existing manual label tool output may be partial.
 
 For example: one real page with manually confirmed receptacle boxes but
 other unlabeled receptacles has exhaustive_families=[]. A distinct fully
-reviewed wall-only page with no target devices may declare
-exhaustive_families=["receptacle","switch_sensor",...] and instances=[].
+reviewed symbol-free page may set `"verified_no_symbols": true` and
+`"instances": []`; the manifest and tile exporter automatically expand its
+negative coverage to the trained class map. Other verified negatives may still
+use class-specific `exhaustive_families`.
 Do not make completeness claims solely because a sheet is called
 "architectural" or "negative" in its file name.
 
