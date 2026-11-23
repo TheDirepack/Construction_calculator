@@ -150,6 +150,17 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         "x".join(map(str, row["pdf_crop"]["bank_grid"]))
         for row in pdf_views if row["pdf_crop"].get("bank_grid")
     )
+    # Separate true physical-region coverage from multiple DPI zooms of
+    # that same PDF region. Unique clip rectangles alone now overcount sites.
+    anchor_dpis = {}
+    for row in pdf_views:
+        anchor = row["pdf_crop"].get("region_anchor_pt")
+        if anchor is not None:
+            key = (row["source"], row["pdf_crop"]["pdf_page_index"],
+                   tuple(anchor))
+            anchor_dpis.setdefault(key, set()).add(
+                row["pdf_crop"]["effective_dpi"]
+            )
     pdf_dpis = [row["pdf_crop"]["effective_dpi"] for row in pdf_views]
     dpi_bins = ((100, 150), (150, 200), (200, 250),
                 (250, 300), (300, 350), (350, 400))
@@ -173,6 +184,10 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
             if g.get("ink_color_bgr") is not None
         }),
         "pdf_native_views": len(pdf_views),
+        "pdf_unique_physical_region_anchors": len(anchor_dpis),
+        "pdf_dpi_variants_per_region_histogram": dict(sorted(Counter(
+            len(values) for values in anchor_dpis.values()
+        ).items())),
         "pdf_spatial_bank_unique_slots": len(pdf_bank_slots),
         "pdf_spatial_bank_pages_sampled": len(pdf_banked_pages),
         "pdf_spatial_bank_grid_histogram": dict(sorted(pdf_bank_grids.items())),
