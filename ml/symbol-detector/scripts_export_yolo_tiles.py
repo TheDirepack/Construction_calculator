@@ -18,7 +18,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from blueprint_symbols.raster_training import read_records, RasterTileDataset
-from blueprint_symbols.dataset_manifest import validate_manifest_sources
+from blueprint_symbols.dataset_manifest import validate_manifest_sources, trusted_training_instance
 from blueprint_symbols.variants import make_variant, EVAL_VARIANTS, TRAIN_VARIANTS
 from blueprint_symbols.multiscale import plan_pyramid_tiles, sample_tile
 
@@ -37,7 +37,7 @@ def _export_annotations(instances: list[dict], tile, classes: dict[str,int],
         area=max(1e-9,(u1-u0)*(v1-v0))
         coverage=(x1-x0)*(y1-y0)/area
         cls=inst.get('symbol_family')
-        if (cls not in classes or inst.get('uncertain',False) or coverage < .98):
+        if (cls not in classes or not trusted_training_instance(inst) or coverage < .98):
             ignored.append([x0,y0,x1,y1])
         else:
             targets.append((classes[cls],(x0,y0,x1,y1)))
@@ -194,7 +194,7 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
         for ri,rec in enumerate(per_split[split]):
             image=_img(rec)
             expected={idx for idx,inst in enumerate(rec.instances)
-                      if inst.get('symbol_family') in classes and not inst.get('uncertain',False)}
+                      if inst.get('symbol_family') in classes and trusted_training_instance(inst)}
             observed=set()
             tiles=plan_pyramid_tiles(rec.width,rec.height,tile_size=512,overlap=overlap,source_scales=scales)
             for ti,tile in enumerate(tiles):

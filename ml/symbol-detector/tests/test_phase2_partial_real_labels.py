@@ -273,3 +273,49 @@ def test_manifest_rejects_string_verification_or_malformed_exhaustiveness(tmp_pa
             build_manifest(sources, val_fraction=.20, test_fraction=.20,
                            allow_partial_training=True)
     first.write_text(original)
+
+
+def test_explicitly_pending_boxes_never_become_training_positives():
+    from types import SimpleNamespace
+    from blueprint_symbols.dataset_manifest import trusted_training_instance
+    from scripts_export_yolo_tiles import _export_annotations
+
+    base = {'symbol_family': 'receptacle', 'bbox_xyxy': [90, 90, 130, 130],
+            'uncertain': False}
+    legacy = dict(base)
+    accepted = dict(base, review_status='accepted', review_source='human',
+                    verified_ground_truth=True)
+    pending = dict(base, review_status='unreviewed', review_source='sam3',
+                   verified_ground_truth=False)
+    fake_accept = dict(base, review_status='accepted', review_source='sam3',
+                       verified_ground_truth=True)
+    absent_status = dict(base, verified_ground_truth=False)
+    assert trusted_training_instance(legacy)
+    assert trusted_training_instance(accepted)
+    assert not trusted_training_instance(pending)
+    assert not trusted_training_instance(fake_accept)
+    assert not trusted_training_instance(absent_status)
+    tile = SimpleNamespace(x=0, y=0, size=512, source_scale=1)
+    for source in (pending, fake_accept, absent_status):
+        targets, ignored = _export_annotations([source], tile, {'receptacle': 0})
+        assert targets == []
+        assert ignored == [[90.0, 90.0, 130.0, 130.0]]
+    for source in (legacy, accepted):
+        targets, ignored = _export_annotations([source], tile, {'receptacle': 0})
+        assert len(targets) == 1 and ignored == []
+
+
+def test_manifest_class_count_ignores_malformed_explicit_review(tmp_path):
+    _manifest, _ = mixed_source_manifest(tmp_path)
+    source = sorted(tmp_path.glob('drawing_*.json'))[0]
+    document = json.loads(source.read_text())
+    document['instances'][0].update({
+        'review_status': 'unreviewed', 'review_source': 'sam3',
+        'verified_ground_truth': False, 'uncertain': False,
+    })
+    source.write_text(json.dumps(document))
+    refreshed = build_manifest(sorted(tmp_path.glob('drawing_*.json')),
+                               val_fraction=.2, test_fraction=.2,
+                               allow_partial_training=True)
+    row = next(x for x in refreshed['source_images'] if x['annotation'] == str(source))
+    assert row['usable_families'] == []
