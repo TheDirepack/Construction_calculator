@@ -43,6 +43,28 @@ def _valid(candidate: np.ndarray, reference: np.ndarray) -> bool:
         return False
     if min(w / max(1, rw), h / max(1, rh)) < 0.36:
         return False
+
+    # Thin electrical symbols are distinguished by stroke continuity and
+    # holes. A random field of disconnected dots can satisfy the same ink
+    # fraction and bbox limits yet no longer resemble any original device.
+    ref_binary = (reference > 64).astype(np.uint8)
+    cand_binary = (candidate > 64).astype(np.uint8)
+    ref_components = cv2.connectedComponents(ref_binary, connectivity=8)[0] - 1
+    cand_components = cv2.connectedComponents(cand_binary, connectivity=8)[0] - 1
+    if cand_components > max(ref_components + 5, ref_components * 3):
+        return False
+    # Keep at least one enclosing loop if the source symbol actually had
+    # one. Closed rings/circles encode important device distinctions.
+    def holes(binary: np.ndarray) -> int:
+        _, hierarchy = cv2.findContours(
+            binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if hierarchy is None:
+            return 0
+        return int((hierarchy[0, :, 3] >= 0).sum())
+
+    if holes(ref_binary) >= 1 and holes(cand_binary) == 0:
+        return False
     return True
 
 
