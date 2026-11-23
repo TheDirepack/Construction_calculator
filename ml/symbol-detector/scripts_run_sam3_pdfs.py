@@ -652,6 +652,10 @@ def main() -> None:
                     help='Exclude raster-traced NECA symbols; default retains traced Annex A alternatives')
     ap.add_argument('--reference-geometry-batch', type=int, default=4,
                     help='Bounded multi-exemplar geometry encoding on cached reference sheets (VRAM tradeoff)')
+    ap.add_argument('--shared-reference-px', type=int, default=24,
+                    help='Visual reference glyph pixels on same-image SAM tile (grouped mode)')
+    ap.add_argument('--shared-slot-pitch', type=int, default=36,
+                    help='Spacing for NECA glyphs on the same-image reference strip')
     ap.add_argument('--reference-render-height', type=int, default=96,
                     help='Height used when rasterizing individual NECA vectors before prompt encoding')
     ap.add_argument('--no-reference-quality', action='store_true',
@@ -675,7 +679,7 @@ def main() -> None:
     ap.add_argument('--switch-suffix-margin', type=float, default=0.06,
                     help='Reject similar-scoring ambiguous suffix interpretations')
     ap.add_argument('--scan-mode', choices=['grouped', 'hierarchical', 'flat'], default='grouped',
-                    help='Hierarchical shares each tile embedding across coarse-family and gated-subtype passes')
+                    help='Grouped (default) uses supported same-image references; hierarchical/flat are experimental cross-image transfer baselines')
     ap.add_argument('--coarse-per-family', type=int, default=2)
     ap.add_argument('--fine-per-family', type=int, default=12,
                     help='Subtype prompts per active family; 0 = all in catalog')
@@ -808,33 +812,60 @@ def main() -> None:
     print(f'NECA reference preflight: {len(glyphs)}/{len(selected)} usable; '
           f'details={dict(reference_stats)}', flush=True)
     t_enc = time.time()
-    feature_cache = None
-    cached_features = None
-    if not args.no_prompt_cache and resolved_model_revision is not None:
-        feature_cache = prompt_feature_cache_path(
-            cache_root / 'encoded', glyphs,
-            model_id=args.model_id,
-            model_revision=resolved_model_revision,
-            model_config=model.config.to_json_string(),
-            dtype=dtype, target_px=44,
-        )
-        cached_features = load_prompt_features(
-            feature_cache, glyph_count=len(glyphs), device='cuda', dtype=dtype,
-        )
-    if cached_features is not None:
-        print('Loaded locally cached SAM visual geometry embeddings', flush=True)
-        geo_feats, geo_masks, blank_tf, blank_tm = cached_features
-    else:
-        geo_feats, geo_masks, blank_tf, blank_tm = preencode_svg_prompts(
-            model, processor, glyphs, device='cuda', dtype=dtype,
-            target_px=44, geometry_batch=args.reference_geometry_batch,
-        )
-        if feature_cache is not None:
-            save_prompt_features(
-                feature_cache,
-                (geo_feats, geo_masks, blank_tf, blank_tm),
+    shared_canvas = None
+    if args.scan_mode == 'grouped':
+        try:
+            shared_canvas = build_shared_canvas(
+                glyphs, tile_size=args.tile_size,
+                slot_pitch=args.shared_slot_pitch,
+                reference_px=args.shared_reference_px,
             )
-            print('Cached SAM visual geometry embeddings locally', flush=True)
+        except ValueError as exc:
+            ap.error(f'unsupported shared NECA layout: {exc}')
+        # Supported SAM3 geometry prompts must refer to THIS tile's FPN,
+        # not cached prompt tokens from a different reference image.
+        visual_tokens = processor(text='visual', return_tensors='pt')
+        with torch.inference_mode():
+            blank_tf = model.get_text_features(
+                input_ids=visual_tokens['input_ids'].to('cuda'),
+                attention_mask=visual_tokens['attention_mask'].to('cuda'),
+                return_dict=True,
+            ).pooler_output.to(dtype)
+        blank_tm = visual_tokens['attention_mask'].to('cuda').bool()
+        geo_feats = torch.empty((0, 2, blank_tf.shape[-1]), device='cuda', dtype=dtype)
+        geo_masks = torch.empty((0, 2), device='cuda', dtype=torch.bool)
+        print(f'SAM same-image exemplar canvas: target_width={shared_canvas.target_width}; '
+              f'visual references={len(shared_canvas.reference_boxes)}; '
+              f'precomputed cross-image embeddings=0', flush=True)
+    else:
+        # Legacy experimental separate-image visual embeddings: not an
+        # officially supported cross-image exemplar feature.
+        feature_cache = None
+        cached_features = None
+        if not args.no_prompt_cache and resolved_model_revision is not None:
+            feature_cache = prompt_feature_cache_path(
+                cache_root / 'encoded', glyphs,
+                model_id=args.model_id,
+                model_revision=resolved_model_revision,
+                model_config=model.config.to_json_string(),
+                dtype=dtype, target_px=44,
+            )
+            cached_features = load_prompt_features(
+                feature_cache, glyph_count=len(glyphs), device='cuda', dtype=dtype,
+            )
+        if cached_features is not None:
+            print('Loaded experimental cross-image geometry embeddings', flush=True)
+            geo_feats, geo_masks, blank_tf, blank_tm = cached_features
+        else:
+            geo_feats, geo_masks, blank_tf, blank_tm = preencode_svg_prompts(
+                model, processor, glyphs, device='cuda', dtype=dtype,
+                target_px=44, geometry_batch=args.reference_geometry_batch,
+            )
+            if feature_cache is not None:
+                save_prompt_features(
+                    feature_cache, (geo_feats, geo_masks, blank_tf, blank_tm),
+                )
+                print('Cached experimental cross-image geometry embeddings', flush=True)
     if args.scan_mode != 'grouped' and args.svg_dedup_sim < 1.0:
         # Global cosine dedup can silently erase an entire visual group;
         # grouped mode already deduplicates by *core silhouette* metadata.
@@ -848,7 +879,8 @@ def main() -> None:
             f'{orig_n} -> {len(glyphs)} distinct prototypes ({dedup_counts})',
             flush=True,
         )
-    print(f'Pre-encoded {len(glyphs)} active SVG prompts in {time.time() - t_enc:.1f}s (VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
+    print(f'SAM visual prompt setup completed in {time.time() - t_enc:.1f}s '
+          f'(VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB)', flush=True)
     if args.scan_mode == 'grouped':
         missing_visual_groups = sorted(
             {x.visual_group for x in selected} - {x.visual_group for x in glyphs}
@@ -930,6 +962,10 @@ def main() -> None:
         'prompt_feature_cache_schema': 2,
         'scan_mode': args.scan_mode,
         'visual_prototypes_per_group': args.visual_prototypes_per_group,
+        'shared_image_prompting': shared_canvas is not None,
+        'shared_reference_px': args.shared_reference_px if shared_canvas else None,
+        'shared_slot_pitch': args.shared_slot_pitch if shared_canvas else None,
+        'shared_target_width': shared_canvas.target_width if shared_canvas else None,
         'allow_missing_visual_groups': args.allow_missing_visual_groups,
         'switch_suffix_refs': [t.symbol_id for t in switch_suffix_refs],
         'switch_suffix_template_content_sha256': hashlib.sha256(
@@ -1019,6 +1055,7 @@ def main() -> None:
                     svg_batch=args.svg_batch, score_thr=args.score_thr,
                     coarse_score_thr=args.coarse_score_thr,
                     prompt_plan=prompt_plan,
+                    shared_canvas=shared_canvas,
                     fallback_every_tiles=args.fallback_every_tiles,
                     fine_match_iou=args.fine_match_iou,
                     emit_generic=args.emit_generic,
