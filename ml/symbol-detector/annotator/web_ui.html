@@ -202,12 +202,12 @@
         <strong id="multiSelectionTitle" style="color:var(--text);font-size:13.5px;">0 symbols selected</strong>
       </div>
       <div class="chip-list" aria-label="Batch quick family hotkeys 1 to 6">
-        <button type="button" class="chip quick-family" data-family="receptacle" title="Set family for all selected (1)">1 receptacle</button>
-        <button type="button" class="chip quick-family" data-family="switch" title="Set family for all selected (2)">2 switch</button>
-        <button type="button" class="chip quick-family" data-family="luminaire" title="Set family for all selected (3)">3 luminaire</button>
-        <button type="button" class="chip quick-family" data-family="fire_alarm_device" title="Set family for all selected (4)">4 fire_alarm</button>
-        <button type="button" class="chip quick-family" data-family="data_outlet" title="Set family for all selected (5)">5 data_outlet</button>
-        <button type="button" class="chip quick-family" data-family="junction_box" title="Set family for all selected (6)">6 j-box</button>
+        <button type="button" class="chip multi-quick-family" data-family="receptacle" title="Set family for all selected (1)">1 receptacle</button>
+        <button type="button" class="chip multi-quick-family" data-family="switch" title="Set family for all selected (2)">2 switch</button>
+        <button type="button" class="chip multi-quick-family" data-family="luminaire" title="Set family for all selected (3)">3 luminaire</button>
+        <button type="button" class="chip multi-quick-family" data-family="fire_alarm_device" title="Set family for all selected (4)">4 fire_alarm</button>
+        <button type="button" class="chip multi-quick-family" data-family="data_outlet" title="Set family for all selected (5)">5 data_outlet</button>
+        <button type="button" class="chip multi-quick-family" data-family="junction_box" title="Set family for all selected (6)">6 j-box</button>
       </div>
       <div class="row wrap" style="margin-top:10px;">
         <button type="button" id="multiVerifyBtn" class="primary" title="Verify all selected (A)">Verify All · A</button>
@@ -278,12 +278,21 @@
 
       <details class="section-card" id="anchorsSection" open>
         <summary>Anchors &amp; extra snap vector</summary>
-        <div class="small" style="margin-bottom:6px">Place precise anchors or bias wall-snapping with an extra vector:</div>
+        <div class="small" style="margin-bottom:6px">Place anchors or snap to box center, edges, and feature tips:</div>
         <div class="row wrap">
           <button type="button" id="placeCircleCenter" class="ghost" title="Primary anchor for circular electrical symbols (receptacles, etc.)">circle_center</button>
           <button type="button" id="placeVisualCenter" class="ghost" title="Visual center for non-circular symbols">visual_center</button>
           <button type="button" id="placeWallAttach" class="ghost" title="Exact point where symbol touches wall">wall_attachment</button>
           <button type="button" id="autoCenterAnchor" class="ghost" title="Place center anchor at exact geometric box center">Auto-center</button>
+        </div>
+        <div class="small" style="margin:6px 0 3px">Direct snap anchor to bounding box points or feature tip:</div>
+        <div class="row wrap">
+          <button type="button" id="snapAnchorCenter" class="ghost" title="Snap anchor to exact center of bounding box">Center</button>
+          <button type="button" id="snapAnchorTop" class="ghost" title="Snap anchor to top edge center">Top Edge</button>
+          <button type="button" id="snapAnchorBottom" class="ghost" title="Snap anchor to bottom edge center">Bottom Edge</button>
+          <button type="button" id="snapAnchorLeft" class="ghost" title="Snap anchor to left edge center">Left Edge</button>
+          <button type="button" id="snapAnchorRight" class="ghost" title="Snap anchor to right edge center">Right Edge</button>
+          <button type="button" id="snapAnchorTip" class="ghost" title="Cast dense rays in area to find and snap to the very tip of the symbol ink">Snap to Tip</button>
         </div>
         <div class="row" style="margin-bottom:6px">
           <input id="customAnchorName" placeholder="Custom anchor name">

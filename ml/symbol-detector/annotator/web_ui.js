@@ -117,6 +117,7 @@ const state = {
   pointerImg: null, pointerScreen: null,
   orientedDraft: null,
   snapPreview: null,
+  activeAnchorSnap: null,
   walls: [],
   familyDisciplines: {},
   variantsByFamily: {},
@@ -309,6 +310,33 @@ function itemCenter(item) {
   if (item.bbox_rotated) return [item.bbox_rotated.cx, item.bbox_rotated.cy];
   const b = item.bbox_xyxy;
   return [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+}
+
+function getBoxSnapPoints(item) {
+  if (!item) return [];
+  const points = [];
+  if (item.bbox_rotated && Math.abs(item.bbox_rotated.angle_deg || 0) > 1e-4) {
+    const { cx, cy, w, h, angle_deg } = item.bbox_rotated;
+    const a = (angle_deg * Math.PI) / 180;
+    const cosA = Math.cos(a), sinA = Math.sin(a);
+    const u = [cosA, sinA];
+    const n = [-sinA, cosA];
+    points.push({ name: "Center", key: "center", xy: [cx, cy] });
+    points.push({ name: "Top Edge", key: "top", xy: [cx - n[0] * (h / 2), cy - n[1] * (h / 2)] });
+    points.push({ name: "Bottom Edge", key: "bottom", xy: [cx + n[0] * (h / 2), cy + n[1] * (h / 2)] });
+    points.push({ name: "Left Edge", key: "left", xy: [cx - u[0] * (w / 2), cy - u[1] * (w / 2)] });
+    points.push({ name: "Right Edge", key: "right", xy: [cx + u[0] * (w / 2), cy + u[1] * (w / 2)] });
+  } else {
+    const [x0, y0, x1, y1] = item.bbox_xyxy;
+    const midX = (x0 + x1) / 2;
+    const midY = (y0 + y1) / 2;
+    points.push({ name: "Center", key: "center", xy: [midX, midY] });
+    points.push({ name: "Top Edge", key: "top", xy: [midX, y0] });
+    points.push({ name: "Bottom Edge", key: "bottom", xy: [midX, y1] });
+    points.push({ name: "Left Edge", key: "left", xy: [x0, midY] });
+    points.push({ name: "Right Edge", key: "right", xy: [x1, midY] });
+  }
+  return points;
 }
 function computeQualityWarnings() {
   if (!state.doc) return [];
@@ -777,6 +805,69 @@ function draw() {
     ctx.restore();
   }
 
+  if (state.mode === "anchor") {
+    const item = chosen();
+    if (item) {
+      const boxPts = getBoxSnapPoints(item);
+      ctx.save();
+      for (const bp of boxPts) {
+        const [sx, sy] = imageToScreen(bp.xy[0], bp.xy[1], viewport());
+        ctx.strokeStyle = "rgba(56, 232, 255, 0.7)";
+        ctx.fillStyle = "rgba(56, 232, 255, 0.25)";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if (state.activeAnchorSnap) {
+      if (state.activeAnchorSnap.rays && state.activeAnchorSnap.rays.length) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(255, 159, 67, 0.3)";
+        ctx.lineWidth = 1;
+        for (const [r0, r1] of state.activeAnchorSnap.rays) {
+          const [s0x, s0y] = imageToScreen(r0[0], r0[1], viewport());
+          const [s1x, s1y] = imageToScreen(r1[0], r1[1], viewport());
+          ctx.beginPath();
+          ctx.moveTo(s0x, s0y);
+          ctx.lineTo(s1x, s1y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+      const [sx, sy] = imageToScreen(state.activeAnchorSnap.xy[0], state.activeAnchorSnap.xy[1], viewport());
+      const [cx, cy] = state.pointerScreen || [sx, sy];
+      ctx.save();
+      ctx.strokeStyle = "rgba(255, 159, 67, 0.85)";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(sx, sy);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.strokeStyle = "#ff9f43";
+      ctx.fillStyle = "rgba(255, 159, 67, 0.35)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 7.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(sx - 4.5, sy); ctx.lineTo(sx, sy - 4.5);
+      ctx.lineTo(sx + 4.5, sy); ctx.lineTo(sx, sy + 4.5);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.restore();
+
+      drawBadge(ctx, sx + 10, sy - 10, `Snap: ${state.activeAnchorSnap.label}`);
+    }
+  }
+
   drawLoupe(ctx, w, h);
   $("zoomLabel").textContent = Math.round(state.scale * 100) + "%";
 }
@@ -954,7 +1045,7 @@ function snapBoxToContrastEdges(box, rotated = null) {
         return contrast >= contrastThresh;
       }
 
-      const N = 25;
+      const N = Math.max(51, Math.min(101, Math.round(sw * 1.5)));
       const maxTravelX = Math.floor(Math.min(sw * 0.42, (sw - 6) / 2));
       const maxTravelY = Math.floor(Math.min(sh * 0.42, (sh - 6) / 2));
 
@@ -1080,7 +1171,7 @@ function snapBoxToContrastEdges(box, rotated = null) {
 
     const rotW = rotated.w;
     const rotH = rotated.h;
-    const N = 25;
+    const N = Math.max(51, Math.min(101, Math.round(Math.max(rotW, rotH) * 1.5)));
     const maxTravelU = Math.floor(Math.min(rotW * 0.42, (rotW - 6) / 2));
     const maxTravelV = Math.floor(Math.min(rotH * 0.42, (rotH - 6) / 2));
 
@@ -1161,6 +1252,133 @@ function snapBoxToContrastEdges(box, rotated = null) {
   }
 }
 
+function findFeatureTipInArea(probePt, item, searchRadius = 24) {
+  if (!state.image || !item || !state.doc) return null;
+  const ctr = itemCenter(item);
+  let px, py, useOmni = false;
+  if (!probePt) {
+    useOmni = true;
+    px = ctr[0];
+    py = ctr[1];
+  } else {
+    px = probePt[0];
+    py = probePt[1];
+  }
+
+  const dx = px - ctr[0], dy = py - ctr[1];
+  const distCtr = Math.hypot(dx, dy);
+  if (distCtr < 3 && !probePt) {
+    useOmni = true;
+  }
+  const probeAngle = distCtr > 1e-4 ? Math.atan2(dy, dx) : 0;
+  const dirX = distCtr > 1e-4 ? dx / distCtr : 0;
+  const dirY = distCtr > 1e-4 ? dy / distCtr : -1;
+
+  const bb = item.bbox_xyxy;
+  const margin = 6;
+  const sx0 = Math.max(0, Math.floor(Math.max(bb[0] - margin, useOmni ? bb[0] - margin : px - searchRadius)));
+  const sy0 = Math.max(0, Math.floor(Math.max(bb[1] - margin, useOmni ? bb[1] - margin : py - searchRadius)));
+  const sx1 = Math.min(state.doc.image_width, Math.ceil(Math.min(bb[2] + margin, useOmni ? bb[2] + margin : px + searchRadius + 1)));
+  const sy1 = Math.min(state.doc.image_height, Math.ceil(Math.min(bb[3] + margin, useOmni ? bb[3] + margin : py + searchRadius + 1)));
+  const sw = sx1 - sx0, sh = sy1 - sy0;
+  if (sw < 3 || sh < 3) return null;
+
+  const ctx = getEdgeSnapCtx();
+  edgeSnapCanvas.width = sw;
+  edgeSnapCanvas.height = sh;
+  ctx.drawImage(state.image, sx0, sy0, sw, sh, 0, 0, sw, sh);
+  const imgData = ctx.getImageData(0, 0, sw, sh);
+  const d = imgData.data;
+
+  let borderLSum = 0, borderCount = 0;
+  for (let x = 0; x < sw; x += 2) {
+    const t = x * 4, b = ((sh - 1) * sw + x) * 4;
+    borderLSum += 0.299 * d[t] + 0.587 * d[t + 1] + 0.114 * d[t + 2];
+    borderLSum += 0.299 * d[b] + 0.587 * d[b + 1] + 0.114 * d[b + 2];
+    borderCount += 2;
+  }
+  for (let y = 0; y < sh; y += 2) {
+    const l = y * sw * 4, r = (y * sw + (sw - 1)) * 4;
+    borderLSum += 0.299 * d[l] + 0.587 * d[l + 1] + 0.114 * d[l + 2];
+    borderLSum += 0.299 * d[r] + 0.587 * d[r + 1] + 0.114 * d[r + 2];
+    borderCount += 2;
+  }
+  const bgL = borderCount ? borderLSum / borderCount : 255;
+  const isLightBg = bgL >= 128;
+  const contrastThresh = 28;
+
+  function isInk(ix, iy) {
+    const lx = Math.round(ix - sx0);
+    const ly = Math.round(iy - sy0);
+    if (lx < 0 || lx >= sw || ly < 0 || ly >= sh) return false;
+    const idx = (ly * sw + lx) * 4;
+    const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+    const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
+    return contrast >= contrastThresh;
+  }
+
+  // Cast a dense cluster of rays in this area (omni if whole symbol, fan if localized)
+  const numRays = useOmni ? 120 : 75;
+  const arcSpan = useOmni ? Math.PI * 2 : (Math.PI * 0.75);
+  const startAngle = useOmni ? 0 : (probeAngle - arcSpan / 2);
+  const angleStep = arcSpan / (numRays - 1 || 1);
+
+  const rays = [];
+  const candidateTips = [];
+  let maxProj = -999999;
+  const maxRayLen = useOmni ? Math.hypot(bb[2] - bb[0], bb[3] - bb[1]) * 0.85 : (distCtr + searchRadius + 6);
+  const minRayLen = useOmni ? 2 : Math.max(2, distCtr - searchRadius);
+
+  for (let i = 0; i < numRays; i++) {
+    const ang = startAngle + i * angleStep;
+    const cosA = Math.cos(ang), sinA = Math.sin(ang);
+    const rayStart = [ctr[0] + cosA * minRayLen, ctr[1] + sinA * minRayLen];
+    let outermostInk = null;
+
+    for (let r = minRayLen; r <= maxRayLen; r += 0.5) {
+      const rx = ctr[0] + cosA * r;
+      const ry = ctr[1] + sinA * r;
+      if (rx < sx0 || rx >= sx1 || ry < sy0 || ry >= sy1) break;
+      if (isInk(rx, ry)) {
+        outermostInk = [rx, ry];
+      }
+    }
+
+    const rayEnd = outermostInk || [ctr[0] + cosA * maxRayLen, ctr[1] + sinA * maxRayLen];
+    rays.push([rayStart, rayEnd]);
+
+    if (outermostInk) {
+      const proj = useOmni ? Math.hypot(outermostInk[0] - ctr[0], outermostInk[1] - ctr[1])
+                           : (outermostInk[0] - ctr[0]) * dirX + (outermostInk[1] - ctr[1]) * dirY;
+      if (proj > maxProj + 0.01) {
+        maxProj = proj;
+        candidateTips.length = 0;
+        candidateTips.push(outermostInk);
+      } else if (Math.abs(proj - maxProj) <= 0.75) {
+        candidateTips.push(outermostInk);
+      }
+    }
+  }
+
+  if (!candidateTips.length) {
+    return null;
+  }
+
+  let avgX = 0, avgY = 0;
+  for (const pt of candidateTips) {
+    avgX += pt[0];
+    avgY += pt[1];
+  }
+  avgX /= candidateTips.length;
+  avgY /= candidateTips.length;
+
+  const res = [Math.round(avgX * 10) / 10, Math.round(avgY * 10) / 10];
+  res.xy = [res[0], res[1]];
+  res.rays = rays;
+  res.label = "Feature Tip";
+  return res;
+}
+
 function snapContrastEdgesSelected() {
   const targets = chosenList();
   if (!targets.length) {
@@ -1231,7 +1449,7 @@ function refreshControls() {
     banner.textContent = "Oriented box: drag or tap to spawn rotated box auto-aligned to walls (Esc to exit)";
   } else if (state.mode === "anchor") {
     banner.hidden = false;
-    banner.textContent = `Anchor mode: click canvas to place "${state.activeAnchorName}" (Esc to exit)`;
+    banner.textContent = `Anchor mode: click to place "${state.activeAnchorName}" (snaps to Center, Edges, or Feature Tip · Esc to exit)`;
   } else if (state.mode === "snap") {
     banner.hidden = false;
     banner.textContent = "Snap vector mode: drag from origin toward wall (Shift snaps 15° · Esc to exit)";
@@ -1714,7 +1932,7 @@ function fillSelection() {
   $("instanceIdInput").value = item.instance_id;
   $("disciplineBadge").textContent = disciplineFor(item.symbol_family);
   $("family").value = item.symbol_family;
-  for (const btn of document.querySelectorAll(".quick-family")) {
+  for (const btn of document.querySelectorAll(".quick-family, .multi-quick-family")) {
     btn.setAttribute("aria-pressed", String(btn.dataset.family === item.symbol_family));
   }
   updateVariantDatalist(item.symbol_family);
@@ -2323,8 +2541,23 @@ function pointerDown(event) {
   } else if (state.mode === "anchor") {
     const item = chosen();
     if (!item) { setMode("select"); return; }
-    const ax = clamp(pt[0], 0, state.doc.image_width);
-    const ay = clamp(pt[1], 0, state.doc.image_height);
+    let ax = clamp(pt[0], 0, state.doc.image_width);
+    let ay = clamp(pt[1], 0, state.doc.image_height);
+    let snapLabel = "manual";
+
+    if (state.activeAnchorSnap) {
+      ax = state.activeAnchorSnap.xy[0];
+      ay = state.activeAnchorSnap.xy[1];
+      snapLabel = state.activeAnchorSnap.label;
+    } else {
+      const tip = findFeatureTipInArea(pt, item, 22 / state.scale);
+      if (tip) {
+        ax = tip[0];
+        ay = tip[1];
+        snapLabel = "Feature Tip";
+      }
+    }
+
     const name = state.activeAnchorName || "circle_center";
     modifySelection(x => {
       x.anchors ||= {};
@@ -2334,7 +2567,8 @@ function pointerDown(event) {
         annotated: true,
       };
     });
-    notify(`Placed anchor "${name}" at (${ax.toFixed(1)}, ${ay.toFixed(1)}).`, "saved");
+    notify(`Placed anchor "${name}" at (${ax.toFixed(1)}, ${ay.toFixed(1)}) [${snapLabel}].`, "saved");
+    state.activeAnchorSnap = null;
     setMode("select");
     return;
   } else if (state.mode === "snap") {
@@ -2377,6 +2611,41 @@ function pointerDown(event) {
   draw();
 }
 
+function updateAnchorSnap(pt) {
+  const item = chosen();
+  if (!item || !pt) {
+    state.activeAnchorSnap = null;
+    return;
+  }
+  const snapDist = 16 / state.scale;
+  let closestSnap = null;
+  let minD = snapDist;
+
+  // 1. Check box snap points: Center, Top, Bottom, Left, Right
+  const boxPoints = getBoxSnapPoints(item);
+  for (const sp of boxPoints) {
+    const d = Math.hypot(pt[0] - sp.xy[0], pt[1] - sp.xy[1]);
+    if (d < minD) {
+      minD = d;
+      closestSnap = { xy: [...sp.xy], label: sp.name, kind: "box" };
+    }
+  }
+
+  // 2. Check feature tip snap if not directly locked onto a box snap point
+  if (!closestSnap || minD > 8 / state.scale) {
+    const tip = findFeatureTipInArea(pt, item, 22 / state.scale);
+    if (tip) {
+      const dTip = Math.hypot(pt[0] - tip[0], pt[1] - tip[1]);
+      if (dTip < minD) {
+        minD = dTip;
+        closestSnap = { xy: tip.xy || tip, rays: tip.rays, label: "Feature Tip", kind: "tip" };
+      }
+    }
+  }
+
+  state.activeAnchorSnap = closestSnap;
+}
+
 function pointerMove(event) {
   const xy = coordinate(event), pt = screenToImage(...xy, viewport());
   state.pointerScreen = xy;
@@ -2385,6 +2654,11 @@ function pointerMove(event) {
     $("cursorCoords").textContent = `x:${pt[0].toFixed(0)} y:${pt[1].toFixed(0)}`;
   }
   if (!state.drag) {
+    if (state.mode === "anchor") {
+      updateAnchorSnap(pt);
+    } else {
+      state.activeAnchorSnap = null;
+    }
     if (state.mode === "draw" || state.mode === "oriented" || state.mode === "anchor" ||
         state.mode === "snap" || state.orientedDraft) {
       draw();
@@ -2825,22 +3099,74 @@ function addCustomDeviceAttribute() {
   $("customAttrVal").value = "";
 }
 
-function autoPlaceCenterAnchor() {
+function placeBoxSnapAnchor(snapKey) {
   const item = chosen();
-  if (!item) return;
-  const cx = item.bbox_rotated ? item.bbox_rotated.cx : (item.bbox_xyxy[0] + item.bbox_xyxy[2]) / 2;
-  const cy = item.bbox_rotated ? item.bbox_rotated.cy : (item.bbox_xyxy[1] + item.bbox_xyxy[3]) / 2;
-  const circular = ["receptacle", "luminaire", "junction_box", "fire_alarm_device", "sprinkler_head", "sensor"];
-  const name = circular.includes(item.symbol_family) ? "circle_center" : "visual_center";
+  if (!item) {
+    notify("Select a box first to place an anchor.", "warning");
+    return;
+  }
+  const pts = getBoxSnapPoints(item);
+  const found = pts.find(p => p.key === snapKey);
+  if (!found) return;
+  const [ax, ay] = found.xy;
+  let name = state.activeAnchorName;
+  if (!name || name === "circle_center" || name === "visual_center") {
+    if (snapKey === "center") {
+      const circular = ["receptacle", "luminaire", "junction_box", "fire_alarm_device", "sprinkler_head", "sensor"];
+      name = circular.includes(item.symbol_family) ? "circle_center" : "visual_center";
+    } else {
+      name = "wall_attachment";
+    }
+  }
   modifySelection(x => {
     x.anchors ||= {};
     x.anchors[name] = {
-      xy: [Math.round(cx * 1000) / 1000, Math.round(cy * 1000) / 1000],
+      xy: [Math.round(ax * 1000) / 1000, Math.round(ay * 1000) / 1000],
       visible: true,
       annotated: true,
     };
   });
-  notify(`Placed ${name} at box center (${cx.toFixed(1)}, ${cy.toFixed(1)}).`, "saved");
+  notify(`Placed anchor "${name}" at ${found.name} (${ax.toFixed(1)}, ${ay.toFixed(1)}).`, "saved");
+  draw();
+}
+
+function autoPlaceCenterAnchor() {
+  placeBoxSnapAnchor("center");
+}
+
+function snapAnchorToTip() {
+  const item = chosen();
+  if (!item) {
+    notify("Select a box first to snap anchor to a tip.", "warning");
+    return;
+  }
+  const ctr = itemCenter(item);
+  let probe = state.pointerImg;
+  const maxDim = Math.max(item.bbox_xyxy[2] - item.bbox_xyxy[0], item.bbox_xyxy[3] - item.bbox_xyxy[1]);
+  if (!probe || Math.hypot(probe[0] - ctr[0], probe[1] - ctr[1]) > maxDim * 1.5) {
+    const rad = ((item.bbox_rotated?.angle_deg ?? (item.rotation_degrees || 0)) * Math.PI) / 180;
+    const dist = Math.max(12, maxDim / 2 - 2);
+    probe = [ctr[0] + Math.cos(rad) * dist, ctr[1] + Math.sin(rad) * dist];
+  }
+  const tip = findFeatureTipInArea(probe, item, Math.max(24, 28 / state.scale)) ||
+              findFeatureTipInArea(null, item, maxDim);
+  if (!tip) {
+    notify("No distinct ink tip found in the probed area. In Anchor mode, click on or near a feature tip.", "warning");
+    state.activeAnchorName = state.activeAnchorName || "wall_attachment";
+    setMode("anchor");
+    return;
+  }
+  const name = state.activeAnchorName || "wall_attachment";
+  modifySelection(x => {
+    x.anchors ||= {};
+    x.anchors[name] = {
+      xy: [Math.round(tip[0] * 1000) / 1000, Math.round(tip[1] * 1000) / 1000],
+      visible: true,
+      annotated: true,
+    };
+  });
+  notify(`Snapped anchor "${name}" to feature tip at (${tip[0].toFixed(1)}, ${tip[1].toFixed(1)}).`, "saved");
+  draw();
 }
 
 function autoSnapFromBoxAngle() {
@@ -3786,7 +4112,7 @@ function wireEvents() {
   $("duplicate").addEventListener("click", duplicateSelected);
   $("delete").addEventListener("click", deleteSelected);
 
-  for (const btn of document.querySelectorAll(".quick-family")) {
+  for (const btn of document.querySelectorAll(".quick-family, .multi-quick-family")) {
     btn.addEventListener("click", () => applyQuickFamily(btn.dataset.family));
   }
   for (const id of ["instanceIdInput", "family", "variant", "x0", "y0", "x1", "y1", "occluded", "truncated"]) {
@@ -3830,7 +4156,13 @@ function wireEvents() {
   $("placeCircleCenter").addEventListener("click", () => { state.activeAnchorName = "circle_center"; setMode("anchor"); });
   $("placeVisualCenter").addEventListener("click", () => { state.activeAnchorName = "visual_center"; setMode("anchor"); });
   $("placeWallAttach").addEventListener("click", () => { state.activeAnchorName = "wall_attachment"; setMode("anchor"); });
-  $("autoCenterAnchor").addEventListener("click", autoPlaceCenterAnchor);
+  $("autoCenterAnchor")?.addEventListener("click", autoPlaceCenterAnchor);
+  $("snapAnchorCenter")?.addEventListener("click", () => placeBoxSnapAnchor("center"));
+  $("snapAnchorTop")?.addEventListener("click", () => placeBoxSnapAnchor("top"));
+  $("snapAnchorBottom")?.addEventListener("click", () => placeBoxSnapAnchor("bottom"));
+  $("snapAnchorLeft")?.addEventListener("click", () => placeBoxSnapAnchor("left"));
+  $("snapAnchorRight")?.addEventListener("click", () => placeBoxSnapAnchor("right"));
+  $("snapAnchorTip")?.addEventListener("click", snapAnchorToTip);
   $("placeCustomAnchor").addEventListener("click", () => {
     const name = $("customAnchorName").value.trim();
     if (!name) { notify("Enter a custom anchor name first.", "warning"); return; }
