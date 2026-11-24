@@ -93,9 +93,12 @@
 <header>
   <strong>Symbol labels</strong>
   <div class="toolbar-group">
-    <select id="docSelect" style="max-width:240px;font-size:12.5px;padding:4px 6px;" title="Switch Blueprint Document" aria-label="Select blueprint document">
-      <option value="">Loading documents...</option>
-    </select>
+    <button id="navPdfsBtn" class="primary" style="font-weight:600;" title="Open all blueprints catalog menu">📁 PDFs</button>
+    <button id="nextPdfBtn" class="ghost" title="Open next blueprint document in list">Next PDF →</button>
+  </div>
+  <div class="toolbar-group">
+    <span id="currentDocBadge" style="font-weight:600;font-size:12.5px;color:#56b4db;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+    <select id="docSelect" hidden aria-label="Select blueprint document"></select>
   </div>
   <div class="toolbar-group">
     <button id="prevPage" title="Previous page or JSON ([)">&lt;</button>
@@ -105,12 +108,13 @@
   </div>
   <span class="spacer"></span>
   <div class="toolbar-group">
-    <button id="selectTool" aria-pressed="true" title="Select / move / resize / rotate (V)">Select · V</button>
+    <button id="panTool" aria-pressed="true" title="Pan drawing: click & drag canvas anywhere (hold Space or H)">Pan · Space</button>
+    <button id="selectTool" aria-pressed="false" title="Select / move / resize / rotate (V)">Select · V</button>
     <button id="drawTool" aria-pressed="false" title="Draw axis-aligned box (B)">Box · B</button>
-    <button id="orientedTool" aria-pressed="false" title="Draw oriented/rotated box: drag axis, then click width (O)">Oriented · O</button>
-    <button id="anchorTool" aria-pressed="false" title="Place anchor point on selected box (K)">Anchor · K</button>
-    <button id="snapTool" aria-pressed="false" title="Draw extra wall-snap vector on selected box (G)">Snap · G</button>
-    <button id="panTool" aria-pressed="false" title="Pan drawing (hold Space)">Pan</button>
+    <button id="orientedTool" aria-pressed="false" title="Draw oriented box: drag baseline edge, then move to top/bottom side (O)">Oriented · O</button>
+    <button id="snapRefineBtn" class="ghost" title="Snap bounding box to symbol contrast edges (G)">Snap Edges · G</button>
+    <button id="anchorTool" class="ghost" aria-pressed="false" title="Place anchor point on selected box (K)">Anchor · K</button>
+    <button id="snapTool" class="ghost" aria-pressed="false" hidden title="Draw extra wall-snap vector on selected box">Snap Vec</button>
   </div>
   <div class="toolbar-group">
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
@@ -123,6 +127,21 @@
     <button id="save" class="primary" title="Save this page (Ctrl+S)">Save</button>
   </div>
 </header>
+<div id="pdfMenuScreen" style="position:fixed;inset:0;background:#0e151c;z-index:9000;display:flex;flex-direction:column;padding:20px;overflow-y:auto;" hidden>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-bottom:1px solid #324351;padding-bottom:14px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button id="closePdfMenuBtn" class="primary" style="font-size:13.5px;padding:6px 14px;">← Back to Editor</button>
+      <h2 style="margin:0;font-size:17px;">Blueprints Directory (<span id="pdfMenuTotal">0</span>)</h2>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <input id="pdfMenuSearch" type="search" placeholder="Filter by document name or folder path..." style="min-width:300px;padding:6px 10px;font-size:13px;" autocomplete="off">
+      <button id="filterPdfAll" class="chip" aria-pressed="true">All</button>
+      <button id="filterPdfProposals" class="chip" aria-pressed="false">With Proposals</button>
+      <button id="filterPdfAnnotated" class="chip" aria-pressed="false">Annotated</button>
+    </div>
+  </div>
+  <div id="pdfGrid" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(350px, 1fr));gap:12px;margin-top:16px;"></div>
+</div>
 <main id="workspace">
   <section id="viewport" aria-label="Drawing canvas">
     <canvas id="canvas" tabindex="0" aria-label="Blueprint image and bounding boxes"></canvas>
@@ -178,7 +197,26 @@
     <div id="items" aria-label="Label list"></div>
 
     <h3>Selected symbol</h3>
-    <p id="emptySelection">Select a box on the drawing, press B for an axis-aligned box, or press O to draw an oriented/rotated box.</p>
+    <div id="multiSelectionCard" class="section-card" hidden style="border-color:var(--accent);background:#162430;">
+      <div class="row" style="margin-bottom:8px;">
+        <strong id="multiSelectionTitle" style="color:var(--text);font-size:13.5px;">0 symbols selected</strong>
+      </div>
+      <div class="chip-list" aria-label="Batch quick family hotkeys 1 to 6">
+        <button type="button" class="chip quick-family" data-family="receptacle" title="Set family for all selected (1)">1 receptacle</button>
+        <button type="button" class="chip quick-family" data-family="switch" title="Set family for all selected (2)">2 switch</button>
+        <button type="button" class="chip quick-family" data-family="luminaire" title="Set family for all selected (3)">3 luminaire</button>
+        <button type="button" class="chip quick-family" data-family="fire_alarm_device" title="Set family for all selected (4)">4 fire_alarm</button>
+        <button type="button" class="chip quick-family" data-family="data_outlet" title="Set family for all selected (5)">5 data_outlet</button>
+        <button type="button" class="chip quick-family" data-family="junction_box" title="Set family for all selected (6)">6 j-box</button>
+      </div>
+      <div class="row wrap" style="margin-top:10px;">
+        <button type="button" id="multiVerifyBtn" class="primary" title="Verify all selected (A)">Verify All · A</button>
+        <button type="button" id="multiSnapBtn" class="ghost" title="Snap all selected boxes to symbol contrast edges (G)">Snap Edges All · G</button>
+        <button type="button" id="multiRejectBtn" class="danger" title="Reject all selected (X)">Reject All · X</button>
+        <button type="button" id="multiDeleteBtn" class="danger" title="Delete all selected (Delete)">Delete All · Del</button>
+      </div>
+    </div>
+    <p id="emptySelection">Select a box on the drawing, drag an area in Select mode, or press B to draw a box.</p>
     <div id="selectionDetails" hidden>
       <div class="row">
         <span id="selectedId" class="small" style="flex:1;overflow:hidden;text-overflow:ellipsis;"></span>
@@ -195,6 +233,7 @@
       <div class="chip-list" id="quickSubtypeBar" aria-label="Quick subtype chips (Shift+1 to Shift+6)"></div>
       <div class="row wrap">
         <button id="accept" class="primary" title="Verify selected box (A)">Verify · A</button>
+        <button id="snapRefineInspectorBtn" class="ghost" title="Snap box to symbol contrast edges (G)">Snap Edges · G</button>
         <button id="unverify" class="ghost" title="Mark selected box back to pending">Unverify</button>
         <button id="reject" class="danger" title="Reject selected detection (X)">Reject · X</button>
         <button id="duplicate" class="ghost" title="Duplicate selected box (D) or Ctrl+C / Ctrl+V at cursor">Duplicate · D</button>

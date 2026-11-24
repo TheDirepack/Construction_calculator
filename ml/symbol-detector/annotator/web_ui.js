@@ -95,7 +95,9 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   token: null, page: 0, pageCount: 1, revision: null, doc: null,
-  image: null, mode: "select", selectedId: null,
+  image: null, mode: "pan", selectedId: null,
+  selectedIds: new Set(),
+  pageCache: {},
   scale: 1, x: 0, y: 0, space: false, drag: null, dirty: false,
   undo: [], redo: [], lastFamily: "receptacle", lastVariantByFamily: {}, customVariantsByFamily: {}, busy: false,
   showLabels: true, showLoupe: true, showWalls: true,
@@ -118,6 +120,8 @@ const state = {
   documents: [],
   currentDocPath: "",
   currentDocName: "",
+  pdfMenuFilter: "all",
+  pdfMenuQuery: "",
 };
 
 const elements = typeof document === "undefined" ? null : {
@@ -175,27 +179,61 @@ function notify(message, kind = "") {
   target.textContent = message;
   target.className = kind;
 }
+function updateDirtyIndicator() {
+  const dirtyPages = new Set();
+  for (const [pStr, c] of Object.entries(state.pageCache || {})) {
+    if (c.dirty) dirtyPages.add(Number(pStr) + 1);
+  }
+  if (state.dirty) dirtyPages.add(state.page + 1);
+
+  const dirtyEl = $("dirty");
+  if (!dirtyEl) return;
+  if (dirtyPages.size > 0) {
+    const sorted = [...dirtyPages].sort((a, b) => a - b);
+    dirtyEl.textContent = `Unsaved (p.${sorted.join(", ")})`;
+    dirtyEl.className = "warning";
+    $("save").disabled = false;
+  } else {
+    dirtyEl.textContent = "Saved";
+    dirtyEl.className = "saved";
+    $("save").disabled = state.revision !== null;
+  }
+}
+
 function editState() {
   state.dirty = true;
-  $("dirty").textContent = "Unsaved changes";
-  $("dirty").className = "warning";
-  $("save").disabled = false;
+  if (state.doc) {
+    state.pageCache[state.page] = {
+      doc: JSON.parse(JSON.stringify(state.doc)),
+      dirty: true,
+      revision: state.revision,
+      undo: [...state.undo],
+      redo: [...state.redo],
+      selectedIds: new Set(state.selectedIds),
+      selectedId: state.selectedId,
+    };
+  }
+  updateDirtyIndicator();
   saveLocalDraft();
 }
+
 function savedState() {
   state.dirty = false;
-  $("dirty").textContent = "Saved";
-  $("dirty").className = "saved";
-  $("save").disabled = state.revision !== null;
+  if (state.pageCache[state.page]) {
+    state.pageCache[state.page].dirty = false;
+  }
+  updateDirtyIndicator();
   $("conflictBanner").hidden = true;
   clearLocalDraft();
 }
+
 function snapshot() {
   return JSON.stringify({
     instances: state.doc.instances,
     rejected_proposals: state.doc.rejected_proposals || [],
     verified_no_symbols: state.doc.verified_no_symbols === true,
     selectedId: state.selectedId,
+    selectedIds: Array.from(state.selectedIds || []),
     meta: {
       source_id: state.doc.source_id || "",
       project_family_id: state.doc.project_family_id || "",
@@ -204,33 +242,48 @@ function snapshot() {
     },
   });
 }
+
 function remember() {
   state.undo.push(snapshot());
   if (state.undo.length > 80) state.undo.shift();
   state.redo.length = 0;
 }
+
 function restore(snapshotText) {
   const data = JSON.parse(snapshotText);
   state.doc.instances = data.instances;
   state.doc.rejected_proposals = data.rejected_proposals;
   state.doc.verified_no_symbols = data.verified_no_symbols === true;
   state.selectedId = data.selectedId;
+  state.selectedIds = new Set(data.selectedIds || (data.selectedId ? [data.selectedId] : []));
   if (data.meta) Object.assign(state.doc, data.meta);
   editState();
   refresh();
 }
+
 function undo() {
   if (state.busy || !state.undo.length) return;
   state.redo.push(snapshot());
   restore(state.undo.pop());
 }
+
 function redo() {
   if (state.busy || !state.redo.length) return;
   state.undo.push(snapshot());
   restore(state.redo.pop());
 }
+
 function chosen() {
   return state.doc?.instances.find((x) => x.instance_id === state.selectedId) ?? null;
+}
+
+function chosenList() {
+  if (!state.doc?.instances) return [];
+  if (state.selectedIds && state.selectedIds.size > 0) {
+    return state.doc.instances.filter(x => state.selectedIds.has(x.instance_id));
+  }
+  const single = chosen();
+  return single ? [single] : [];
 }
 function coordinate(event) {
   const r = elements.canvas.getBoundingClientRect();
@@ -394,6 +447,15 @@ function draw() {
   if (!canvas || !state.doc) return;
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (!w || !h) return;
+  if (state.drag?.type === "pan") {
+    canvas.style.cursor = "grabbing";
+  } else if (state.mode === "pan" || state.space) {
+    canvas.style.cursor = "grab";
+  } else if (state.mode === "draw" || state.mode === "oriented" || state.mode === "anchor" || state.mode === "snap") {
+    canvas.style.cursor = "crosshair";
+  } else {
+    canvas.style.cursor = "default";
+  }
   const dpr = window.devicePixelRatio || 1;
   if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
     canvas.width = Math.round(w * dpr);
@@ -452,7 +514,7 @@ function draw() {
     const bw = (box[2] - box[0]) * state.scale;
     const bh = (box[3] - box[1]) * state.scale;
     const color = labelColor(item);
-    const isSel = item.instance_id === state.selectedId;
+    const isSel = Boolean(state.selectedIds?.has(item.instance_id) || item.instance_id === state.selectedId);
 
     if (item.bbox_rotated) {
       ctx.save();
@@ -562,7 +624,7 @@ function draw() {
       ctx.fillText(text.slice(0, 42), sx0 + 4, Math.max(12, sy0 - 5));
     }
 
-    if (isSel) {
+    if (isSel && (!state.selectedIds || state.selectedIds.size <= 1)) {
       ctx.fillStyle = "#fff"; ctx.strokeStyle = color; ctx.lineWidth = 2;
       if (item.bbox_rotated) {
         const corners = rotatedCorners(item.bbox_rotated).map(pt => imageToScreen(pt[0], pt[1], viewport()));
@@ -615,7 +677,25 @@ function draw() {
     ctx.restore();
   }
 
-  if (state.drag?.type === "draw") {
+  if (state.drag?.type === "marquee") {
+    const box = normalizedBox(state.drag.start, state.drag.current,
+                              state.doc.image_width, state.doc.image_height);
+    const [x, y] = imageToScreen(box[0], box[1], viewport());
+    const bw = (box[2] - box[0]) * state.scale;
+    const bh = (box[3] - box[1]) * state.scale;
+    ctx.save();
+    ctx.strokeStyle = "#56b4db";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.fillStyle = "rgba(86, 180, 219, 0.18)";
+    ctx.fillRect(x, y, bw, bh);
+    ctx.strokeRect(x, y, bw, bh);
+    const insideCount = state.doc.instances.filter(it =>
+      !(it.bbox_xyxy[2] < box[0] || it.bbox_xyxy[0] > box[2] || it.bbox_xyxy[3] < box[1] || it.bbox_xyxy[1] > box[3])
+    ).length;
+    drawBadge(ctx, x + 6, Math.max(4, y - 22), `Area select: ${insideCount} symbol${insideCount === 1 ? "" : "s"}`);
+    ctx.restore();
+  } else if (state.drag?.type === "draw") {
     const box = normalizedBox(state.drag.start, state.drag.current,
                               state.doc.image_width, state.doc.image_height);
     const [x, y] = imageToScreen(box[0], box[1], viewport());
@@ -681,19 +761,285 @@ function buildOrientedFromDraft(draft, cursorPt) {
   const cx0 = (p1[0] + p2[0]) / 2;
   const cy0 = (p1[1] + p2[1]) / 2;
   const a = angleDeg * Math.PI / 180;
+  // Unit normal perpendicular to baseline
   const nx = -Math.sin(a), ny = Math.cos(a);
   const signedDist = (cursorPt[0] - cx0) * nx + (cursorPt[1] - cy0) * ny;
-  const h = Math.max(4, Math.abs(signedDist) * 2);
-  return { cx: cx0, cy: cy0, w: Math.max(4, w), h, angle_deg: angleDeg };
+  const h = Math.max(4, Math.abs(signedDist));
+  // Displace center along normal so baseline (p1, p2) remains stationary as one edge of the box
+  const shift = signedDist / 2;
+  const cx = cx0 + nx * shift;
+  const cy = cy0 + ny * shift;
+  return { cx, cy, w: Math.max(4, w), h, angle_deg: angleDeg };
+}
+
+function snapAngleToWallsOrCardinals(rawAng, startPt) {
+  if (state.walls && state.walls.length) {
+    let bestDiff = 22;
+    let bestSnap = null;
+    for (const w of state.walls) {
+      const sx = w.start[0], sy = w.start[1];
+      const ex = w.end[0], ey = w.end[1];
+      const wx = ex - sx, wy = ey - sy;
+      const wlen2 = wx * wx + wy * wy;
+      if (wlen2 < 1e-6) continue;
+      const u = clamp(((startPt[0] - sx) * wx + (startPt[1] - sy) * wy) / wlen2, 0, 1);
+      const px = sx + u * wx, py = sy + u * wy;
+      const dist = Math.hypot(startPt[0] - px, startPt[1] - py);
+      if (dist <= 80) {
+        const wallAng = Math.atan2(wy, wx) * 180 / Math.PI;
+        for (const offset of [0, 90, 180, -90]) {
+          const candidate = ((wallAng + offset + 180) % 360 + 360) % 360 - 180;
+          const diff = Math.abs(((rawAng - candidate + 180) % 360 + 360) % 360 - 180);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestSnap = candidate;
+          }
+        }
+      }
+    }
+    if (bestSnap !== null) return Math.round(bestSnap * 10) / 10;
+  }
+  for (const card of [0, 45, 90, 135, 180, -45, -90, -135]) {
+    const diff = Math.abs(((rawAng - card + 180) % 360 + 360) % 360 - 180);
+    if (diff <= 10) return card;
+  }
+  return rawAng;
+}
+
+let edgeSnapCanvas = null;
+let edgeSnapCtx = null;
+function getEdgeSnapCtx() {
+  if (!edgeSnapCanvas) {
+    edgeSnapCanvas = document.createElement("canvas");
+    edgeSnapCtx = edgeSnapCanvas.getContext("2d", { willReadFrequently: true });
+  }
+  return edgeSnapCtx;
+}
+
+function snapBoxToContrastEdges(box, rotated = null) {
+  if (!state.image || !state.doc) return { box, rotated };
+  const [x0, y0, x1, y1] = box;
+  const w = x1 - x0, h = y1 - y0;
+  if (w < 6 || h < 6) return { box, rotated };
+
+  if (!rotated || Math.abs(rotated.angle_deg || 0) < 1e-4) {
+    const padX = Math.max(3, Math.round(w * 0.12));
+    const padY = Math.max(3, Math.round(h * 0.12));
+    const sx0 = Math.max(0, Math.floor(x0 - padX));
+    const sy0 = Math.max(0, Math.floor(y0 - padY));
+    const sx1 = Math.min(state.doc.image_width, Math.ceil(x1 + padX));
+    const sy1 = Math.min(state.doc.image_height, Math.ceil(y1 + padY));
+    const sw = sx1 - sx0, sh = sy1 - sy0;
+    if (sw < 6 || sh < 6) return { box, rotated };
+
+    const ctx = getEdgeSnapCtx();
+    edgeSnapCanvas.width = sw;
+    edgeSnapCanvas.height = sh;
+    ctx.drawImage(state.image, sx0, sy0, sw, sh, 0, 0, sw, sh);
+    const imgData = ctx.getImageData(0, 0, sw, sh);
+    const d = imgData.data;
+
+    let borderLSum = 0, borderCount = 0;
+    for (let cx = 0; cx < sw; cx += 2) {
+      const iTop = cx * 4, iBot = ((sh - 1) * sw + cx) * 4;
+      borderLSum += 0.299 * d[iTop] + 0.587 * d[iTop + 1] + 0.114 * d[iTop + 2];
+      borderLSum += 0.299 * d[iBot] + 0.587 * d[iBot + 1] + 0.114 * d[iBot + 2];
+      borderCount += 2;
+    }
+    const bgL = borderCount ? borderLSum / borderCount : 255;
+    const isLightBg = bgL >= 128;
+    const contrastThresh = 28;
+
+    const relX0 = x0 - sx0, relX1 = x1 - sx0;
+    const relY0 = y0 - sy0, relY1 = y1 - sy0;
+
+    const histX = new Int32Array(sw);
+    const histY = new Int32Array(sh);
+
+    const searchMinY = Math.max(0, Math.floor(relY0 - padX * 0.5));
+    const searchMaxY = Math.min(sh - 1, Math.ceil(relY1 + padX * 0.5));
+    const searchMinX = Math.max(0, Math.floor(relX0 - padY * 0.5));
+    const searchMaxX = Math.min(sw - 1, Math.ceil(relX1 + padY * 0.5));
+
+    for (let cy = searchMinY; cy <= searchMaxY; cy++) {
+      const rowOffset = cy * sw * 4;
+      for (let cx = searchMinX; cx <= searchMaxX; cx++) {
+        const idx = rowOffset + cx * 4;
+        const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+        const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
+        if (contrast >= contrastThresh) {
+          histX[cx]++;
+          histY[cy]++;
+        }
+      }
+    }
+
+    const minDensX = Math.max(1, Math.round(h * 0.04));
+    const minDensY = Math.max(1, Math.round(w * 0.04));
+
+    let firstX = -1, lastX = -1, firstY = -1, lastY = -1;
+    for (let cx = 0; cx < sw; cx++) {
+      if (histX[cx] >= minDensX) {
+        if (firstX === -1) firstX = cx;
+        lastX = cx;
+      }
+    }
+    for (let cy = 0; cy < sh; cy++) {
+      if (histY[cy] >= minDensY) {
+        if (firstY === -1) firstY = cy;
+        lastY = cy;
+      }
+    }
+
+    if (firstX === -1 || lastX === -1 || firstY === -1 || lastY === -1 ||
+        (lastX - firstX < 4) || (lastY - firstY < 4)) {
+      return { box, rotated };
+    }
+
+    let newW = (lastX - firstX + 1);
+    let newH = (lastY - firstY + 1);
+
+    if (newW < w * 0.5) newW = Math.round(w * 0.55);
+    if (newH < h * 0.5) newH = Math.round(h * 0.55);
+    if (newW > w * 1.35) newW = Math.round(w * 1.35);
+    if (newH > h * 1.35) newH = Math.round(h * 1.35);
+
+    const midX = sx0 + (firstX + lastX) / 2;
+    const midY = sy0 + (firstY + lastY) / 2;
+
+    let nx0 = clamp(midX - newW / 2 - 1.5, 0, state.doc.image_width - 4);
+    let ny0 = clamp(midY - newH / 2 - 1.5, 0, state.doc.image_height - 4);
+    let nx1 = clamp(midX + newW / 2 + 1.5, nx0 + 4, state.doc.image_width);
+    let ny1 = clamp(midY + newH / 2 + 1.5, ny0 + 4, state.doc.image_height);
+
+    return {
+      box: [Math.round(nx0 * 10) / 10, Math.round(ny0 * 10) / 10, Math.round(nx1 * 10) / 10, Math.round(ny1 * 10) / 10],
+      rotated: null,
+    };
+  }
+
+  const { cx, cy, angle_deg } = rotated;
+  const rad = angle_deg * Math.PI / 180;
+  const cosA = Math.cos(rad), sinA = Math.sin(rad);
+
+  const pad = Math.max(6, Math.round(Math.max(w, h) * 0.15));
+  const radius = Math.ceil(Math.hypot(rotated.w, rotated.h) / 2 + pad);
+  const sx0 = Math.max(0, Math.floor(cx - radius));
+  const sy0 = Math.max(0, Math.floor(cy - radius));
+  const sx1 = Math.min(state.doc.image_width, Math.ceil(cx + radius));
+  const sy1 = Math.min(state.doc.image_height, Math.ceil(cy + radius));
+  const sw = sx1 - sx0, sh = sy1 - sy0;
+  if (sw < 6 || sh < 6) return { box, rotated };
+
+  const ctx = getEdgeSnapCtx();
+  edgeSnapCanvas.width = sw;
+  edgeSnapCanvas.height = sh;
+  ctx.drawImage(state.image, sx0, sy0, sw, sh, 0, 0, sw, sh);
+  const imgData = ctx.getImageData(0, 0, sw, sh);
+  const d = imgData.data;
+
+  let borderLSum = 0, borderCount = 0;
+  for (let x = 0; x < sw; x += 2) {
+    const t = x * 4, b = ((sh - 1) * sw + x) * 4;
+    borderLSum += 0.299 * d[t] + 0.587 * d[t + 1] + 0.114 * d[t + 2];
+    borderLSum += 0.299 * d[b] + 0.587 * d[b + 1] + 0.114 * d[b + 2];
+    borderCount += 2;
+  }
+  const bgL = borderCount ? borderLSum / borderCount : 255;
+  const isLightBg = bgL >= 128;
+  const contrastThresh = 28;
+
+  let minU = 99999, maxU = -99999, minV = 99999, maxV = -99999;
+  let inkCount = 0;
+  const maxUAllowed = rotated.w / 2 + pad * 0.8;
+  const maxVAllowed = rotated.h / 2 + pad * 0.8;
+
+  for (let py = 0; py < sh; py++) {
+    const imgY = sy0 + py;
+    const rowOffset = py * sw * 4;
+    for (let px = 0; px < sw; px++) {
+      const idx = rowOffset + px * 4;
+      const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+      const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
+      if (contrast >= contrastThresh) {
+        const imgX = sx0 + px;
+        const dx = imgX - cx, dy = imgY - cy;
+        const u = dx * cosA + dy * sinA;
+        const v = -dx * sinA + dy * cosA;
+        if (Math.abs(u) <= maxUAllowed && Math.abs(v) <= maxVAllowed) {
+          inkCount++;
+          if (u < minU) minU = u;
+          if (u > maxU) maxU = u;
+          if (v < minV) minV = v;
+          if (v > maxV) maxV = v;
+        }
+      }
+    }
+  }
+
+  if (inkCount < 6 || minU >= maxU || minV >= maxV) return { box, rotated };
+
+  let newRotW = Math.max(rotated.w * 0.5, Math.min(rotated.w * 1.35, (maxU - minU) + 3));
+  let newRotH = Math.max(rotated.h * 0.5, Math.min(rotated.h * 1.35, (maxV - minV) + 3));
+
+  const shiftU = (minU + maxU) / 2;
+  const shiftV = (minV + maxV) / 2;
+  const newCx = clamp(cx + shiftU * cosA - shiftV * sinA, 0, state.doc.image_width);
+  const newCy = clamp(cy + shiftU * sinA + shiftV * cosA, 0, state.doc.image_height);
+
+  const nextRot = {
+    cx: Math.round(newCx * 10) / 10,
+    cy: Math.round(newCy * 10) / 10,
+    w: Math.round(newRotW * 10) / 10,
+    h: Math.round(newRotH * 10) / 10,
+    angle_deg: rotated.angle_deg,
+  };
+  const aabb = rotatedAabb(nextRot.cx, nextRot.cy, nextRot.w, nextRot.h, nextRot.angle_deg);
+  return { box: aabb.map(v => Math.round(v * 10) / 10), rotated: nextRot };
+}
+
+function snapContrastEdgesSelected() {
+  const targets = chosenList();
+  if (!targets.length) {
+    notify("Select one or more boxes first to snap to symbol edges.", "warning");
+    return;
+  }
+  flushPendingInputs();
+  remember();
+  let snappedCount = 0;
+  for (const item of targets) {
+    const before = reviewEvidenceKey(item);
+    const res = snapBoxToContrastEdges(item.bbox_xyxy, item.bbox_rotated);
+    if (checkBox(res.box)) {
+      item.bbox_xyxy = res.box;
+      if (res.rotated) {
+        item.bbox_rotated = res.rotated;
+      } else if (item.bbox_rotated) {
+        item.bbox_rotated.w = res.box[2] - res.box[0];
+        item.bbox_rotated.h = res.box[3] - res.box[1];
+        item.bbox_rotated.cx = (res.box[0] + res.box[2]) / 2;
+        item.bbox_rotated.cy = (res.box[1] + res.box[3]) / 2;
+      }
+      invalidateReviewOnChange(item, before);
+      snappedCount++;
+    }
+  }
+  editState();
+  refresh();
+  notify(`Snapped ${snappedCount} box${snappedCount > 1 ? "es" : ""} to symbol contrast edges.`, "saved");
 }
 
 function refreshControls() {
+  if ($("currentDocBadge")) {
+    $("currentDocBadge").textContent = state.currentDocName || "Document";
+    $("currentDocBadge").title = state.currentDocPath || "";
+  }
   $("pageIndicator").textContent = (state.pageCount === 1 && state.doc?.page_index > 0)
     ? "Source p" + (state.doc.page_index + 1)
     : "Page " + (state.page + 1) + " / " + state.pageCount;
   $("prevPage").disabled = state.page === 0 || state.busy;
   $("nextPage").disabled = state.page >= state.pageCount - 1 || state.busy;
-  for (const name of ["select", "draw", "oriented", "anchor", "snap", "pan"]) {
+  for (const name of ["pan", "select", "draw", "oriented", "anchor", "snap"]) {
     const el = $(name + "Tool");
     if (el) el.setAttribute("aria-pressed", String(state.mode === name));
   }
@@ -1188,10 +1534,21 @@ function fillSheetMetadata() {
 }
 
 function fillSelection() {
+  const count = state.selectedIds?.size || (chosen() ? 1 : 0);
+  const multiCard = $("multiSelectionCard");
+  if (multiCard) {
+    if (count > 1) {
+      multiCard.hidden = false;
+      $("multiSelectionTitle").textContent = `${count} symbols selected`;
+    } else {
+      multiCard.hidden = true;
+    }
+  }
+
   const item = chosen();
-  $("emptySelection").hidden = Boolean(item);
-  $("selectionDetails").hidden = !item;
-  if (!item) return;
+  $("emptySelection").hidden = count > 0;
+  $("selectionDetails").hidden = count === 0 || count > 1;
+  if (!item || count > 1) return;
   $("selectedId").textContent = item.instance_id;
   $("instanceIdInput").value = item.instance_id;
   $("disciplineBadge").textContent = disciplineFor(item.symbol_family);
@@ -1273,8 +1630,33 @@ function refresh() {
 
 function select(id, focus = false) {
   if (state.selectedId !== id) state.snapPreview = null;
-  state.selectedId = id;
+  if (id == null) {
+    state.selectedIds.clear();
+    state.selectedId = null;
+  } else {
+    state.selectedIds = new Set([id]);
+    state.selectedId = id;
+  }
   if (focus && chosen()) centerBox(chosen().bbox_xyxy);
+  refresh();
+}
+
+function selectMultiple(ids) {
+  state.selectedIds = new Set(ids);
+  state.selectedId = ids.length ? ids[0] : null;
+  refresh();
+}
+
+function toggleSelect(id) {
+  if (state.selectedIds.has(id)) {
+    state.selectedIds.delete(id);
+    if (state.selectedId === id) {
+      state.selectedId = state.selectedIds.size ? [...state.selectedIds][0] : null;
+    }
+  } else {
+    state.selectedIds.add(id);
+    state.selectedId = id;
+  }
   refresh();
 }
 
@@ -1303,22 +1685,33 @@ function subtypeForChangedFamily(family, existingVariant) {
 function applyQuickFamily(family) {
   if (!family) return;
   state.lastFamily = family;
-  if (!chosen()) {
+  const list = chosenList();
+  if (!list.length) {
     notify(`Next drawn box will default to ${family}.`);
     return;
   }
-  modifySelection(x => {
-    if (family !== x.symbol_family) {
-      x.symbol_variant = subtypeForChangedFamily(family, x.symbol_variant);
+  remember();
+  for (const item of list) {
+    const before = reviewEvidenceKey(item);
+    if (family !== item.symbol_family) {
+      item.symbol_variant = subtypeForChangedFamily(family, item.symbol_variant);
     }
-    x.symbol_family = family;
-    x.discipline = disciplineFor(family);
-    x.device_type = family;
-  });
-  notify(`Set family to ${family}.`, "saved");
+    item.symbol_family = family;
+    item.discipline = disciplineFor(family);
+    item.device_type = family;
+    invalidateReviewOnChange(item, before);
+  }
+  editState();
+  refresh();
+  notify(`Set family to ${family} for ${list.length} symbol${list.length > 1 ? "s" : ""}.`, "saved");
 }
 
 function newInstance(box, rotated = null) {
+  const snapped = snapBoxToContrastEdges(box, rotated);
+  if (checkBox(snapped.box)) {
+    box = snapped.box;
+    if (snapped.rotated) rotated = snapped.rotated;
+  }
   const family = state.lastFamily;
   const item = {
     instance_id: "manual_p" + (state.page + 1) + "_" + crypto.randomUUID().slice(0, 8),
@@ -1349,7 +1742,7 @@ function newInstance(box, rotated = null) {
   state.doc.instances.push(item);
   select(item.instance_id);
   editState();
-  notify(rotated ? "Oriented draft box added. Press 1–6 for family, A to verify." : "Draft box added. Press 1–6 for family, A to verify.");
+  notify(rotated ? "Oriented box added & snapped. Press 1–6 for family, A to verify." : "Box added & snapped to contrast edges. Press 1–6 for family, A to verify.");
 }
 
 function checkBox(box) {
@@ -1412,44 +1805,60 @@ function flushPendingInputs() {
 
 function verifySelected() {
   flushPendingInputs();
-  modifySelection(item => {
+  const list = chosenList();
+  if (!list.length) return;
+  remember();
+  for (const item of list) {
     item.review_status = "accepted";
     item.review_source = "human";
     item.verified_ground_truth = true;
     item.uncertain = false;
-  });
+  }
+  editState();
+  refresh();
+  notify(`Verified ${list.length} symbol${list.length > 1 ? "s" : ""}.`, "saved");
   nextPending(false);
 }
 
 function unverifySelected() {
   flushPendingInputs();
-  modifySelection(item => {
+  const list = chosenList();
+  if (!list.length) return;
+  remember();
+  for (const item of list) {
     item.review_status = "unreviewed";
     item.review_source = "manual_draft";
     item.verified_ground_truth = false;
     item.uncertain = true;
-  });
+  }
+  editState();
+  refresh();
+  notify(`Marked ${list.length} symbol${list.length > 1 ? "s" : ""} as pending.`, "saved");
 }
 
 function rejectSelected() {
   flushPendingInputs();
   if (state.busy) return;
-  const item = chosen();
-  if (!item) return;
+  const list = chosenList();
+  if (!list.length) return;
   remember();
-  state.doc.instances = state.doc.instances.filter(x => x.instance_id !== item.instance_id);
-  const rejected = {
-    ...item,
-    review_status: "rejected",
-    review_source: "human",
-    verified_ground_truth: false,
-    uncertain: true,
-  };
+  const rejSet = new Set(list.map(x => x.instance_id));
+  state.doc.instances = state.doc.instances.filter(x => !rejSet.has(x.instance_id));
   state.doc.rejected_proposals ||= [];
-  state.doc.rejected_proposals.push(rejected);
+  for (const item of list) {
+    state.doc.rejected_proposals.push({
+      ...item,
+      review_status: "rejected",
+      review_source: "human",
+      verified_ground_truth: false,
+      uncertain: true,
+    });
+  }
   state.selectedId = null;
+  state.selectedIds.clear();
   editState();
   refresh();
+  notify(`Rejected ${list.length} symbol${list.length > 1 ? "s" : ""}.`, "saved");
   nextPending(false);
 }
 
@@ -1559,32 +1968,39 @@ function pasteAtCursor() {
 }
 
 function deleteSelected() {
-  if (state.busy || !chosen()) return;
+  const list = chosenList();
+  if (state.busy || !list.length) return;
   remember();
-  state.doc.instances = state.doc.instances.filter(x => x.instance_id !== state.selectedId);
+  const toDelete = new Set(list.map(x => x.instance_id));
+  state.doc.instances = state.doc.instances.filter(x => !toDelete.has(x.instance_id));
   state.selectedId = null;
+  state.selectedIds.clear();
   editState();
   refresh();
+  notify(`Deleted ${list.length} box${list.length > 1 ? "es" : ""}.`, "saved");
 }
 
 function nudgeSelected(dx, dy) {
-  const item = chosen();
-  if (!item || state.busy) return;
-  const tx = clamp(dx, -item.bbox_xyxy[0], state.doc.image_width - item.bbox_xyxy[2]);
-  const ty = clamp(dy, -item.bbox_xyxy[1], state.doc.image_height - item.bbox_xyxy[3]);
-  if (Math.abs(tx) < 1e-6 && Math.abs(ty) < 1e-6) return;
-  modifySelection(x => {
-    x.bbox_xyxy = [
-      Math.round((x.bbox_xyxy[0] + tx) * 1000) / 1000,
-      Math.round((x.bbox_xyxy[1] + ty) * 1000) / 1000,
-      Math.round((x.bbox_xyxy[2] + tx) * 1000) / 1000,
-      Math.round((x.bbox_xyxy[3] + ty) * 1000) / 1000,
+  const list = chosenList();
+  if (!list.length || state.busy) return;
+  remember();
+  for (const item of list) {
+    const tx = clamp(dx, -item.bbox_xyxy[0], state.doc.image_width - item.bbox_xyxy[2]);
+    const ty = clamp(dy, -item.bbox_xyxy[1], state.doc.image_height - item.bbox_xyxy[3]);
+    if (Math.abs(tx) < 1e-6 && Math.abs(ty) < 1e-6) continue;
+    item.bbox_xyxy = [
+      Math.round((item.bbox_xyxy[0] + tx) * 1000) / 1000,
+      Math.round((item.bbox_xyxy[1] + ty) * 1000) / 1000,
+      Math.round((item.bbox_xyxy[2] + tx) * 1000) / 1000,
+      Math.round((item.bbox_xyxy[3] + ty) * 1000) / 1000,
     ];
-    if (x.bbox_rotated) {
-      x.bbox_rotated.cx = Math.round((x.bbox_rotated.cx + tx) * 1000) / 1000;
-      x.bbox_rotated.cy = Math.round((x.bbox_rotated.cy + ty) * 1000) / 1000;
+    if (item.bbox_rotated) {
+      item.bbox_rotated.cx = Math.round((item.bbox_rotated.cx + tx) * 1000) / 1000;
+      item.bbox_rotated.cy = Math.round((item.bbox_rotated.cy + ty) * 1000) / 1000;
     }
-  });
+  }
+  editState();
+  refresh();
 }
 
 function nextPending(wrap = true) {
@@ -1623,8 +2039,71 @@ function pointerDown(event) {
   event.preventDefault();
   flushPendingInputs();
   const xy = coordinate(event), pt = screenToImage(...xy, viewport());
-  if (state.space || state.mode === "pan" || event.button === 1) {
+  if (state.space || event.button === 1) {
     state.drag = { type: "pan", at: xy, x: state.x, y: state.y };
+  } else if (state.mode === "pan") {
+    const hit = currentPageMouseHit(pt);
+    if (hit) {
+      select(hit.item.instance_id);
+      remember();
+      const bb = hit.item.bbox_xyxy;
+      const rotBase = hit.item.bbox_rotated
+        ? { ...hit.item.bbox_rotated }
+        : { cx: (bb[0] + bb[2]) / 2, cy: (bb[1] + bb[3]) / 2, w: bb[2] - bb[0], h: bb[3] - bb[1], angle_deg: 0 };
+      state.drag = {
+        type: hit.action,
+        start: pt,
+        box: [...bb],
+        boxes: { [hit.item.instance_id]: [...bb] },
+        originalRotation: hit.item.bbox_rotated ? { ...hit.item.bbox_rotated } : null,
+        originalRotations: { [hit.item.instance_id]: hit.item.bbox_rotated ? { ...hit.item.bbox_rotated } : null },
+        rotBase,
+        moved: false,
+        selected: hit.item.instance_id,
+        selectedIds: [hit.item.instance_id],
+        reviewEvidence: reviewEvidenceKey(hit.item),
+      };
+    } else {
+      select(null);
+      state.drag = { type: "pan", at: xy, x: state.x, y: state.y };
+    }
+  } else if (state.mode === "select") {
+    const hit = currentPageMouseHit(pt);
+    if (!hit) {
+      if (!event.shiftKey) select(null);
+      state.drag = { type: "marquee", start: pt, current: pt };
+    } else {
+      if (event.shiftKey) {
+        toggleSelect(hit.item.instance_id);
+      } else if (!state.selectedIds?.has(hit.item.instance_id)) {
+        select(hit.item.instance_id);
+      }
+      remember();
+      const movingItems = chosenList();
+      const boxes = {};
+      const originalRotations = {};
+      for (const it of movingItems) {
+        boxes[it.instance_id] = [...it.bbox_xyxy];
+        originalRotations[it.instance_id] = it.bbox_rotated ? { ...it.bbox_rotated } : null;
+      }
+      const bb = hit.item.bbox_xyxy;
+      const rotBase = hit.item.bbox_rotated
+        ? { ...hit.item.bbox_rotated }
+        : { cx: (bb[0] + bb[2]) / 2, cy: (bb[1] + bb[3]) / 2, w: bb[2] - bb[0], h: bb[3] - bb[1], angle_deg: 0 };
+      state.drag = {
+        type: hit.action,
+        start: pt,
+        box: [...bb],
+        boxes,
+        originalRotation: hit.item.bbox_rotated ? { ...hit.item.bbox_rotated } : null,
+        originalRotations,
+        rotBase,
+        moved: false,
+        selected: hit.item.instance_id,
+        selectedIds: movingItems.map(x => x.instance_id),
+        reviewEvidence: reviewEvidenceKey(hit.item),
+      };
+    }
   } else if (state.mode === "draw") {
     state.drag = { type: "draw", start: pt, current: pt };
   } else if (state.mode === "oriented") {
@@ -1635,6 +2114,7 @@ function pointerDown(event) {
       if (checkBox(aabb)) {
         remember();
         newInstance(aabb, rot);
+        setMode("select");
       } else {
         notify("Oriented box extends outside image bounds.", "error");
       }
@@ -1674,6 +2154,7 @@ function pointerDown(event) {
     const hit = currentPageMouseHit(pt);
     if (!hit) {
       select(null);
+      state.drag = { type: "pan", at: xy, x: state.x, y: state.y };
     } else {
       select(hit.item.instance_id);
       remember();
@@ -1685,10 +2166,13 @@ function pointerDown(event) {
         type: hit.action,
         start: pt,
         box: [...bb],
+        boxes: { [hit.item.instance_id]: [...bb] },
         originalRotation: hit.item.bbox_rotated ? { ...hit.item.bbox_rotated } : null,
+        originalRotations: { [hit.item.instance_id]: hit.item.bbox_rotated ? { ...hit.item.bbox_rotated } : null },
         rotBase,
         moved: false,
         selected: hit.item.instance_id,
+        selectedIds: [hit.item.instance_id],
         reviewEvidence: reviewEvidenceKey(hit.item),
       };
     }
@@ -1715,9 +2199,27 @@ function pointerMove(event) {
   if (d.type === "pan") {
     state.x = d.x + xy[0] - d.at[0];
     state.y = d.y + xy[1] - d.at[1];
+  } else if (d.type === "marquee") {
+    d.current = pt;
   } else if (d.type === "draw") {
     d.current = pt;
-  } else if (d.type === "oriented-axis" || d.type === "snap") {
+  } else if (d.type === "oriented-axis") {
+    let cur = [clamp(pt[0], 0, state.doc.image_width), clamp(pt[1], 0, state.doc.image_height)];
+    const dx = cur[0] - d.start[0], dy = cur[1] - d.start[1];
+    const dist = Math.hypot(dx, dy);
+    let rawAng = Math.atan2(dy, dx) * 180 / Math.PI;
+    let snappedAng = rawAng;
+    if (event.shiftKey) {
+      snappedAng = Math.round(rawAng / 15) * 15;
+    } else {
+      snappedAng = snapAngleToWallsOrCardinals(rawAng, d.start);
+    }
+    const rad = snappedAng * Math.PI / 180;
+    d.current = [
+      clamp(d.start[0] + Math.cos(rad) * dist, 0, state.doc.image_width),
+      clamp(d.start[1] + Math.sin(rad) * dist, 0, state.doc.image_height),
+    ];
+  } else if (d.type === "snap") {
     let cur = [clamp(pt[0], 0, state.doc.image_width), clamp(pt[1], 0, state.doc.image_height)];
     if (event.shiftKey) {
       const dx = cur[0] - d.start[0], dy = cur[1] - d.start[1];
@@ -1771,12 +2273,28 @@ function pointerMove(event) {
     let box = [...d.box];
     if (d.type === "move") {
       if (dx || dy) d.moved = true;
-      const tx = clamp(dx, -box[0], state.doc.image_width - box[2]);
-      const ty = clamp(dy, -box[1], state.doc.image_height - box[3]);
-      box = [box[0] + tx, box[1] + ty, box[2] + tx, box[3] + ty];
-      if (item.bbox_rotated) {
-        item.bbox_rotated.cx = d.originalRotation.cx + tx;
-        item.bbox_rotated.cy = d.originalRotation.cy + ty;
+      if (d.selectedIds && d.selectedIds.length > 1) {
+        for (const id of d.selectedIds) {
+          const it = state.doc.instances.find(x => x.instance_id === id);
+          const origBox = d.boxes?.[id];
+          if (!it || !origBox) continue;
+          const tx = clamp(dx, -origBox[0], state.doc.image_width - origBox[2]);
+          const ty = clamp(dy, -origBox[1], state.doc.image_height - origBox[3]);
+          it.bbox_xyxy = [origBox[0] + tx, origBox[1] + ty, origBox[2] + tx, origBox[3] + ty];
+          if (it.bbox_rotated && d.originalRotations?.[id]) {
+            it.bbox_rotated.cx = d.originalRotations[id].cx + tx;
+            it.bbox_rotated.cy = d.originalRotations[id].cy + ty;
+          }
+        }
+      } else {
+        const tx = clamp(dx, -box[0], state.doc.image_width - box[2]);
+        const ty = clamp(dy, -box[1], state.doc.image_height - box[3]);
+        box = [box[0] + tx, box[1] + ty, box[2] + tx, box[3] + ty];
+        if (item.bbox_rotated && d.originalRotation) {
+          item.bbox_rotated.cx = d.originalRotation.cx + tx;
+          item.bbox_rotated.cy = d.originalRotation.cy + ty;
+        }
+        item.bbox_xyxy = box;
       }
     } else {
       if (d.type.includes("w")) box[0] = clamp(d.box[0] + dx, 0, box[2] - 2);
@@ -1786,8 +2304,8 @@ function pointerMove(event) {
       delete item.bbox_rotated;
       item.rotation_degrees = 0;
       d.moved = true;
+      item.bbox_xyxy = box;
     }
-    item.bbox_xyxy = box;
   }
   draw();
 }
@@ -1799,15 +2317,36 @@ function pointerUp(event) {
     elements.canvas.releasePointerCapture(event.pointerId);
   }
   state.drag = null;
-  if (d.type === "draw") {
+  if (d.type === "marquee") {
     const box = normalizedBox(d.start, d.current, state.doc.image_width, state.doc.image_height);
-    if (checkBox(box)) { remember(); newInstance(box); }
+    const w = box[2] - box[0], h = box[3] - box[1];
+    if (w >= 3 && h >= 3) {
+      const hits = state.doc.instances.filter(it =>
+        !(it.bbox_xyxy[2] < box[0] || it.bbox_xyxy[0] > box[2] ||
+          it.bbox_xyxy[3] < box[1] || it.bbox_xyxy[1] > box[3])
+      );
+      if (hits.length) {
+        selectMultiple(hits.map(x => x.instance_id));
+        notify(`Selected ${hits.length} symbol${hits.length > 1 ? "s" : ""}. Press Del to delete, A to verify, X to reject, G to snap.`, "saved");
+      } else {
+        select(null);
+      }
+    }
+  } else if (d.type === "draw") {
+    const box = normalizedBox(d.start, d.current, state.doc.image_width, state.doc.image_height);
+    if (checkBox(box)) {
+      remember();
+      newInstance(box);
+      setMode("select");
+    }
   } else if (d.type === "oriented-axis") {
     const len = Math.hypot(d.current[0] - d.start[0], d.current[1] - d.start[1]);
     if (len >= 4) {
-      const ang = Math.round(Math.atan2(d.current[1] - d.start[1], d.current[0] - d.start[0]) * 180 / Math.PI * 10) / 10;
+      const rawAng = Math.atan2(d.current[1] - d.start[1], d.current[0] - d.start[0]) * 180 / Math.PI;
+      const ang = Math.round(snapAngleToWallsOrCardinals(rawAng, d.start) * 10) / 10;
       state.orientedDraft = { p1: d.start, p2: d.current, angleDeg: ang, w: len };
       refreshControls();
+      notify("Oriented (step 2/2): move cursor to top/bottom side for depth, then click to finish (Esc to cancel).", "saved");
     } else {
       notify("Drag along the symbol's main axis (at least 4 px).", "warning");
     }
@@ -1829,8 +2368,15 @@ function pointerUp(event) {
     }
   } else if (d.type !== "pan") {
     if (d.moved) {
-      const edited = state.doc.instances.find(x => x.instance_id === d.selected);
-      if (edited) invalidateReviewOnChange(edited, d.reviewEvidence);
+      if (d.selectedIds && d.selectedIds.length > 1) {
+        for (const id of d.selectedIds) {
+          const edited = state.doc.instances.find(x => x.instance_id === id);
+          if (edited) invalidateReviewOnChange(edited, "");
+        }
+      } else {
+        const edited = state.doc.instances.find(x => x.instance_id === d.selected);
+        if (edited) invalidateReviewOnChange(edited, d.reviewEvidence);
+      }
       editState();
       refresh();
     } else {
@@ -1844,18 +2390,36 @@ function cancelDrag() {
   state.orientedDraft = null;
   const drag = state.drag;
   if (!drag) { refreshControls(); draw(); return; }
-  if (drag.type === "pan") {
-    state.x = drag.x; state.y = drag.y;
+  if (drag.type === "pan" || drag.type === "marquee") {
+    if (drag.type === "pan") {
+      state.x = drag.x; state.y = drag.y;
+    }
   } else if (drag.type !== "draw" && drag.type !== "snap" && drag.type !== "oriented-axis") {
-    const item = state.doc.instances.find(x => x.instance_id === drag.selected);
-    if (item) {
-      item.bbox_xyxy = [...drag.box];
-      if (drag.originalRotation) {
-        item.bbox_rotated = { ...drag.originalRotation };
-        item.rotation_degrees = drag.originalRotation.angle_deg;
-      } else {
-        delete item.bbox_rotated;
-        item.rotation_degrees = 0;
+    if (drag.selectedIds && drag.selectedIds.length > 1) {
+      for (const id of drag.selectedIds) {
+        const item = state.doc.instances.find(x => x.instance_id === id);
+        if (item && drag.boxes?.[id]) {
+          item.bbox_xyxy = [...drag.boxes[id]];
+          if (drag.originalRotations?.[id]) {
+            item.bbox_rotated = { ...drag.originalRotations[id] };
+            item.rotation_degrees = drag.originalRotations[id].angle_deg;
+          } else {
+            delete item.bbox_rotated;
+            item.rotation_degrees = 0;
+          }
+        }
+      }
+    } else {
+      const item = state.doc.instances.find(x => x.instance_id === drag.selected);
+      if (item) {
+        item.bbox_xyxy = [...drag.box];
+        if (drag.originalRotation) {
+          item.bbox_rotated = { ...drag.originalRotation };
+          item.rotation_degrees = drag.originalRotation.angle_deg;
+        } else {
+          delete item.bbox_rotated;
+          item.rotation_degrees = 0;
+        }
       }
     }
     state.undo.pop();
@@ -2154,6 +2718,116 @@ async function runWallSnapPreview() {
   }
 }
 
+async function snapRefineSelected() {
+  const item = chosen();
+  if (!item) {
+    notify("Select a box first to snap to wall.", "warning");
+    return;
+  }
+  flushPendingInputs();
+  remember();
+
+  let snapRes = null;
+  try {
+    const res = await api("/api/snap?page=" + state.page, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+      body: JSON.stringify({ instance: JSON.parse(JSON.stringify(item)) }),
+    });
+    snapRes = res.snap;
+  } catch (_) {}
+
+  let nearestWall = null;
+  let minDist = 80;
+  const ctr = itemCenter(item);
+  if (state.walls && state.walls.length) {
+    for (let i = 0; i < state.walls.length; i++) {
+      const w = state.walls[i];
+      const sx = w.start[0], sy = w.start[1], ex = w.end[0], ey = w.end[1];
+      const wx = ex - sx, wy = ey - sy;
+      const wlen2 = wx * wx + wy * wy;
+      if (wlen2 < 1e-6) continue;
+      const u = clamp(((ctr[0] - sx) * wx + (ctr[1] - sy) * wy) / wlen2, 0, 1);
+      const px = sx + u * wx, py = sy + u * wy;
+      const d = Math.hypot(ctr[0] - px, ctr[1] - py);
+      if (d < minDist) {
+        minDist = d;
+        nearestWall = { wall: w, pt: [px, py], dist: d, wx, wy };
+      }
+    }
+  }
+
+  if (nearestWall) {
+    const { pt, wx, wy } = nearestWall;
+    const wallAng = Math.atan2(wy, wx) * 180 / Math.PI;
+    const curAng = item.bbox_rotated?.angle_deg ?? (item.rotation_degrees || 0);
+    let bestAng = curAng;
+    let minAngDiff = 999;
+    for (const offset of [0, 90, 180, -90]) {
+      const cand = ((wallAng + offset + 180) % 360 + 360) % 360 - 180;
+      const diff = Math.abs(((curAng - cand + 180) % 360 + 360) % 360 - 180);
+      if (diff < minAngDiff) {
+        minAngDiff = diff;
+        bestAng = cand;
+      }
+    }
+    const finalAng = Math.round(bestAng * 10) / 10;
+
+    item.anchors ||= {};
+    item.anchors.wall_attachment = {
+      xy: [Math.round(pt[0] * 1000) / 1000, Math.round(pt[1] * 1000) / 1000],
+      visible: true,
+      annotated: true,
+    };
+
+    const vdx = pt[0] - ctr[0], vdy = pt[1] - ctr[1];
+    const vlen = Math.hypot(vdx, vdy);
+    if (vlen > 1e-3) {
+      item.snap_vector = {
+        origin: [Math.round(ctr[0] * 1000) / 1000, Math.round(ctr[1] * 1000) / 1000],
+        direction: [Math.round((vdx / vlen) * 10000) / 10000, Math.round((vdy / vlen) * 10000) / 10000],
+      };
+    }
+
+    setSelectedAngle(finalAng);
+    if (snapRes) {
+      item.snap = snapRes;
+      state.snapPreview = snapRes;
+    }
+    editState();
+    refresh();
+    notify(`Refined: snapped to wall at (${pt[0].toFixed(1)}, ${pt[1].toFixed(1)}), angle ${finalAng}°.`, "saved");
+  } else if (snapRes && snapRes.point) {
+    item.anchors ||= {};
+    item.anchors.wall_attachment = {
+      xy: snapRes.point,
+      visible: true,
+      annotated: true,
+    };
+    if (snapRes.wall_angle_deg != null) {
+      const curAng = item.bbox_rotated?.angle_deg ?? (item.rotation_degrees || 0);
+      let bestAng = curAng;
+      let minAngDiff = 999;
+      for (const offset of [0, 90, 180, -90]) {
+        const cand = ((snapRes.wall_angle_deg + offset + 180) % 360 + 360) % 360 - 180;
+        const diff = Math.abs(((curAng - cand + 180) % 360 + 360) % 360 - 180);
+        if (diff < minAngDiff) {
+          minAngDiff = diff;
+          bestAng = cand;
+        }
+      }
+      setSelectedAngle(Math.round(bestAng * 10) / 10);
+    }
+    item.snap = snapRes;
+    state.snapPreview = snapRes;
+    editState();
+    refresh();
+    notify(`Wall snap resolved: ${snapRes.kind}.`, "saved");
+  } else {
+    notify("No wall segment found within 80 px of the box to snap to.", "warning");
+  }
+}
+
 async function importJsonFromFile(file) {
   if (!file || !state.doc) return;
   const source = {
@@ -2276,8 +2950,17 @@ function populateFamilyDatalist(families) {
 
 async function loadPage(page, force = false) {
   if (state.busy || state.drag || page < 0 || (page >= state.pageCount && state.doc)) return;
-  if (state.dirty && !force &&
-      !window.confirm("Discard unsaved annotations on this page? Click Cancel, then Save.")) return;
+  if (state.doc) {
+    state.pageCache[state.page] = {
+      doc: JSON.parse(JSON.stringify(state.doc)),
+      dirty: Boolean(state.dirty),
+      revision: state.revision,
+      undo: [...state.undo],
+      redo: [...state.redo],
+      selectedIds: new Set(state.selectedIds),
+      selectedId: state.selectedId,
+    };
+  }
   state.busy = true;
   refreshControls();
   try {
@@ -2294,28 +2977,7 @@ async function loadPage(page, force = false) {
     }
     state.page = page;
     state.pageCount = result.page_count;
-    state.revision = result.revision;
-    state.doc = result.document;
-    const presence = result.page_presence_suggestion;
-    const presenceHint = $("pagePresenceHint");
-    presenceHint.hidden = !presence;
-    if (presence) {
-      const labels = {
-        possible_symbols: "Possible symbols; inspect and label all target devices.",
-        review_required: "Unable to exclude symbols; visually inspect the entire page.",
-        blank_candidate: "No PDF content stream detected; still requires explicit full-page review.",
-      };
-      const terms = Array.isArray(presence.risk_terms) && presence.risk_terms.length
-        ? " Signals: " + presence.risk_terms.join(", ") : "";
-      presenceHint.textContent = "Automated suggestion (unverified): " +
-        (labels[presence.suggestion] || labels.review_required) + terms;
-    }
     state.image = img;
-    state.selectedId = null;
-    state.snapPreview = null;
-    state.orientedDraft = null;
-    state.undo.length = 0;
-    state.redo.length = 0;
     state.familyDisciplines = result.family_disciplines || {};
     state.variantsByFamily = result.variants_by_family || {};
     state.attributeSchema = result.attribute_schema || state.attributeSchema;
@@ -2328,17 +2990,53 @@ async function loadPage(page, force = false) {
     state.siblingFiles = result.sibling_files || [];
     state.walls = Array.isArray(result.walls) ? result.walls : [];
     if (Array.isArray(result.families)) populateFamilyDatalist(result.families);
+
+    const presence = result.page_presence_suggestion;
+    const presenceHint = $("pagePresenceHint");
+    if (presenceHint) {
+      presenceHint.hidden = !presence;
+      if (presence) {
+        const labels = {
+          possible_symbols: "Possible symbols; inspect and label all target devices.",
+          review_required: "Unable to exclude symbols; visually inspect the entire page.",
+          blank_candidate: "No PDF content stream detected; still requires explicit full-page review.",
+        };
+        const terms = Array.isArray(presence.risk_terms) && presence.risk_terms.length
+          ? " Signals: " + presence.risk_terms.join(", ") : "";
+        presenceHint.textContent = "Automated suggestion (unverified): " +
+          (labels[presence.suggestion] || labels.review_required) + terms;
+      }
+    }
+
+    const cached = state.pageCache[page];
+    if (cached) {
+      state.doc = JSON.parse(JSON.stringify(cached.doc));
+      state.dirty = Boolean(cached.dirty);
+      state.revision = cached.revision;
+      state.undo = [...cached.undo];
+      state.redo = [...cached.redo];
+      state.selectedIds = new Set(cached.selectedIds || []);
+      state.selectedId = cached.selectedId || null;
+    } else {
+      state.doc = result.document;
+      state.dirty = false;
+      state.revision = result.revision;
+      state.undo = [];
+      state.redo = [];
+      state.selectedIds = new Set();
+      state.selectedId = null;
+    }
+
+    state.snapPreview = null;
+    state.orientedDraft = null;
     $("search").value = "";
     $("filter").value = "all";
-    state.dirty = false;
-    $("dirty").textContent = "Saved";
-    $("dirty").className = "saved";
-    $("save").disabled = state.revision !== null;
+    updateDirtyIndicator();
     $("conflictBanner").hidden = true;
     checkLocalDraft();
     fit();
     refresh();
-    notify(`Loaded ${state.jsonFilename || ("page " + (page + 1))}. Draw boxes or review proposals.`);
+    notify(`Loaded ${state.jsonFilename || ("page " + (page + 1))}.`);
   } catch (error) {
     notify(String(error.message || error), "error");
   } finally {
@@ -2349,38 +3047,175 @@ async function loadPage(page, force = false) {
 
 async function loadDocumentsList() {
   const select = $("docSelect");
-  if (!select) return;
   try {
     const res = await api("/api/documents");
     const docs = res.documents || [];
     state.documents = docs;
-    select.replaceChildren();
-    if (!docs.length) {
-      const opt = document.createElement("option");
-      opt.textContent = "No blueprints found";
-      select.appendChild(opt);
-      return;
-    }
-    for (const doc of docs) {
-      const opt = document.createElement("option");
-      opt.value = doc.path;
-      let badge = "• ";
-      if (doc.has_annotations) badge = "★ [Annotated] ";
-      else if (doc.has_proposals) badge = "◆ [Proposals] ";
-      opt.textContent = `${badge}${doc.name} (${doc.rel_path})`;
-      if (doc.is_current || doc.path === state.currentDocPath) {
-        opt.selected = true;
+    if (select) {
+      select.replaceChildren();
+      if (!docs.length) {
+        const opt = document.createElement("option");
+        opt.textContent = "No blueprints found";
+        select.appendChild(opt);
+      } else {
+        for (const doc of docs) {
+          const opt = document.createElement("option");
+          opt.value = doc.path;
+          let badge = "• ";
+          if (doc.has_annotations) badge = "★ [Annotated] ";
+          else if (doc.has_proposals) badge = "◆ [Proposals] ";
+          opt.textContent = `${badge}${doc.name} (${doc.rel_path})`;
+          if (doc.is_current || doc.path === state.currentDocPath) {
+            opt.selected = true;
+          }
+          select.appendChild(opt);
+        }
       }
-      select.appendChild(opt);
+    }
+    if ($("pdfMenuScreen") && !$("pdfMenuScreen").hidden) {
+      renderPdfGrid();
     }
   } catch (err) {
     notify("Could not list documents: " + (err.message || err), "error");
   }
 }
 
+function openPdfMenu() {
+  const menu = $("pdfMenuScreen");
+  if (!menu) return;
+  menu.hidden = false;
+  if ($("pdfMenuSearch")) {
+    $("pdfMenuSearch").value = state.pdfMenuQuery || "";
+    $("pdfMenuSearch").focus();
+  }
+  renderPdfGrid();
+}
+
+function closePdfMenu() {
+  const menu = $("pdfMenuScreen");
+  if (menu) menu.hidden = true;
+}
+
+function renderPdfGrid() {
+  const grid = $("pdfGrid");
+  const totalEl = $("pdfMenuTotal");
+  if (!grid) return;
+  grid.replaceChildren();
+
+  const query = (state.pdfMenuQuery || "").trim().toLowerCase();
+  const filter = state.pdfMenuFilter || "all";
+
+  const filtered = state.documents.filter(doc => {
+    if (filter === "proposals" && !doc.has_proposals) return false;
+    if (filter === "annotated" && !doc.has_annotations) return false;
+    if (!query) return true;
+    const hay = `${doc.name} ${doc.stem || ""} ${doc.rel_path || ""} ${doc.path || ""}`.toLowerCase();
+    return hay.includes(query);
+  });
+
+  if (totalEl) {
+    totalEl.textContent = `${filtered.length} / ${state.documents.length}`;
+  }
+
+  if (!filtered.length) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "grid-column: 1 / -1; padding: 30px; text-align: center; color: var(--muted);";
+    empty.textContent = "No blueprints match the search criteria.";
+    grid.appendChild(empty);
+    return;
+  }
+
+  for (const doc of filtered) {
+    const isCurrent = doc.is_current || doc.path === state.currentDocPath;
+    const card = document.createElement("div");
+    card.style.cssText = `
+      background: ${isCurrent ? "#162836" : "var(--panel)"};
+      border: 1px solid ${isCurrent ? "var(--accent)" : "var(--line)"};
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      position: relative;
+    `;
+
+    const titleRow = document.createElement("div");
+    titleRow.style.cssText = "display:flex;align-items:flex-start;justify-content:space-between;gap:8px;";
+
+    const title = document.createElement("div");
+    title.style.cssText = "font-weight:600;font-size:13.5px;color:var(--text);word-break:break-word;";
+    title.textContent = doc.name;
+
+    titleRow.appendChild(title);
+    if (isCurrent) {
+      const activeBadge = document.createElement("span");
+      activeBadge.className = "pill";
+      activeBadge.style.cssText = "background:#195070;border-color:#56b4db;color:#fff;font-size:11px;flex-shrink:0;";
+      activeBadge.textContent = "Current";
+      titleRow.appendChild(activeBadge);
+    }
+    card.appendChild(titleRow);
+
+    const pathText = document.createElement("div");
+    pathText.style.cssText = "font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    pathText.textContent = doc.rel_path || doc.path;
+    pathText.title = doc.path;
+    card.appendChild(pathText);
+
+    const tagsRow = document.createElement("div");
+    tagsRow.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:auto;";
+
+    if (doc.has_annotations) {
+      const tag = document.createElement("span");
+      tag.className = "tag accepted";
+      tag.textContent = "★ Annotated";
+      tagsRow.appendChild(tag);
+    }
+    if (doc.has_proposals) {
+      const tag = document.createElement("span");
+      tag.className = "tag legacy";
+      tag.textContent = "◆ Proposals Available";
+      tagsRow.appendChild(tag);
+    }
+
+    const openBtn = document.createElement("button");
+    openBtn.className = isCurrent ? "ghost" : "primary";
+    openBtn.style.cssText = "margin-left:auto;font-size:12px;padding:4px 10px;";
+    openBtn.textContent = isCurrent ? "Active" : "Open Blueprint";
+    openBtn.addEventListener("click", async () => {
+      closePdfMenu();
+      if (!isCurrent) {
+        await switchDocument(doc.path);
+      }
+    });
+    tagsRow.appendChild(openBtn);
+    card.appendChild(tagsRow);
+
+    grid.appendChild(card);
+  }
+}
+
+async function nextDocument() {
+  if (!state.documents || !state.documents.length) {
+    await loadDocumentsList();
+  }
+  if (!state.documents.length) {
+    notify("No blueprints found to cycle.", "warning");
+    return;
+  }
+  const curIdx = state.documents.findIndex(d => d.path === state.currentDocPath);
+  const nextIdx = (curIdx + 1) % state.documents.length;
+  const nextDoc = state.documents[nextIdx];
+  if (nextDoc) {
+    await switchDocument(nextDoc.path);
+    notify(`Switched to: ${nextDoc.name} (${nextIdx + 1} / ${state.documents.length})`, "saved");
+  }
+}
+
 async function switchDocument(path) {
   if (!path || path === state.currentDocPath) return;
-  if (state.dirty && !window.confirm("Discard unsaved annotations before switching documents?")) {
+  const hasDirty = Object.values(state.pageCache || {}).some(c => c.dirty) || state.dirty;
+  if (hasDirty && !window.confirm("You have unsaved annotations across pages in this PDF. Discard them before switching documents?")) {
     if ($("docSelect")) $("docSelect").value = state.currentDocPath;
     return;
   }
@@ -2393,6 +3228,7 @@ async function switchDocument(path) {
       headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
       body: JSON.stringify({ path }),
     });
+    state.pageCache = {};
     state.currentDocPath = path;
     state.page = 0;
     state.busy = false;
@@ -2520,35 +3356,72 @@ async function savePage() {
   }
   flushPendingInputs();
   if (!state.doc || state.busy) return true;
-  if (!state.dirty && state.revision !== null) return true;
+
+  if (state.doc) {
+    state.pageCache[state.page] = {
+      doc: JSON.parse(JSON.stringify(state.doc)),
+      dirty: Boolean(state.dirty),
+      revision: state.revision,
+      undo: [...state.undo],
+      redo: [...state.redo],
+      selectedIds: new Set(state.selectedIds),
+      selectedId: state.selectedId,
+    };
+  }
+
+  const dirtyPages = [];
+  for (const [pStr, c] of Object.entries(state.pageCache)) {
+    if (c.dirty) dirtyPages.push(Number(pStr));
+  }
+  if (!dirtyPages.includes(state.page) && state.dirty) {
+    dirtyPages.push(state.page);
+  }
+
+  if (!dirtyPages.length) {
+    notify("All pages are already saved.", "saved");
+    return true;
+  }
+
   state.busy = true;
   refreshControls();
+  let savedCount = 0;
   try {
-    const metadata = {
-      source_id: state.doc.source_id || "",
-      project_family_id: state.doc.project_family_id || "",
-      document_id: state.doc.document_id || "",
-      verified_no_symbols: state.doc.verified_no_symbols === true,
-    };
-    if (state.doc.notes) metadata.notes = state.doc.notes;
-    const result = await api("/api/save?page=" + state.page, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-      body: JSON.stringify({
-        revision: state.revision,
-        instances: state.doc.instances,
-        rejected_proposals: state.doc.rejected_proposals || [],
-        metadata,
-      }),
-    });
-    state.revision = result.revision;
-    if (result.document) {
-      state.doc = result.document;
+    for (const p of dirtyPages) {
+      const cached = state.pageCache[p];
+      const docToSave = (p === state.page) ? state.doc : (cached ? cached.doc : state.doc);
+      const revToSave = (p === state.page) ? state.revision : (cached ? cached.revision : state.revision);
+      const metadata = {
+        source_id: docToSave.source_id || "",
+        project_family_id: docToSave.project_family_id || "",
+        document_id: docToSave.document_id || "",
+        verified_no_symbols: docToSave.verified_no_symbols === true,
+      };
+      if (docToSave.notes) metadata.notes = docToSave.notes;
+      const result = await api("/api/save?page=" + p, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+        body: JSON.stringify({
+          revision: revToSave,
+          instances: docToSave.instances,
+          rejected_proposals: docToSave.rejected_proposals || [],
+          metadata,
+        }),
+      });
+      if (cached) {
+        cached.revision = result.revision;
+        cached.dirty = false;
+        if (result.document) cached.doc = result.document;
+      }
+      if (p === state.page) {
+        state.revision = result.revision;
+        state.dirty = false;
+        if (result.document) state.doc = result.document;
+      }
+      savedCount++;
     }
     savedState();
     refresh();
-    notify(`Saved ${state.jsonFilename || ("page " + (state.page + 1))}. ` +
-      (state.doc.verified_no_symbols ? "Verified symbol-free negative." : "Page completeness remains unknown."), "saved");
+    notify(`Saved ${savedCount} page${savedCount > 1 ? "s" : ""} to server.`, "saved");
     return true;
   } catch (error) {
     if (error.status === 409) {
@@ -2563,6 +3436,43 @@ async function savePage() {
 }
 
 function wireEvents() {
+  if ($("navPdfsBtn")) $("navPdfsBtn").addEventListener("click", openPdfMenu);
+  if ($("nextPdfBtn")) $("nextPdfBtn").addEventListener("click", nextDocument);
+  if ($("closePdfMenuBtn")) $("closePdfMenuBtn").addEventListener("click", closePdfMenu);
+  if ($("pdfMenuSearch")) $("pdfMenuSearch").addEventListener("input", (e) => {
+    state.pdfMenuQuery = e.target.value;
+    renderPdfGrid();
+  });
+  if ($("filterPdfAll")) $("filterPdfAll").addEventListener("click", () => {
+    state.pdfMenuFilter = "all";
+    $("filterPdfAll").setAttribute("aria-pressed", "true");
+    $("filterPdfProposals").setAttribute("aria-pressed", "false");
+    $("filterPdfAnnotated").setAttribute("aria-pressed", "false");
+    renderPdfGrid();
+  });
+  if ($("filterPdfProposals")) $("filterPdfProposals").addEventListener("click", () => {
+    state.pdfMenuFilter = "proposals";
+    $("filterPdfAll").setAttribute("aria-pressed", "false");
+    $("filterPdfProposals").setAttribute("aria-pressed", "true");
+    $("filterPdfAnnotated").setAttribute("aria-pressed", "false");
+    renderPdfGrid();
+  });
+  if ($("filterPdfAnnotated")) $("filterPdfAnnotated").addEventListener("click", () => {
+    state.pdfMenuFilter = "annotated";
+    $("filterPdfAll").setAttribute("aria-pressed", "false");
+    $("filterPdfProposals").setAttribute("aria-pressed", "false");
+    $("filterPdfAnnotated").setAttribute("aria-pressed", "true");
+    renderPdfGrid();
+  });
+
+  if ($("multiVerifyBtn")) $("multiVerifyBtn").addEventListener("click", verifySelected);
+  if ($("multiSnapBtn")) $("multiSnapBtn").addEventListener("click", snapContrastEdgesSelected);
+  if ($("multiRejectBtn")) $("multiRejectBtn").addEventListener("click", rejectSelected);
+  if ($("multiDeleteBtn")) $("multiDeleteBtn").addEventListener("click", deleteSelected);
+
+  if ($("snapRefineBtn")) $("snapRefineBtn").addEventListener("click", snapContrastEdgesSelected);
+  if ($("snapRefineInspectorBtn")) $("snapRefineInspectorBtn").addEventListener("click", snapContrastEdgesSelected);
+
   if ($("docSelect")) $("docSelect").addEventListener("change", (e) => switchDocument(e.target.value));
   if ($("serverExportBtn")) $("serverExportBtn").addEventListener("click", exportServer);
   if ($("serverImportBtn")) $("serverImportBtn").addEventListener("click", openServerImportDialog);
@@ -2799,8 +3709,9 @@ function wireEvents() {
     if (key === "b") setMode("draw");
     else if (key === "o") setMode("oriented");
     else if (key === "v") setMode("select");
+    else if (key === "h" || key === "p") setMode("pan");
     else if (key === "k") setMode("anchor");
-    else if (key === "g") setMode("snap");
+    else if (key === "g") snapContrastEdgesSelected();
     else if (key === "m") { state.showLoupe = !state.showLoupe; refreshControls(); draw(); }
     else if (key === "i") { state.viewFilterIdx = (state.viewFilterIdx + 1) % VIEW_FILTERS.length; refreshControls(); draw(); }
     else if (key === "a") verifySelected();
