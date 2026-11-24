@@ -357,7 +357,8 @@ def test_document_browser_switching_and_server_export_import(tmp_path):
     assert export_res["success"] is True
     assert Path(export_res["path"]).is_file()
     assert export_res["total_instances"] == 1
-    assert export_res["pages_count"] == 1
+    assert export_res["pages_count"] == 2
+    assert export_res["annotated_pages_count"] == 1
 
     # Switch to plan_B
     new_state = session.switch_document("plan_B.pdf")

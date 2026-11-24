@@ -1110,28 +1110,42 @@ class LabelingSession:
 
             for page_idx in range(self.page_count):
                 page_json = self._json_path(page_idx)
+                p_data = None
                 if page_json.is_file():
                     try:
                         p_data = json.loads(page_json.read_text(encoding="utf-8"))
-                        insts = p_data.get("instances", [])
-                        total_instances += len(insts)
-                        for inst in insts:
-                            fam = str(inst.get("symbol_family") or "unknown")
-                            instances_by_family[fam] = instances_by_family.get(fam, 0) + 1
-                            if inst.get("verified_ground_truth") is True:
-                                verified_instances += 1
-                        annotated_pages.append({
-                            "page_index": page_idx,
-                            "page_number": page_idx + 1,
-                            "json_path": str(page_json),
-                            "verified_no_symbols": p_data.get("verified_no_symbols", False),
-                            "annotation_completeness": p_data.get("annotation_completeness", "partial"),
-                            "instance_count": len(insts),
-                            "instances": insts,
-                            "rejected_proposals": p_data.get("rejected_proposals", []),
-                        })
                     except Exception:
                         pass
+                if p_data is None:
+                    try:
+                        p_data, _, _ = self._load(page_idx)
+                    except Exception:
+                        p_data = {
+                            "image_width": 0, "image_height": 0,
+                            "instances": [], "rejected_proposals": [],
+                            "verified_no_symbols": False,
+                            "annotation_completeness": "unreviewed",
+                        }
+
+                insts = p_data.get("instances", [])
+                total_instances += len(insts)
+                for inst in insts:
+                    fam = str(inst.get("symbol_family") or "unknown")
+                    instances_by_family[fam] = instances_by_family.get(fam, 0) + 1
+                    if inst.get("verified_ground_truth") is True:
+                        verified_instances += 1
+                annotated_pages.append({
+                    "page_index": page_idx,
+                    "page_number": page_idx + 1,
+                    "image_width": p_data.get("image_width"),
+                    "image_height": p_data.get("image_height"),
+                    "json_path": str(page_json) if page_json.is_file() else None,
+                    "verified_no_symbols": p_data.get("verified_no_symbols", False),
+                    "annotation_completeness": p_data.get("annotation_completeness", "unreviewed" if not page_json.is_file() else "partial"),
+                    "instance_count": len(insts),
+                    "instances": insts,
+                    "rejected_proposals": p_data.get("rejected_proposals", []),
+                })
 
             export_payload = {
                 "format_version": 1,
@@ -1140,7 +1154,7 @@ class LabelingSession:
                 "source_pdf_sha256": self.source_hash,
                 "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "total_pdf_pages": self.page_count,
-                "annotated_pages_count": len(annotated_pages),
+                "annotated_pages_count": len([p for p in annotated_pages if p["instance_count"] > 0 or p["verified_no_symbols"]]),
                 "total_instances": total_instances,
                 "verified_instances": verified_instances,
                 "instances_by_family": instances_by_family,
@@ -1155,8 +1169,10 @@ class LabelingSession:
                 "path": str(export_file),
                 "filename": export_file.name,
                 "pages_count": len(annotated_pages),
+                "annotated_pages_count": len([p for p in annotated_pages if p["instance_count"] > 0 or p["verified_no_symbols"]]),
                 "total_instances": total_instances,
                 "verified_instances": verified_instances,
+                "export_payload": export_payload,
             }
 
     def list_server_sources(self, page_index: int) -> list[dict]:
@@ -1229,13 +1245,39 @@ class LabelingSession:
                         existing_ids.add(prop["instance_id"])
                         imported_count += 1
             elif isinstance(raw, dict) and isinstance(raw.get("pages"), list):
+                pages_imported = 0
                 for p in raw["pages"]:
-                    if p.get("page_index") == page_index:
-                        for inst in p.get("instances", []):
-                            if inst.get("instance_id") not in existing_ids:
-                                current_instances.append(inst)
-                                existing_ids.add(inst["instance_id"])
-                                imported_count += 1
+                    p_idx = p.get("page_index")
+                    if p_idx is None or not (0 <= p_idx < self.page_count):
+                        continue
+                    p_baseline, p_rev, _ = self._load(p_idx)
+                    p_insts = list(p_baseline.get("instances", []))
+                    p_existing = {inst["instance_id"] for inst in p_insts}
+                    added_this_page = 0
+                    for inst in p.get("instances", []):
+                        if isinstance(inst, dict):
+                            inst_id = inst.get("instance_id")
+                            if not inst_id or inst_id in p_existing:
+                                inst_id = f"imported_p{p_idx + 1}_{len(p_insts) + 1}"
+                                inst = dict(inst, instance_id=inst_id)
+                            p_insts.append(inst)
+                            p_existing.add(inst_id)
+                            imported_count += 1
+                            added_this_page += 1
+                    if added_this_page > 0 or p.get("verified_no_symbols"):
+                        p_baseline["instances"] = [_normalize_instance_for_save(x) for x in p_insts]
+                        if p.get("verified_no_symbols") is not None:
+                            p_baseline["verified_no_symbols"] = p["verified_no_symbols"]
+                        p_json = self._json_path(p_idx)
+                        encoded = (json.dumps(p_baseline, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+                        _atomic_bytes(p_json, encoded)
+                        pages_imported += 1
+                return {
+                    "success": True,
+                    "filename": target.name,
+                    "imported_count": imported_count,
+                    "pages_imported": pages_imported or len(raw["pages"]),
+                }
             elif isinstance(raw, dict) and isinstance(raw.get("instances"), list):
                 for inst in raw["instances"]:
                     if isinstance(inst, dict):

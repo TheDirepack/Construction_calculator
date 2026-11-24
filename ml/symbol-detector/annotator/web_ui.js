@@ -3558,20 +3558,38 @@ async function importJsonFromFile(file) {
   }
 }
 
-function downloadJsonBackup() {
+function isAnyPageDirty() {
+  return Boolean(state.dirty || Object.values(state.pageCache || {}).some(c => c.dirty));
+}
+
+async function downloadJsonBackup() {
   if (!state.doc) return;
   flushPendingInputs();
-  const payload = JSON.stringify(state.doc, null, 2) + "\n";
-  const blob = new Blob([payload], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = state.jsonFilename || `annotations_p${state.page + 1}.json`;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  notify("Exported JSON backup.", "saved");
+  if (isAnyPageDirty()) {
+    const saved = await saveEntirePdf();
+    if (!saved) return;
+  }
+  notify("Preparing entire PDF export...", "");
+  try {
+    const res = await api("/api/server_export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+      body: JSON.stringify({}),
+    });
+    const payload = JSON.stringify(res.export_payload || res, null, 2) + "\n";
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = res.filename || `${(state.currentDocName || "document").replace(/\.pdf$/i, "")}_full_export.json`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    notify(`Exported entire PDF JSON (${res.pages_count} pages, ${res.total_instances} symbols).`, "saved");
+  } catch (err) {
+    notify("Export failed: " + (err.message || err), "error");
+  }
 }
 
 async function api(path, options = {}) {
@@ -3861,10 +3879,15 @@ async function nextDocument() {
 
 async function switchDocument(path) {
   if (!path || path === state.currentDocPath) return;
-  const hasDirty = Object.values(state.pageCache || {}).some(c => c.dirty) || state.dirty;
-  if (hasDirty && !window.confirm("You have unsaved annotations across pages in this PDF. Discard them before switching documents?")) {
-    if ($("docSelect")) $("docSelect").value = state.currentDocPath;
-    return;
+  if (isAnyPageDirty()) {
+    const saveFirst = window.confirm("You have unsaved annotations across this PDF. Save all pages before switching documents?");
+    if (saveFirst) {
+      const saved = await saveEntirePdf();
+      if (!saved) {
+        if ($("docSelect")) $("docSelect").value = state.currentDocPath;
+        return;
+      }
+    }
   }
   state.busy = true;
   refreshControls();
@@ -3889,17 +3912,21 @@ async function switchDocument(path) {
 }
 
 async function exportServer() {
+  if (isAnyPageDirty()) {
+    const saved = await saveEntirePdf();
+    if (!saved) return;
+  }
   state.busy = true;
   refreshControls();
-  notify("Exporting annotations to server...", "");
+  notify("Exporting entire PDF annotations to server...", "");
   try {
     const res = await api("/api/server_export", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
       body: JSON.stringify({}),
     });
-    notify(`Exported to server: ${res.filename} (${res.total_instances} symbols, ${res.pages_count} pages)`, "saved");
-    alert(`Export complete on server!\n\nPath: ${res.path}\nTotal symbols: ${res.total_instances} (${res.verified_instances} verified)\nPages exported: ${res.pages_count}`);
+    notify(`Exported entire PDF: ${res.filename} (${res.total_instances} symbols across all ${res.pages_count} pages)`, "saved");
+    alert(`Export complete for entire PDF!\n\nFile: ${res.filename}\nPath: ${res.path}\nTotal symbols: ${res.total_instances} (${res.verified_instances} verified)\nTotal pages: ${res.pages_count}`);
   } catch (err) {
     notify("Server export failed: " + (err.message || err), "error");
   } finally {
@@ -3996,7 +4023,7 @@ async function switchSiblingFile(filename) {
   }
 }
 
-async function savePage() {
+async function saveEntirePdf() {
   if (state.drag) {
     notify("Finish drawing or moving the box before saving.", "warning");
     return false;
@@ -4020,18 +4047,14 @@ async function savePage() {
   for (const [pStr, c] of Object.entries(state.pageCache)) {
     if (c.dirty) dirtyPages.push(Number(pStr));
   }
-  if (!dirtyPages.includes(state.page) && state.dirty) {
+  if (!dirtyPages.includes(state.page) && (state.dirty || !dirtyPages.length)) {
     dirtyPages.push(state.page);
-  }
-
-  if (!dirtyPages.length) {
-    notify("All pages are already saved.", "saved");
-    return true;
   }
 
   state.busy = true;
   refreshControls();
   let savedCount = 0;
+  let totalSavedSymbols = 0;
   try {
     for (const p of dirtyPages) {
       const cached = state.pageCache[p];
@@ -4065,10 +4088,16 @@ async function savePage() {
         if (result.document) state.doc = result.document;
       }
       savedCount++;
+      totalSavedSymbols += (docToSave.instances?.length || 0);
+    }
+    for (const p of dirtyPages) {
+      if (state.pageCache[p]) {
+        state.pageCache[p].dirty = false;
+      }
     }
     savedState();
     refresh();
-    notify(`Saved ${savedCount} page${savedCount > 1 ? "s" : ""} to server.`, "saved");
+    notify(`Saved entire PDF: ${savedCount} page${savedCount > 1 ? "s" : ""} saved (${totalSavedSymbols} symbols).`, "saved");
     return true;
   } catch (error) {
     if (error.status === 409) {
@@ -4081,6 +4110,7 @@ async function savePage() {
     refreshControls();
   }
 }
+const savePage = saveEntirePdf;
 
 function wireEvents() {
   if ($("navPdfsBtn")) $("navPdfsBtn").addEventListener("click", openPdfMenu);
