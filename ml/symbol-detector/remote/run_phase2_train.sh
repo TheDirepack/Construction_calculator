@@ -117,7 +117,26 @@ source = Path(sys.argv[1])
 mask = read_supervision(source)
 if mask is None or not mask["has_partial"]:
     raise SystemExit("Missing/incorrect class-masked partial-supervision sidecar")
-print(json.dumps({"partial_training": mask["has_partial"], "class_ids": mask["class_ids"]}, indent=2))
+# Detector classification MUST see independently verified background negatives.
+# Otherwise positive-only gradients can lead to a detector that fires everywhere.
+classes = set(mask["class_ids"].values())
+labels = source.parent / "labels" / "train"
+complete_empty = [
+    name for name, ids in mask["samples"].items()
+    if classes.issubset(set(ids))
+    and not (labels / (name + ".txt")).read_text().strip()
+]
+if not complete_empty:
+    raise SystemExit(
+        "No fully verified negative detector tiles in TRAIN. "
+        "Supply reviewed negative pages and/or PHASE2_WALL_MANIFEST; "
+        "partial/unlabeled pages may not be used as replacement negatives."
+    )
+print(json.dumps({
+    "partial_training": mask["has_partial"],
+    "class_ids": mask["class_ids"],
+    "verified_complete_empty_training_tiles": len(complete_empty),
+}, indent=2))
 PY
 
 TRAIN_ARGS=(
