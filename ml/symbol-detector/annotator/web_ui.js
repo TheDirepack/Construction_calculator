@@ -908,118 +908,141 @@ function snapBoxToContrastEdges(box, rotated = null) {
     if (!state.image || !state.doc) return { box, rotated };
     const [x0, y0, x1, y1] = box;
     const w = x1 - x0, h = y1 - y0;
-    if (w < 4 || h < 4) return { box, rotated };
+    if (w < 6 || h < 6) return { box, rotated };
+
+    const ctx = getEdgeSnapCtx();
 
     if (!rotated || Math.abs(rotated.angle_deg || 0) < 1e-4) {
-      const padX = Math.max(3, Math.round(w * 0.12));
-      const padY = Math.max(3, Math.round(h * 0.12));
-      const sx0 = Math.max(0, Math.floor(x0 - padX));
-      const sy0 = Math.max(0, Math.floor(y0 - padY));
-      const sx1 = Math.min(state.doc.image_width, Math.ceil(x1 + padX));
-      const sy1 = Math.min(state.doc.image_height, Math.ceil(y1 + padY));
+      // Axis-aligned box: spawn vectors from the 4 outer sides of the drawn box
+      // and march inward toward the center to shrink in all directions. Never expand.
+      const sx0 = Math.max(0, Math.floor(x0));
+      const sy0 = Math.max(0, Math.floor(y0));
+      const sx1 = Math.min(state.doc.image_width, Math.ceil(x1));
+      const sy1 = Math.min(state.doc.image_height, Math.ceil(y1));
       const sw = sx1 - sx0, sh = sy1 - sy0;
-      if (sw < 4 || sh < 4) return { box, rotated };
+      if (sw < 6 || sh < 6) return { box, rotated };
 
-      const ctx = getEdgeSnapCtx();
       edgeSnapCanvas.width = sw;
       edgeSnapCanvas.height = sh;
       ctx.drawImage(state.image, sx0, sy0, sw, sh, 0, 0, sw, sh);
       const imgData = ctx.getImageData(0, 0, sw, sh);
       const d = imgData.data;
 
+      // Sample border pixels to estimate local background luminance
       let borderLSum = 0, borderCount = 0;
-      for (let cx = 0; cx < sw; cx += 2) {
-        const iTop = cx * 4, iBot = ((sh - 1) * sw + cx) * 4;
+      for (let x = 0; x < sw; x += 2) {
+        const iTop = x * 4, iBot = ((sh - 1) * sw + x) * 4;
         borderLSum += 0.299 * d[iTop] + 0.587 * d[iTop + 1] + 0.114 * d[iTop + 2];
         borderLSum += 0.299 * d[iBot] + 0.587 * d[iBot + 1] + 0.114 * d[iBot + 2];
+        borderCount += 2;
+      }
+      for (let y = 0; y < sh; y += 2) {
+        const iLeft = y * sw * 4, iRight = (y * sw + (sw - 1)) * 4;
+        borderLSum += 0.299 * d[iLeft] + 0.587 * d[iLeft + 1] + 0.114 * d[iLeft + 2];
+        borderLSum += 0.299 * d[iRight] + 0.587 * d[iRight + 1] + 0.114 * d[iRight + 2];
         borderCount += 2;
       }
       const bgL = borderCount ? borderLSum / borderCount : 255;
       const isLightBg = bgL >= 128;
       const contrastThresh = 28;
 
-      const relX0 = x0 - sx0, relX1 = x1 - sx0;
-      const relY0 = y0 - sy0, relY1 = y1 - sy0;
+      function isInkAt(px, py) {
+        if (px < 0 || px >= sw || py < 0 || py >= sh) return false;
+        const idx = (py * sw + px) * 4;
+        const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+        const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
+        return contrast >= contrastThresh;
+      }
 
-      const histX = new Int32Array(sw);
-      const histY = new Int32Array(sh);
+      const N = 25;
+      const maxTravelX = Math.floor(Math.min(sw * 0.42, (sw - 6) / 2));
+      const maxTravelY = Math.floor(Math.min(sh * 0.42, (sh - 6) / 2));
 
-      const searchMinY = Math.max(0, Math.floor(relY0 - padX * 0.5));
-      const searchMaxY = Math.min(sh - 1, Math.ceil(relY1 + padX * 0.5));
-      const searchMinX = Math.max(0, Math.floor(relX0 - padY * 0.5));
-      const searchMaxX = Math.min(sw - 1, Math.ceil(relX1 + padY * 0.5));
-
-      for (let cy = searchMinY; cy <= searchMaxY; cy++) {
-        const rowOffset = cy * sw * 4;
-        for (let cx = searchMinX; cx <= searchMaxX; cx++) {
-          const idx = rowOffset + cx * 4;
-          const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
-          const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
-          if (contrast >= contrastThresh) {
-            histX[cx]++;
-            histY[cy]++;
-          }
+      // Left side: vectors from x = 0 marching rightward
+      const hitsLeft = [];
+      for (let i = 0; i < N; i++) {
+        const t = 0.12 + 0.76 * (i / (N - 1));
+        const py = Math.floor(t * (sh - 1));
+        for (let dist = 0; dist <= maxTravelX; dist++) {
+          if (isInkAt(dist, py)) { hitsLeft.push(dist); break; }
         }
       }
 
-      const minDensX = Math.max(1, Math.round(h * 0.04));
-      const minDensY = Math.max(1, Math.round(w * 0.04));
-
-      let firstX = -1, lastX = -1, firstY = -1, lastY = -1;
-      for (let cx = 0; cx < sw; cx++) {
-        if (histX[cx] >= minDensX) {
-          if (firstX === -1) firstX = cx;
-          lastX = cx;
-        }
-      }
-      for (let cy = 0; cy < sh; cy++) {
-        if (histY[cy] >= minDensY) {
-          if (firstY === -1) firstY = cy;
-          lastY = cy;
+      // Right side: vectors from x = sw - 1 marching leftward
+      const hitsRight = [];
+      for (let i = 0; i < N; i++) {
+        const t = 0.12 + 0.76 * (i / (N - 1));
+        const py = Math.floor(t * (sh - 1));
+        for (let dist = 0; dist <= maxTravelX; dist++) {
+          if (isInkAt(sw - 1 - dist, py)) { hitsRight.push(dist); break; }
         }
       }
 
-      if (firstX === -1 || lastX === -1 || firstY === -1 || lastY === -1 ||
-          (lastX - firstX < 4) || (lastY - firstY < 4)) {
-        return { box, rotated };
+      // Top side: vectors from y = 0 marching downward
+      const hitsTop = [];
+      for (let i = 0; i < N; i++) {
+        const t = 0.12 + 0.76 * (i / (N - 1));
+        const px = Math.floor(t * (sw - 1));
+        for (let dist = 0; dist <= maxTravelY; dist++) {
+          if (isInkAt(px, dist)) { hitsTop.push(dist); break; }
+        }
       }
 
-      let newW = (lastX - firstX + 1);
-      let newH = (lastY - firstY + 1);
+      // Bottom side: vectors from y = sh - 1 marching upward
+      const hitsBottom = [];
+      for (let i = 0; i < N; i++) {
+        const t = 0.12 + 0.76 * (i / (N - 1));
+        const px = Math.floor(t * (sw - 1));
+        for (let dist = 0; dist <= maxTravelY; dist++) {
+          if (isInkAt(px, sh - 1 - dist)) { hitsBottom.push(dist); break; }
+        }
+      }
 
-      if (newW < w * 0.5) newW = Math.round(w * 0.55);
-      if (newH < h * 0.5) newH = Math.round(h * 0.55);
-      if (newW > w * 1.35) newW = Math.round(w * 1.35);
-      if (newH > h * 1.35) newH = Math.round(h * 1.35);
+      function computeSideShrink(hits) {
+        if (hits.length < N * 0.25) return 0;
+        hits.sort((a, b) => a - b);
+        const idx = Math.min(Math.floor(hits.length * 0.20), hits.length - 1);
+        return hits[idx];
+      }
 
-      const midX = sx0 + (firstX + lastX) / 2;
-      const midY = sy0 + (firstY + lastY) / 2;
+      const sLeft = computeSideShrink(hitsLeft);
+      const sRight = computeSideShrink(hitsRight);
+      const sTop = computeSideShrink(hitsTop);
+      const sBottom = computeSideShrink(hitsBottom);
 
-      let nx0 = clamp(midX - newW / 2 - 1.5, 0, state.doc.image_width - 4);
-      let ny0 = clamp(midY - newH / 2 - 1.5, 0, state.doc.image_height - 4);
-      let nx1 = clamp(midX + newW / 2 + 1.5, nx0 + 4, state.doc.image_width);
-      let ny1 = clamp(midY + newH / 2 + 1.5, ny0 + 4, state.doc.image_height);
+      const newX0 = x0 + sLeft;
+      const newX1 = x1 - sRight;
+      const newY0 = y0 + sTop;
+      const newY1 = y1 - sBottom;
 
-      return {
-        box: [Math.round(nx0 * 10) / 10, Math.round(ny0 * 10) / 10, Math.round(nx1 * 10) / 10, Math.round(ny1 * 10) / 10],
-        rotated: null,
-      };
+      if (newX1 - newX0 >= 4 && newY1 - newY0 >= 4) {
+        return {
+          box: [
+            Math.round(newX0 * 10) / 10,
+            Math.round(newY0 * 10) / 10,
+            Math.round(newX1 * 10) / 10,
+            Math.round(newY1 * 10) / 10,
+          ],
+          rotated: null,
+        };
+      }
+      return { box, rotated };
     }
 
+    // Rotated box: spawn vectors from -U, +U, -V, +V sides of the drawn box
+    // and march inward toward the center to shrink in all directions. Never expand.
     const { cx, cy, angle_deg } = rotated;
     const rad = angle_deg * Math.PI / 180;
     const cosA = Math.cos(rad), sinA = Math.sin(rad);
 
-    const pad = Math.max(6, Math.round(Math.max(w, h) * 0.15));
-    const radius = Math.ceil(Math.hypot(rotated.w, rotated.h) / 2 + pad);
+    const radius = Math.ceil(Math.hypot(rotated.w, rotated.h) / 2) + 2;
     const sx0 = Math.max(0, Math.floor(cx - radius));
     const sy0 = Math.max(0, Math.floor(cy - radius));
     const sx1 = Math.min(state.doc.image_width, Math.ceil(cx + radius));
     const sy1 = Math.min(state.doc.image_height, Math.ceil(cy + radius));
     const sw = sx1 - sx0, sh = sy1 - sy0;
-    if (sw < 4 || sh < 4) return { box, rotated };
+    if (sw < 6 || sh < 6) return { box, rotated };
 
-    const ctx = getEdgeSnapCtx();
     edgeSnapCanvas.width = sw;
     edgeSnapCanvas.height = sh;
     ctx.drawImage(state.image, sx0, sy0, sw, sh, 0, 0, sw, sh);
@@ -1033,57 +1056,105 @@ function snapBoxToContrastEdges(box, rotated = null) {
       borderLSum += 0.299 * d[b] + 0.587 * d[b + 1] + 0.114 * d[b + 2];
       borderCount += 2;
     }
+    for (let y = 0; y < sh; y += 2) {
+      const l = y * sw * 4, r = (y * sw + (sw - 1)) * 4;
+      borderLSum += 0.299 * d[l] + 0.587 * d[l + 1] + 0.114 * d[l + 2];
+      borderLSum += 0.299 * d[r] + 0.587 * d[r + 1] + 0.114 * d[r + 2];
+      borderCount += 2;
+    }
     const bgL = borderCount ? borderLSum / borderCount : 255;
     const isLightBg = bgL >= 128;
     const contrastThresh = 28;
 
-    let minU = 99999, maxU = -99999, minV = 99999, maxV = -99999;
-    let inkCount = 0;
-    const maxUAllowed = rotated.w / 2 + pad * 0.8;
-    const maxVAllowed = rotated.h / 2 + pad * 0.8;
+    function isInkLocal(u, v) {
+      const imgX = cx + u * cosA - v * sinA;
+      const imgY = cy + u * sinA + v * cosA;
+      const px = Math.round(imgX - sx0);
+      const py = Math.round(imgY - sy0);
+      if (px < 0 || px >= sw || py < 0 || py >= sh) return false;
+      const idx = (py * sw + px) * 4;
+      const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+      const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
+      return contrast >= contrastThresh;
+    }
 
-    for (let py = 0; py < sh; py++) {
-      const imgY = sy0 + py;
-      const rowOffset = py * sw * 4;
-      for (let px = 0; px < sw; px++) {
-        const idx = rowOffset + px * 4;
-        const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
-        const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
-        if (contrast >= contrastThresh) {
-          const imgX = sx0 + px;
-          const dx = imgX - cx, dy = imgY - cy;
-          const u = dx * cosA + dy * sinA;
-          const v = -dx * sinA + dy * cosA;
-          if (Math.abs(u) <= maxUAllowed && Math.abs(v) <= maxVAllowed) {
-            inkCount++;
-            if (u < minU) minU = u;
-            if (u > maxU) maxU = u;
-            if (v < minV) minV = v;
-            if (v > maxV) maxV = v;
-          }
-        }
+    const rotW = rotated.w;
+    const rotH = rotated.h;
+    const N = 25;
+    const maxTravelU = Math.floor(Math.min(rotW * 0.42, (rotW - 6) / 2));
+    const maxTravelV = Math.floor(Math.min(rotH * 0.42, (rotH - 6) / 2));
+
+    // -U side: rays starting at u = -rotW/2 marching along +u
+    const hitsMinU = [];
+    for (let i = 0; i < N; i++) {
+      const t = 0.12 + 0.76 * (i / (N - 1));
+      const v = -rotH / 2 + t * rotH;
+      for (let dist = 0; dist <= maxTravelU; dist++) {
+        if (isInkLocal(-rotW / 2 + dist, v)) { hitsMinU.push(dist); break; }
       }
     }
 
-    if (inkCount < 6 || minU >= maxU || minV >= maxV) return { box, rotated };
+    // +U side: rays starting at u = +rotW/2 marching along -u
+    const hitsMaxU = [];
+    for (let i = 0; i < N; i++) {
+      const t = 0.12 + 0.76 * (i / (N - 1));
+      const v = -rotH / 2 + t * rotH;
+      for (let dist = 0; dist <= maxTravelU; dist++) {
+        if (isInkLocal(rotW / 2 - dist, v)) { hitsMaxU.push(dist); break; }
+      }
+    }
 
-    let newRotW = Math.max(rotated.w * 0.5, Math.min(rotated.w * 1.35, (maxU - minU) + 3));
-    let newRotH = Math.max(rotated.h * 0.5, Math.min(rotated.h * 1.35, (maxV - minV) + 3));
+    // -V side: rays starting at v = -rotH/2 marching along +v
+    const hitsMinV = [];
+    for (let i = 0; i < N; i++) {
+      const t = 0.12 + 0.76 * (i / (N - 1));
+      const u = -rotW / 2 + t * rotW;
+      for (let dist = 0; dist <= maxTravelV; dist++) {
+        if (isInkLocal(u, -rotH / 2 + dist)) { hitsMinV.push(dist); break; }
+      }
+    }
 
-    const shiftU = (minU + maxU) / 2;
-    const shiftV = (minV + maxV) / 2;
-    const newCx = clamp(cx + shiftU * cosA - shiftV * sinA, 0, state.doc.image_width);
-    const newCy = clamp(cy + shiftU * sinA + shiftV * cosA, 0, state.doc.image_height);
+    // +V side: rays starting at v = +rotH/2 marching along -v
+    const hitsMaxV = [];
+    for (let i = 0; i < N; i++) {
+      const t = 0.12 + 0.76 * (i / (N - 1));
+      const u = -rotW / 2 + t * rotW;
+      for (let dist = 0; dist <= maxTravelV; dist++) {
+        if (isInkLocal(u, rotH / 2 - dist)) { hitsMaxV.push(dist); break; }
+      }
+    }
 
-    const nextRot = {
-      cx: Math.round(newCx * 10) / 10,
-      cy: Math.round(newCy * 10) / 10,
-      w: Math.round(newRotW * 10) / 10,
-      h: Math.round(newRotH * 10) / 10,
-      angle_deg: rotated.angle_deg,
-    };
-    const aabb = rotatedAabb(nextRot.cx, nextRot.cy, nextRot.w, nextRot.h, nextRot.angle_deg);
-    return { box: aabb.map(v => Math.round(v * 10) / 10), rotated: nextRot };
+    function computeSideShrinkRot(hits) {
+      if (hits.length < N * 0.25) return 0;
+      hits.sort((a, b) => a - b);
+      const idx = Math.min(Math.floor(hits.length * 0.20), hits.length - 1);
+      return hits[idx];
+    }
+
+    const sMinU = computeSideShrinkRot(hitsMinU);
+    const sMaxU = computeSideShrinkRot(hitsMaxU);
+    const sMinV = computeSideShrinkRot(hitsMinV);
+    const sMaxV = computeSideShrinkRot(hitsMaxV);
+
+    const newRotW = rotW - (sMinU + sMaxU);
+    const newRotH = rotH - (sMinV + sMaxV);
+
+    if (newRotW >= 4 && newRotH >= 4) {
+      const deltaU = (sMinU - sMaxU) / 2;
+      const deltaV = (sMinV - sMaxV) / 2;
+      const newCx = clamp(cx + deltaU * cosA - deltaV * sinA, 0, state.doc.image_width);
+      const newCy = clamp(cy + deltaU * sinA + deltaV * cosA, 0, state.doc.image_height);
+      const nextRot = {
+        cx: Math.round(newCx * 10) / 10,
+        cy: Math.round(newCy * 10) / 10,
+        w: Math.round(newRotW * 10) / 10,
+        h: Math.round(newRotH * 10) / 10,
+        angle_deg: rotated.angle_deg,
+      };
+      const aabb = rotatedAabb(nextRot.cx, nextRot.cy, nextRot.w, nextRot.h, nextRot.angle_deg);
+      return { box: aabb.map(v => Math.round(v * 10) / 10), rotated: nextRot };
+    }
+    return { box, rotated };
   } catch (err) {
     console.warn("Contrast edge snap error:", err);
     return { box, rotated };
