@@ -109,6 +109,7 @@ const state = {
   image: null, mode: "pan", selectedId: null,
   selectedIds: new Set(),
   pageCache: {},
+  conflictPage: null,
   scale: 1, x: 0, y: 0, space: false, drag: null, dirty: false,
   undo: [], redo: [], lastFamily: "receptacle", lastVariantByFamily: {}, customVariantsByFamily: {}, busy: false,
   showLabels: true, showLoupe: true, showWalls: true,
@@ -196,6 +197,30 @@ function notify(message, kind = "") {
   const target = $("message");
   target.textContent = message;
   target.className = kind;
+}
+
+// Native window.confirm() can be suppressed by the browser (mobile Chrome
+// offers "prevent additional dialogs"), after which it silently returns false.
+// Every confirmation goes through this in-page dialog instead.
+let pendingConfirm = null;
+function confirmAction(message, options = {}) {
+  const dialog = $("confirmDialog");
+  if (!dialog || typeof dialog.showModal !== "function") {
+    return Promise.resolve(window.confirm(message));
+  }
+  $("confirmTitle").textContent = options.title || "Confirm";
+  $("confirmMessage").textContent = message;
+  $("confirmOkBtn").textContent = options.confirmLabel || "Confirm";
+  $("confirmCancelBtn").textContent = options.cancelLabel || "Cancel";
+  dialog.showModal();
+  return new Promise((resolve) => { pendingConfirm = resolve; });
+}
+function settleConfirm(value) {
+  const dialog = $("confirmDialog");
+  if (dialog && dialog.open) dialog.close();
+  const resolve = pendingConfirm;
+  pendingConfirm = null;
+  if (resolve) resolve(value);
 }
 function updateDirtyIndicator() {
   const dirtyPages = new Set();
@@ -3519,10 +3544,11 @@ async function importJsonFromFile(file) {
     // unidentified source requires confirmation and new human verification.
     const sameImage = Boolean(imported.image_sha256 && state.doc.image_sha256 &&
       imported.image_sha256 === state.doc.image_sha256);
-    if (!sameImage && !window.confirm(
+    if (!sameImage && !(await confirmAction(
       "This JSON does not identify the exact current image. Import as UNVERIFIED " +
-      "proposals and discard previous rejected marks? Review every box before accepting."
-    )) return;
+      "proposals and discard previous rejected marks? Review every box before accepting.",
+      { title: "Import unverified JSON", confirmLabel: "Import as unverified" }
+    ))) return;
     const preparedInstances = imported.instances.map((raw, idx) => {
       const fam = String(raw.symbol_family || raw.device_type || "unknown_symbol");
       return {
@@ -3627,7 +3653,12 @@ function populateFamilyDatalist(families) {
 
 async function loadPage(page, force = false) {
   if (state.busy || state.drag || page < 0 || (page >= state.pageCount && state.doc)) return;
-  if (state.doc) {
+  // force means "take this page from disk". Never seed the cache with the
+  // in-memory copy of that same page, and never read it back afterwards:
+  // otherwise "Reload from disk" returns the stale revision that caused the
+  // save conflict and the conflict can never be cleared.
+  const reloadingCurrent = force && page === state.page;
+  if (state.doc && !reloadingCurrent) {
     state.pageCache[state.page] = {
       doc: JSON.parse(JSON.stringify(state.doc)),
       dirty: Boolean(state.dirty),
@@ -3685,7 +3716,8 @@ async function loadPage(page, force = false) {
       }
     }
 
-    const cached = state.pageCache[page];
+    const cached = force ? null : state.pageCache[page];
+    if (force) delete state.pageCache[page];
     if (cached) {
       state.doc = JSON.parse(JSON.stringify(cached.doc));
       state.dirty = Boolean(cached.dirty);
@@ -4159,7 +4191,10 @@ async function nextDocument() {
 async function switchDocument(path) {
   if (!path || path === state.currentDocPath) return;
   if (isAnyPageDirty()) {
-    const saveFirst = window.confirm("You have unsaved annotations across this PDF. Save all pages before switching documents?");
+    const saveFirst = await confirmAction(
+      "You have unsaved annotations across this PDF. Save all pages before switching documents?",
+      { title: "Unsaved annotations", confirmLabel: "Save all pages", cancelLabel: "Discard changes" }
+    );
     if (saveFirst) {
       const saved = await saveEntirePdf();
       if (!saved) {
@@ -4290,7 +4325,10 @@ async function confirmServerImport() {
 
 async function switchSiblingFile(filename) {
   if (!filename || filename === state.jsonFilename) return;
-  if (state.dirty && !window.confirm("Discard unsaved annotations before switching JSON files?")) {
+  if (state.dirty && !(await confirmAction(
+    "Discard unsaved annotations before switching JSON files?",
+    { title: "Discard unsaved annotations", confirmLabel: "Discard", cancelLabel: "Keep editing" }
+  ))) {
     $("fileSwitcher").value = state.jsonFilename;
     return;
   }
@@ -4344,6 +4382,7 @@ async function saveEntirePdf() {
   refreshControls();
   let savedCount = 0;
   let totalSavedSymbols = 0;
+  let conflictPage = null;
   try {
     for (const p of dirtyPages) {
       const cached = state.pageCache[p];
@@ -4356,16 +4395,25 @@ async function saveEntirePdf() {
         verified_no_symbols: docToSave.verified_no_symbols === true,
       };
       if (docToSave.notes) metadata.notes = docToSave.notes;
-      const result = await api("/api/save?page=" + p, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-        body: JSON.stringify({
-          revision: revToSave,
-          instances: docToSave.instances,
-          rejected_proposals: docToSave.rejected_proposals || [],
-          metadata,
-        }),
-      });
+      let result;
+      try {
+        result = await api("/api/save?page=" + p, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+          body: JSON.stringify({
+            revision: revToSave,
+            instances: docToSave.instances,
+            rejected_proposals: docToSave.rejected_proposals || [],
+            metadata,
+          }),
+        });
+      } catch (error) {
+        // One stale page must not block every other page. Keep going, then
+        // name the conflicting page so it can be reloaded and re-applied.
+        if (error.status !== 409) throw error;
+        conflictPage = p;
+        continue;
+      }
       if (cached) {
         cached.revision = result.revision;
         cached.dirty = false;
@@ -4379,19 +4427,31 @@ async function saveEntirePdf() {
       savedCount++;
       totalSavedSymbols += (docToSave.instances?.length || 0);
     }
+    if (conflictPage !== null) {
+      state.conflictPage = conflictPage;
+      $("conflictBanner").hidden = false;
+      $("conflictText").textContent =
+        `Page ${conflictPage + 1} changed on disk and was not saved.`;
+      if (conflictPage !== state.page) clearLocalDraft();
+      updateDirtyIndicator();
+      notify(
+        `Saved ${savedCount} page${savedCount === 1 ? "" : "s"} (${totalSavedSymbols} symbols); ` +
+        `page ${conflictPage + 1} changed on disk. Reload that page, then re-apply your edits.`,
+        "warning"
+      );
+      return false;
+    }
     for (const p of dirtyPages) {
       if (state.pageCache[p]) {
         state.pageCache[p].dirty = false;
       }
     }
+    state.conflictPage = null;
     savedState();
     refresh();
     notify(`Saved entire PDF: ${savedCount} page${savedCount > 1 ? "s" : ""} saved (${totalSavedSymbols} symbols).`, "saved");
     return true;
   } catch (error) {
-    if (error.status === 409) {
-      $("conflictBanner").hidden = false;
-    }
     notify("Save failed: " + (error.message || error), "error");
     return false;
   } finally {
@@ -4515,7 +4575,7 @@ function wireEvents() {
   $("undo").addEventListener("click", undo);
   $("redo").addEventListener("click", redo);
   $("save").addEventListener("click", savePage);
-  $("verifiedNoSymbols").addEventListener("change", (event) => {
+  $("verifiedNoSymbols").addEventListener("change", async (event) => {
     if (!state.doc || state.busy) return;
     const value = event.target.checked;
     if (value && state.doc.instances.length) {
@@ -4523,7 +4583,10 @@ function wireEvents() {
       notify("Reject or remove every active proposal before marking this page symbol-free.", "warning");
       return;
     }
-    if (value && !window.confirm("Have you reviewed the ENTIRE page and confirmed there are no target symbols? This creates negative training labels.")) {
+    if (value && !(await confirmAction(
+      "Have you reviewed the ENTIRE page and confirmed there are no target symbols? This creates negative training labels.",
+      { title: "Mark page symbol-free", confirmLabel: "Yes, no symbols on this page" }
+    ))) {
       event.target.checked = false;
       return;
     }
@@ -4532,7 +4595,18 @@ function wireEvents() {
     editState();
     refresh();
   });
-  $("reloadFromDisk").addEventListener("click", () => loadPage(state.page, true));
+  $("reloadFromDisk").addEventListener("click", async () => {
+    const target = Number.isInteger(state.conflictPage) ? state.conflictPage : state.page;
+    state.conflictPage = null;
+    $("conflictBanner").hidden = true;
+    await loadPage(target, true);
+  });
+  $("confirmOkBtn").addEventListener("click", () => settleConfirm(true));
+  $("confirmCancelBtn").addEventListener("click", () => settleConfirm(false));
+  $("confirmDialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    settleConfirm(false);
+  });
   $("restoreDraftBtn").addEventListener("click", async () => {
     try {
       const parsed = JSON.parse(window.localStorage?.getItem(draftStorageKey()) || "null");

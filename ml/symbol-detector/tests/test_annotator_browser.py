@@ -33,6 +33,12 @@ def _launch_browser(playwright_instance):
     )
 
 
+def _answer_confirm(page, accept=True):
+    page.wait_for_selector("#confirmDialog[open]")
+    page.locator("#confirmOkBtn" if accept else "#confirmCancelBtn").click()
+    page.wait_for_function("() => !document.querySelector('#confirmDialog').open")
+
+
 def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
     document = fitz.open()
     for _ in range(2):
@@ -120,8 +126,8 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
                 assert "0 active" in page.locator("#count").inner_text()
                 assert not (tmp_path / "labels" / "label_test_p0002.json").exists()
                 assert session.page_state(1)["document"]["annotation_completeness_verified"] is False
-                page.on("dialog", lambda dialog: dialog.accept())
                 page.locator("#verifiedNoSymbols").check()
+                _answer_confirm(page)
                 page.locator("#save").click()
                 page.wait_for_function("() => document.querySelector('#dirty').textContent === 'Saved'")
                 saved_negative = json.loads((tmp_path / "labels" / "label_test_p0002.json").read_text())
@@ -252,12 +258,12 @@ def test_browser_import_requires_source_match_and_unverifies(tmp_path):
                 page.wait_for_function(
                     "() => document.querySelector('#count')?.textContent?.includes('0 active')"
                 )
-                page.once("dialog", lambda dialog: dialog.dismiss())
                 page.locator("#importJsonFile").set_input_files(str(imported))
+                _answer_confirm(page, accept=False)
                 assert "0 active" in page.locator("#count").inner_text()
 
-                page.once("dialog", lambda dialog: dialog.accept())
                 page.locator("#importJsonFile").set_input_files(str(imported))
+                _answer_confirm(page)
                 page.wait_for_function(
                     "() => document.querySelector('#count')?.textContent?.includes('1 pending')"
                 )
@@ -678,8 +684,8 @@ def test_browser_next_pdf_starts_with_empty_page(tmp_path):
                     "() => document.querySelector('#count').textContent.includes('1 pending')"
                 )
 
-                page.on("dialog", lambda dialog: dialog.accept())
                 page.locator("#nextPdfBtn").click()
+                _answer_confirm(page)
                 page.wait_for_function(
                     "() => document.querySelector('#currentDocBadge').textContent.includes('switch_b.pdf')"
                 )
@@ -691,6 +697,102 @@ def test_browser_next_pdf_starts_with_empty_page(tmp_path):
                 # Accepting the switch prompt saved the first PDF's own page.
                 saved_a = json.loads((tmp_path / "labels" / "switch_a_p0001.json").read_text())
                 assert len(saved_a["instances"]) == 1
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
+
+
+def test_browser_save_conflict_reloads_the_conflicting_page(tmp_path):
+    """A stale page must not trap Save in a reload/conflict loop."""
+    document = fitz.open()
+    for _ in range(2):
+        page = document.new_page(width=400, height=300)
+        page.draw_rect(fitz.Rect(50, 50, 65, 65), color=(0, 0, 0))
+    pdf = tmp_path / "conflict.pdf"
+    document.save(pdf)
+    document.close()
+
+    session = LabelingSession(pdf=pdf, out_dir=tmp_path / "labels", dpi=144)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1420, "height": 900})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function(
+                    "() => document.querySelector('#pageIndicator').textContent === 'Page 1 / 2'"
+                )
+
+                # Cancelling the in-page confirmation must not attest the page.
+                page.locator("#verifiedNoSymbols").check()
+                _answer_confirm(page, accept=False)
+                assert not page.locator("#verifiedNoSymbols").is_checked()
+
+                # Page 1: negative attestation. Page 2: a drawn draft.
+                page.locator("#verifiedNoSymbols").check()
+                _answer_confirm(page)
+                page.wait_for_function(
+                    "() => document.querySelector('#dirty').textContent === 'Unsaved (p.1)'"
+                )
+                page.locator("#nextPage").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#pageIndicator').textContent === 'Page 2 / 2'"
+                )
+                canvas = page.locator("#canvas").bounding_box()
+                assert canvas is not None
+                page.locator("#drawTool").click()
+                sx, sy = canvas["x"] + 230, canvas["y"] + 190
+                page.mouse.move(sx, sy)
+                page.mouse.down()
+                page.mouse.move(sx + 48, sy + 36, steps=4)
+                page.mouse.up()
+                page.wait_for_function(
+                    "() => document.querySelector('#count').textContent.includes('1 pending')"
+                )
+
+                # Another client saves page 1 while this browser is on page 2.
+                session.save(
+                    0, revision=session.page_state(0)["revision"], instances=[],
+                    rejected=[], metadata={"verified_no_symbols": False},
+                )
+
+                page.locator("#save").click()
+                page.wait_for_function(
+                    "() => !document.querySelector('#conflictBanner').hidden"
+                )
+                # The unaffected page still saved.
+                assert (tmp_path / "labels" / "conflict_p0002.json").exists()
+                assert "page 1 changed on disk" in page.locator("#message").inner_text()
+
+                page.locator("#reloadFromDisk").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#conflictBanner').hidden"
+                )
+                page.wait_for_function(
+                    "() => document.querySelector('#pageIndicator').textContent === 'Page 1 / 2'"
+                )
+                # Reload must show the on-disk page, not the stale in-memory copy.
+                assert not page.locator("#verifiedNoSymbols").is_checked()
+                assert "0 active" in page.locator("#count").inner_text()
+                assert page.locator("#dirty").inner_text() == "Saved"
+                assert "Page 1" in (page.locator("#conflictText").text_content() or "")
+
+                # Saving again after the reload must succeed instead of repeating 409.
+                page.locator("#verifiedNoSymbols").check()
+                _answer_confirm(page)
+                page.locator("#save").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#dirty').textContent === 'Saved'"
+                )
+                assert page.locator("#conflictBanner").is_hidden()
+                saved = json.loads((tmp_path / "labels" / "conflict_p0001.json").read_text())
+                assert saved["verified_no_symbols"] is True
             finally:
                 browser.close()
     finally:

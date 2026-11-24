@@ -179,7 +179,7 @@
     <canvas id="canvas" tabindex="0" aria-label="Blueprint image and bounding boxes"></canvas>
     <div id="modeBanner" hidden></div>
     <div id="conflictBanner" class="top-banner" hidden>
-      <span>File changed on disk.</span>
+      <span id="conflictText">File changed on disk.</span>
       <button id="reloadFromDisk" class="ghost">Reload from disk</button>
     </div>
     <div id="draftBanner" class="top-banner" hidden>
@@ -432,6 +432,14 @@
   <div class="row" style="justify-content:flex-end;margin-top:14px;gap:8px;">
     <button id="closeServerImportBtn" type="button" class="ghost">Cancel</button>
     <button id="confirmServerImportBtn" type="button" class="primary">Import File</button>
+  </div>
+</dialog>
+<dialog id="confirmDialog" style="background:#17222c;color:#e8f0f4;border:1px solid #324351;border-radius:8px;padding:16px;max-width:460px;width:90%;">
+  <h3 id="confirmTitle" style="margin:0 0 8px;font-size:15px;">Confirm</h3>
+  <p id="confirmMessage" class="small" style="margin:0 0 14px;color:#cfe0ea;line-height:1.5;"></p>
+  <div class="row" style="justify-content:flex-end;margin-top:14px;gap:8px;">
+    <button id="confirmCancelBtn" type="button" class="ghost">Cancel</button>
+    <button id="confirmOkBtn" type="button" class="primary">Confirm</button>
   </div>
 </dialog>
 <script type="module" src="/web_ui.js"></script>
