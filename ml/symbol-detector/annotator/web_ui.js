@@ -85,6 +85,14 @@ export function hitBox(box, x, y, scale, includeCorners, rotated = null) {
 }
 
 const ID_REGEX = /^[a-zA-Z0-9_.:-]{1,120}$/;
+function generateId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    try {
+      return crypto.randomUUID().slice(0, 8);
+    } catch (_) {}
+  }
+  return Math.random().toString(36).slice(2, 10);
+}
 const QUICK_FAMILIES = ["receptacle", "switch", "luminaire", "fire_alarm_device", "data_outlet", "junction_box"];
 const VIEW_FILTERS = [
   { name: "Normal", css: "none" },
@@ -703,6 +711,23 @@ function draw() {
     ctx.strokeRect(x, y, (box[2] - box[0]) * state.scale, (box[3] - box[1]) * state.scale);
     ctx.setLineDash([]);
     drawBadge(ctx, x, Math.max(4, y - 24), `${(box[2] - box[0]).toFixed(1)} × ${(box[3] - box[1]).toFixed(1)} px`);
+  } else if (state.drag?.type === "oriented") {
+    const rot = computeOrientedFromDrag(state.drag.start, state.drag.current);
+    const corners = rotatedCorners(rot).map(pt => imageToScreen(pt[0], pt[1], viewport()));
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(corners[0][0], corners[0][1]);
+    for (let i = 1; i < 4; i++) ctx.lineTo(corners[i][0], corners[i][1]);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(103, 198, 255, 0.16)";
+    ctx.fill();
+    ctx.strokeStyle = "#33a7ff";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 3]);
+    ctx.stroke();
+    ctx.restore();
+    drawBadge(ctx, corners[1][0] + 8, corners[1][1] - 10,
+              `${rot.w.toFixed(1)} × ${rot.h.toFixed(1)} px · ${rot.angle_deg.toFixed(1)}°`);
   } else if (state.drag?.type === "oriented-axis") {
     const [x0, y0] = imageToScreen(state.drag.start[0], state.drag.start[1], viewport());
     const [x1, y1] = imageToScreen(state.drag.current[0], state.drag.current[1], viewport());
@@ -806,6 +831,68 @@ function snapAngleToWallsOrCardinals(rawAng, startPt) {
   return rawAng;
 }
 
+function findNearestWallAngle(pt, maxDist = 80) {
+  if (!state.walls || !state.walls.length) return null;
+  let minDist = maxDist;
+  let nearestAng = null;
+  for (let i = 0; i < state.walls.length; i++) {
+    const w = state.walls[i];
+    const sx = w.start[0], sy = w.start[1], ex = w.end[0], ey = w.end[1];
+    const wx = ex - sx, wy = ey - sy;
+    const wlen2 = wx * wx + wy * wy;
+    if (wlen2 < 1e-6) continue;
+    const u = clamp(((pt[0] - sx) * wx + (pt[1] - sy) * wy) / wlen2, 0, 1);
+    const px = sx + u * wx, py = sy + u * wy;
+    const d = Math.hypot(pt[0] - px, pt[1] - py);
+    if (d < minDist) {
+      minDist = d;
+      nearestAng = Math.atan2(wy, wx) * 180 / Math.PI;
+    }
+  }
+  return nearestAng;
+}
+
+function computeOrientedFromDrag(p0, p1) {
+  const dx = p1[0] - p0[0];
+  const dy = p1[1] - p0[1];
+  const dist = Math.hypot(dx, dy);
+
+  if (dist < 3) {
+    const wallAng = findNearestWallAngle(p0, 80);
+    const angle_deg = wallAng !== null ? Math.round(wallAng * 10) / 10 : 0;
+    return {
+      cx: p0[0],
+      cy: p0[1],
+      w: 28,
+      h: 28,
+      angle_deg,
+    };
+  }
+
+  const rawAng = Math.atan2(dy, dx) * 180 / Math.PI;
+  const snappedAng = snapAngleToWallsOrCardinals(rawAng, p0);
+  const rad = snappedAng * Math.PI / 180;
+  const ux = Math.cos(rad), uy = Math.sin(rad);
+  const nx = -Math.sin(rad), ny = Math.cos(rad);
+
+  const projU = dx * ux + dy * uy;
+  const projN = dx * nx + dy * ny;
+
+  const w = Math.max(4, Math.abs(projU));
+  const h = Math.max(4, Math.abs(projN));
+
+  const cx = p0[0] + ux * (projU / 2) + nx * (projN / 2);
+  const cy = p0[1] + uy * (projU / 2) + ny * (projN / 2);
+
+  return {
+    cx: Math.round(cx * 1000) / 1000,
+    cy: Math.round(cy * 1000) / 1000,
+    w: Math.round(w * 1000) / 1000,
+    h: Math.round(h * 1000) / 1000,
+    angle_deg: Math.round(snappedAng * 1000) / 1000,
+  };
+}
+
 let edgeSnapCanvas = null;
 let edgeSnapCtx = null;
 function getEdgeSnapCtx() {
@@ -817,20 +904,120 @@ function getEdgeSnapCtx() {
 }
 
 function snapBoxToContrastEdges(box, rotated = null) {
-  if (!state.image || !state.doc) return { box, rotated };
-  const [x0, y0, x1, y1] = box;
-  const w = x1 - x0, h = y1 - y0;
-  if (w < 6 || h < 6) return { box, rotated };
+  try {
+    if (!state.image || !state.doc) return { box, rotated };
+    const [x0, y0, x1, y1] = box;
+    const w = x1 - x0, h = y1 - y0;
+    if (w < 4 || h < 4) return { box, rotated };
 
-  if (!rotated || Math.abs(rotated.angle_deg || 0) < 1e-4) {
-    const padX = Math.max(3, Math.round(w * 0.12));
-    const padY = Math.max(3, Math.round(h * 0.12));
-    const sx0 = Math.max(0, Math.floor(x0 - padX));
-    const sy0 = Math.max(0, Math.floor(y0 - padY));
-    const sx1 = Math.min(state.doc.image_width, Math.ceil(x1 + padX));
-    const sy1 = Math.min(state.doc.image_height, Math.ceil(y1 + padY));
+    if (!rotated || Math.abs(rotated.angle_deg || 0) < 1e-4) {
+      const padX = Math.max(3, Math.round(w * 0.12));
+      const padY = Math.max(3, Math.round(h * 0.12));
+      const sx0 = Math.max(0, Math.floor(x0 - padX));
+      const sy0 = Math.max(0, Math.floor(y0 - padY));
+      const sx1 = Math.min(state.doc.image_width, Math.ceil(x1 + padX));
+      const sy1 = Math.min(state.doc.image_height, Math.ceil(y1 + padY));
+      const sw = sx1 - sx0, sh = sy1 - sy0;
+      if (sw < 4 || sh < 4) return { box, rotated };
+
+      const ctx = getEdgeSnapCtx();
+      edgeSnapCanvas.width = sw;
+      edgeSnapCanvas.height = sh;
+      ctx.drawImage(state.image, sx0, sy0, sw, sh, 0, 0, sw, sh);
+      const imgData = ctx.getImageData(0, 0, sw, sh);
+      const d = imgData.data;
+
+      let borderLSum = 0, borderCount = 0;
+      for (let cx = 0; cx < sw; cx += 2) {
+        const iTop = cx * 4, iBot = ((sh - 1) * sw + cx) * 4;
+        borderLSum += 0.299 * d[iTop] + 0.587 * d[iTop + 1] + 0.114 * d[iTop + 2];
+        borderLSum += 0.299 * d[iBot] + 0.587 * d[iBot + 1] + 0.114 * d[iBot + 2];
+        borderCount += 2;
+      }
+      const bgL = borderCount ? borderLSum / borderCount : 255;
+      const isLightBg = bgL >= 128;
+      const contrastThresh = 28;
+
+      const relX0 = x0 - sx0, relX1 = x1 - sx0;
+      const relY0 = y0 - sy0, relY1 = y1 - sy0;
+
+      const histX = new Int32Array(sw);
+      const histY = new Int32Array(sh);
+
+      const searchMinY = Math.max(0, Math.floor(relY0 - padX * 0.5));
+      const searchMaxY = Math.min(sh - 1, Math.ceil(relY1 + padX * 0.5));
+      const searchMinX = Math.max(0, Math.floor(relX0 - padY * 0.5));
+      const searchMaxX = Math.min(sw - 1, Math.ceil(relX1 + padY * 0.5));
+
+      for (let cy = searchMinY; cy <= searchMaxY; cy++) {
+        const rowOffset = cy * sw * 4;
+        for (let cx = searchMinX; cx <= searchMaxX; cx++) {
+          const idx = rowOffset + cx * 4;
+          const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+          const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
+          if (contrast >= contrastThresh) {
+            histX[cx]++;
+            histY[cy]++;
+          }
+        }
+      }
+
+      const minDensX = Math.max(1, Math.round(h * 0.04));
+      const minDensY = Math.max(1, Math.round(w * 0.04));
+
+      let firstX = -1, lastX = -1, firstY = -1, lastY = -1;
+      for (let cx = 0; cx < sw; cx++) {
+        if (histX[cx] >= minDensX) {
+          if (firstX === -1) firstX = cx;
+          lastX = cx;
+        }
+      }
+      for (let cy = 0; cy < sh; cy++) {
+        if (histY[cy] >= minDensY) {
+          if (firstY === -1) firstY = cy;
+          lastY = cy;
+        }
+      }
+
+      if (firstX === -1 || lastX === -1 || firstY === -1 || lastY === -1 ||
+          (lastX - firstX < 4) || (lastY - firstY < 4)) {
+        return { box, rotated };
+      }
+
+      let newW = (lastX - firstX + 1);
+      let newH = (lastY - firstY + 1);
+
+      if (newW < w * 0.5) newW = Math.round(w * 0.55);
+      if (newH < h * 0.5) newH = Math.round(h * 0.55);
+      if (newW > w * 1.35) newW = Math.round(w * 1.35);
+      if (newH > h * 1.35) newH = Math.round(h * 1.35);
+
+      const midX = sx0 + (firstX + lastX) / 2;
+      const midY = sy0 + (firstY + lastY) / 2;
+
+      let nx0 = clamp(midX - newW / 2 - 1.5, 0, state.doc.image_width - 4);
+      let ny0 = clamp(midY - newH / 2 - 1.5, 0, state.doc.image_height - 4);
+      let nx1 = clamp(midX + newW / 2 + 1.5, nx0 + 4, state.doc.image_width);
+      let ny1 = clamp(midY + newH / 2 + 1.5, ny0 + 4, state.doc.image_height);
+
+      return {
+        box: [Math.round(nx0 * 10) / 10, Math.round(ny0 * 10) / 10, Math.round(nx1 * 10) / 10, Math.round(ny1 * 10) / 10],
+        rotated: null,
+      };
+    }
+
+    const { cx, cy, angle_deg } = rotated;
+    const rad = angle_deg * Math.PI / 180;
+    const cosA = Math.cos(rad), sinA = Math.sin(rad);
+
+    const pad = Math.max(6, Math.round(Math.max(w, h) * 0.15));
+    const radius = Math.ceil(Math.hypot(rotated.w, rotated.h) / 2 + pad);
+    const sx0 = Math.max(0, Math.floor(cx - radius));
+    const sy0 = Math.max(0, Math.floor(cy - radius));
+    const sx1 = Math.min(state.doc.image_width, Math.ceil(cx + radius));
+    const sy1 = Math.min(state.doc.image_height, Math.ceil(cy + radius));
     const sw = sx1 - sx0, sh = sy1 - sy0;
-    if (sw < 6 || sh < 6) return { box, rotated };
+    if (sw < 4 || sh < 4) return { box, rotated };
 
     const ctx = getEdgeSnapCtx();
     edgeSnapCanvas.width = sw;
@@ -840,162 +1027,67 @@ function snapBoxToContrastEdges(box, rotated = null) {
     const d = imgData.data;
 
     let borderLSum = 0, borderCount = 0;
-    for (let cx = 0; cx < sw; cx += 2) {
-      const iTop = cx * 4, iBot = ((sh - 1) * sw + cx) * 4;
-      borderLSum += 0.299 * d[iTop] + 0.587 * d[iTop + 1] + 0.114 * d[iTop + 2];
-      borderLSum += 0.299 * d[iBot] + 0.587 * d[iBot + 1] + 0.114 * d[iBot + 2];
+    for (let x = 0; x < sw; x += 2) {
+      const t = x * 4, b = ((sh - 1) * sw + x) * 4;
+      borderLSum += 0.299 * d[t] + 0.587 * d[t + 1] + 0.114 * d[t + 2];
+      borderLSum += 0.299 * d[b] + 0.587 * d[b + 1] + 0.114 * d[b + 2];
       borderCount += 2;
     }
     const bgL = borderCount ? borderLSum / borderCount : 255;
     const isLightBg = bgL >= 128;
     const contrastThresh = 28;
 
-    const relX0 = x0 - sx0, relX1 = x1 - sx0;
-    const relY0 = y0 - sy0, relY1 = y1 - sy0;
+    let minU = 99999, maxU = -99999, minV = 99999, maxV = -99999;
+    let inkCount = 0;
+    const maxUAllowed = rotated.w / 2 + pad * 0.8;
+    const maxVAllowed = rotated.h / 2 + pad * 0.8;
 
-    const histX = new Int32Array(sw);
-    const histY = new Int32Array(sh);
-
-    const searchMinY = Math.max(0, Math.floor(relY0 - padX * 0.5));
-    const searchMaxY = Math.min(sh - 1, Math.ceil(relY1 + padX * 0.5));
-    const searchMinX = Math.max(0, Math.floor(relX0 - padY * 0.5));
-    const searchMaxX = Math.min(sw - 1, Math.ceil(relX1 + padY * 0.5));
-
-    for (let cy = searchMinY; cy <= searchMaxY; cy++) {
-      const rowOffset = cy * sw * 4;
-      for (let cx = searchMinX; cx <= searchMaxX; cx++) {
-        const idx = rowOffset + cx * 4;
+    for (let py = 0; py < sh; py++) {
+      const imgY = sy0 + py;
+      const rowOffset = py * sw * 4;
+      for (let px = 0; px < sw; px++) {
+        const idx = rowOffset + px * 4;
         const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
         const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
         if (contrast >= contrastThresh) {
-          histX[cx]++;
-          histY[cy]++;
+          const imgX = sx0 + px;
+          const dx = imgX - cx, dy = imgY - cy;
+          const u = dx * cosA + dy * sinA;
+          const v = -dx * sinA + dy * cosA;
+          if (Math.abs(u) <= maxUAllowed && Math.abs(v) <= maxVAllowed) {
+            inkCount++;
+            if (u < minU) minU = u;
+            if (u > maxU) maxU = u;
+            if (v < minV) minV = v;
+            if (v > maxV) maxV = v;
+          }
         }
       }
     }
 
-    const minDensX = Math.max(1, Math.round(h * 0.04));
-    const minDensY = Math.max(1, Math.round(w * 0.04));
+    if (inkCount < 6 || minU >= maxU || minV >= maxV) return { box, rotated };
 
-    let firstX = -1, lastX = -1, firstY = -1, lastY = -1;
-    for (let cx = 0; cx < sw; cx++) {
-      if (histX[cx] >= minDensX) {
-        if (firstX === -1) firstX = cx;
-        lastX = cx;
-      }
-    }
-    for (let cy = 0; cy < sh; cy++) {
-      if (histY[cy] >= minDensY) {
-        if (firstY === -1) firstY = cy;
-        lastY = cy;
-      }
-    }
+    let newRotW = Math.max(rotated.w * 0.5, Math.min(rotated.w * 1.35, (maxU - minU) + 3));
+    let newRotH = Math.max(rotated.h * 0.5, Math.min(rotated.h * 1.35, (maxV - minV) + 3));
 
-    if (firstX === -1 || lastX === -1 || firstY === -1 || lastY === -1 ||
-        (lastX - firstX < 4) || (lastY - firstY < 4)) {
-      return { box, rotated };
-    }
+    const shiftU = (minU + maxU) / 2;
+    const shiftV = (minV + maxV) / 2;
+    const newCx = clamp(cx + shiftU * cosA - shiftV * sinA, 0, state.doc.image_width);
+    const newCy = clamp(cy + shiftU * sinA + shiftV * cosA, 0, state.doc.image_height);
 
-    let newW = (lastX - firstX + 1);
-    let newH = (lastY - firstY + 1);
-
-    if (newW < w * 0.5) newW = Math.round(w * 0.55);
-    if (newH < h * 0.5) newH = Math.round(h * 0.55);
-    if (newW > w * 1.35) newW = Math.round(w * 1.35);
-    if (newH > h * 1.35) newH = Math.round(h * 1.35);
-
-    const midX = sx0 + (firstX + lastX) / 2;
-    const midY = sy0 + (firstY + lastY) / 2;
-
-    let nx0 = clamp(midX - newW / 2 - 1.5, 0, state.doc.image_width - 4);
-    let ny0 = clamp(midY - newH / 2 - 1.5, 0, state.doc.image_height - 4);
-    let nx1 = clamp(midX + newW / 2 + 1.5, nx0 + 4, state.doc.image_width);
-    let ny1 = clamp(midY + newH / 2 + 1.5, ny0 + 4, state.doc.image_height);
-
-    return {
-      box: [Math.round(nx0 * 10) / 10, Math.round(ny0 * 10) / 10, Math.round(nx1 * 10) / 10, Math.round(ny1 * 10) / 10],
-      rotated: null,
+    const nextRot = {
+      cx: Math.round(newCx * 10) / 10,
+      cy: Math.round(newCy * 10) / 10,
+      w: Math.round(newRotW * 10) / 10,
+      h: Math.round(newRotH * 10) / 10,
+      angle_deg: rotated.angle_deg,
     };
+    const aabb = rotatedAabb(nextRot.cx, nextRot.cy, nextRot.w, nextRot.h, nextRot.angle_deg);
+    return { box: aabb.map(v => Math.round(v * 10) / 10), rotated: nextRot };
+  } catch (err) {
+    console.warn("Contrast edge snap error:", err);
+    return { box, rotated };
   }
-
-  const { cx, cy, angle_deg } = rotated;
-  const rad = angle_deg * Math.PI / 180;
-  const cosA = Math.cos(rad), sinA = Math.sin(rad);
-
-  const pad = Math.max(6, Math.round(Math.max(w, h) * 0.15));
-  const radius = Math.ceil(Math.hypot(rotated.w, rotated.h) / 2 + pad);
-  const sx0 = Math.max(0, Math.floor(cx - radius));
-  const sy0 = Math.max(0, Math.floor(cy - radius));
-  const sx1 = Math.min(state.doc.image_width, Math.ceil(cx + radius));
-  const sy1 = Math.min(state.doc.image_height, Math.ceil(cy + radius));
-  const sw = sx1 - sx0, sh = sy1 - sy0;
-  if (sw < 6 || sh < 6) return { box, rotated };
-
-  const ctx = getEdgeSnapCtx();
-  edgeSnapCanvas.width = sw;
-  edgeSnapCanvas.height = sh;
-  ctx.drawImage(state.image, sx0, sy0, sw, sh, 0, 0, sw, sh);
-  const imgData = ctx.getImageData(0, 0, sw, sh);
-  const d = imgData.data;
-
-  let borderLSum = 0, borderCount = 0;
-  for (let x = 0; x < sw; x += 2) {
-    const t = x * 4, b = ((sh - 1) * sw + x) * 4;
-    borderLSum += 0.299 * d[t] + 0.587 * d[t + 1] + 0.114 * d[t + 2];
-    borderLSum += 0.299 * d[b] + 0.587 * d[b + 1] + 0.114 * d[b + 2];
-    borderCount += 2;
-  }
-  const bgL = borderCount ? borderLSum / borderCount : 255;
-  const isLightBg = bgL >= 128;
-  const contrastThresh = 28;
-
-  let minU = 99999, maxU = -99999, minV = 99999, maxV = -99999;
-  let inkCount = 0;
-  const maxUAllowed = rotated.w / 2 + pad * 0.8;
-  const maxVAllowed = rotated.h / 2 + pad * 0.8;
-
-  for (let py = 0; py < sh; py++) {
-    const imgY = sy0 + py;
-    const rowOffset = py * sw * 4;
-    for (let px = 0; px < sw; px++) {
-      const idx = rowOffset + px * 4;
-      const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
-      const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
-      if (contrast >= contrastThresh) {
-        const imgX = sx0 + px;
-        const dx = imgX - cx, dy = imgY - cy;
-        const u = dx * cosA + dy * sinA;
-        const v = -dx * sinA + dy * cosA;
-        if (Math.abs(u) <= maxUAllowed && Math.abs(v) <= maxVAllowed) {
-          inkCount++;
-          if (u < minU) minU = u;
-          if (u > maxU) maxU = u;
-          if (v < minV) minV = v;
-          if (v > maxV) maxV = v;
-        }
-      }
-    }
-  }
-
-  if (inkCount < 6 || minU >= maxU || minV >= maxV) return { box, rotated };
-
-  let newRotW = Math.max(rotated.w * 0.5, Math.min(rotated.w * 1.35, (maxU - minU) + 3));
-  let newRotH = Math.max(rotated.h * 0.5, Math.min(rotated.h * 1.35, (maxV - minV) + 3));
-
-  const shiftU = (minU + maxU) / 2;
-  const shiftV = (minV + maxV) / 2;
-  const newCx = clamp(cx + shiftU * cosA - shiftV * sinA, 0, state.doc.image_width);
-  const newCy = clamp(cy + shiftU * sinA + shiftV * cosA, 0, state.doc.image_height);
-
-  const nextRot = {
-    cx: Math.round(newCx * 10) / 10,
-    cy: Math.round(newCy * 10) / 10,
-    w: Math.round(newRotW * 10) / 10,
-    h: Math.round(newRotH * 10) / 10,
-    angle_deg: rotated.angle_deg,
-  };
-  const aabb = rotatedAabb(nextRot.cx, nextRot.cy, nextRot.w, nextRot.h, nextRot.angle_deg);
-  return { box: aabb.map(v => Math.round(v * 10) / 10), rotated: nextRot };
 }
 
 function snapContrastEdgesSelected() {
@@ -1065,9 +1157,7 @@ function refreshControls() {
   const banner = $("modeBanner");
   if (state.mode === "oriented") {
     banner.hidden = false;
-    banner.textContent = state.orientedDraft
-      ? "Oriented box (step 2/2): move perpendicular to set thickness, then click to finish (Esc to cancel)"
-      : "Oriented box (step 1/2): drag along symbol axis (hold Shift for 15° snap · Esc to exit)";
+    banner.textContent = "Oriented box: drag or tap to spawn rotated box auto-aligned to walls (Esc to exit)";
   } else if (state.mode === "anchor") {
     banner.hidden = false;
     banner.textContent = `Anchor mode: click canvas to place "${state.activeAnchorName}" (Esc to exit)`;
@@ -1707,14 +1797,18 @@ function applyQuickFamily(family) {
 }
 
 function newInstance(box, rotated = null) {
-  const snapped = snapBoxToContrastEdges(box, rotated);
-  if (checkBox(snapped.box)) {
-    box = snapped.box;
-    if (snapped.rotated) rotated = snapped.rotated;
+  try {
+    const snapped = snapBoxToContrastEdges(box, rotated);
+    if (snapped && checkBox(snapped.box)) {
+      box = snapped.box;
+      if (snapped.rotated) rotated = snapped.rotated;
+    }
+  } catch (err) {
+    console.warn("Auto edge snap skipped:", err);
   }
   const family = state.lastFamily;
   const item = {
-    instance_id: "manual_p" + (state.page + 1) + "_" + crypto.randomUUID().slice(0, 8),
+    instance_id: "manual_p" + (state.page + 1) + "_" + generateId(),
     symbol_family: family,
     symbol_variant: state.lastVariantByFamily[family] || "unspecified",
     discipline: disciplineFor(family),
@@ -1896,7 +1990,7 @@ function cloneInstanceAt(item, targetCenter = null) {
   const dy = ny0 - item.bbox_xyxy[1];
 
   const copy = JSON.parse(JSON.stringify(item));
-  copy.instance_id = "manual_p" + (state.page + 1) + "_" + crypto.randomUUID().slice(0, 8);
+  copy.instance_id = "manual_p" + (state.page + 1) + "_" + generateId();
   copy.bbox_xyxy = [
     Math.round((item.bbox_xyxy[0] + dx) * 1000) / 1000,
     Math.round((item.bbox_xyxy[1] + dy) * 1000) / 1000,
@@ -2105,25 +2199,56 @@ function pointerDown(event) {
       };
     }
   } else if (state.mode === "draw") {
-    state.drag = { type: "draw", start: pt, current: pt };
-  } else if (state.mode === "oriented") {
-    if (state.orientedDraft) {
-      const rot = buildOrientedFromDraft(state.orientedDraft, pt);
-      const aabb = rotatedAabb(rot.cx, rot.cy, rot.w, rot.h, rot.angle_deg);
-      state.orientedDraft = null;
-      if (checkBox(aabb)) {
-        remember();
-        newInstance(aabb, rot);
-        setMode("select");
-      } else {
-        notify("Oriented box extends outside image bounds.", "error");
-      }
-      refreshControls();
-      draw();
-      return;
+    const hit = currentPageMouseHit(pt);
+    if (hit) {
+      select(hit.item.instance_id);
+      remember();
+      const bb = hit.item.bbox_xyxy;
+      const rotBase = hit.item.bbox_rotated
+        ? { ...hit.item.bbox_rotated }
+        : { cx: (bb[0] + bb[2]) / 2, cy: (bb[1] + bb[3]) / 2, w: bb[2] - bb[0], h: bb[3] - bb[1], angle_deg: 0 };
+      state.drag = {
+        type: hit.action,
+        start: pt,
+        box: [...bb],
+        boxes: { [hit.item.instance_id]: [...bb] },
+        originalRotation: hit.item.bbox_rotated ? { ...hit.item.bbox_rotated } : null,
+        originalRotations: { [hit.item.instance_id]: hit.item.bbox_rotated ? { ...hit.item.bbox_rotated } : null },
+        rotBase,
+        moved: false,
+        selected: hit.item.instance_id,
+        selectedIds: [hit.item.instance_id],
+        reviewEvidence: reviewEvidenceKey(hit.item),
+      };
+    } else {
+      state.drag = { type: "draw", start: pt, current: pt };
     }
-    const clampedPt = [clamp(pt[0], 0, state.doc.image_width), clamp(pt[1], 0, state.doc.image_height)];
-    state.drag = { type: "oriented-axis", start: clampedPt, current: clampedPt };
+  } else if (state.mode === "oriented") {
+    const hit = currentPageMouseHit(pt);
+    if (hit) {
+      select(hit.item.instance_id);
+      remember();
+      const bb = hit.item.bbox_xyxy;
+      const rotBase = hit.item.bbox_rotated
+        ? { ...hit.item.bbox_rotated }
+        : { cx: (bb[0] + bb[2]) / 2, cy: (bb[1] + bb[3]) / 2, w: bb[2] - bb[0], h: bb[3] - bb[1], angle_deg: 0 };
+      state.drag = {
+        type: hit.action,
+        start: pt,
+        box: [...bb],
+        boxes: { [hit.item.instance_id]: [...bb] },
+        originalRotation: hit.item.bbox_rotated ? { ...hit.item.bbox_rotated } : null,
+        originalRotations: { [hit.item.instance_id]: hit.item.bbox_rotated ? { ...hit.item.bbox_rotated } : null },
+        rotBase,
+        moved: false,
+        selected: hit.item.instance_id,
+        selectedIds: [hit.item.instance_id],
+        reviewEvidence: reviewEvidenceKey(hit.item),
+      };
+    } else {
+      const clampedPt = [clamp(pt[0], 0, state.doc.image_width), clamp(pt[1], 0, state.doc.image_height)];
+      state.drag = { type: "oriented", start: clampedPt, current: clampedPt };
+    }
   } else if (state.mode === "anchor") {
     const item = chosen();
     if (!item) { setMode("select"); return; }
@@ -2201,7 +2326,7 @@ function pointerMove(event) {
     state.y = d.y + xy[1] - d.at[1];
   } else if (d.type === "marquee") {
     d.current = pt;
-  } else if (d.type === "draw") {
+  } else if (d.type === "draw" || d.type === "oriented") {
     d.current = pt;
   } else if (d.type === "oriented-axis") {
     let cur = [clamp(pt[0], 0, state.doc.image_width), clamp(pt[1], 0, state.doc.image_height)];
@@ -2333,22 +2458,43 @@ function pointerUp(event) {
       }
     }
   } else if (d.type === "draw") {
-    const box = normalizedBox(d.start, d.current, state.doc.image_width, state.doc.image_height);
+    let box = normalizedBox(d.start, d.current, state.doc.image_width, state.doc.image_height);
+    const bw = box[2] - box[0], bh = box[3] - box[1];
+    if (bw < 3 || bh < 3) {
+      const cx = (d.start[0] + d.current[0]) / 2;
+      const cy = (d.start[1] + d.current[1]) / 2;
+      box = normalizedBox([cx - 14, cy - 14], [cx + 14, cy + 14], state.doc.image_width, state.doc.image_height);
+    }
     if (checkBox(box)) {
       remember();
       newInstance(box);
-      setMode("select");
+    }
+  } else if (d.type === "oriented") {
+    const rot = computeOrientedFromDrag(d.start, d.current);
+    const aabb = rotatedAabb(rot.cx, rot.cy, rot.w, rot.h, rot.angle_deg);
+    if (checkBox(aabb)) {
+      remember();
+      newInstance(aabb, rot);
+    } else {
+      const clampedBox = [
+        clamp(aabb[0], 0, state.doc.image_width - 4),
+        clamp(aabb[1], 0, state.doc.image_height - 4),
+        clamp(aabb[2], 4, state.doc.image_width),
+        clamp(aabb[3], 4, state.doc.image_height),
+      ];
+      if (checkBox(clampedBox)) {
+        remember();
+        newInstance(clampedBox, rot);
+      } else {
+        notify("Box extends outside page bounds.", "warning");
+      }
     }
   } else if (d.type === "oriented-axis") {
-    const len = Math.hypot(d.current[0] - d.start[0], d.current[1] - d.start[1]);
-    if (len >= 4) {
-      const rawAng = Math.atan2(d.current[1] - d.start[1], d.current[0] - d.start[0]) * 180 / Math.PI;
-      const ang = Math.round(snapAngleToWallsOrCardinals(rawAng, d.start) * 10) / 10;
-      state.orientedDraft = { p1: d.start, p2: d.current, angleDeg: ang, w: len };
-      refreshControls();
-      notify("Oriented (step 2/2): move cursor to top/bottom side for depth, then click to finish (Esc to cancel).", "saved");
-    } else {
-      notify("Drag along the symbol's main axis (at least 4 px).", "warning");
+    const rot = computeOrientedFromDrag(d.start, d.current);
+    const aabb = rotatedAabb(rot.cx, rot.cy, rot.w, rot.h, rot.angle_deg);
+    if (checkBox(aabb)) {
+      remember();
+      newInstance(aabb, rot);
     }
   } else if (d.type === "snap") {
     const dx = d.current[0] - d.start[0];
@@ -2394,7 +2540,7 @@ function cancelDrag() {
     if (drag.type === "pan") {
       state.x = drag.x; state.y = drag.y;
     }
-  } else if (drag.type !== "draw" && drag.type !== "snap" && drag.type !== "oriented-axis") {
+  } else if (drag.type !== "draw" && drag.type !== "oriented" && drag.type !== "snap" && drag.type !== "oriented-axis") {
     if (drag.selectedIds && drag.selectedIds.length > 1) {
       for (const id of drag.selectedIds) {
         const item = state.doc.instances.find(x => x.instance_id === id);
