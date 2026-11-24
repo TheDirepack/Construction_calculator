@@ -11,6 +11,7 @@ import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import com.thedirepack.constructioncalc.core.model.design.ScheduleCsv
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
+import com.thedirepack.constructioncalc.feature.panels.domain.PanelExportLayout
 import com.thedirepack.constructioncalc.feature.panels.domain.ScheduleText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -21,12 +22,17 @@ import java.time.format.DateTimeFormatter
 
 /** Share/export actions for the project's panel schedules and takeoffs. A null list means every panel. */
 internal class ExportActions(
-    val pdf: (List<String>?) -> Unit,
-    val png: (String?) -> Unit,
+    private val onPdf: (List<String>?, PanelExportLayout) -> Unit,
+    private val onPng: (String?, PanelExportLayout) -> Unit,
     val scheduleCsv: (List<String>?) -> Unit,
     val takeoffCsv: () -> Unit,
     val text: (List<String>?) -> Unit,
-)
+    private val defaultLayout: () -> PanelExportLayout = { PanelExportLayout.BRANCH_STANDARD },
+) {
+    fun pdf(panelIds: List<String>?, layout: PanelExportLayout = defaultLayout()) = onPdf(panelIds, layout)
+
+    fun png(panelId: String?, layout: PanelExportLayout = defaultLayout()) = onPng(panelId, layout)
+}
 
 @Composable
 internal fun rememberExportActions(ctx: PanelsContext): ExportActions {
@@ -41,6 +47,7 @@ internal fun rememberExportActions(ctx: PanelsContext): ExportActions {
     val unitsNow = rememberUpdatedState(settings.unitSystem)
 
     return remember(context, services) {
+        val templateStore = services.settings.module(PanelsTool.ID)
         fun date() = DateTimeFormatter.ofPattern("MMM d, yyyy").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(services.clock()))
 
         fun shareFile(
@@ -68,7 +75,7 @@ internal fun rememberExportActions(ctx: PanelsContext): ExportActions {
         }
 
         ExportActions(
-            pdf = { panelIds ->
+            onPdf = { panelIds, layout ->
                 val c = current.value
                 if (c.project.panels.isEmpty()) {
                     c.host.showMessage("Add a panel first")
@@ -86,9 +93,9 @@ internal fun rememberExportActions(ctx: PanelsContext): ExportActions {
                     subject = "${project.name} panel schedule",
                     body = ScheduleText.render(project, design, panelIds, companyLines, dateText, format, units),
                     errorFallback = "Couldn't make the PDF",
-                ) { out -> PanelPdf.write(out, project, design, panelIds, companyLines, dateText, units) }
+                ) { out -> PanelPdf.write(out, project, design, panelIds, companyLines, dateText, units, layout) }
             },
-            png = { panelId ->
+            onPng = { panelId, layout ->
                 val c = current.value
                 val panel = panelId?.let(c.project::panel) ?: c.project.panels.firstOrNull()
                 if (panel == null) {
@@ -107,7 +114,7 @@ internal fun rememberExportActions(ctx: PanelsContext): ExportActions {
                     subject = "${project.name} · ${panel.name} panel schedule",
                     body = ScheduleText.render(project, design, listOf(panel.id), companyLines, dateText, format, units),
                     errorFallback = "Couldn't render the PNG",
-                ) { out -> PanelPng.write(out, project, design, panel, companyLines, dateText) }
+                ) { out -> PanelPng.write(out, project, design, panel, companyLines, dateText, layout = layout) }
             },
             scheduleCsv = { panelIds ->
                 val c = current.value
@@ -152,6 +159,7 @@ internal fun rememberExportActions(ctx: PanelsContext): ExportActions {
                     ScheduleText.render(c.project, c.design, panelIds, header.value, date(), lengthNow.value, unitsNow.value),
                 )
             },
+            defaultLayout = { PanelTemplateStore.defaultLayout(templateStore) },
         )
     }
 }

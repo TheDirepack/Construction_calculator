@@ -31,4 +31,5 @@ object FootInchTool : ToolModule {
 /** Keys in this tool's settings store. */
 internal object FootInchPrefs {
     const val SHOW_FRACTION_KEYS = "show_fraction_keys"
+    const val DUAL_KEYPAD = "dual_keypad"
 }
