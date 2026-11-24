@@ -636,3 +636,64 @@ def test_browser_electrical_device_catalog_search_modal_and_save(tmp_path):
         server.shutdown()
         server.server_close()
         worker.join(timeout=10)
+
+
+def test_browser_next_pdf_starts_with_empty_page(tmp_path):
+    """Switching blueprint documents must not carry the previous PDF's page over."""
+    docs_dir = tmp_path / "blueprints"
+    docs_dir.mkdir()
+    for name in ("switch_a.pdf", "switch_b.pdf"):
+        document = fitz.open()
+        for _ in range(2):
+            page = document.new_page(width=400, height=300)
+            page.draw_rect(fitz.Rect(50, 50, 65, 65), color=(0, 0, 0))
+        document.save(docs_dir / name)
+        document.close()
+
+    session = LabelingSession(pdf=docs_dir / "switch_a.pdf", blueprints_dir=docs_dir,
+                              out_dir=tmp_path / "labels", dpi=144)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1420, "height": 900})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function(
+                    "() => document.querySelector('#pageIndicator').textContent === 'Page 1 / 2'"
+                )
+                assert "switch_a.pdf" in page.locator("#currentDocBadge").inner_text()
+
+                page.locator("#drawTool").click()
+                canvas = page.locator("#canvas").bounding_box()
+                assert canvas is not None
+                sx, sy = canvas["x"] + 230, canvas["y"] + 190
+                page.mouse.move(sx, sy)
+                page.mouse.down()
+                page.mouse.move(sx + 48, sy + 36, steps=4)
+                page.mouse.up()
+                page.wait_for_function(
+                    "() => document.querySelector('#count').textContent.includes('1 pending')"
+                )
+
+                page.on("dialog", lambda dialog: dialog.accept())
+                page.locator("#nextPdfBtn").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#currentDocBadge').textContent.includes('switch_b.pdf')"
+                )
+                page.wait_for_function(
+                    "() => document.querySelector('#pageIndicator').textContent === 'Page 1 / 2'"
+                )
+                assert "0 active" in page.locator("#count").inner_text()
+                assert session.page_state(0)["document"]["instances"] == []
+                # Accepting the switch prompt saved the first PDF's own page.
+                saved_a = json.loads((tmp_path / "labels" / "switch_a_p0001.json").read_text())
+                assert len(saved_a["instances"]) == 1
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)

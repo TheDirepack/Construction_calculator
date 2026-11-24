@@ -490,3 +490,42 @@ def test_electrical_device_catalog_completeness_and_http_endpoint(tmp_path):
         worker.join(timeout=10)
 
 
+
+
+def test_switch_document_drops_previous_walls_and_page_presence(tmp_path):
+    bp_dir = tmp_path / "blueprints"
+    bp_dir.mkdir()
+    pdf1 = _pdf(bp_dir / "first.pdf", pages=2)
+    pdf2 = _pdf(bp_dir / "second.pdf", pages=2)
+
+    walls = tmp_path / "walls.json"
+    walls.write_text(json.dumps([{"start": [10, 10], "end": [200, 10]}]), encoding="utf-8")
+    presence = tmp_path / "presence.json"
+    presence.write_text(json.dumps({
+        "format_version": 1,
+        "purpose": "page_symbol_presence_review_queue",
+        "documents": [{
+            "source_pdf_sha256": hashlib.sha256(pdf1.read_bytes()).hexdigest(),
+            "pages": [{
+                "page_index": 0,
+                "suggestion": "possible_symbols",
+                "risk_terms": ["receptacle"],
+                "verified_no_symbols": False,
+                "eligible_as_supervised_negative": False,
+            }],
+        }],
+    }), encoding="utf-8")
+
+    session = LabelingSession(
+        pdf=pdf1, blueprints_dir=bp_dir, out_dir=tmp_path / "labels",
+        walls=walls, page_presence=presence,
+    )
+    state = session.page_state(0)
+    assert state["walls"]
+    assert state["page_presence_suggestion"]["suggestion"] == "possible_symbols"
+
+    session.switch_document("second.pdf")
+    state = session.page_state(0)
+    assert session.pdf == pdf2
+    assert state["walls"] == []
+    assert state["page_presence_suggestion"] is None

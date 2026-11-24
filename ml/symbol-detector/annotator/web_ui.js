@@ -4180,6 +4180,16 @@ async function switchDocument(path) {
     state.pageCache = {};
     state.currentDocPath = path;
     state.page = 0;
+    // loadPage() caches the in-memory document under state.page before it
+    // fetches the next one. Drop the previous PDF first, otherwise its labels
+    // are written into page 0 and restored as if they belonged to the new PDF.
+    state.doc = null;
+    state.dirty = false;
+    state.revision = null;
+    state.undo = [];
+    state.redo = [];
+    state.selectedIds = new Set();
+    state.selectedId = null;
     state.busy = false;
     await loadDocumentsList();
     await loadPage(0, true);

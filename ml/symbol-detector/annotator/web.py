@@ -1075,6 +1075,11 @@ class LabelingSession:
             self.edit = None
             self.edit_files = []
             self._render_cache.clear()
+            # Wall centerlines and page-presence suggestions were derived from
+            # the previous PDF; keeping them would guide the new document with
+            # another drawing's geometry and page verdicts.
+            self.walls = []
+            self.page_presence = {}
             self.source_hash = sha256_file(self.pdf)
             self.source_stat = self.pdf.stat()
             fitz = _import_fitz()
