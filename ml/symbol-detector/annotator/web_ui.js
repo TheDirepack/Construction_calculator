@@ -118,6 +118,7 @@ const state = {
   orientedDraft: null,
   snapPreview: null,
   activeAnchorSnap: null,
+  snapSensitivity: "high",
   walls: [],
   familyDisciplines: {},
   variantsByFamily: {},
@@ -994,6 +995,36 @@ function getEdgeSnapCtx() {
   return edgeSnapCtx;
 }
 
+function getSnapThreshold(maxContrast, sensitivity = state.snapSensitivity) {
+  if (sensitivity === "max") {
+    return Math.max(6, Math.min(16, Math.round(maxContrast * 0.15)));
+  } else if (sensitivity === "normal") {
+    return Math.max(16, Math.min(30, Math.round(maxContrast * 0.32)));
+  } else {
+    // "high" (default)
+    return Math.max(10, Math.min(22, Math.round(maxContrast * 0.22)));
+  }
+}
+
+function setSnapSensitivity(val) {
+  state.snapSensitivity = val;
+  const sel = $("snapSensitivity");
+  if (sel) sel.value = val;
+  const labels = {
+    normal: "Normal (standard contrast)",
+    high: "High (ceiling grid & faint lines)",
+    max: "Max Edge (ultra-sensitive outer contour)",
+  };
+  notify(`Snap sensitivity: ${labels[val] || val}`, "info");
+}
+
+function cycleSnapSensitivity() {
+  const current = state.snapSensitivity || "high";
+  const order = ["normal", "high", "max"];
+  const next = order[(order.indexOf(current) + 1) % order.length];
+  setSnapSensitivity(next);
+}
+
 function snapBoxToContrastEdges(box, rotated = null) {
   try {
     if (!state.image || !state.doc) return { box, rotated };
@@ -1002,6 +1033,7 @@ function snapBoxToContrastEdges(box, rotated = null) {
     if (w < 6 || h < 6) return { box, rotated };
 
     const ctx = getEdgeSnapCtx();
+    const density = (state.snapSensitivity === "max") ? 2.5 : (state.snapSensitivity === "high" ? 2.0 : 1.5);
 
     if (!rotated || Math.abs(rotated.angle_deg || 0) < 1e-4) {
       // Axis-aligned box: spawn vectors from the 4 outer sides of the drawn box
@@ -1035,71 +1067,99 @@ function snapBoxToContrastEdges(box, rotated = null) {
       }
       const bgL = borderCount ? borderLSum / borderCount : 255;
       const isLightBg = bgL >= 128;
-      const contrastThresh = 28;
 
-      function isInkAt(px, py) {
+      let maxContrast = 0;
+      for (let y = 0; y < sh; y += 2) {
+        const row = y * sw * 4;
+        for (let x = 0; x < sw; x += 2) {
+          const idx = row + x * 4;
+          const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+          const c = isLightBg ? (bgL - lum) : (lum - bgL);
+          if (c > maxContrast) maxContrast = c;
+        }
+      }
+
+      const contrastThresh = getSnapThreshold(maxContrast, state.snapSensitivity);
+      const fallbackThresh = Math.max(6, Math.round(contrastThresh * 0.65));
+
+      function isInkAt(px, py, thresh = contrastThresh) {
         if (px < 0 || px >= sw || py < 0 || py >= sh) return false;
         const idx = (py * sw + px) * 4;
         const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
         const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
-        return contrast >= contrastThresh;
+        return contrast >= thresh;
       }
 
-      const N = Math.max(51, Math.min(101, Math.round(sw * 1.5)));
-      const maxTravelX = Math.floor(Math.min(sw * 0.42, (sw - 6) / 2));
-      const maxTravelY = Math.floor(Math.min(sh * 0.42, (sh - 6) / 2));
+      // Ray counts are strictly dependent on each side's pixel size
+      const numRaysX = Math.max(32, Math.min(240, Math.round(sw * density)));
+      const numRaysY = Math.max(32, Math.min(240, Math.round(sh * density)));
+      const maxTravelX = Math.floor(Math.min(sw * 0.46, (sw - 4) / 2));
+      const maxTravelY = Math.floor(Math.min(sh * 0.46, (sh - 4) / 2));
 
-      // Left side: vectors from x = 0 marching rightward
-      const hitsLeft = [];
-      for (let i = 0; i < N; i++) {
-        const t = 0.12 + 0.76 * (i / (N - 1));
-        const py = Math.floor(t * (sh - 1));
-        for (let dist = 0; dist <= maxTravelX; dist++) {
-          if (isInkAt(dist, py)) { hitsLeft.push(dist); break; }
+      function computeSideHits(numRays, maxTravel, testCoord) {
+        let hits = [];
+        for (let i = 0; i < numRays; i++) {
+          const t = (numRays === 1) ? 0.5 : (0.01 + 0.98 * (i / (numRays - 1)));
+          for (let dist = 0; dist <= maxTravel; dist++) {
+            if (testCoord(t, dist, contrastThresh)) { hits.push(dist); break; }
+          }
         }
-      }
-
-      // Right side: vectors from x = sw - 1 marching leftward
-      const hitsRight = [];
-      for (let i = 0; i < N; i++) {
-        const t = 0.12 + 0.76 * (i / (N - 1));
-        const py = Math.floor(t * (sh - 1));
-        for (let dist = 0; dist <= maxTravelX; dist++) {
-          if (isInkAt(sw - 1 - dist, py)) { hitsRight.push(dist); break; }
+        const minExpected = Math.max(2, Math.min(6, Math.round(numRays * 0.04)));
+        if (hits.length < minExpected && fallbackThresh < contrastThresh) {
+          const retryHits = [];
+          for (let i = 0; i < numRays; i++) {
+            const t = (numRays === 1) ? 0.5 : (0.01 + 0.98 * (i / (numRays - 1)));
+            for (let dist = 0; dist <= maxTravel; dist++) {
+              if (testCoord(t, dist, fallbackThresh)) { retryHits.push(dist); break; }
+            }
+          }
+          if (retryHits.length >= minExpected) hits = retryHits;
         }
+        return hits;
       }
 
-      // Top side: vectors from y = 0 marching downward
-      const hitsTop = [];
-      for (let i = 0; i < N; i++) {
-        const t = 0.12 + 0.76 * (i / (N - 1));
-        const px = Math.floor(t * (sw - 1));
-        for (let dist = 0; dist <= maxTravelY; dist++) {
-          if (isInkAt(px, dist)) { hitsTop.push(dist); break; }
-        }
-      }
-
-      // Bottom side: vectors from y = sh - 1 marching upward
-      const hitsBottom = [];
-      for (let i = 0; i < N; i++) {
-        const t = 0.12 + 0.76 * (i / (N - 1));
-        const px = Math.floor(t * (sw - 1));
-        for (let dist = 0; dist <= maxTravelY; dist++) {
-          if (isInkAt(px, sh - 1 - dist)) { hitsBottom.push(dist); break; }
-        }
-      }
-
-      function computeSideShrink(hits) {
-        if (hits.length < N * 0.25) return 0;
+      function computeSideShrink(hits, numRays) {
+        const minExpected = Math.max(2, Math.min(6, Math.round(numRays * 0.04)));
+        if (hits.length < minExpected) return 0;
         hits.sort((a, b) => a - b);
-        const idx = Math.min(Math.floor(hits.length * 0.20), hits.length - 1);
+        const clusterSize = Math.max(2, Math.min(5, Math.round(numRays * 0.035)));
+        for (let i = 0; i <= hits.length - clusterSize; i++) {
+          if (hits[i + clusterSize - 1] - hits[i] <= 2.2) {
+            return hits[i];
+          }
+        }
+        const idx = Math.min(Math.floor(hits.length * 0.05), hits.length - 1);
         return hits[idx];
       }
 
-      const sLeft = computeSideShrink(hitsLeft);
-      const sRight = computeSideShrink(hitsRight);
-      const sTop = computeSideShrink(hitsTop);
-      const sBottom = computeSideShrink(hitsBottom);
+      // Left side: vectors from x = 0 marching rightward
+      const hitsLeft = computeSideHits(numRaysY, maxTravelX, (t, dist, thresh) => {
+        const py = Math.floor(t * (sh - 1));
+        return isInkAt(dist, py, thresh);
+      });
+
+      // Right side: vectors from x = sw - 1 marching leftward
+      const hitsRight = computeSideHits(numRaysY, maxTravelX, (t, dist, thresh) => {
+        const py = Math.floor(t * (sh - 1));
+        return isInkAt(sw - 1 - dist, py, thresh);
+      });
+
+      // Top side: vectors from y = 0 marching downward
+      const hitsTop = computeSideHits(numRaysX, maxTravelY, (t, dist, thresh) => {
+        const px = Math.floor(t * (sw - 1));
+        return isInkAt(px, dist, thresh);
+      });
+
+      // Bottom side: vectors from y = sh - 1 marching upward
+      const hitsBottom = computeSideHits(numRaysX, maxTravelY, (t, dist, thresh) => {
+        const px = Math.floor(t * (sw - 1));
+        return isInkAt(px, sh - 1 - dist, thresh);
+      });
+
+      const sLeft = computeSideShrink(hitsLeft, numRaysY);
+      const sRight = computeSideShrink(hitsRight, numRaysY);
+      const sTop = computeSideShrink(hitsTop, numRaysX);
+      const sBottom = computeSideShrink(hitsBottom, numRaysX);
 
       const newX0 = x0 + sLeft;
       const newX1 = x1 - sRight;
@@ -1155,9 +1215,21 @@ function snapBoxToContrastEdges(box, rotated = null) {
     }
     const bgL = borderCount ? borderLSum / borderCount : 255;
     const isLightBg = bgL >= 128;
-    const contrastThresh = 28;
 
-    function isInkLocal(u, v) {
+    let maxContrast = 0;
+    for (let y = 0; y < sh; y += 2) {
+      const row = y * sw * 4;
+      for (let x = 0; x < sw; x += 2) {
+        const idx = row + x * 4;
+        const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+        const c = isLightBg ? (bgL - lum) : (lum - bgL);
+        if (c > maxContrast) maxContrast = c;
+      }
+    }
+    const contrastThresh = getSnapThreshold(maxContrast, state.snapSensitivity);
+    const fallbackThresh = Math.max(6, Math.round(contrastThresh * 0.65));
+
+    function isInkLocal(u, v, thresh = contrastThresh) {
       const imgX = cx + u * cosA - v * sinA;
       const imgY = cy + u * sinA + v * cosA;
       const px = Math.round(imgX - sx0);
@@ -1166,66 +1238,80 @@ function snapBoxToContrastEdges(box, rotated = null) {
       const idx = (py * sw + px) * 4;
       const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
       const contrast = isLightBg ? (bgL - lum) : (lum - bgL);
-      return contrast >= contrastThresh;
+      return contrast >= thresh;
     }
 
     const rotW = rotated.w;
     const rotH = rotated.h;
-    const N = Math.max(51, Math.min(101, Math.round(Math.max(rotW, rotH) * 1.5)));
-    const maxTravelU = Math.floor(Math.min(rotW * 0.42, (rotW - 6) / 2));
-    const maxTravelV = Math.floor(Math.min(rotH * 0.42, (rotH - 6) / 2));
+    const numRaysU = Math.max(32, Math.min(240, Math.round(rotW * density)));
+    const numRaysV = Math.max(32, Math.min(240, Math.round(rotH * density)));
+    const maxTravelU = Math.floor(Math.min(rotW * 0.46, (rotW - 4) / 2));
+    const maxTravelV = Math.floor(Math.min(rotH * 0.46, (rotH - 4) / 2));
 
-    // -U side: rays starting at u = -rotW/2 marching along +u
-    const hitsMinU = [];
-    for (let i = 0; i < N; i++) {
-      const t = 0.12 + 0.76 * (i / (N - 1));
-      const v = -rotH / 2 + t * rotH;
-      for (let dist = 0; dist <= maxTravelU; dist++) {
-        if (isInkLocal(-rotW / 2 + dist, v)) { hitsMinU.push(dist); break; }
+    function computeSideHitsRot(numRays, maxTravel, testCoord) {
+      let hits = [];
+      for (let i = 0; i < numRays; i++) {
+        const t = (numRays === 1) ? 0.5 : (0.01 + 0.98 * (i / (numRays - 1)));
+        for (let dist = 0; dist <= maxTravel; dist++) {
+          if (testCoord(t, dist, contrastThresh)) { hits.push(dist); break; }
+        }
       }
+      const minExpected = Math.max(2, Math.min(6, Math.round(numRays * 0.04)));
+      if (hits.length < minExpected && fallbackThresh < contrastThresh) {
+        const retryHits = [];
+        for (let i = 0; i < numRays; i++) {
+          const t = (numRays === 1) ? 0.5 : (0.01 + 0.98 * (i / (numRays - 1)));
+          for (let dist = 0; dist <= maxTravel; dist++) {
+            if (testCoord(t, dist, fallbackThresh)) { retryHits.push(dist); break; }
+          }
+        }
+        if (retryHits.length >= minExpected) hits = retryHits;
+      }
+      return hits;
     }
 
-    // +U side: rays starting at u = +rotW/2 marching along -u
-    const hitsMaxU = [];
-    for (let i = 0; i < N; i++) {
-      const t = 0.12 + 0.76 * (i / (N - 1));
-      const v = -rotH / 2 + t * rotH;
-      for (let dist = 0; dist <= maxTravelU; dist++) {
-        if (isInkLocal(rotW / 2 - dist, v)) { hitsMaxU.push(dist); break; }
-      }
-    }
-
-    // -V side: rays starting at v = -rotH/2 marching along +v
-    const hitsMinV = [];
-    for (let i = 0; i < N; i++) {
-      const t = 0.12 + 0.76 * (i / (N - 1));
-      const u = -rotW / 2 + t * rotW;
-      for (let dist = 0; dist <= maxTravelV; dist++) {
-        if (isInkLocal(u, -rotH / 2 + dist)) { hitsMinV.push(dist); break; }
-      }
-    }
-
-    // +V side: rays starting at v = +rotH/2 marching along -v
-    const hitsMaxV = [];
-    for (let i = 0; i < N; i++) {
-      const t = 0.12 + 0.76 * (i / (N - 1));
-      const u = -rotW / 2 + t * rotW;
-      for (let dist = 0; dist <= maxTravelV; dist++) {
-        if (isInkLocal(u, rotH / 2 - dist)) { hitsMaxV.push(dist); break; }
-      }
-    }
-
-    function computeSideShrinkRot(hits) {
-      if (hits.length < N * 0.25) return 0;
+    function computeSideShrinkRot(hits, numRays) {
+      const minExpected = Math.max(2, Math.min(6, Math.round(numRays * 0.04)));
+      if (hits.length < minExpected) return 0;
       hits.sort((a, b) => a - b);
-      const idx = Math.min(Math.floor(hits.length * 0.20), hits.length - 1);
+      const clusterSize = Math.max(2, Math.min(5, Math.round(numRays * 0.035)));
+      for (let i = 0; i <= hits.length - clusterSize; i++) {
+        if (hits[i + clusterSize - 1] - hits[i] <= 2.2) {
+          return hits[i];
+        }
+      }
+      const idx = Math.min(Math.floor(hits.length * 0.05), hits.length - 1);
       return hits[idx];
     }
 
-    const sMinU = computeSideShrinkRot(hitsMinU);
-    const sMaxU = computeSideShrinkRot(hitsMaxU);
-    const sMinV = computeSideShrinkRot(hitsMinV);
-    const sMaxV = computeSideShrinkRot(hitsMaxV);
+    // -U side: rays starting at u = -rotW/2 marching along +u (spanning rotH -> numRaysV)
+    const hitsMinU = computeSideHitsRot(numRaysV, maxTravelU, (t, dist, thresh) => {
+      const v = -rotH / 2 + t * rotH;
+      return isInkLocal(-rotW / 2 + dist, v, thresh);
+    });
+
+    // +U side: rays starting at u = +rotW/2 marching along -u (spanning rotH -> numRaysV)
+    const hitsMaxU = computeSideHitsRot(numRaysV, maxTravelU, (t, dist, thresh) => {
+      const v = -rotH / 2 + t * rotH;
+      return isInkLocal(rotW / 2 - dist, v, thresh);
+    });
+
+    // -V side: rays starting at v = -rotH/2 marching along +v (spanning rotW -> numRaysU)
+    const hitsMinV = computeSideHitsRot(numRaysU, maxTravelV, (t, dist, thresh) => {
+      const u = -rotW / 2 + t * rotW;
+      return isInkLocal(u, -rotH / 2 + dist, thresh);
+    });
+
+    // +V side: rays starting at v = +rotH/2 marching along -v (spanning rotW -> numRaysU)
+    const hitsMaxV = computeSideHitsRot(numRaysU, maxTravelV, (t, dist, thresh) => {
+      const u = -rotW / 2 + t * rotW;
+      return isInkLocal(u, rotH / 2 - dist, thresh);
+    });
+
+    const sMinU = computeSideShrinkRot(hitsMinU, numRaysV);
+    const sMaxU = computeSideShrinkRot(hitsMaxU, numRaysV);
+    const sMinV = computeSideShrinkRot(hitsMinV, numRaysU);
+    const sMaxV = computeSideShrinkRot(hitsMaxV, numRaysU);
 
     const newRotW = rotW - (sMinU + sMaxU);
     const newRotH = rotH - (sMinV + sMaxV);
@@ -1305,7 +1391,18 @@ function findFeatureTipInArea(probePt, item, searchRadius = 24) {
   }
   const bgL = borderCount ? borderLSum / borderCount : 255;
   const isLightBg = bgL >= 128;
-  const contrastThresh = 28;
+
+  let maxContrast = 0;
+  for (let y = 0; y < sh; y += 2) {
+    const row = y * sw * 4;
+    for (let x = 0; x < sw; x += 2) {
+      const idx = row + x * 4;
+      const lum = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+      const c = isLightBg ? (bgL - lum) : (lum - bgL);
+      if (c > maxContrast) maxContrast = c;
+    }
+  }
+  const contrastThresh = getSnapThreshold(maxContrast, state.snapSensitivity);
 
   function isInk(ix, iy) {
     const lx = Math.round(ix - sx0);
@@ -1317,8 +1414,13 @@ function findFeatureTipInArea(probePt, item, searchRadius = 24) {
     return contrast >= contrastThresh;
   }
 
-  // Cast a dense cluster of rays in this area (omni if whole symbol, fan if localized)
-  const numRays = useOmni ? 120 : 75;
+  // Cast rays scaled with feature size/radius
+  const featureSpan = useOmni ? Math.hypot(bb[2] - bb[0], bb[3] - bb[1]) : searchRadius * 2;
+  const density = (state.snapSensitivity === "max") ? 3.5 : (state.snapSensitivity === "high" ? 2.8 : 2.0);
+  const numRays = useOmni
+    ? Math.max(90, Math.min(260, Math.round(featureSpan * density)))
+    : Math.max(50, Math.min(180, Math.round(featureSpan * density)));
+
   const arcSpan = useOmni ? Math.PI * 2 : (Math.PI * 0.75);
   const startAngle = useOmni ? 0 : (probeAngle - arcSpan / 2);
   const angleStep = arcSpan / (numRays - 1 || 1);
@@ -1407,10 +1509,12 @@ function snapContrastEdgesSelected() {
   }
   editState();
   refresh();
-  notify(`Snapped ${snappedCount} box${snappedCount > 1 ? "es" : ""} to symbol contrast edges.`, "saved");
+  const sensLabel = { normal: "Normal", high: "High", max: "Max Edge" }[state.snapSensitivity] || state.snapSensitivity;
+  notify(`Snapped ${snappedCount} box${snappedCount > 1 ? "es" : ""} to symbol contrast edges [${sensLabel}].`, "saved");
 }
 
 function refreshControls() {
+  if ($("snapSensitivity")) $("snapSensitivity").value = state.snapSensitivity || "high";
   if ($("currentDocBadge")) {
     $("currentDocBadge").textContent = state.currentDocName || "Document";
     $("currentDocBadge").title = state.currentDocPath || "";
@@ -4015,6 +4119,7 @@ function wireEvents() {
 
   if ($("snapRefineBtn")) $("snapRefineBtn").addEventListener("click", snapContrastEdgesSelected);
   if ($("snapRefineInspectorBtn")) $("snapRefineInspectorBtn").addEventListener("click", snapContrastEdgesSelected);
+  if ($("snapSensitivity")) $("snapSensitivity").addEventListener("change", (e) => setSnapSensitivity(e.target.value));
 
   if ($("docSelect")) $("docSelect").addEventListener("change", (e) => switchDocument(e.target.value));
   if ($("serverExportBtn")) $("serverExportBtn").addEventListener("click", exportServer);
@@ -4260,7 +4365,14 @@ function wireEvents() {
     else if (key === "v") setMode("select");
     else if (key === "h" || key === "p") setMode("pan");
     else if (key === "k") setMode("anchor");
-    else if (key === "g") snapContrastEdgesSelected();
+    else if (key === "g") {
+      if (event.shiftKey) {
+        event.preventDefault();
+        cycleSnapSensitivity();
+      } else {
+        snapContrastEdgesSelected();
+      }
+    }
     else if (key === "m") { state.showLoupe = !state.showLoupe; refreshControls(); draw(); }
     else if (key === "i") { state.viewFilterIdx = (state.viewFilterIdx + 1) % VIEW_FILTERS.length; refreshControls(); draw(); }
     else if (key === "a") verifySelected();

@@ -112,7 +112,12 @@
     <button id="selectTool" aria-pressed="false" title="Select / move / resize / rotate (V)">Select · V</button>
     <button id="drawTool" aria-pressed="false" title="Draw axis-aligned box (B)">Box · B</button>
     <button id="orientedTool" aria-pressed="false" title="Draw oriented box: drag baseline edge, then move to top/bottom side (O)">Oriented · O</button>
-    <button id="snapRefineBtn" class="ghost" title="Snap bounding box to symbol contrast edges (G)">Snap Edges · G</button>
+    <button id="snapRefineBtn" class="ghost" title="Snap bounding box to symbol contrast edges (G · Shift+G cycles sensitivity)">Snap Edges · G</button>
+    <select id="snapSensitivity" class="ghost" title="Snap edge contrast sensitivity (affects ray density &amp; edge detection threshold)" style="font-size:12px;padding:2px 6px;height:28px;">
+      <option value="normal">Sensitivity: Normal</option>
+      <option value="high" selected>Sensitivity: High (Grid &amp; faint lines)</option>
+      <option value="max">Sensitivity: Max Edge (Ultra-sensitive)</option>
+    </select>
     <button id="anchorTool" class="ghost" aria-pressed="false" title="Place anchor point on selected box (K)">Anchor · K</button>
     <button id="snapTool" class="ghost" aria-pressed="false" hidden title="Draw extra wall-snap vector on selected box">Snap Vec</button>
   </div>
