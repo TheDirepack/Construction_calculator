@@ -95,7 +95,7 @@ def warp_whole_page(
     base_symbol_ink = np.bincount(
         labels[original_gray < 190].ravel(), minlength=len(prior) + 1
     )
-    paper = tuple(int(v) for v in np.median(image.reshape(-1, 3), axis=0))
+    paper = tuple(int(v) for v in (np.median(image[::4, ::4].reshape(-1, 3), axis=0) if min(image.shape[:2]) >= 64 else np.median(image.reshape(-1, 3), axis=0)))
     out = image.copy()
     base_names = ("stretch_shear", "projective", "elastic_mesh", "cross_waves",
                   "page_curl", "fold_bend", "radial_lens", "local_crumple",

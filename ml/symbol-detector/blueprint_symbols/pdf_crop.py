@@ -21,19 +21,28 @@ class PdfCropSampler:
     def __init__(self, max_open_documents: int = 3,
                  max_cached_thumbnails: int = 96,
                  thumbnail_long_side: int = 384,
-                 max_cached_crops: int = 32):
+                 max_cached_crops: int = 32,
+                 max_display_lists: int = 2,
+                 thumbnail_cache_dir: str | Path | None = None):
         if min(max_open_documents, max_cached_thumbnails, thumbnail_long_side,
-               max_cached_crops) < 1:
+               max_cached_crops, max_display_lists) < 1:
             raise ValueError("PDF cache limits must be positive")
         self.max_open_documents = int(max_open_documents)
         self.max_cached_thumbnails = int(max_cached_thumbnails)
         self.thumbnail_long_side = int(thumbnail_long_side)
         self.max_cached_crops = int(max_cached_crops)
+        self.max_display_lists = int(max_display_lists)
+        # Optional on-disk cache of the grayscale density thumbnail, shared by
+        # every DataLoader worker and every epoch (the thumbnail render costs
+        # 20-450 ms per page; the PNG is a few KB of line art).
+        self.thumbnail_cache_dir = Path(thumbnail_cache_dir) if thumbnail_cache_dir else None
         self._docs = OrderedDict()
         self._thumbs = OrderedDict()
         self._crops = OrderedDict()
+        self._dlists = OrderedDict()
 
     def close(self) -> None:
+        self._dlists.clear()
         for doc in self._docs.values():
             doc.close()
         self._docs.clear()
@@ -49,8 +58,75 @@ class PdfCropSampler:
         doc = fitz.open(path)
         self._docs[path] = doc
         while len(self._docs) > self.max_open_documents:
-            self._docs.popitem(last=False)[1].close()
+            old_path, old_doc = self._docs.popitem(last=False)
+            # A display list must not outlive its document.
+            for key in [k for k in self._dlists if k[0] == old_path]:
+                del self._dlists[key]
+            old_doc.close()
         return doc
+
+    def _display_list(self, path: str, index: int, page):
+        """Interpreted page content, reused for the 4 views of a crop burst.
+
+        Rendering a clip from a display list skips re-parsing the page's
+        content stream (14-94 ms -> ~1 ms on vector-heavy sheets) and gives
+        byte-identical pixels. Only used on unrotated pages, where display
+        list and page coordinates coincide.
+        """
+        if page.rotation % 360 != 0:
+            return None
+        key = (path, index)
+        dl = self._dlists.get(key)
+        if dl is not None:
+            self._dlists.move_to_end(key)
+            return dl
+        dl = page.get_displaylist()
+        self._dlists[key] = dl
+        while len(self._dlists) > self.max_display_lists:
+            self._dlists.popitem(last=False)
+        return dl
+
+    def _render(self, path: str, index: int, page, *, matrix, colorspace, clip=None):
+        dl = self._display_list(path, index, page)
+        if dl is not None:
+            return dl.get_pixmap(matrix=matrix, colorspace=colorspace, alpha=False, clip=clip)
+        return page.get_pixmap(matrix=matrix, colorspace=colorspace, alpha=False, clip=clip)
+
+    def _thumb_cache_path(self, path: str, index: int) -> Path | None:
+        if self.thumbnail_cache_dir is None:
+            return None
+        import hashlib
+        import os
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        ident = f"{os.path.abspath(path)}|{st.st_size}|{st.st_mtime_ns}|{index}|{self.thumbnail_long_side}|v1"
+        digest = hashlib.sha1(ident.encode("utf-8")).hexdigest()
+        return self.thumbnail_cache_dir / digest[:2] / f"{digest}.png"
+
+    def _thumbnail_gray(self, path: str, index: int, page) -> np.ndarray:
+        cache = self._thumb_cache_path(path, index)
+        if cache is not None and cache.is_file():
+            gray = cv2.imread(str(cache), cv2.IMREAD_UNCHANGED)
+            if gray is not None and gray.ndim == 2 and gray.dtype == np.uint8:
+                return gray
+        import fitz
+        box = page.rect
+        factor = self.thumbnail_long_side / max(box.width, box.height)
+        pix = self._render(path, index, page, matrix=fitz.Matrix(factor, factor),
+                           colorspace=fitz.csGRAY)
+        gray = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width).copy()
+        if cache is not None:
+            import os
+            try:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                tmp = cache.with_suffix(f".{os.getpid()}.tmp.png")
+                if cv2.imwrite(str(tmp), gray):          # lossless PNG
+                    os.replace(tmp, cache)
+            except OSError:
+                pass                                       # cache is best-effort
+        return gray
 
     def _density(self, path: str, index: int, page) -> tuple[np.ndarray, int, int]:
         key = (path, index)
@@ -58,12 +134,8 @@ class PdfCropSampler:
         if old is not None:
             self._thumbs.move_to_end(key)
             return old
-        import fitz
-        box = page.rect
-        factor = self.thumbnail_long_side / max(box.width, box.height)
-        pix = page.get_pixmap(matrix=fitz.Matrix(factor, factor),
-                              colorspace=fitz.csGRAY, alpha=False)
-        gray = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width)
+        gray = self._thumbnail_gray(path, index, page)
+        pix_h, pix_w = gray.shape
         # At 384px across a construction sheet, antialiased thin/faint CAD
         # strokes may be much lighter than 190. Estimate local paper level
         # from the thumbnail instead of silently treating these as blank.
@@ -78,7 +150,7 @@ class PdfCropSampler:
         if len(anchors) > 8192:
             anchors = anchors[np.linspace(0, len(anchors) - 1, 8192,
                                            dtype=np.intp)]
-        result = integral, pix.width, pix.height, anchors, round(threshold, 2)
+        result = integral, pix_w, pix_h, anchors, round(threshold, 2)
         self._thumbs[key] = result
         while len(self._thumbs) > self.max_cached_thumbnails:
             self._thumbs.popitem(last=False)
@@ -289,8 +361,8 @@ class PdfCropSampler:
         clip = fitz.Rect(bounds.x0+x, bounds.y0+y,
                          bounds.x0+x+span, bounds.y0+y+span)
         zoom = requested_dpi / 72.0
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom),
-                              clip=clip, colorspace=fitz.csRGB, alpha=False)
+        pix = self._render(pdf_path, page_index, page, matrix=fitz.Matrix(zoom, zoom),
+                           clip=clip, colorspace=fitz.csRGB)
         if pix.n != 3 or pix.width <= 0 or pix.height <= 0:
             raise RuntimeError("PDF clip rasterization returned an invalid pixmap")
         rgb = np.frombuffer(pix.samples, np.uint8).reshape(

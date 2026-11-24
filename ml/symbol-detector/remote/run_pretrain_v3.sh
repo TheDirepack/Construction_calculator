@@ -9,11 +9,12 @@ CODE="$BASE/code"
 DATA="$BASE/data/blueprints_and_libraries"
 WORK="$BASE/work"
 OUT="${SSL_OUT:-$WORK/pretrain_v3}"
-# Effective optimizer batch, not necessarily the number held on the GPU.
-# The 512px SSL decoder reconstructs full-resolution RGB and can exhaust
-# 6GB VRAM with a physical batch of 14. Default to 7 x 2 accumulation.
+# Effective optimizer batch. By default the whole batch is held on the GPU
+# (no gradient accumulation): a physical batch of 14 at 512px measured
+# ~4.6GB allocated / 4.9GB reserved on the 6GB RTX 2060 (2026-11-24).
+# Set SSL_MICROBATCH lower to trade speed for memory.
 SSL_BATCH="${SSL_BATCH:-14}"
-SSL_MICROBATCH="${SSL_MICROBATCH:-$(( SSL_BATCH < 2 ? SSL_BATCH : 2 ))}"
+SSL_MICROBATCH="${SSL_MICROBATCH:-$SSL_BATCH}"
 SSL_EPOCHS="${SSL_EPOCHS:-60}"
 SSL_ITEMS_PER_EPOCH="${SSL_ITEMS_PER_EPOCH:-8190}"
 SSL_VAL_ITEMS="${SSL_VAL_ITEMS:-512}"

@@ -428,3 +428,104 @@ def test_http_lan_routes_and_document_selection(tmp_path):
         server.server_close()
         worker.join(timeout=10)
 
+
+def test_electrical_device_catalog_completeness_and_http_endpoint(tmp_path):
+    from annotator.model import discipline_for, load_electrical_device_catalog
+    from blueprint_symbols.catalog import FAMILIES
+
+    catalog = load_electrical_device_catalog()
+    assert catalog["summary"]["categories_count"] == 11
+    assert catalog["summary"]["total_devices"] == 104
+    assert len(catalog["categories"]) == 11
+    assert len(catalog["devices"]) == 104
+
+    pdf = _pdf(tmp_path / "catalog_plan.pdf", pages=1)
+    session = LabelingSession(pdf=pdf, out_dir=tmp_path / "labels")
+
+    seen_pairs = set()
+    by_label = {}
+    for dev in catalog["devices"]:
+        fam = dev["symbol_family"]
+        var = dev["symbol_variant"]
+        assert (fam, var) not in seen_pairs
+        seen_pairs.add((fam, var))
+        assert discipline_for(fam) == "electrical"
+        assert fam in FAMILIES["electrical"]
+        assert var in session.variants_by_family[fam]
+        by_label[dev["label"]] = dev
+
+    assert by_label["Card Reader - Long Range"]["symbol_family"] == "security_device"
+    assert by_label["Card Reader - Long Range"]["symbol_variant"] == "card_reader_long_range"
+    assert by_label["Fire Alarm Horn / Strobe - Wall Mounted"]["symbol_family"] == "fire_alarm_device"
+    assert by_label["Fire Alarm Horn / Strobe - Wall Mounted"]["symbol_variant"] == "horn_strobe_wall"
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+        try:
+            conn.request("GET", "/api/session")
+            r1 = conn.getresponse()
+            session_body = json.loads(r1.read())
+            assert r1.status == 200
+            assert len(session_body["device_catalog"]["devices"]) == 104
+
+            conn.request("GET", "/api/device_catalog")
+            r2 = conn.getresponse()
+            cat_body = json.loads(r2.read())
+            assert r2.status == 200
+            assert len(cat_body["devices"]) == 104
+            assert len(cat_body["categories"]) == 11
+            labels = {d["label"]: d for d in cat_body["devices"]}
+            assert labels["Card Reader - Long Range"]["symbol_family"] == "security_device"
+            assert labels["Card Reader - Long Range"]["symbol_variant"] == "card_reader_long_range"
+            assert labels["Fire Alarm Horn / Strobe - Wall Mounted"]["symbol_family"] == "fire_alarm_device"
+            assert labels["Fire Alarm Horn / Strobe - Wall Mounted"]["symbol_variant"] == "horn_strobe_wall"
+        finally:
+            conn.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
+
+
+
+
+def test_switch_document_drops_previous_walls_and_page_presence(tmp_path):
+    bp_dir = tmp_path / "blueprints"
+    bp_dir.mkdir()
+    pdf1 = _pdf(bp_dir / "first.pdf", pages=2)
+    pdf2 = _pdf(bp_dir / "second.pdf", pages=2)
+
+    walls = tmp_path / "walls.json"
+    walls.write_text(json.dumps([{"start": [10, 10], "end": [200, 10]}]), encoding="utf-8")
+    presence = tmp_path / "presence.json"
+    presence.write_text(json.dumps({
+        "format_version": 1,
+        "purpose": "page_symbol_presence_review_queue",
+        "documents": [{
+            "source_pdf_sha256": hashlib.sha256(pdf1.read_bytes()).hexdigest(),
+            "pages": [{
+                "page_index": 0,
+                "suggestion": "possible_symbols",
+                "risk_terms": ["receptacle"],
+                "verified_no_symbols": False,
+                "eligible_as_supervised_negative": False,
+            }],
+        }],
+    }), encoding="utf-8")
+
+    session = LabelingSession(
+        pdf=pdf1, blueprints_dir=bp_dir, out_dir=tmp_path / "labels",
+        walls=walls, page_presence=presence,
+    )
+    state = session.page_state(0)
+    assert state["walls"]
+    assert state["page_presence_suggestion"]["suggestion"] == "possible_symbols"
+
+    session.switch_document("second.pdf")
+    state = session.page_state(0)
+    assert session.pdf == pdf2
+    assert state["walls"] == []
+    assert state["page_presence_suggestion"] is None

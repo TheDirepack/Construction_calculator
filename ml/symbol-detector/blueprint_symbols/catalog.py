@@ -13,6 +13,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         'transformer', 'disconnect', 'circuit_breaker', 'motor', 'generator',
         'fire_alarm_device', 'data_outlet', 'telecom_device', 'conduit_fitting',
         'grounding_symbol', 'electrical_meter', 'control_relay', 'sensor',
+        'security_device', 'cctv_device', 'audio_visual_device', 'motor_control',
     ),
     'mechanical': (
         'valve', 'pump', 'pipe_fitting', 'pipe_connection', 'strainer',

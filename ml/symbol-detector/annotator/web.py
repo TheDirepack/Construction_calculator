@@ -32,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from annotator import agent_api
 from annotator.model import (
     FAMILY_DISCIPLINES,
     FAMILY_VARIANT_SUGGESTIONS,
@@ -40,6 +41,7 @@ from annotator.model import (
     Sheet,
     SnapVector,
     discipline_for,
+    load_electrical_device_catalog,
 )
 
 try:
@@ -121,6 +123,12 @@ FAMILY_TO_ATTRIBUTE_SCHEMA = {
     "alarm_device": "fire_alarm_notification",
     "data_outlet": "data_outlet",
     "telecom_device": "data_outlet",
+    "security_device": "security_device",
+    "cctv_device": "cctv_device",
+    "audio_visual_device": "audio_visual_device",
+    "sensor": "sensor",
+    "disconnect": "disconnect",
+    "motor_control": "motor_control",
 }
 
 
@@ -594,6 +602,16 @@ def _attribute_schema_payload() -> dict:
 
 def _load_neca_subtypes(catalog_root: Path | None) -> dict[str, list[str]]:
     merged: dict[str, list[str]] = {k: list(v) for k, v in FAMILY_VARIANT_SUGGESTIONS.items()}
+    for dev in load_electrical_device_catalog().get("devices", []):
+        fam = dev.get("symbol_family")
+        var = dev.get("symbol_variant")
+        if fam and var:
+            bucket = merged.setdefault(fam, [])
+            if var not in bucket:
+                if "unspecified" in bucket:
+                    bucket.insert(bucket.index("unspecified"), var)
+                else:
+                    bucket.append(var)
     if catalog_root is None:
         return merged
     try:
@@ -608,10 +626,10 @@ def _load_neca_subtypes(catalog_root: Path | None) -> dict[str, list[str]]:
         "fire_alarm_control": "fire_alarm_device",
         "occupancy_sensor": "sensor",
         "power_distribution_equipment": "panelboard",
-        "motor_control": "disconnect",
-        "audio_visual_device": "telecom_device",
+        "motor_control": "motor_control",
+        "audio_visual_device": "audio_visual_device",
         "communications_equipment": "telecom_device",
-        "security_device": "telecom_device",
+        "security_device": "security_device",
         "nurse_call_device": "telecom_device",
     }
     for spec in specs:
@@ -662,6 +680,7 @@ class LabelingSession:
         self.source_stat = self.pdf.stat() if self.pdf else None
         self.walls = _load_walls(walls)
         self.variants_by_family = _load_neca_subtypes(neca_catalog)
+        self.device_catalog = load_electrical_device_catalog()
         if self.pdf:
             fitz = _import_fitz()
             with fitz.open(self.pdf) as doc:
@@ -953,6 +972,11 @@ class LabelingSession:
                 pass
             return _geometric_wall_snap(instance_dict, self.walls)
 
+    def page_document(self, index: int) -> tuple[dict, str | None, Path]:
+        """Public accessor for the page JSON, its revision and rendered image path."""
+        with self.lock:
+            return self._load(index)
+
     def page_state(self, index: int) -> dict:
         with self.lock:
             data, revision, _ = self._load(index)
@@ -1057,6 +1081,11 @@ class LabelingSession:
             self.edit = None
             self.edit_files = []
             self._render_cache.clear()
+            # Wall centerlines and page-presence suggestions were derived from
+            # the previous PDF; keeping them would guide the new document with
+            # another drawing's geometry and page verdicts.
+            self.walls = []
+            self.page_presence = {}
             self.source_hash = sha256_file(self.pdf)
             self.source_stat = self.pdf.stat()
             fitz = _import_fitz()
@@ -1373,6 +1402,8 @@ class LabelingSession:
                             raise LabelingError(f"metadata.{key} must be a short string")
                         baseline[key] = val.strip()
 
+            if metadata is not None and "vlm_assessment" in metadata:
+                baseline["vlm_assessment"] = agent_api.validate_assessment(metadata["vlm_assessment"])
             if metadata is not None and "verified_no_symbols" in metadata:
                 baseline["verified_no_symbols"] = metadata["verified_no_symbols"]
             baseline["instances"] = [_normalize_instance_for_save(item) for item in instances]
@@ -1448,7 +1479,10 @@ def make_handler(session: LabelingSession):
                         "mode": "edit" if session.edit else "pdf",
                         "current_doc_name": session.pdf.name if session.pdf else (session.edit.name if session.edit else ""),
                         "current_doc_path": str(session.pdf.resolve()) if session.pdf else (str(session.edit.resolve()) if session.edit else ""),
+                        "device_catalog": session.device_catalog,
                     })
+                elif url.path == "/api/device_catalog":
+                    self._json(200, session.device_catalog)
                 elif url.path == "/api/page":
                     self._json(200, session.page_state(self._page(url.query)))
                 elif url.path == "/api/image":
@@ -1460,6 +1494,15 @@ def make_handler(session: LabelingSession):
                     self._json(200, {"documents": session.list_documents()})
                 elif url.path == "/api/server_sources":
                     self._json(200, {"sources": session.list_server_sources(self._page(url.query))})
+                elif url.path == "/api/agent/tools":
+                    self._json(200, agent_api.tool_manifest(session))
+                elif url.path == "/api/agent/context":
+                    page_idx, kwargs = agent_api.parse_context_query(session, url.query)
+                    self._json(200, agent_api.page_context(session, page_idx, **kwargs))
+                elif url.path == "/api/agent/view":
+                    page_idx, kwargs = agent_api.parse_view_query(session, url.query)
+                    data, mime = agent_api.render_view(session, page_idx, **kwargs)
+                    self._reply(200, data, mime)
                 else:
                     self._json(404, {"error": "unknown endpoint"})
             except (LabelingError, ValueError, FileNotFoundError) as exc:
@@ -1486,6 +1529,7 @@ def make_handler(session: LabelingSession):
             valid_endpoints = (
                 "/api/save", "/api/validate", "/api/open", "/api/snap",
                 "/api/document", "/api/server_export", "/api/server_import",
+                "/api/agent/act",
             )
             if url.path not in valid_endpoints:
                 self._json(404, {"error": "unknown endpoint"})
@@ -1499,6 +1543,19 @@ def make_handler(session: LabelingSession):
                 data = json.loads(raw)
                 if not isinstance(data, dict):
                     raise LabelingError("request body must be an object")
+                if url.path == "/api/agent/act":
+                    page_idx = agent_api.page_from_query(session, url.query)[0]
+                    dry_run = data.get("dry_run", False)
+                    if type(dry_run) is not bool:
+                        raise LabelingError("dry_run must be boolean")
+                    result = agent_api.apply_actions(
+                        session, page_idx,
+                        revision=data.get("revision"),
+                        actions=data.get("actions"),
+                        dry_run=dry_run,
+                    )
+                    self._json(200, result)
+                    return
                 if url.path == "/api/document":
                     target_path = data.get("path") or data.get("name")
                     if not target_path:

@@ -93,7 +93,10 @@ function generateId() {
   }
   return Math.random().toString(36).slice(2, 10);
 }
-const QUICK_FAMILIES = ["receptacle", "switch", "luminaire", "fire_alarm_device", "data_outlet", "junction_box"];
+const QUICK_FAMILIES = [
+  "receptacle", "switch", "luminaire", "fire_alarm_device", "data_outlet",
+  "junction_box", "sensor", "security_device", "disconnect",
+];
 const VIEW_FILTERS = [
   { name: "Normal", css: "none" },
   { name: "Dim", css: "brightness(0.72) contrast(1.08)" },
@@ -106,6 +109,7 @@ const state = {
   image: null, mode: "pan", selectedId: null,
   selectedIds: new Set(),
   pageCache: {},
+  conflictPage: null,
   scale: 1, x: 0, y: 0, space: false, drag: null, dirty: false,
   undo: [], redo: [], lastFamily: "receptacle", lastVariantByFamily: {}, customVariantsByFamily: {}, busy: false,
   showLabels: true, showLoupe: true, showWalls: true,
@@ -132,6 +136,11 @@ const state = {
   currentDocName: "",
   pdfMenuFilter: "all",
   pdfMenuQuery: "",
+  deviceCatalog: { categories: [], devices: [], summary: {} },
+  deviceCatalogQuery: "",
+  deviceCatalogCategory: "all",
+  deviceModalQuery: "",
+  deviceModalCategory: "all",
 };
 
 const elements = typeof document === "undefined" ? null : {
@@ -188,6 +197,30 @@ function notify(message, kind = "") {
   const target = $("message");
   target.textContent = message;
   target.className = kind;
+}
+
+// Native window.confirm() can be suppressed by the browser (mobile Chrome
+// offers "prevent additional dialogs"), after which it silently returns false.
+// Every confirmation goes through this in-page dialog instead.
+let pendingConfirm = null;
+function confirmAction(message, options = {}) {
+  const dialog = $("confirmDialog");
+  if (!dialog || typeof dialog.showModal !== "function") {
+    return Promise.resolve(window.confirm(message));
+  }
+  $("confirmTitle").textContent = options.title || "Confirm";
+  $("confirmMessage").textContent = message;
+  $("confirmOkBtn").textContent = options.confirmLabel || "Confirm";
+  $("confirmCancelBtn").textContent = options.cancelLabel || "Cancel";
+  dialog.showModal();
+  return new Promise((resolve) => { pendingConfirm = resolve; });
+}
+function settleConfirm(value) {
+  const dialog = $("confirmDialog");
+  if (dialog && dialog.open) dialog.close();
+  const resolve = pendingConfirm;
+  pendingConfirm = null;
+  if (resolve) resolve(value);
 }
 function updateDirtyIndicator() {
   const dirtyPages = new Set();
@@ -1595,8 +1628,10 @@ function sortedItems(list = state.doc.instances) {
 
 function itemSearchText(item) {
   const attrs = Array.isArray(item.attributes_from_text) ? item.attributes_from_text.join(" ") : "";
+  const cat = catalogEntryFor(item.symbol_family, item.symbol_variant);
+  const catText = cat ? `${cat.label} ${cat.category}` : "";
   return (item.symbol_family + " " + item.symbol_variant + " " +
-    item.instance_id + " " + disciplineFor(item.symbol_family) + " " + attrs).toLowerCase();
+    item.instance_id + " " + disciplineFor(item.symbol_family) + " " + attrs + " " + catText).toLowerCase();
 }
 
 function refreshList() {
@@ -1696,7 +1731,7 @@ function renderQuickSubtypes(item) {
   const bar = $("quickSubtypeBar");
   if (!bar) return;
   bar.replaceChildren();
-  const subtypes = subtypesForFamily(item.symbol_family).slice(0, 10);
+  const subtypes = subtypesForFamily(item.symbol_family).slice(0, 40);
   subtypes.forEach((sub, idx) => {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -2107,6 +2142,8 @@ function refresh() {
   refreshControls();
   refreshList();
   fillSelection();
+  updateActiveDevicePill();
+  renderInlineDeviceCatalog();
   fillSheetMetadata();
   draw();
 }
@@ -3507,10 +3544,11 @@ async function importJsonFromFile(file) {
     // unidentified source requires confirmation and new human verification.
     const sameImage = Boolean(imported.image_sha256 && state.doc.image_sha256 &&
       imported.image_sha256 === state.doc.image_sha256);
-    if (!sameImage && !window.confirm(
+    if (!sameImage && !(await confirmAction(
       "This JSON does not identify the exact current image. Import as UNVERIFIED " +
-      "proposals and discard previous rejected marks? Review every box before accepting."
-    )) return;
+      "proposals and discard previous rejected marks? Review every box before accepting.",
+      { title: "Import unverified JSON", confirmLabel: "Import as unverified" }
+    ))) return;
     const preparedInstances = imported.instances.map((raw, idx) => {
       const fam = String(raw.symbol_family || raw.device_type || "unknown_symbol");
       return {
@@ -3615,7 +3653,12 @@ function populateFamilyDatalist(families) {
 
 async function loadPage(page, force = false) {
   if (state.busy || state.drag || page < 0 || (page >= state.pageCount && state.doc)) return;
-  if (state.doc) {
+  // force means "take this page from disk". Never seed the cache with the
+  // in-memory copy of that same page, and never read it back afterwards:
+  // otherwise "Reload from disk" returns the stale revision that caused the
+  // save conflict and the conflict can never be cleared.
+  const reloadingCurrent = force && page === state.page;
+  if (state.doc && !reloadingCurrent) {
     state.pageCache[state.page] = {
       doc: JSON.parse(JSON.stringify(state.doc)),
       dirty: Boolean(state.dirty),
@@ -3673,7 +3716,8 @@ async function loadPage(page, force = false) {
       }
     }
 
-    const cached = state.pageCache[page];
+    const cached = force ? null : state.pageCache[page];
+    if (force) delete state.pageCache[page];
     if (cached) {
       state.doc = JSON.parse(JSON.stringify(cached.doc));
       state.dirty = Boolean(cached.dirty);
@@ -3742,6 +3786,273 @@ async function loadDocumentsList() {
     }
   } catch (err) {
     notify("Could not list documents: " + (err.message || err), "error");
+  }
+}
+
+function catalogDevices() {
+  return Array.isArray(state.deviceCatalog?.devices) ? state.deviceCatalog.devices : [];
+}
+
+function catalogCategories() {
+  return Array.isArray(state.deviceCatalog?.categories) ? state.deviceCatalog.categories : [];
+}
+
+function catalogEntryFor(family, variant) {
+  return catalogDevices().find(d => d.symbol_family === family && d.symbol_variant === variant) || null;
+}
+
+function deviceMatchesQuery(dev, query) {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return true;
+  const tokens = q.split(/\s+/).filter(Boolean);
+  const sample = Array.isArray(dev.sample_legend_texts) ? dev.sample_legend_texts.join(" ") : "";
+  const hay = `${dev.label} ${dev.category} ${dev.symbol_family} ${dev.symbol_variant} ${sample}`.toLowerCase();
+  return tokens.every(tok => hay.includes(tok));
+}
+
+function filteredCatalogDevices(category, query) {
+  return catalogDevices().filter(d => {
+    if (category && category !== "all" && d.category !== category) return false;
+    return deviceMatchesQuery(d, query);
+  });
+}
+
+function activeTargetPair() {
+  const item = chosen();
+  if (item) return [item.symbol_family, item.symbol_variant || "unspecified"];
+  const fam = state.lastFamily || "receptacle";
+  return [fam, state.lastVariantByFamily[fam] || "unspecified"];
+}
+
+function populateDeviceCategorySelect() {
+  const sel = $("deviceCategorySelect");
+  if (!sel) return;
+  const allDevs = catalogDevices();
+  const counts = {};
+  for (const d of allDevs) {
+    counts[d.category] = (counts[d.category] || 0) + 1;
+  }
+  sel.replaceChildren();
+  const allOpt = document.createElement("option");
+  allOpt.value = "all";
+  allOpt.textContent = `All categories (${allDevs.length})`;
+  sel.append(allOpt);
+  for (const cat of catalogCategories()) {
+    const opt = document.createElement("option");
+    opt.value = cat;
+    opt.textContent = `${cat} (${counts[cat] || 0})`;
+    sel.append(opt);
+  }
+  sel.value = state.deviceCatalogCategory || "all";
+}
+
+function updateActiveDevicePill() {
+  const allDevs = catalogDevices();
+  const navBtn = $("navDevicesBtn");
+  if (navBtn) {
+    navBtn.textContent = allDevs.length ? `📚 Devices (${allDevs.length})` : "📚 Devices";
+  }
+  const pill = $("activeDevicePill");
+  if (!pill) return;
+  const [fam, varName] = activeTargetPair();
+  const entry = catalogEntryFor(fam, varName);
+  pill.textContent = entry ? entry.label : `${fam} / ${varName}`;
+  pill.title = `${fam} / ${varName}`;
+}
+
+function applyCatalogDevice(dev) {
+  if (!dev) return;
+  const fam = dev.symbol_family;
+  const varName = dev.symbol_variant || "unspecified";
+  state.lastFamily = fam;
+  state.lastVariantByFamily[fam] = varName;
+  const list = chosenList();
+  if (!list.length) {
+    updateActiveDevicePill();
+    renderInlineDeviceCatalog();
+    notify(`Next drawn box set to ${dev.label} (${fam} / ${varName}).`, "saved");
+    return;
+  }
+  flushPendingInputs();
+  remember();
+  for (const item of list) {
+    const before = reviewEvidenceKey(item);
+    item.symbol_family = fam;
+    item.symbol_variant = varName;
+    item.discipline = disciplineFor(fam);
+    item.device_type = fam;
+    invalidateReviewOnChange(item, before);
+  }
+  editState();
+  refresh();
+  notify(`Set ${list.length} symbol${list.length > 1 ? "s" : ""} to ${dev.label} (${fam} / ${varName}).`, "saved");
+}
+
+function renderInlineDeviceCatalog() {
+  const listEl = $("deviceCatalogList");
+  const countEl = $("deviceCatalogCount");
+  if (!listEl) return;
+  listEl.replaceChildren();
+
+  const allDevs = catalogDevices();
+  const filtered = filteredCatalogDevices(state.deviceCatalogCategory, state.deviceCatalogQuery);
+  if (countEl) {
+    countEl.textContent = filtered.length === allDevs.length
+      ? String(allDevs.length)
+      : `${filtered.length}/${allDevs.length}`;
+  }
+  if (!filtered.length) {
+    const empty = document.createElement("span");
+    empty.className = "small";
+    empty.textContent = allDevs.length ? "No matching devices." : "Loading devices...";
+    listEl.append(empty);
+    return;
+  }
+
+  const [activeFam, activeVar] = activeTargetPair();
+  const byCat = new Map();
+  for (const cat of catalogCategories()) byCat.set(cat, []);
+  for (const d of filtered) {
+    if (!byCat.has(d.category)) byCat.set(d.category, []);
+    byCat.get(d.category).push(d);
+  }
+
+  for (const [cat, devs] of byCat.entries()) {
+    if (!devs.length) continue;
+    if (state.deviceCatalogCategory === "all") {
+      const hdr = document.createElement("div");
+      hdr.className = "catalog-cat-header";
+      hdr.textContent = `${cat} (${devs.length})`;
+      listEl.append(hdr);
+    }
+    for (const dev of devs) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "catalog-device-btn";
+      btn.textContent = dev.label;
+      btn.dataset.family = dev.symbol_family;
+      btn.dataset.variant = dev.symbol_variant;
+      const sample = Array.isArray(dev.sample_legend_texts) && dev.sample_legend_texts.length
+        ? `\nLegend examples: ${dev.sample_legend_texts.join(" | ")}`
+        : "";
+      btn.title = `${dev.category} · ${dev.symbol_family} / ${dev.symbol_variant} (${dev.source_count} PDFs)${sample}`;
+      btn.setAttribute("aria-pressed", String(activeFam === dev.symbol_family && activeVar === dev.symbol_variant));
+      btn.addEventListener("click", () => applyCatalogDevice(dev));
+      listEl.append(btn);
+    }
+  }
+}
+
+function openDeviceCatalogModal() {
+  const modal = $("deviceCatalogModal");
+  if (!modal) return;
+  modal.hidden = false;
+  if ($("deviceModalSearch")) {
+    $("deviceModalSearch").value = state.deviceModalQuery || "";
+    $("deviceModalSearch").focus();
+  }
+  renderDeviceCatalogModal();
+}
+
+function closeDeviceCatalogModal() {
+  const modal = $("deviceCatalogModal");
+  if (modal) modal.hidden = true;
+}
+
+function renderDeviceCatalogModal() {
+  const grid = $("deviceModalGrid");
+  const pillsEl = $("deviceModalCategoryPills");
+  const countEl = $("deviceModalCount");
+  if (!grid || !pillsEl) return;
+
+  const allDevs = catalogDevices();
+  const cats = catalogCategories();
+  const counts = {};
+  for (const d of allDevs) counts[d.category] = (counts[d.category] || 0) + 1;
+
+  pillsEl.replaceChildren();
+  const makePill = (val, labelText) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chip";
+    btn.textContent = labelText;
+    btn.setAttribute("aria-pressed", String((state.deviceModalCategory || "all") === val));
+    btn.addEventListener("click", () => {
+      state.deviceModalCategory = val;
+      renderDeviceCatalogModal();
+    });
+    return btn;
+  };
+  pillsEl.append(makePill("all", `All (${allDevs.length})`));
+  for (const cat of cats) {
+    pillsEl.append(makePill(cat, `${cat} (${counts[cat] || 0})`));
+  }
+
+  const filtered = filteredCatalogDevices(state.deviceModalCategory, state.deviceModalQuery);
+  if (countEl) {
+    countEl.textContent = filtered.length === allDevs.length
+      ? String(allDevs.length)
+      : `${filtered.length} / ${allDevs.length}`;
+  }
+
+  grid.replaceChildren();
+  if (!filtered.length) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "grid-column: 1 / -1; padding: 30px; text-align: center; color: var(--muted);";
+    empty.textContent = "No curated electrical devices match your search.";
+    grid.append(empty);
+    return;
+  }
+
+  const [activeFam, activeVar] = activeTargetPair();
+  const byCat = new Map();
+  for (const cat of cats) byCat.set(cat, []);
+  for (const d of filtered) {
+    if (!byCat.has(d.category)) byCat.set(d.category, []);
+    byCat.get(d.category).push(d);
+  }
+
+  for (const [cat, devs] of byCat.entries()) {
+    if (!devs.length) continue;
+    const card = document.createElement("div");
+    card.className = "device-cat-card";
+    const hdr = document.createElement("div");
+    hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid #243542;padding-bottom:6px;";
+    const title = document.createElement("strong");
+    title.style.cssText = "font-size:13.5px;color:var(--accent);";
+    title.textContent = cat;
+    const badge = document.createElement("span");
+    badge.className = "pill";
+    badge.textContent = `${devs.length}`;
+    hdr.append(title, badge);
+    card.append(hdr);
+
+    const list = document.createElement("div");
+    list.style.cssText = "display:flex;flex-direction:column;gap:5px;";
+    for (const dev of devs) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "device-modal-btn";
+      btn.setAttribute("aria-pressed", String(activeFam === dev.symbol_family && activeVar === dev.symbol_variant));
+      const sample = Array.isArray(dev.sample_legend_texts) && dev.sample_legend_texts.length
+        ? `Legend texts: ${dev.sample_legend_texts.join(" | ")}`
+        : "";
+      btn.title = sample;
+
+      const left = document.createElement("span");
+      left.textContent = dev.label;
+      const right = document.createElement("span");
+      right.className = "device-modal-meta";
+      right.textContent = `${dev.symbol_family} / ${dev.symbol_variant} · ${dev.source_count}`;
+      btn.append(left, right);
+      btn.addEventListener("click", () => {
+        applyCatalogDevice(dev);
+        closeDeviceCatalogModal();
+      });
+      list.append(btn);
+    }
+    card.append(list);
+    grid.append(card);
   }
 }
 
@@ -3880,7 +4191,10 @@ async function nextDocument() {
 async function switchDocument(path) {
   if (!path || path === state.currentDocPath) return;
   if (isAnyPageDirty()) {
-    const saveFirst = window.confirm("You have unsaved annotations across this PDF. Save all pages before switching documents?");
+    const saveFirst = await confirmAction(
+      "You have unsaved annotations across this PDF. Save all pages before switching documents?",
+      { title: "Unsaved annotations", confirmLabel: "Save all pages", cancelLabel: "Discard changes" }
+    );
     if (saveFirst) {
       const saved = await saveEntirePdf();
       if (!saved) {
@@ -3901,6 +4215,16 @@ async function switchDocument(path) {
     state.pageCache = {};
     state.currentDocPath = path;
     state.page = 0;
+    // loadPage() caches the in-memory document under state.page before it
+    // fetches the next one. Drop the previous PDF first, otherwise its labels
+    // are written into page 0 and restored as if they belonged to the new PDF.
+    state.doc = null;
+    state.dirty = false;
+    state.revision = null;
+    state.undo = [];
+    state.redo = [];
+    state.selectedIds = new Set();
+    state.selectedId = null;
     state.busy = false;
     await loadDocumentsList();
     await loadPage(0, true);
@@ -4001,7 +4325,10 @@ async function confirmServerImport() {
 
 async function switchSiblingFile(filename) {
   if (!filename || filename === state.jsonFilename) return;
-  if (state.dirty && !window.confirm("Discard unsaved annotations before switching JSON files?")) {
+  if (state.dirty && !(await confirmAction(
+    "Discard unsaved annotations before switching JSON files?",
+    { title: "Discard unsaved annotations", confirmLabel: "Discard", cancelLabel: "Keep editing" }
+  ))) {
     $("fileSwitcher").value = state.jsonFilename;
     return;
   }
@@ -4055,6 +4382,7 @@ async function saveEntirePdf() {
   refreshControls();
   let savedCount = 0;
   let totalSavedSymbols = 0;
+  let conflictPage = null;
   try {
     for (const p of dirtyPages) {
       const cached = state.pageCache[p];
@@ -4067,16 +4395,25 @@ async function saveEntirePdf() {
         verified_no_symbols: docToSave.verified_no_symbols === true,
       };
       if (docToSave.notes) metadata.notes = docToSave.notes;
-      const result = await api("/api/save?page=" + p, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-        body: JSON.stringify({
-          revision: revToSave,
-          instances: docToSave.instances,
-          rejected_proposals: docToSave.rejected_proposals || [],
-          metadata,
-        }),
-      });
+      let result;
+      try {
+        result = await api("/api/save?page=" + p, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+          body: JSON.stringify({
+            revision: revToSave,
+            instances: docToSave.instances,
+            rejected_proposals: docToSave.rejected_proposals || [],
+            metadata,
+          }),
+        });
+      } catch (error) {
+        // One stale page must not block every other page. Keep going, then
+        // name the conflicting page so it can be reloaded and re-applied.
+        if (error.status !== 409) throw error;
+        conflictPage = p;
+        continue;
+      }
       if (cached) {
         cached.revision = result.revision;
         cached.dirty = false;
@@ -4090,19 +4427,31 @@ async function saveEntirePdf() {
       savedCount++;
       totalSavedSymbols += (docToSave.instances?.length || 0);
     }
+    if (conflictPage !== null) {
+      state.conflictPage = conflictPage;
+      $("conflictBanner").hidden = false;
+      $("conflictText").textContent =
+        `Page ${conflictPage + 1} changed on disk and was not saved.`;
+      if (conflictPage !== state.page) clearLocalDraft();
+      updateDirtyIndicator();
+      notify(
+        `Saved ${savedCount} page${savedCount === 1 ? "" : "s"} (${totalSavedSymbols} symbols); ` +
+        `page ${conflictPage + 1} changed on disk. Reload that page, then re-apply your edits.`,
+        "warning"
+      );
+      return false;
+    }
     for (const p of dirtyPages) {
       if (state.pageCache[p]) {
         state.pageCache[p].dirty = false;
       }
     }
+    state.conflictPage = null;
     savedState();
     refresh();
     notify(`Saved entire PDF: ${savedCount} page${savedCount > 1 ? "s" : ""} saved (${totalSavedSymbols} symbols).`, "saved");
     return true;
   } catch (error) {
-    if (error.status === 409) {
-      $("conflictBanner").hidden = false;
-    }
     notify("Save failed: " + (error.message || error), "error");
     return false;
   } finally {
@@ -4115,6 +4464,51 @@ const savePage = saveEntirePdf;
 function wireEvents() {
   if ($("navPdfsBtn")) $("navPdfsBtn").addEventListener("click", openPdfMenu);
   if ($("nextPdfBtn")) $("nextPdfBtn").addEventListener("click", nextDocument);
+  if ($("navDevicesBtn")) $("navDevicesBtn").addEventListener("click", openDeviceCatalogModal);
+  if ($("openDeviceCatalogBtn")) $("openDeviceCatalogBtn").addEventListener("click", openDeviceCatalogModal);
+  if ($("closeDeviceCatalogBtn")) $("closeDeviceCatalogBtn").addEventListener("click", closeDeviceCatalogModal);
+  if ($("deviceCatalogSearch")) {
+    $("deviceCatalogSearch").addEventListener("input", (e) => {
+      state.deviceCatalogQuery = e.target.value;
+      renderInlineDeviceCatalog();
+    });
+    $("deviceCatalogSearch").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const matches = filteredCatalogDevices(state.deviceCatalogCategory, state.deviceCatalogQuery);
+        if (matches.length) applyCatalogDevice(matches[0]);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (state.deviceCatalogQuery) {
+          e.target.value = "";
+          state.deviceCatalogQuery = "";
+          renderInlineDeviceCatalog();
+        } else {
+          e.target.blur();
+        }
+      }
+    });
+  }
+  if ($("deviceCategorySelect")) {
+    $("deviceCategorySelect").addEventListener("change", (e) => {
+      state.deviceCatalogCategory = e.target.value;
+      renderInlineDeviceCatalog();
+    });
+  }
+  if ($("deviceModalSearch")) {
+    $("deviceModalSearch").addEventListener("input", (e) => {
+      state.deviceModalQuery = e.target.value;
+      renderDeviceCatalogModal();
+    });
+    $("deviceModalSearch").addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeDeviceCatalogModal();
+      }
+    });
+  }
   if ($("closePdfMenuBtn")) $("closePdfMenuBtn").addEventListener("click", closePdfMenu);
   if ($("pdfMenuSearch")) $("pdfMenuSearch").addEventListener("input", (e) => {
     state.pdfMenuQuery = e.target.value;
@@ -4181,7 +4575,7 @@ function wireEvents() {
   $("undo").addEventListener("click", undo);
   $("redo").addEventListener("click", redo);
   $("save").addEventListener("click", savePage);
-  $("verifiedNoSymbols").addEventListener("change", (event) => {
+  $("verifiedNoSymbols").addEventListener("change", async (event) => {
     if (!state.doc || state.busy) return;
     const value = event.target.checked;
     if (value && state.doc.instances.length) {
@@ -4189,7 +4583,10 @@ function wireEvents() {
       notify("Reject or remove every active proposal before marking this page symbol-free.", "warning");
       return;
     }
-    if (value && !window.confirm("Have you reviewed the ENTIRE page and confirmed there are no target symbols? This creates negative training labels.")) {
+    if (value && !(await confirmAction(
+      "Have you reviewed the ENTIRE page and confirmed there are no target symbols? This creates negative training labels.",
+      { title: "Mark page symbol-free", confirmLabel: "Yes, no symbols on this page" }
+    ))) {
       event.target.checked = false;
       return;
     }
@@ -4198,7 +4595,18 @@ function wireEvents() {
     editState();
     refresh();
   });
-  $("reloadFromDisk").addEventListener("click", () => loadPage(state.page, true));
+  $("reloadFromDisk").addEventListener("click", async () => {
+    const target = Number.isInteger(state.conflictPage) ? state.conflictPage : state.page;
+    state.conflictPage = null;
+    $("conflictBanner").hidden = true;
+    await loadPage(target, true);
+  });
+  $("confirmOkBtn").addEventListener("click", () => settleConfirm(true));
+  $("confirmCancelBtn").addEventListener("click", () => settleConfirm(false));
+  $("confirmDialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    settleConfirm(false);
+  });
   $("restoreDraftBtn").addEventListener("click", async () => {
     try {
       const parsed = JSON.parse(window.localStorage?.getItem(draftStorageKey()) || "null");
@@ -4344,6 +4752,11 @@ function wireEvents() {
     if (event.code === "Space") state.space = false;
   });
   window.addEventListener("keydown", event => {
+    if (event.key === "Escape" && $("deviceCatalogModal") && !$("deviceCatalogModal").hidden) {
+      event.preventDefault();
+      closeDeviceCatalogModal();
+      return;
+    }
     const form = event.target.matches?.("input,textarea,select,[contenteditable]");
     if (event.key.toLowerCase() === "s" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
@@ -4381,7 +4794,7 @@ function wireEvents() {
       }
       return;
     }
-    if (!event.shiftKey && /^[1-6]$/.test(key)) {
+    if (!event.shiftKey && /^[1-9]$/.test(key)) {
       applyQuickFamily(QUICK_FAMILIES[Number(key) - 1]);
       return;
     }
@@ -4395,6 +4808,10 @@ function wireEvents() {
     else if (key === "v") setMode("select");
     else if (key === "h" || key === "p") setMode("pan");
     else if (key === "k") setMode("anchor");
+    else if (key === "c") {
+      if ($("deviceCatalogModal")?.hidden) openDeviceCatalogModal();
+      else closeDeviceCatalogModal();
+    }
     else if (key === "g") {
       if (event.shiftKey) {
         event.preventDefault();
@@ -4426,6 +4843,10 @@ async function init() {
     state.token = response.token;
     state.currentDocName = response.current_doc_name || "";
     state.currentDocPath = response.current_doc_path || "";
+    state.deviceCatalog = response.device_catalog || state.deviceCatalog;
+    populateDeviceCategorySelect();
+    updateActiveDevicePill();
+    renderInlineDeviceCatalog();
     await loadDocumentsList();
     await loadPage(response.initial_page, true);
   } catch (error) {

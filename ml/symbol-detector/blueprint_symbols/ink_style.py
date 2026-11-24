@@ -6,8 +6,12 @@ different-colour annotations and isolated local paper should not dominate.
 """
 from __future__ import annotations
 
+import weakref
+
 import cv2
 import numpy as np
+
+_GLOBAL_INK_CACHE: dict = {}
 
 
 def local_drawing_ink_bgr(
@@ -62,8 +66,19 @@ def local_drawing_ink_bgr(
         if choice is not None:
             return choice
 
+    # The whole-crop fallback is identical for every symbol placed on the same
+    # reference drawing (callers composite onto a copy, never the reference),
+    # so compute it once per reference array.
+    cached = _GLOBAL_INK_CACHE.get("entry")
+    if cached is not None and cached[0]() is image and cached[1] == min_samples:
+        return cached[2]
     global_choice = read_ink(image.reshape(-1, 3))
-    return global_choice if global_choice is not None else (35, 35, 35)
+    result = global_choice if global_choice is not None else (35, 35, 35)
+    try:
+        _GLOBAL_INK_CACHE["entry"] = (weakref.ref(image), min_samples, result)
+    except TypeError:          # views of non-owning buffers may not be weak-referenceable
+        pass
+    return result
 
 
 def sized_symbol_range(
