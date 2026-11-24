@@ -572,3 +572,67 @@ def test_browser_late_wall_snap_does_not_overwrite_other_selection(tmp_path):
         server.shutdown()
         server.server_close()
         worker.join(timeout=10)
+
+
+def test_browser_electrical_device_catalog_search_modal_and_save(tmp_path):
+    document = fitz.open()
+    page_pdf = document.new_page(width=400, height=300)
+    page_pdf.draw_rect(fitz.Rect(80, 80, 120, 120), color=(0, 0, 0))
+    pdf = tmp_path / "catalog_devices.pdf"
+    document.save(pdf)
+    document.close()
+
+    session = LabelingSession(pdf=pdf, out_dir=tmp_path / "labels", dpi=144)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1420, "height": 900})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function(
+                    "() => document.querySelector('#deviceCatalogCount')?.textContent === '104'"
+                )
+                page.locator("#drawTool").click()
+                canvas = page.locator("#canvas").bounding_box()
+                assert canvas is not None
+                sx, sy = canvas["x"] + 230, canvas["y"] + 190
+                page.mouse.move(sx, sy)
+                page.mouse.down()
+                page.mouse.move(sx + 48, sy + 36, steps=4)
+                page.mouse.up()
+                page.wait_for_function(
+                    "() => document.querySelector('#count').textContent.includes('1 pending')"
+                )
+
+                page.locator("#deviceCatalogSearch").fill("Long Range")
+                page.locator("#deviceCatalogList button", has_text="Card Reader - Long Range").click()
+                assert page.locator("#family").input_value() == "security_device"
+                assert page.locator("#variant").input_value() == "card_reader_long_range"
+                assert page.locator("#disciplineBadge").inner_text() == "electrical"
+
+                page.locator("#navDevicesBtn").click()
+                page.wait_for_function("() => !document.querySelector('#deviceCatalogModal').hidden")
+                page.locator("#deviceModalSearch").fill("Horn / Strobe - Wall")
+                page.locator("#deviceModalGrid button", has_text="Fire Alarm Horn / Strobe - Wall Mounted").click()
+                page.wait_for_function("() => document.querySelector('#deviceCatalogModal').hidden")
+                assert page.locator("#family").input_value() == "fire_alarm_device"
+                assert page.locator("#variant").input_value() == "horn_strobe_wall"
+
+                page.locator("#accept").click()
+                page.locator("#save").click()
+                page.wait_for_function("() => document.querySelector('#dirty').textContent === 'Saved'")
+                saved = json.loads((tmp_path / "labels" / "catalog_devices_p0001.json").read_text())
+                inst = saved["instances"][0]
+                assert inst["symbol_family"] == "fire_alarm_device"
+                assert inst["symbol_variant"] == "horn_strobe_wall"
+                assert inst["discipline"] == "electrical"
+                assert inst["verified_ground_truth"] is True
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)

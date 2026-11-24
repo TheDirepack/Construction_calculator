@@ -1,0 +1,1253 @@
+{
+  "format_version": 1,
+  "summary": {
+    "total_devices": 104,
+    "categories_count": 11,
+    "total_pdfs_scanned": 1001,
+    "total_legend_sheets_found": 831,
+    "min_sources_threshold": 2
+  },
+  "categories": [
+    "Power Receptacles & Wiring Devices",
+    "Lighting Controls & Wall Switches",
+    "Disconnect Switches & Safety Switches",
+    "Lighting Fixtures & Emergency Egress",
+    "Occupancy, Daylight & Environmental Sensors",
+    "Electrical Distribution & Raceways",
+    "Fire Alarm & Life Safety Systems",
+    "Access Control & Physical Security",
+    "Video Surveillance (CCTV)",
+    "Telecommunications, Data & Network",
+    "Audio / Visual, Paging & Intercom"
+  ],
+  "devices": [
+    {
+      "label": "Receptacle - Duplex",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "duplex",
+      "source_count": 65,
+      "sample_legend_texts": [
+        "120V DUPLEX RECEPTACLE",
+        "120V DUPLEX RECEPTACLE, NEMA CONFIGURATION",
+        "120V, 20A DUPLEX RECEPTACLE IN FLUSH FLOOR"
+      ]
+    },
+    {
+      "label": "Receptacle - Quadruplex",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "quad",
+      "source_count": 34,
+      "sample_legend_texts": [
+        "20A, 120V, NEMA 5-20R DOUBLE DUPLEX RECEPTACLE 18\"",
+        "20A, 120V, NEMA 5-20R DOUBLE DUPLEX RECEPTACLE, ONE",
+        "20A, 125V DUPLEX RECEPTACLE (LEFT) QUAD RECEPTACLE (RIGHT) INSTALLED IN"
+      ]
+    },
+    {
+      "label": "Receptacle - Simplex / Single",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "single",
+      "source_count": 24,
+      "sample_legend_texts": [
+        "120V SIMPLEX RECEPTACLE, NEMA CONFIGURATION",
+        "20 AMP SINGLE RECEPTACLE, TYPE, MOUNTING HEIGHT AND RATINGS",
+        "20A, 120V, NEMA 5-20R SIMPLEX RECEPTACLE 18\""
+      ]
+    },
+    {
+      "label": "Receptacle - Special Purpose / Dedicated Voltage",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "special_purpose",
+      "source_count": 20,
+      "sample_legend_texts": [
+        "\"SPECIAL PURPOSE RECEPTACLE SCHEDULE\".",
+        "208/240V RECEPTACLE 18\" COD UNLESS",
+        "208V WALL RECEPTACLE ON BACKUP POWER"
+      ]
+    },
+    {
+      "label": "Receptacle - Duplex Above Counter",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "duplex_above_counter",
+      "source_count": 18,
+      "sample_legend_texts": [
+        "20 AMP DUPLEX RECEPTACLE MTD. HORIZ. 6\" ABOVE COUNTER",
+        "20A DUPLEX RECEPTACLE 6\" ABOVE COUNTER UNLESS",
+        "20A DUPLEX RECEPTACLE 8\" ABOVE COUNTER UNLESS"
+      ]
+    },
+    {
+      "label": "Receptacle - GFCI Duplex",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "duplex_gfci",
+      "source_count": 10,
+      "sample_legend_texts": [
+        "20A WEATHER RESISTANT GFCI DUPLEX RECEPTACLE MOUNTED",
+        "20A, 120V, NEMA 5-20R DOUBLE DUPLEX GFCI RECEPTACLE",
+        "20A, 120V, NEMA 5-20R DUPLEX GFCI RECEPTACLE 18\" AFF"
+      ]
+    },
+    {
+      "label": "Receptacle - Floor Mounted",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "floor_mounted",
+      "source_count": 9,
+      "sample_legend_texts": [
+        "20A-125V FLUSH FLOOR DUPLEX RECEPTACLE. 20A WHEN INDICATED OR IF BRANCH CIRCUIT",
+        "AREAS, REFER TO DETAIL - KITCHEN FLOOR RECEPTACLE.",
+        "DATA FLOOR RECEPTACLE"
+      ]
+    },
+    {
+      "label": "Receptacle - USB Charger Duplex",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "usb_charger_duplex",
+      "source_count": 6,
+      "sample_legend_texts": [
+        "20A-125V DUPLEX TAMPER RESISTANT RECEPTACLE WITH (2) USB CHARGING PORTS",
+        "Combination Duplex Receptacle with USB Charger.  15Amp, 125Volt,",
+        "DOUBLE DUPLEX STRAIGHT BLADE RECEPTACLE WITH DUPLEX USB PLUGS"
+      ]
+    },
+    {
+      "label": "Receptacle - Isolated Ground",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "isolated_ground",
+      "source_count": 5,
+      "sample_legend_texts": [
+        "20A ISOLATED GROUND RECEPTACLE",
+        "20A, 125V DUPLEX ISOLATED GROUND RECEPTACLE (LEFT) AND QUAD ISOLATED",
+        "DUPLEX ISOLATED GROUND RECEPTACLE FLUSH MOUNTED IN SUSPENDED CEILING."
+      ]
+    },
+    {
+      "label": "Receptacle - Weatherproof GFCI Duplex",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "weatherproof_gfci_duplex",
+      "source_count": 4,
+      "sample_legend_texts": [
+        "DUPLEX WEATHERPROOF GROUND FAULT CIRCUIT INTERRUPTER RECEPTACLE WITH COVER",
+        "GFCI RECEPTACLE WITH WEATHERPROOF COVER",
+        "W = WEATHERPROOF COVER AND GFCI"
+      ]
+    },
+    {
+      "label": "Receptacle - Ceiling Mounted",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "ceiling_mounted",
+      "source_count": 3,
+      "sample_legend_texts": [
+        "CEILING MOUNTED RECEPTACLE",
+        "DUPLEX CEILING RECEPTACLE"
+      ]
+    },
+    {
+      "label": "Receptacle - Tamper Resistant",
+      "category": "Power Receptacles & Wiring Devices",
+      "symbol_family": "receptacle",
+      "symbol_variant": "tamper_resistant",
+      "source_count": 2,
+      "sample_legend_texts": [
+        "20A, 125V DUPLEX TAMPER-RESISTANT RECEPTACLE INSTALLED IN SINGLE SERVICE",
+        "20A, 125V ISOLATED GROUND DUPLEX TAMPER-RESISTANT RECEPTACLE INSTALLED",
+        "20A, 125V ISOLATED GROUND DUPLEX TAMPER-RESISTANT RECEPTACLE MOUNTED"
+      ]
+    },
+    {
+      "label": "Switch - Single Pole",
+      "category": "Lighting Controls & Wall Switches",
+      "symbol_family": "switch",
+      "symbol_variant": "single_pole",
+      "source_count": 43,
+      "sample_legend_texts": [
+        "\"K\" = SINGLE POLE SWITCH (KEY-OPERATED)",
+        "\"OS\" = OCCUPANCY SENSOR WALL SWITCH (IR) WITH MANUAL",
+        "\"OS\" = OCCUPANCY/VACANCY SENSOR WALL SWITCH (IR) WITH MANUAL OVERRIDE"
+      ]
+    },
+    {
+      "label": "Switch - Dimmer",
+      "category": "Lighting Controls & Wall Switches",
+      "symbol_family": "switch",
+      "symbol_variant": "dimmer",
+      "source_count": 22,
+      "sample_legend_texts": [
+        "\"D3\" = THREE-WAY DIMMING SWITCH",
+        "\"D4\" = FOUR-WAY DIMMING SWITCH",
+        "D = DIMMER SWITCH"
+      ]
+    },
+    {
+      "label": "Switch - 3-Way",
+      "category": "Lighting Controls & Wall Switches",
+      "symbol_family": "switch",
+      "symbol_variant": "three_way",
+      "source_count": 18,
+      "sample_legend_texts": [
+        "\"3\" = THREE-WAY SWITCH 20A, 120-277VAC",
+        "'3' DENOTES 3-WAY SWITCH.",
+        "3-WAY SWITCH"
+      ]
+    },
+    {
+      "label": "Switch - 4-Way",
+      "category": "Lighting Controls & Wall Switches",
+      "symbol_family": "switch",
+      "symbol_variant": "four_way",
+      "source_count": 17,
+      "sample_legend_texts": [
+        "\"4\" = FOUR-WAY SWITCH 20A, 120-277VAC",
+        "'4' DENOTES 4-WAY SWITCH.",
+        "4 = FOUR-WAY SWITCH"
+      ]
+    },
+    {
+      "label": "Switch - Time Switch / Timer",
+      "category": "Lighting Controls & Wall Switches",
+      "symbol_family": "switch",
+      "symbol_variant": "time_switch",
+      "source_count": 15,
+      "sample_legend_texts": [
+        "(1) ROUTE THROUGH WEATHER PROOF PHOTCELL AND OVERRIDE TIMER SWITCH.",
+        "AUTOMATIC TIME SWITCH CONTROL IS INSTALLED IT SHALL INCORPORATE AN OVERRIDE CONTROL THAT",
+        "DIGITAL TIME SWITCH"
+      ]
+    },
+    {
+      "label": "Switch - Momentary",
+      "category": "Lighting Controls & Wall Switches",
+      "symbol_family": "switch",
+      "symbol_variant": "momentary",
+      "source_count": 8,
+      "sample_legend_texts": [
+        "- EXAMPLE: SINGLE POLE MOMENTARY SWITCH CONTROLLING SWITCH GROUP \"e\".",
+        "3 OR 4 WAY MOMENTARY SWITCH MOUNTED AT 4' AFF.",
+        "LV MOMENTARY SWITCH"
+      ]
+    },
+    {
+      "label": "Switch - Key Operated",
+      "category": "Lighting Controls & Wall Switches",
+      "symbol_family": "switch",
+      "symbol_variant": "key_operated",
+      "source_count": 6,
+      "sample_legend_texts": [
+        "3-WAY KEYED SWITCH",
+        "KEY-OPERATED SWITCH",
+        "KEY-OPERATED SWITCH."
+      ]
+    },
+    {
+      "label": "Emergency Power Off (EPO) Pushbutton",
+      "category": "Lighting Controls & Wall Switches",
+      "symbol_family": "switch",
+      "symbol_variant": "emergency_power_off_pushbutton",
+      "source_count": 4,
+      "sample_legend_texts": [
+        "EMERGENCY POWER OFF PUSHBUTTON",
+        "EMERGENCY PUSH BUTTON (GENERATORS/BOILERS)",
+        "EMERGENCY PUSH BUTTON."
+      ]
+    },
+    {
+      "label": "Switch - 3-Way Dimmer",
+      "category": "Lighting Controls & Wall Switches",
+      "symbol_family": "switch",
+      "symbol_variant": "three_way_dimmer",
+      "source_count": 2,
+      "sample_legend_texts": [
+        "3-WAY DIMMABLE SWITCH MOUNTED 4' AFF."
+      ]
+    },
+    {
+      "label": "Disconnect Switch",
+      "category": "Disconnect Switches & Safety Switches",
+      "symbol_family": "disconnect",
+      "symbol_variant": "disconnect_switch",
+      "source_count": 64,
+      "sample_legend_texts": [
+        "\u0007Disconnect switch air break with fuse. “zzA” indi-",
+        "\"M\" DENOTES DISCONNECT SWITCH INTEGRAL WITH MECHANICAL EQUIPMENT.  \"E\" DENOTES",
+        "10. FOR EACH EQUIPMENT CONNECTION SHOWN, PROVIDE THE DEVICE, OUTLET, DISCONNECT SWITCH, OR"
+      ]
+    },
+    {
+      "label": "Disconnect Switch - Fused",
+      "category": "Disconnect Switches & Safety Switches",
+      "symbol_family": "disconnect",
+      "symbol_variant": "fused",
+      "source_count": 29,
+      "sample_legend_texts": [
+        "COMBINATION MOTOR STARTER/FUSED DISCONNECT SWITCH,",
+        "EQUIPMENT CONNECTION (Fused Disconnect Switch)",
+        "FUSED DISCONNECT SWITCH"
+      ]
+    },
+    {
+      "label": "Disconnect Switch - Non-Fused",
+      "category": "Disconnect Switches & Safety Switches",
+      "symbol_family": "disconnect",
+      "symbol_variant": "non_fused",
+      "source_count": 7,
+      "sample_legend_texts": [
+        "NEMA 3R 480V, 3-POLE UNFUSED DISCONNECT SWITCH.",
+        "NON-FUSIBLE DISCONNECT SWITCH",
+        "UNFUSED DISCONNECT SWITCH.  SIZE AS SHOWN"
+      ]
+    },
+    {
+      "label": "Exit Sign",
+      "category": "Lighting Fixtures & Emergency Egress",
+      "symbol_family": "luminaire",
+      "symbol_variant": "exit_sign",
+      "source_count": 41,
+      "sample_legend_texts": [
+        "Back Exit Sign (Single Face)",
+        "CEILING MTD. EXIT SIGN, SHADED AREAS INDICATE",
+        "CEILING MTD. EXIT SIGN, SHADED AREAS INDICATE NUMBER OF FACES,"
+      ]
+    },
+    {
+      "label": "Emergency Battery Light Unit",
+      "category": "Lighting Fixtures & Emergency Egress",
+      "symbol_family": "luminaire",
+      "symbol_variant": "emergency_battery_light",
+      "source_count": 30,
+      "sample_legend_texts": [
+        "2X2 RECESSED EMERGENCY LIGHT",
+        "90 MINUTES EMERGENCY BATTERY PACK)",
+        "BATTERY PACK EMERGENCY LIGHT FIXTURE WITH TWO LAMP"
+      ]
+    },
+    {
+      "label": "Lighting Control Panel",
+      "category": "Lighting Fixtures & Emergency Egress",
+      "symbol_family": "panelboard",
+      "symbol_variant": "lighting_control_panel",
+      "source_count": 16,
+      "sample_legend_texts": [
+        "-LIGHTING CONTROL PANEL",
+        "LCP",
+        "LIGHTING CONTROL PANEL"
+      ]
+    },
+    {
+      "label": "Light Fixture - Recessed Downlight",
+      "category": "Lighting Fixtures & Emergency Egress",
+      "symbol_family": "luminaire",
+      "symbol_variant": "recessed_downlight",
+      "source_count": 11,
+      "sample_legend_texts": [
+        "EMERGENCY RECESSED DOWNLIGHT LIGHTING FIXTURE WITH NOTATION AS ABOVE.",
+        "EXISTING SOFFIT MOUNTED DOWNLIGHT FIXTURE TO BE REPLACED BY NEW",
+        "LIGHTING FIXTURE - RECESSED DOWNLIGHT - REFER TO LIGHTING FIXTURE SCHEDULE"
+      ]
+    },
+    {
+      "label": "Exit Sign - Wall Mounted",
+      "category": "Lighting Fixtures & Emergency Egress",
+      "symbol_family": "luminaire",
+      "symbol_variant": "exit_sign_wall",
+      "source_count": 9,
+      "sample_legend_texts": [
+        "WALL MOUNTED EXIT SIGN",
+        "WALL MOUNTED EXIT SIGN -",
+        "WALL MOUNTED EXIT SIGN W/DIRECTION INDICATED"
+      ]
+    },
+    {
+      "label": "Light Fixture - Pole / Floodlight",
+      "category": "Lighting Fixtures & Emergency Egress",
+      "symbol_family": "luminaire",
+      "symbol_variant": "pole_floodlight",
+      "source_count": 9,
+      "sample_legend_texts": [
+        "CONNECT TO EXISTING FLOOD LIGHT CIRCUIT AS SHOWN FOR POWER AND",
+        "EXISTING STRUCTURAL FRAME MOUNTED FLOOD LIGHT FIXTURE TO BE",
+        "EXISTING STRUCTURAL FRAME MOUNTED FLOOD LIGHT FIXTURE TO BE REPLACE"
+      ]
+    },
+    {
+      "label": "Light Fixture - Wall Mounted",
+      "category": "Lighting Fixtures & Emergency Egress",
+      "symbol_family": "luminaire",
+      "symbol_variant": "wall_mounted",
+      "source_count": 8,
+      "sample_legend_texts": [
+        "24\" SLIM WALL SCONCE, DIRECT DOWN LIGHT, BLACK",
+        "24\" SLIM WALL SCONCE, DIRECT/INDIRECT LIGHT, BLACK",
+        "LIGHTING FIXTURE - WALL SCONCE - REFER TO LIGHTING FIXTURE SCHEDULE"
+      ]
+    },
+    {
+      "label": "Exit Sign - Ceiling Mounted",
+      "category": "Lighting Fixtures & Emergency Egress",
+      "symbol_family": "luminaire",
+      "symbol_variant": "exit_sign_ceiling",
+      "source_count": 6,
+      "sample_legend_texts": [
+        "CEILING MOUNT EXIT SIGN W/ 90 MINUTES",
+        "CEILING MOUNTED EXIT SIGN",
+        "CEILING MOUNTED EXIT SIGN, SHADING INDICATES FACES"
+      ]
+    },
+    {
+      "label": "Light Fixture - Linear / Strip",
+      "category": "Lighting Fixtures & Emergency Egress",
+      "symbol_family": "luminaire",
+      "symbol_variant": "linear_strip",
+      "source_count": 6,
+      "sample_legend_texts": [
+        "EXISTING CONTINUOUS LINEAR LIGHT FIXTURE SHALL BE SEPARATED",
+        "LINEAR LIGHT FIXTURE",
+        "LINEAR STRIP FIXTURE W/ DESIGNATION"
+      ]
+    },
+    {
+      "label": "Thermostat",
+      "category": "Occupancy, Daylight & Environmental Sensors",
+      "symbol_family": "sensor",
+      "symbol_variant": "thermostat",
+      "source_count": 77,
+      "sample_legend_texts": [
+        "-THERMOSTAT OR TELE CONDUIT",
+        "-THERMOSTAT/TEMPERATURE SENSOR",
+        "16. SEQUENCE OF OPERATION:  UNLESS NOTED OTHERWISE, THERMOSTAT AND UNITS SHALL BE SET UP FOR"
+      ]
+    },
+    {
+      "label": "Humidistat",
+      "category": "Occupancy, Daylight & Environmental Sensors",
+      "symbol_family": "sensor",
+      "symbol_variant": "humidistat",
+      "source_count": 49,
+      "sample_legend_texts": [
+        "-HUMIDISTAT/HUMIDITY SENSOR",
+        "HSTAT HUMIDISTAT",
+        "HUMIDISTAT"
+      ]
+    },
+    {
+      "label": "Occupancy Sensor",
+      "category": "Occupancy, Daylight & Environmental Sensors",
+      "symbol_family": "sensor",
+      "symbol_variant": "occupancy_sensor",
+      "source_count": 49,
+      "sample_legend_texts": [
+        "20 AMP, 125 VOLT OCCUPANCY SENSOR LIGHT SWITCH",
+        "3-WAY / MULTI-WAY OCCUPANCY SENSOR SWITCH.",
+        "CEILING MOUNTED CORRIDOR OCCUPANCY SENSOR"
+      ]
+    },
+    {
+      "label": "Carbon Dioxide (CO2) Sensor",
+      "category": "Occupancy, Daylight & Environmental Sensors",
+      "symbol_family": "sensor",
+      "symbol_variant": "co2_sensor",
+      "source_count": 33,
+      "sample_legend_texts": [
+        "-CO2 SENSOR",
+        "CARBON DIOXIDE SENSOR",
+        "CO2 SENSOR"
+      ]
+    },
+    {
+      "label": "Daylight Photosensor / Photocell",
+      "category": "Occupancy, Daylight & Environmental Sensors",
+      "symbol_family": "sensor",
+      "symbol_variant": "daylight_photosensor",
+      "source_count": 30,
+      "sample_legend_texts": [
+        "-PHOTOCELL",
+        "BUILDING MOUNTED PHOTOCELL",
+        "DAYLIGHT PHOTO SENSOR. COORDINATE EXACT LOCATIONS WITH"
+      ]
+    },
+    {
+      "label": "Carbon Monoxide (CO) Sensor",
+      "category": "Occupancy, Daylight & Environmental Sensors",
+      "symbol_family": "sensor",
+      "symbol_variant": "co_sensor",
+      "source_count": 23,
+      "sample_legend_texts": [
+        "CARBON MONOXIDE SENSOR",
+        "CO DETECTOR",
+        "CO SENSOR, ETC."
+      ]
+    },
+    {
+      "label": "Vacancy Sensor",
+      "category": "Occupancy, Daylight & Environmental Sensors",
+      "symbol_family": "sensor",
+      "symbol_variant": "vacancy_sensor",
+      "source_count": 22,
+      "sample_legend_texts": [
+        "LUTRON WALL/CEILING MOUNTED LOW VOLTAGE VACANCY SENSOR SWITCH CONFIGURED",
+        "OCCUPANCY SENSOR, VACANCY SENSOR - CEILING",
+        "OCCUPANCY SENSOR, VACANCY SENSOR - MOUNTEDHIGH"
+      ]
+    },
+    {
+      "label": "Occupancy Sensor - Ceiling Mounted",
+      "category": "Occupancy, Daylight & Environmental Sensors",
+      "symbol_family": "sensor",
+      "symbol_variant": "occupancy_sensor_ceiling",
+      "source_count": 21,
+      "sample_legend_texts": [
+        "CEILING MOUNT OCCUPANCY SENSOR",
+        "CEILING MOUNTED OCCUPANCY SENSOR",
+        "CEILING MOUNTED OCCUPANCY SENSOR (DUAL TECHNOLOGY)"
+      ]
+    },
+    {
+      "label": "Differential Pressure Sensor",
+      "category": "Occupancy, Daylight & Environmental Sensors",
+      "symbol_family": "sensor",
+      "symbol_variant": "differential_pressure_sensor",
+      "source_count": 19,
+      "sample_legend_texts": [
+        "DIFFERENTIAL PRESSURE SENSOR",
+        "DIFFERENTIAL PRESSURE SENSOR (V.N.O)",
+        "DIFFERENTIAL PRESSURE SENSOR/TRANSMITTER"
+      ]
+    },
+    {
+      "label": "Occupancy Sensor - Wall Mounted",
+      "category": "Occupancy, Daylight & Environmental Sensors",
+      "symbol_family": "sensor",
+      "symbol_variant": "occupancy_sensor_wall",
+      "source_count": 9,
+      "sample_legend_texts": [
+        "EXISTING WALL MOUNT OCCUPANCY SENSOR SWITCH.",
+        "PUSH BUTTON WALL MOUNT OCCUPANCY SENSOR - WATTSTOPPER DSW-301-W",
+        "WALL MOUNT OCCUPANCY SENSOR WITH DIMMING CONTROLS DUAL TECHNOLOGY"
+      ]
+    },
+    {
+      "label": "Junction Box",
+      "category": "Electrical Distribution & Raceways",
+      "symbol_family": "junction_box",
+      "symbol_variant": "junction_box",
+      "source_count": 151,
+      "sample_legend_texts": [
+        "\"X\" INDICATES JUNCTION BOX TYPE",
+        "- JUNCTION BOX",
+        "-JUNCTION BOX"
+      ]
+    },
+    {
+      "label": "Transformer",
+      "category": "Electrical Distribution & Raceways",
+      "symbol_family": "transformer",
+      "symbol_variant": "transformer",
+      "source_count": 85,
+      "sample_legend_texts": [
+        "\"CPT\" DENOTES CONTROL POWER TRANSFORMER",
+        "\"DRY TYPE TRANSFORMER SCHEDULE\"  FOR DESCRIPTIONS.",
+        "\"DRY TYPE TRANSFORMER SCHEDULE\" FOR DESCRIPTIONS."
+      ]
+    },
+    {
+      "label": "Panelboard",
+      "category": "Electrical Distribution & Raceways",
+      "symbol_family": "panelboard",
+      "symbol_variant": "panelboard",
+      "source_count": 78,
+      "sample_legend_texts": [
+        "'IC' DENOTES PANELBOARD.",
+        "-PANELBOARD",
+        "208V BRANCH PANELBOARD"
+      ]
+    },
+    {
+      "label": "Variable Frequency Drive (VFD)",
+      "category": "Electrical Distribution & Raceways",
+      "symbol_family": "motor_control",
+      "symbol_variant": "vfd",
+      "source_count": 71,
+      "sample_legend_texts": [
+        "(VFD PROVIDED BY DIV. 23). PROVIDE NON-FUSED DISCONNECTING",
+        "-VARIABLE FREQUENCY DRIVE",
+        "2#12 IN A 3/4\" CONDUIT FROM THE DISCONNECT TO THE VFD."
+      ]
+    },
+    {
+      "label": "Automatic Transfer Switch (ATS)",
+      "category": "Electrical Distribution & Raceways",
+      "symbol_family": "panelboard",
+      "symbol_variant": "automatic_transfer_switch",
+      "source_count": 51,
+      "sample_legend_texts": [
+        "\"ATS\" DENOTES AUTOMATIC TRANSFER SWITCH",
+        "-AUTOMATIC TRANSFER SWITCH",
+        "APPROXIMATE LOCATION OF EXISTING ATS AND EMERGENCY PANEL"
+      ]
+    },
+    {
+      "label": "Switchboard / Switchgear",
+      "category": "Electrical Distribution & Raceways",
+      "symbol_family": "panelboard",
+      "symbol_variant": "switchboard_switchgear",
+      "source_count": 45,
+      "sample_legend_texts": [
+        "-SWITCHBOARD",
+        "11.1 One-line Diagram Symbols—Switchboard Meters",
+        "15 KV MAIN SWITCHGEAR SINGLE LINE DIAGRAM"
+      ]
+    },
+    {
+      "label": "Pull Box",
+      "category": "Electrical Distribution & Raceways",
+      "symbol_family": "junction_box",
+      "symbol_variant": "pull_box",
+      "source_count": 34,
+      "sample_legend_texts": [
+        "12\" X 12\" PULL BOX AT HEIGHT NOTED ON PLAN. MEASURED FROM",
+        "12. PULL BOX SHALL NOT BE USED IN LIEU OF A BEND. CONDUITS MUST RUN",
+        "12. PULL BOX SHALL NOT BE USED IN LIEU OF A BEND. CONDUITS MUST RUN STRAIGHT"
+      ]
+    },
+    {
+      "label": "Motor Starter / Controller",
+      "category": "Electrical Distribution & Raceways",
+      "symbol_family": "motor_control",
+      "symbol_variant": "motor_starter",
+      "source_count": 31,
+      "sample_legend_texts": [
+        "\"M\" = MANUAL MOTOR STARTER SWITCH",
+        "ALL MOTOR STARTER CONTROL POWER TRANSFORMERS SHALL BE",
+        "COMBINATION DISCONNECT AND MOTOR STARTER, SIZE"
+      ]
+    },
+    {
+      "label": "Smoke Detector",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "smoke_detector",
+      "source_count": 68,
+      "sample_legend_texts": [
+        "\"SD\" DENOTES TO CONNECT TO SMOKE DETECTOR.",
+        "22. MECHANICAL CONTRACTOR SHALL SUPPLY SMOKE DETECTOR IN RETURN DUCT OF",
+        "35. PROVIDE RETURN AIR SMOKE DETECTOR IN EACH HVAC UNIT OVER 2,000 CFM AS REQUIRED BY THE LATEST ADOPTED INTERNATIONAL MECHANICAL CODE."
+      ]
+    },
+    {
+      "label": "Fire Alarm Control Panel (FACP)",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "fire_alarm_control_panel",
+      "source_count": 63,
+      "sample_legend_texts": [
+        "23, WIRED TO FACP UNDER DIVISION 26",
+        "ALARM SYSTEM TO BE LOCATED AT FACP AND FAA.",
+        "AND INSTALLED UNDER DIVISION 23, WIRED TO FACP UNDER"
+      ]
+    },
+    {
+      "label": "Fire Alarm Strobe",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "fire_alarm_strobe",
+      "source_count": 45,
+      "sample_legend_texts": [
+        "EACH ALARM STROBE LIGHT CIRCUIT: 1 PAIR TWISTED NO. 14 A.W.G. COPPER",
+        "FIRE ALARM STROBE ONLY",
+        "FOR INTRUSION DETECTION. COORDINATE STROBE LIGHT LOCATION WITH"
+      ]
+    },
+    {
+      "label": "Fire Alarm Annunciator Panel",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "annunciator_panel",
+      "source_count": 43,
+      "sample_legend_texts": [
+        "ANNUNCIATOR PANEL",
+        "ANNUNCIATOR PANEL AS INDICATED IN BLOCK DIAGRAMS AND/OR DETAILS.",
+        "ANNUNCIATOR PANEL LOCATION."
+      ]
+    },
+    {
+      "label": "Smoke Detector - Duct",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "duct_smoke_detector",
+      "source_count": 36,
+      "sample_legend_texts": [
+        "-DUCT SMOKE DETECTOR",
+        "CONNECT DUCT SMOKE DETECTOR IN THE HVAC SYSTEM TO ACTIVATE THE",
+        "CONNECT DUCT SMOKE DETECTOR IN THE HVAC SYSTEM TO ACTIVATE THE FIRE ALARM SYSTEM AND"
+      ]
+    },
+    {
+      "label": "Fire Alarm Manual Pull Station",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "manual_pull_station",
+      "source_count": 29,
+      "sample_legend_texts": [
+        "(AFF) OR 6\" BELOW THE FINISHED CEILING OR WHICHEVER IS LOWER OR FOR PULL STATION INSTALL 4",
+        "ALARM, FIRE, MANUAL PULL STATION.",
+        "CEILING OR WHICHEVER IS LOWER OR FOR PULL STATION INSTALL 48\" A.F.F. (TO CENTER OF UNIT)."
+      ]
+    },
+    {
+      "label": "Heat Detector",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "heat_detector",
+      "source_count": 21,
+      "sample_legend_texts": [
+        "CEILING MOUNTED HEAT DETECTOR",
+        "CONVENTIONAL HEAT DETECTOR ALARM (MM)",
+        "FIRE ALARM HEAT DETECTOR."
+      ]
+    },
+    {
+      "label": "Sprinkler Tamper Switch",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "tamper_switch",
+      "source_count": 19,
+      "sample_legend_texts": [
+        "- TAMPER SWITCH",
+        "BUTTERFLY VALVE W/ TAMPER SWITCH",
+        "CLEAN AGENT ACTUATOR CONTROL HEAD TAMPER SWITCH IN OFF-"
+      ]
+    },
+    {
+      "label": "Fire Alarm Horn / Strobe",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "horn_and_strobe",
+      "source_count": 15,
+      "sample_legend_texts": [
+        "CEILING HORN STROBE - CANDELA SUBSCRIPT",
+        "DEVICES (HORN/STROBE,STROBE) AND FROM 120 VAC CIRCUITS.",
+        "EMERGENCY ALARM HORN/STROBE"
+      ]
+    },
+    {
+      "label": "Smoke Detector - Ceiling Mounted",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "smoke_detector_ceiling",
+      "source_count": 10,
+      "sample_legend_texts": [
+        "ADDRESSABLE SMOKE DETECTOR, CEILING MOUNTED.",
+        "FIRE ALARM SYSTEM - SMOKE DETECTOR - CEILING MOUNTED - COORDINATE EXACT",
+        "PHOTOELECTRIC TYPE SMOKE DETECTOR, CEILING MOUNTED UNLESS NOTED OTHERWISE."
+      ]
+    },
+    {
+      "label": "Sprinkler Waterflow Switch",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "waterflow_switch",
+      "source_count": 7,
+      "sample_legend_texts": [
+        "FIRE PROTECTION SPRINKLER FLOW SWITCH",
+        "FIRE SUPPRESSION WATER FLOW SWITCH TO SPRINKLER SYSTEM",
+        "SPRINKLER FLOW SWITCH MONITORING"
+      ]
+    },
+    {
+      "label": "Fire Alarm Speaker / Strobe",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "speaker_and_strobe",
+      "source_count": 5,
+      "sample_legend_texts": [
+        "(LEFT); SPEAKER/STROBE (CENTER); STROBE ONLY (RIGHT). LOCATE 84\" ABOVE",
+        "(TOP LEFT); SPEAKER/STROBE (TOP RIGHT); STROBE ONLY (BOTTOM LEFT). 'CD'",
+        "FIRE ALARM SPEAKER/STROBE UNIT"
+      ]
+    },
+    {
+      "label": "Fire Alarm Horn / Strobe - Wall Mounted",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "horn_strobe_wall",
+      "source_count": 4,
+      "sample_legend_texts": [
+        "FIRE ALARM HORN/STROBE - WALL MOUNTED",
+        "HORN/STROBE, WALL MOUNTED CANDELA AS NOTED ON PLANS,",
+        "WALL MOUNTED HORN STROBE - CANDELA SUBSCRIPT"
+      ]
+    },
+    {
+      "label": "Fire Alarm Strobe - Wall Mounted",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "strobe_wall",
+      "source_count": 4,
+      "sample_legend_texts": [
+        "FIRE ALARM STROBE LIGHT - WALL MOUNTED",
+        "WALL MOUNTED STROBE",
+        "WALL MOUNTED STROBE - CANDELA SUBSCRIPT"
+      ]
+    },
+    {
+      "label": "Fire Alarm Speaker / Strobe - Ceiling Mounted",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "speaker_strobe_ceiling",
+      "source_count": 3,
+      "sample_legend_texts": [
+        "FIRE ALARM SPEAKER/STROBE - CEILING MOUNTED",
+        "HORNS/SPEAKER/STROBE LIGHTS 80\" A.F.F. OR 6\" BELOW HUNG CEILING (WHICHEVER IS LOWER)",
+        "SPEAKER/STROBE, CEILING MOUNTED, CANDELA AS NOTED ON"
+      ]
+    },
+    {
+      "label": "Fire Alarm Strobe - Ceiling Mounted",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "strobe_ceiling",
+      "source_count": 3,
+      "sample_legend_texts": [
+        "CEILING MOUNTED STROBE SPEAKER",
+        "FIRE ALARM STROBE LIGHT - CEILING MOUNTED",
+        "STROBE LIGHT SURFACE MOUNTED TO CEILING."
+      ]
+    },
+    {
+      "label": "Voice Evacuation Panel",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "voice_evacuation_panel",
+      "source_count": 3,
+      "sample_legend_texts": [
+        "FIRE ALARM SYSTEM VOICE EVACUATION PANEL.",
+        "VOICE EVACUATION PANEL"
+      ]
+    },
+    {
+      "label": "Fire Alarm Horn / Strobe - Ceiling Mounted",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "horn_strobe_ceiling",
+      "source_count": 2,
+      "sample_legend_texts": [
+        "FIRE ALARM HORN/STROBE - CEILING MOUNTED",
+        "HORN/STROBE, CEILING MOUNTED, CANDELA AS NOTED ON PLANS,"
+      ]
+    },
+    {
+      "label": "Fire Alarm Speaker / Strobe - Wall Mounted",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "speaker_strobe_wall",
+      "source_count": 2,
+      "sample_legend_texts": [
+        "FIRE ALARM SPEAKER/STROBE - WALL MOUNTED",
+        "SPEAKER/STROBE, WALL MOUNTED CANDELA AS NOTED ON PLANS,"
+      ]
+    },
+    {
+      "label": "Heat Detector - Rate of Rise",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "heat_detector_rate_of_rise",
+      "source_count": 2,
+      "sample_legend_texts": [
+        "FIXED TEMPERATURE / RATE OF RISE HEAT DETECTOR (t =",
+        "HEAT DETECTOR - RATE OF RISE"
+      ]
+    },
+    {
+      "label": "Smoke Detector with Sounder Base",
+      "category": "Fire Alarm & Life Safety Systems",
+      "symbol_family": "fire_alarm_device",
+      "symbol_variant": "smoke_detector_sounder_base",
+      "source_count": 2,
+      "sample_legend_texts": [
+        "SMOKE DETECTOR WITH SOUNDER BASE"
+      ]
+    },
+    {
+      "label": "Card Reader",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "card_reader",
+      "source_count": 89,
+      "sample_legend_texts": [
+        "*Includes (2) Card Readers - One Card Reader",
+        "325 CLASS IV COMPLIANCE, FURNISH AND INSTALL CARD READER TO OUTSIDE OF",
+        "325 CLASS IV COMPLIANCE, FURNISH AND INSTALL CARD READER TO OUTSIDE OF\u0003"
+      ]
+    },
+    {
+      "label": "Glass Break Detector",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "glass_break_detector",
+      "source_count": 46,
+      "sample_legend_texts": [
+        "CEILING-MOUNTED GLASS BREAK SENSOR.",
+        "FURNISH, INSTALL, CONNECT AND PROGRAM TO CCURE SYSTEM   GLASS BREAK DETECTORS TO COVER",
+        "GLASS BREAK"
+      ]
+    },
+    {
+      "label": "Panic / Duress Button",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "panic_duress_button",
+      "source_count": 44,
+      "sample_legend_texts": [
+        "DURESS BUTTON",
+        "DURESS BUTTON MOUNTED IN KNEE SPACE OF DESK, TABLE OR COUNTER PROVIDE ARMORED CABLE",
+        "EMERGENCY PANIC BUTTON"
+      ]
+    },
+    {
+      "label": "Door Release Button",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "door_release_button",
+      "source_count": 41,
+      "sample_legend_texts": [
+        "DOOR RELEASE BUTTON",
+        "DOOR RELEASE BUTTON AND ASSOCIATED EQUIPMENT.",
+        "DOOR RELEASE CONTROL BUTTON"
+      ]
+    },
+    {
+      "label": "Request to Exit (REX) Device",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "request_to_exit",
+      "source_count": 41,
+      "sample_legend_texts": [
+        "ACCESS CONTROL REQUEST TO EXIT DEVICE - JUNCTION BOX WITH SINGLE GANG",
+        "REQUEST TO EXIT",
+        "REQUEST TO EXIT (WALL OR CEILING MOUNTED)"
+      ]
+    },
+    {
+      "label": "Gate Operator",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "gate_operator",
+      "source_count": 40,
+      "sample_legend_texts": [
+        "#12 GROUND. FURNISH AND INSTALL NEW 2 POLE 20 AMP BREAKER FOR GATE OPERATOR.",
+        "1\u0003HP GATE OPERATOR . 220 VOLT SINGLE PHASE. FURNISH, INSTALL NEW\u0003",
+        "1/4' ELECT & 2' COMM) CONDUITS FROM GATE OPERATOR TO BUILDING ."
+      ]
+    },
+    {
+      "label": "Gate Release Button",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "gate_release_button",
+      "source_count": 38,
+      "sample_legend_texts": [
+        "GATE RELEASE BUTTON",
+        "GATE RELEASE CONTROL BUTTON"
+      ]
+    },
+    {
+      "label": "Card Reader - Long Range",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "card_reader_long_range",
+      "source_count": 36,
+      "sample_legend_texts": [
+        "CARD READER (LONG RANGE)",
+        "CARD READER (LONG RANGE) - SEE PEDESTALS"
+      ]
+    },
+    {
+      "label": "Door Contact Switch",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "door_contact_switch",
+      "source_count": 23,
+      "sample_legend_texts": [
+        "CYLINDRICAL LEVER SET WITH REX, DOOR CONTACT AND AND GATE",
+        "DOOR CONTACT",
+        "DOOR CONTACT SWITCH"
+      ]
+    },
+    {
+      "label": "Electric Door Strike",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "electric_door_strike",
+      "source_count": 20,
+      "sample_legend_texts": [
+        "4A) EXISTING POWER TO ELECTRIC STRIKE IS TO REMAIN.",
+        "ACCESS CONTROL SYSTEM ELECTRIC STRIKE / LATCH - PROVIDE 3/4\" CONDUIT",
+        "ELECTRIC DOOR STRIKE"
+      ]
+    },
+    {
+      "label": "Security Keypad",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "security_keypad",
+      "source_count": 16,
+      "sample_legend_texts": [
+        "DIGITAL KEYPAD",
+        "KEYPAD",
+        "KEYPAD CONTROLLER OUTLET"
+      ]
+    },
+    {
+      "label": "Card Reader - Proximity",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "card_reader_proximity",
+      "source_count": 2,
+      "sample_legend_texts": [
+        "PROXIMITY CARD READER",
+        "PROXIMITY CARD READER OUTLET"
+      ]
+    },
+    {
+      "label": "Magnetic Door Lock",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "magnetic_door_lock",
+      "source_count": 2,
+      "sample_legend_texts": [
+        "MAGNETIC DOOR LOCK.",
+        "MAGNETIC LOCK"
+      ]
+    },
+    {
+      "label": "Security Alarm Strobe",
+      "category": "Access Control & Physical Security",
+      "symbol_family": "security_device",
+      "symbol_variant": "security_alarm_strobe",
+      "source_count": 2,
+      "sample_legend_texts": [
+        "SECURITY ALARM STROBE"
+      ]
+    },
+    {
+      "label": "Digital Video Recorder (DVR / NVR)",
+      "category": "Video Surveillance (CCTV)",
+      "symbol_family": "cctv_device",
+      "symbol_variant": "dvr_nvr",
+      "source_count": 41,
+      "sample_legend_texts": [
+        "DIGITAL VIDEO RECORDER",
+        "DIGITAL VIDEO RECORDER (DVR)",
+        "DVR"
+      ]
+    },
+    {
+      "label": "Security Camera - Mini Dome",
+      "category": "Video Surveillance (CCTV)",
+      "symbol_family": "cctv_device",
+      "symbol_variant": "camera_mini_dome",
+      "source_count": 36,
+      "sample_legend_texts": [
+        "MINI DOME CAMERA",
+        "MINI DOME CAMERA - SEE KEY NOTES 9 & 15"
+      ]
+    },
+    {
+      "label": "Security Camera",
+      "category": "Video Surveillance (CCTV)",
+      "symbol_family": "cctv_device",
+      "symbol_variant": "security_camera",
+      "source_count": 24,
+      "sample_legend_texts": [
+        "ACCESS POINT, TEXT 'C' INDICATES OUTLET FOR CCTV CAMERA, TEXT 'AC' INDICATES",
+        "CAM SECURITY CAMERA",
+        "CCTV CAMERA"
+      ]
+    },
+    {
+      "label": "Security Camera - PTZ",
+      "category": "Video Surveillance (CCTV)",
+      "symbol_family": "cctv_device",
+      "symbol_variant": "camera_ptz",
+      "source_count": 2,
+      "sample_legend_texts": [
+        "PTZ CAMERA. PROVIDE BACKBOX WITH COVER 3/4\" CONDUIT, CAT 6",
+        "SURVEILLANCE CAMERA.  PTZ = PAN, TILT, ZOOM."
+      ]
+    },
+    {
+      "label": "Data Outlet - Wall Mounted",
+      "category": "Telecommunications, Data & Network",
+      "symbol_family": "data_outlet",
+      "symbol_variant": "data_wall",
+      "source_count": 37,
+      "sample_legend_texts": [
+        "(1) VOICE + (1) DATA OUTLET EACH WITH FLUSH MOUNTED 4\"",
+        "1  UL LISTED DATA CABLE PULLED TO EACH DATA JACK.",
+        "ABOVE CEILING DATA OUTLET, CABLE TYPE AS SPECIFIED WITH X = NUMBER OF CABLE"
+      ]
+    },
+    {
+      "label": "Wireless Access Point (WAP)",
+      "category": "Telecommunications, Data & Network",
+      "symbol_family": "data_outlet",
+      "symbol_variant": "wap",
+      "source_count": 32,
+      "sample_legend_texts": [
+        "C1-WAP",
+        "CEILING MOUNTED WIRELESS ACCESS POINT",
+        "CEILING MOUNTED WIRELESS ACCESS POINT -"
+      ]
+    },
+    {
+      "label": "Television / CATV Outlet",
+      "category": "Telecommunications, Data & Network",
+      "symbol_family": "data_outlet",
+      "symbol_variant": "catv_outlet",
+      "source_count": 14,
+      "sample_legend_texts": [
+        "CATV OUTLET",
+        "CATV OUTLET BOX",
+        "CLOSED CIRCUIT TELEVISION OUTLET,"
+      ]
+    },
+    {
+      "label": "Data Outlet - Floor Mounted",
+      "category": "Telecommunications, Data & Network",
+      "symbol_family": "data_outlet",
+      "symbol_variant": "data_floor",
+      "source_count": 11,
+      "sample_legend_texts": [
+        "COMPUTER/DATA OUTLET - FLOOR TYPE",
+        "DATA OUTLET (FLOOR OR BELOW FLOOR)",
+        "DATA OUTLET IN FLOOR"
+      ]
+    },
+    {
+      "label": "Telephone Outlet",
+      "category": "Telecommunications, Data & Network",
+      "symbol_family": "data_outlet",
+      "symbol_variant": "telephone_outlet",
+      "source_count": 11,
+      "sample_legend_texts": [
+        "FIRE FIGHTER'S PHONE OUTLET",
+        "FLOOR MTD TELEPHONE OUTLET - REFER TO NOTE 6",
+        "FLUSH FLOOR TELEPHONE OUTLET WITH CARPET FLANGE WHERE APPLICABLE"
+      ]
+    },
+    {
+      "label": "Combination Voice / Data Outlet",
+      "category": "Telecommunications, Data & Network",
+      "symbol_family": "data_outlet",
+      "symbol_variant": "voice_data_combo",
+      "source_count": 6,
+      "sample_legend_texts": [
+        "COMBINATION PHONE/DATA OUTLET ABOVE COUNTER",
+        "COMBINATION PHONE/DATA OUTLET IN WALL",
+        "DUAL DATA/VOIP OUTLET NUMBER SUBSCRIPT"
+      ]
+    },
+    {
+      "label": "Data Outlet - Ceiling Mounted",
+      "category": "Telecommunications, Data & Network",
+      "symbol_family": "data_outlet",
+      "symbol_variant": "data_ceiling",
+      "source_count": 5,
+      "sample_legend_texts": [
+        "CEILING MOUNTED DATA NETWORK OUTLET. PROVIDE T-GRID BOX HANGER FOR",
+        "CEILING MOUNTED DATA OUTLET",
+        "DATA OUTLET IN CEILING"
+      ]
+    },
+    {
+      "label": "Fiber Optic Outlet",
+      "category": "Telecommunications, Data & Network",
+      "symbol_family": "data_outlet",
+      "symbol_variant": "fiber_optic_outlet",
+      "source_count": 3,
+      "sample_legend_texts": [
+        "FIBER OPTIC OUTLET, CABLE TYPE AS SPECIFIED, MOUNTED +18-INCHES A.F.F. UNLESS",
+        "FIBER OPTIC OUTLET, CABLE TYPE AS SPECIFIED, MOUNTED +6-INCHES ABOVE COUNTER OR",
+        "FIBER OPTIC OUTLET, CABLE TYPE AS SPECIFIED, TERMINATED IN FLOOR BOX/POKE -THRU"
+      ]
+    },
+    {
+      "label": "Speaker - Ceiling Mounted",
+      "category": "Audio / Visual, Paging & Intercom",
+      "symbol_family": "audio_visual_device",
+      "symbol_variant": "speaker_ceiling",
+      "source_count": 41,
+      "sample_legend_texts": [
+        "CEILING MOUNTED SPEAKER",
+        "CEILING MOUNTED SPEAKER - 1",
+        "CEILING SPEAKER"
+      ]
+    },
+    {
+      "label": "Intercom Station - Weatherproof",
+      "category": "Audio / Visual, Paging & Intercom",
+      "symbol_family": "audio_visual_device",
+      "symbol_variant": "intercom_weatherproof",
+      "source_count": 36,
+      "sample_legend_texts": [
+        "INTERCOM (WEATHERPROOF)"
+      ]
+    },
+    {
+      "label": "Intercom Substation / Push Button",
+      "category": "Audio / Visual, Paging & Intercom",
+      "symbol_family": "audio_visual_device",
+      "symbol_variant": "intercom_substation",
+      "source_count": 30,
+      "sample_legend_texts": [
+        "AND INTERCOM LOW VOLTAGE SYSTEMS ARE",
+        "AUDIO INTERCOM SUBSTATION.",
+        "CALL-IN SWITCH (PUSH-TO-CALL) FOR INTERCOM SYSTEM."
+      ]
+    },
+    {
+      "label": "Clock Outlet / Location",
+      "category": "Audio / Visual, Paging & Intercom",
+      "symbol_family": "audio_visual_device",
+      "symbol_variant": "clock_outlet",
+      "source_count": 3,
+      "sample_legend_texts": [
+        "\"C\" INDICATES CLOCK OUTLET",
+        "CLOCK LOCATION",
+        "CLOCK LOCATION - DOUBLE FACE"
+      ]
+    },
+    {
+      "label": "Speaker - Wall Mounted",
+      "category": "Audio / Visual, Paging & Intercom",
+      "symbol_family": "audio_visual_device",
+      "symbol_variant": "speaker_wall",
+      "source_count": 3,
+      "sample_legend_texts": [
+        "ALARM WARNING SPEAKER",
+        "WALL MOUNTED SPEAKER-STROBE"
+      ]
+    },
+    {
+      "label": "Intercom Master Station",
+      "category": "Audio / Visual, Paging & Intercom",
+      "symbol_family": "audio_visual_device",
+      "symbol_variant": "intercom_master_station",
+      "source_count": 2,
+      "sample_legend_texts": [
+        "DESKTOP VIDEO INTERCOM MASTER STATION.",
+        "INTERCOM MASTER STATION AS INDICATED BLOCK DIAGRAM AND/OR DETAILS.",
+        "MASTER INTERCOM MONITORING STATION"
+      ]
+    }
+  ]
+}

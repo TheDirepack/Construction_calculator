@@ -63,6 +63,19 @@
     #items button.item-btn { flex:1; text-align:left; display:flex; gap:8px; align-items:center; justify-content:space-between; padding:6px 8px; background:#1b2c39; min-width:0; }
     #items button.item-btn span.item-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     #items button.item-btn.chosen { border-color:var(--accent); background:#204459; }
+    #quickSubtypeBar { max-height:112px; overflow-y:auto; padding-right:2px; }
+    #deviceCatalogList { max-height:175px; overflow-y:auto; display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; padding-right:2px; }
+    .catalog-cat-header { flex-basis:100%; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:4px 0 1px; padding-top:4px; border-top:1px solid #243542; }
+    .catalog-cat-header:first-child { margin-top:0; padding-top:0; border-top:0; }
+    .catalog-device-btn { background:#162430; border:1px solid #3e5566; color:var(--text); padding:3px 8px; font-size:11.5px; border-radius:6px; text-align:left; white-space:normal; line-height:1.25; }
+    .catalog-device-btn:hover { background:#223849; border-color:#5b7f99; }
+    .catalog-device-btn[aria-pressed="true"] { background:#1b6285; border-color:#69bfe4; color:#fff; font-weight:600; }
+    .device-cat-card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; display:flex; flex-direction:column; gap:8px; }
+    .device-modal-btn { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; text-align:left; background:#162430; border:1px solid #3e5566; border-radius:6px; padding:6px 9px; font-size:12.5px; white-space:normal; }
+    .device-modal-btn:hover { background:#223849; border-color:#5b7f99; }
+    .device-modal-btn[aria-pressed="true"] { background:#1b6285; border-color:#69bfe4; color:#fff; }
+    .device-modal-meta { font-size:10.5px; color:var(--muted); white-space:nowrap; flex-shrink:0; }
+    .device-modal-btn[aria-pressed="true"] .device-modal-meta { color:#d8effa; }
     .tag { font-size:11px; color:#fff; background:#6e502f; padding:2px 6px; border-radius:5px; flex-shrink:0; }
     .tag.accepted { background:#1f6c47; }
     .tag.rejected { background:#7a2e38; }
@@ -95,6 +108,7 @@
   <div class="toolbar-group">
     <button id="navPdfsBtn" class="primary" style="font-weight:600;" title="Open all blueprints catalog menu">📁 PDFs</button>
     <button id="nextPdfBtn" class="ghost" title="Open next blueprint document in list">Next PDF →</button>
+    <button id="navDevicesBtn" class="ghost" title="Browse all curated electrical devices by category (C)">📚 Devices</button>
   </div>
   <div class="toolbar-group">
     <span id="currentDocBadge" style="font-weight:600;font-size:12.5px;color:#56b4db;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
@@ -146,6 +160,19 @@
     </div>
   </div>
   <div id="pdfGrid" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(350px, 1fr));gap:12px;margin-top:16px;"></div>
+</div>
+<div id="deviceCatalogModal" style="position:fixed;inset:0;background:#0e151c;z-index:9001;display:flex;flex-direction:column;padding:20px;overflow-y:auto;" hidden>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-bottom:1px solid #324351;padding-bottom:12px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button id="closeDeviceCatalogBtn" class="primary" style="font-size:13.5px;padding:6px 14px;">← Back to Editor</button>
+      <h2 style="margin:0;font-size:17px;">Electrical Devices Catalog (<span id="deviceModalCount">0</span>)</h2>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <input id="deviceModalSearch" type="search" placeholder="Search 104 devices, categories, or legend text..." style="min-width:300px;padding:6px 10px;font-size:13px;" autocomplete="off">
+    </div>
+  </div>
+  <div id="deviceModalCategoryPills" class="chip-list" style="margin-top:10px;"></div>
+  <div id="deviceModalGrid" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(340px, 1fr));gap:12px;margin-top:14px;"></div>
 </div>
 <main id="workspace">
   <section id="viewport" aria-label="Drawing canvas">
@@ -202,17 +229,37 @@
     <div id="items" aria-label="Label list"></div>
 
     <h3>Selected symbol</h3>
+    <details class="section-card" id="deviceCatalogSection" open>
+      <summary style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+        <span>Electrical devices (<span id="deviceCatalogCount">0</span>)</span>
+        <span id="activeDevicePill" class="pill" title="Current selected / next-box device">receptacle / unspecified</span>
+      </summary>
+      <div class="row" style="margin-bottom:6px;">
+        <input id="deviceCatalogSearch" type="search" placeholder="Search 104 devices (e.g. card reader, strobe, vfd)..." aria-label="Search electrical devices" autocomplete="off">
+        <button type="button" id="openDeviceCatalogBtn" class="ghost" title="Open full categorized device catalog (C)">All</button>
+      </div>
+      <select id="deviceCategorySelect" aria-label="Filter electrical devices by category" style="margin-bottom:4px;"></select>
+      <div id="deviceCatalogList" aria-label="Curated electrical devices"></div>
+    </details>
     <div id="multiSelectionCard" class="section-card" hidden style="border-color:var(--accent);background:#162430;">
       <div class="row" style="margin-bottom:8px;">
         <strong id="multiSelectionTitle" style="color:var(--text);font-size:13.5px;">0 symbols selected</strong>
       </div>
-      <div class="chip-list" aria-label="Batch quick family hotkeys 1 to 6">
+      <div class="chip-list" aria-label="Batch quick family hotkeys 1 to 9">
         <button type="button" class="chip multi-quick-family" data-family="receptacle" title="Set family for all selected (1)">1 receptacle</button>
         <button type="button" class="chip multi-quick-family" data-family="switch" title="Set family for all selected (2)">2 switch</button>
         <button type="button" class="chip multi-quick-family" data-family="luminaire" title="Set family for all selected (3)">3 luminaire</button>
         <button type="button" class="chip multi-quick-family" data-family="fire_alarm_device" title="Set family for all selected (4)">4 fire_alarm</button>
         <button type="button" class="chip multi-quick-family" data-family="data_outlet" title="Set family for all selected (5)">5 data_outlet</button>
         <button type="button" class="chip multi-quick-family" data-family="junction_box" title="Set family for all selected (6)">6 j-box</button>
+        <button type="button" class="chip multi-quick-family" data-family="sensor" title="Set family for all selected (7)">7 sensor</button>
+        <button type="button" class="chip multi-quick-family" data-family="security_device" title="Set family for all selected (8)">8 security</button>
+        <button type="button" class="chip multi-quick-family" data-family="disconnect" title="Set family for all selected (9)">9 disconnect</button>
+        <button type="button" class="chip multi-quick-family" data-family="panelboard" title="Set family to panelboard">panelboard</button>
+        <button type="button" class="chip multi-quick-family" data-family="motor_control" title="Set family to motor_control">motor_ctrl</button>
+        <button type="button" class="chip multi-quick-family" data-family="cctv_device" title="Set family to cctv_device">cctv</button>
+        <button type="button" class="chip multi-quick-family" data-family="audio_visual_device" title="Set family to audio_visual_device">av/intercom</button>
+        <button type="button" class="chip multi-quick-family" data-family="transformer" title="Set family to transformer">transformer</button>
       </div>
       <div class="row wrap" style="margin-top:10px;">
         <button type="button" id="multiVerifyBtn" class="primary" title="Verify all selected (A)">Verify All · A</button>
@@ -227,13 +274,21 @@
         <span id="selectedId" class="small" style="flex:1;overflow:hidden;text-overflow:ellipsis;"></span>
         <span id="disciplineBadge" class="pill">electrical</span>
       </div>
-      <div class="chip-list" id="quickClassBar" aria-label="Quick family hotkeys 1 to 6">
+      <div class="chip-list" id="quickClassBar" aria-label="Quick family hotkeys 1 to 9">
         <button type="button" class="chip quick-family" data-family="receptacle" title="Hotkey 1">1 receptacle</button>
         <button type="button" class="chip quick-family" data-family="switch" title="Hotkey 2">2 switch</button>
         <button type="button" class="chip quick-family" data-family="luminaire" title="Hotkey 3">3 luminaire</button>
         <button type="button" class="chip quick-family" data-family="fire_alarm_device" title="Hotkey 4">4 fire_alarm</button>
         <button type="button" class="chip quick-family" data-family="data_outlet" title="Hotkey 5">5 data_outlet</button>
         <button type="button" class="chip quick-family" data-family="junction_box" title="Hotkey 6">6 j-box</button>
+        <button type="button" class="chip quick-family" data-family="sensor" title="Hotkey 7">7 sensor</button>
+        <button type="button" class="chip quick-family" data-family="security_device" title="Hotkey 8">8 security</button>
+        <button type="button" class="chip quick-family" data-family="disconnect" title="Hotkey 9">9 disconnect</button>
+        <button type="button" class="chip quick-family" data-family="panelboard" title="Set family to panelboard">panelboard</button>
+        <button type="button" class="chip quick-family" data-family="motor_control" title="Set family to motor_control">motor_ctrl</button>
+        <button type="button" class="chip quick-family" data-family="cctv_device" title="Set family to cctv_device">cctv</button>
+        <button type="button" class="chip quick-family" data-family="audio_visual_device" title="Set family to audio_visual_device">av/intercom</button>
+        <button type="button" class="chip quick-family" data-family="transformer" title="Set family to transformer">transformer</button>
       </div>
       <div class="chip-list" id="quickSubtypeBar" aria-label="Quick subtype chips (Shift+1 to Shift+6)"></div>
       <div class="row wrap">
@@ -360,7 +415,7 @@
     </details>
 
     <h3>Keyboard</h3>
-    <p class="small">1–6 family · Shift+1–6 subtype · B box · O oriented · V select · K anchor · G snap vector · M loupe · I view filter · Ctrl+C/V stamp at cursor · Arrows nudge (Shift=10px) · A verify · X reject · D duplicate · N next pending · L labels · Delete remove · Ctrl+Z/Y undo/redo · Ctrl+S save · [ / ] pages · 0 fit.</p>
+    <p class="small">1–9 family · Shift+1–6 subtype · C devices catalog · B box · O oriented · V select · K anchor · G snap vector · M loupe · I view filter · Ctrl+C/V stamp at cursor · Arrows nudge (Shift=10px) · A verify · X reject · D duplicate · N next pending · L labels · Delete remove · Ctrl+Z/Y undo/redo · Ctrl+S save · [ / ] pages · 0 fit.</p>
   </aside>
 </main>
 <footer>

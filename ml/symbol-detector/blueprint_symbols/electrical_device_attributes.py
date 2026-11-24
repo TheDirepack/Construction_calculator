@@ -57,6 +57,24 @@ ATTRIBUTE_SCHEMA = {
                             'other'],
         'mounting': ['wall', 'floor', 'ceiling', 'other'],
     },
+    'security_device': {
+        'mounting': ['wall', 'ceiling', 'door_frame', 'pedestal', 'pole', 'gate', 'other'],
+    },
+    'cctv_device': {
+        'mounting': ['ceiling', 'wall', 'pole', 'rack', 'other'],
+    },
+    'audio_visual_device': {
+        'mounting': ['ceiling', 'wall', 'desk', 'rack', 'other'],
+    },
+    'sensor': {
+        'mounting': ['ceiling', 'wall', 'duct', 'exterior', 'other'],
+    },
+    'disconnect': {
+        'mounting': ['wall', 'equipment', 'exterior', 'panel', 'other'],
+    },
+    'motor_control': {
+        'mounting': ['wall', 'panel', 'mcc', 'equipment', 'other'],
+    },
 }
 
 # Open-ended numeric/electrical fields are not symbol classes.
