@@ -4,26 +4,31 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.os.Build
 import android.view.HapticFeedbackConstants
+import android.view.View
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -66,17 +71,27 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.thedirepack.constructioncalc.core.data.AppSettings
+import com.thedirepack.constructioncalc.core.math.Rational
+import com.thedirepack.constructioncalc.core.measure.FeetInchStyle
+import com.thedirepack.constructioncalc.core.measure.FractionRounding
 import com.thedirepack.constructioncalc.core.measure.MeasureFormat
+import com.thedirepack.constructioncalc.core.measure.MetricDisplay
+import com.thedirepack.constructioncalc.core.measure.MetricResolution
 import com.thedirepack.constructioncalc.core.measure.Precision
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.measure.UnitSystem
+import com.thedirepack.constructioncalc.core.measure.input.CalcInput
 import com.thedirepack.constructioncalc.core.measure.input.Key
+import com.thedirepack.constructioncalc.core.measure.input.LengthDisplay
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.components.ActionRow
+import com.thedirepack.constructioncalc.core.ui.components.ChoiceRow
 import com.thedirepack.constructioncalc.core.ui.components.FractionPad
 import com.thedirepack.constructioncalc.core.ui.components.LengthDisplayToggle
 import com.thedirepack.constructioncalc.core.ui.components.MeasureKeypad
@@ -84,12 +99,28 @@ import com.thedirepack.constructioncalc.core.ui.components.SettingsGroup
 import com.thedirepack.constructioncalc.core.ui.components.SwitchRow
 import com.thedirepack.constructioncalc.core.ui.components.ToolScaffold
 import com.thedirepack.constructioncalc.core.ui.components.rememberKeyPress
-import com.thedirepack.constructioncalc.core.ui.components.rememberModuleBoolean
+import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.core.ui.fractionText
 import com.thedirepack.constructioncalc.core.ui.isMetric
 import com.thedirepack.constructioncalc.core.ui.rememberAppSettings
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
+
+@Composable
+internal fun rememberFootInchSettings(): FootInchSettings {
+    val store = LocalAppServices.current.settings.module(FootInchTool.ID)
+    val version by store.changes.collectAsStateWithLifecycle()
+    return remember(version, store) { FootInchSettings.read(store) }
+}
+
+private fun performKeyHaptic(view: View, accepted: Boolean) {
+    val feedback = when {
+        accepted -> HapticFeedbackConstants.KEYBOARD_TAP
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> HapticFeedbackConstants.REJECT
+        else -> HapticFeedbackConstants.LONG_PRESS
+    }
+    view.performHapticFeedback(feedback)
+}
 
 @Composable
 fun FootInchScreen(host: ToolHost) {
@@ -98,37 +129,41 @@ fun FootInchScreen(host: ToolHost) {
     LaunchedEffect(opened) { opened?.let(viewModel::restore) }
 
     val settings = rememberAppSettings()
-    val context = LocalContext.current
-    val view = LocalView.current
+    val footInchSettings = rememberFootInchSettings()
     val services = LocalAppServices.current
     val store = remember(services) { services.settings.module(FootInchTool.ID) }
-    val showFractionKeys = rememberModuleBoolean(FootInchTool.ID, FootInchPrefs.SHOW_FRACTION_KEYS, true)
-    val dualKeypad = rememberModuleBoolean(FootInchTool.ID, FootInchPrefs.DUAL_KEYPAD, false)
+    val context = LocalContext.current
+    val view = LocalView.current
     var showHistory by remember { mutableStateOf(false) }
     var showHelpers by remember { mutableStateOf(false) }
+    var labelingEntry by remember { mutableStateOf<HistoryEntry?>(null) }
     val state = viewModel.state
     val entries by viewModel.history.entries.collectAsStateWithLifecycle()
 
+    val publishIfCompleted: (CalcInput.Outcome) -> Unit = { outcome ->
+        outcome.completed?.let { calc ->
+            host.publish(
+                listOf(viewModel.resultValue(calc, settings)),
+                context = viewModel.formatExpression(calc.expression, settings),
+                immediate = true,
+            )
+        }
+    }
     val press = rememberKeyPress { key ->
         val outcome = viewModel.onKey(key, settings)
-        outcome.completed?.let { calc ->
-            host.publish(listOf(viewModel.resultValue(calc, settings)), context = viewModel.formatExpression(calc.expression, settings), immediate = true)
-        }
+        publishIfCompleted(outcome)
         outcome.accepted
     }
     val hapticAction: (() -> Boolean) -> Unit = { action ->
-        val accepted = action()
-        val feedback = when {
-            accepted -> HapticFeedbackConstants.KEYBOARD_TAP
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> HapticFeedbackConstants.REJECT
-            else -> HapticFeedbackConstants.LONG_PRESS
-        }
-        view.performHapticFeedback(feedback)
+        performKeyHaptic(view, action())
     }
     val copy: (String) -> Unit = { text ->
         context.getSystemService(ClipboardManager::class.java)
             ?.setPrimaryClip(ClipData.newPlainText("Measurement", MeasureFormat.forClipboard(text)))
     }
+
+    val useDualSplit = !settings.isMetric && footInchSettings.keypadLayout == KeypadLayout.DUAL_SPLIT
+    val horizontalPad = if (useDualSplit) 8.dp else 12.dp
 
     ToolScaffold(
         title = "Foot-Inch",
@@ -136,7 +171,7 @@ fun FootInchScreen(host: ToolHost) {
         onSave = viewModel.draft(settings)?.let { draft -> { host.saveToProject(draft) } },
         actions = {
             IconButton(onClick = { showHelpers = true }) {
-                Icon(painterResource(R.drawable.ic_function), contentDescription = "Helpers: Right triangle, layout marks, and stairs")
+                Icon(painterResource(R.drawable.ic_function), contentDescription = "Helpers: Right triangle, stairs, and layout marks")
             }
             IconButton(onClick = { showHistory = true }) {
                 Icon(painterResource(R.drawable.ic_history), contentDescription = "Calculation tape")
@@ -150,9 +185,19 @@ fun FootInchScreen(host: ToolHost) {
             Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 12.dp)
+                .padding(horizontal = horizontalPad)
                 .padding(bottom = 12.dp),
         ) {
+            if (footInchSettings.showInlineTape && entries.isNotEmpty()) {
+                InlineCalculationTape(
+                    entries = entries,
+                    settings = settings,
+                    onRecall = { entry -> press(Key.Recall(entry.result.toQuantity(), entry.preferInches)) },
+                    onCopy = copy,
+                    onRequestRename = { entry -> labelingEntry = entry },
+                    onDelete = viewModel.history::remove,
+                )
+            }
             val inches = viewModel.preferInches()
             Display(
                 expression = viewModel.formatExpression(state.tokens, settings),
@@ -164,7 +209,8 @@ fun FootInchScreen(host: ToolHost) {
                 onRecallMemory = { hapticAction(viewModel::memoryRecall) },
                 settings = settings,
                 preferInches = inches,
-                showFractionKeys = showFractionKeys,
+                showFractionKeys = footInchSettings.showFractionKeys,
+                keypadLayout = footInchSettings.keypadLayout,
                 onCopy = copy,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
@@ -172,31 +218,55 @@ fun FootInchScreen(host: ToolHost) {
                 metric = settings.isMetric,
                 precision = settings.precision,
                 onPrecision = services.settings::setPrecision,
-                dualKeypad = dualKeypad,
-                onToggleDualKeypad = { store.setBoolean(FootInchPrefs.DUAL_KEYPAD, !dualKeypad) },
+                dualSplit = footInchSettings.keypadLayout == KeypadLayout.DUAL_SPLIT,
+                onToggleDualSplit = {
+                    val next = if (footInchSettings.keypadLayout == KeypadLayout.DUAL_SPLIT) {
+                        KeypadLayout.CLASSIC
+                    } else {
+                        KeypadLayout.DUAL_SPLIT
+                    }
+                    store.setString(FootInchPrefs.KEYPAD_LAYOUT, next.name)
+                },
                 onBackspace = { press(Key.Backspace) },
                 onClear = { press(Key.Clear) },
             )
-            FunctionAndMemoryStrip(
-                metric = settings.isMetric,
-                hasMemory = viewModel.hasMemory,
-                hasAns = viewModel.effectiveAns != null,
-                onMemoryClear = { hapticAction(viewModel::memoryClear) },
-                onMemoryRecall = { hapticAction(viewModel::memoryRecall) },
-                onMemoryAdd = { hapticAction(viewModel::memoryAdd) },
-                onMemorySubtract = { hapticAction(viewModel::memorySubtract) },
-                onAns = { hapticAction(viewModel::recallAns) },
-                onKey = press,
-            )
-            Spacer(Modifier.height(6.dp))
-            if (showFractionKeys && !settings.isMetric) {
-                FractionPad(settings.precision, onKey = press)
+            if (footInchSettings.showFunctionStrip) {
+                FunctionAndMemoryStrip(
+                    metric = settings.isMetric,
+                    hasMemory = viewModel.hasMemory,
+                    hasAns = viewModel.effectiveAns != null,
+                    onMemoryClear = { hapticAction(viewModel::memoryClear) },
+                    onMemoryRecall = { hapticAction(viewModel::memoryRecall) },
+                    onMemoryAdd = { hapticAction(viewModel::memoryAdd) },
+                    onMemorySubtract = { hapticAction(viewModel::memorySubtract) },
+                    onAns = { hapticAction(viewModel::recallAns) },
+                    onKey = press,
+                )
                 Spacer(Modifier.height(6.dp))
             }
-            if (dualKeypad && !settings.isMetric) {
-                DualMeasureKeypad(onKey = press, modifier = Modifier.weight(1.45f).fillMaxWidth())
-            } else {
-                MeasureKeypad(onKey = press, metric = settings.isMetric, modifier = Modifier.weight(1.45f).fillMaxWidth())
+            when {
+                settings.isMetric -> {
+                    MeasureKeypad(onKey = press, metric = true, modifier = Modifier.weight(1.45f).fillMaxWidth())
+                }
+                footInchSettings.keypadLayout == KeypadLayout.DUAL_SPLIT -> {
+                    DualSplitKeypad(
+                        fractionPrecision = footInchSettings.effectiveFractionPrecision(settings.precision),
+                        colorBlindShapes = footInchSettings.colorBlindShapes,
+                        onAction = { action ->
+                            val outcome = viewModel.onDualSplitAction(action, settings)
+                            publishIfCompleted(outcome)
+                            performKeyHaptic(view, outcome.accepted)
+                        },
+                        modifier = Modifier.weight(1.55f).fillMaxWidth(),
+                    )
+                }
+                else -> {
+                    if (footInchSettings.showFractionKeys) {
+                        FractionPad(footInchSettings.effectiveFractionPrecision(settings.precision), onKey = press)
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    MeasureKeypad(onKey = press, metric = false, modifier = Modifier.weight(1.45f).fillMaxWidth())
+                }
             }
         }
     }
@@ -210,7 +280,7 @@ fun FootInchScreen(host: ToolHost) {
                 showHistory = false
             },
             onDelete = viewModel.history::remove,
-            onRename = viewModel.history::setLabel,
+            onRequestRename = { labelingEntry = it },
             onClear = viewModel.history::clear,
             onDismiss = { showHistory = false },
         )
@@ -226,6 +296,130 @@ fun FootInchScreen(host: ToolHost) {
             onCopy = copy,
             onDismiss = { showHelpers = false },
         )
+    }
+
+    labelingEntry?.let { entry ->
+        TapeLabelDialog(
+            initial = entry.label,
+            onConfirm = { newLabel ->
+                viewModel.history.setLabel(entry.id, newLabel)
+                labelingEntry = null
+            },
+            onDismiss = { labelingEntry = null },
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun InlineCalculationTape(
+    entries: List<HistoryEntry>,
+    settings: AppSettings,
+    onRecall: (HistoryEntry) -> Unit,
+    onCopy: (String) -> Unit,
+    onRequestRename: (HistoryEntry) -> Unit,
+    onDelete: (Long) -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val listState = rememberLazyListState()
+    LaunchedEffect(entries.firstOrNull()?.id) {
+        if (entries.isNotEmpty()) listState.animateScrollToItem(0)
+    }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = scheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.45f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+    ) {
+        LazyColumn(
+            state = listState,
+            reverseLayout = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 112.dp),
+        ) {
+            itemsIndexed(entries, key = { _, entry -> entry.id }) { index, entry ->
+                var menuOpen by remember { mutableStateOf(false) }
+                val formattedResult = FootInchFormat.primary(entry.result.toQuantity(), settings, entry.preferInches)
+                Column(Modifier.fillMaxWidth()) {
+                    if (index < entries.lastIndex) {
+                        HorizontalDivider(color = scheme.outlineVariant.copy(alpha = 0.35f))
+                    }
+                    Box {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClickLabel = "Recall result",
+                                    onClick = { onRecall(entry) },
+                                    onLongClickLabel = "Tape actions",
+                                    onLongClick = { menuOpen = true },
+                                )
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            if (entry.label.isNotBlank()) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = scheme.primaryContainer,
+                                    contentColor = scheme.onPrimaryContainer,
+                                ) {
+                                    Text(
+                                        entry.label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                            Text(
+                                fractionText(entry.expression),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                fractionText("= $formattedResult"),
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = scheme.primary,
+                                maxLines = 1,
+                            )
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Copy result") },
+                                onClick = {
+                                    onCopy(formattedResult)
+                                    menuOpen = false
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (entry.label.isBlank()) "Label" else "Rename") },
+                                onClick = {
+                                    menuOpen = false
+                                    onRequestRename(entry)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete", color = scheme.error) },
+                                onClick = {
+                                    menuOpen = false
+                                    onDelete(entry.id)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -303,7 +497,6 @@ private fun MiniKey(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Display(
     expression: String,
@@ -316,6 +509,7 @@ private fun Display(
     settings: AppSettings,
     preferInches: Boolean?,
     showFractionKeys: Boolean,
+    keypadLayout: KeypadLayout,
     onCopy: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -345,7 +539,7 @@ private fun Display(
         }
         if (expression.isEmpty()) {
             Text(
-                fractionText(FootInchFormat.hint(settings, showFractionKeys)),
+                fractionText(FootInchFormat.hint(settings, showFractionKeys, keypadLayout)),
                 style = MaterialTheme.typography.bodyLarge,
                 color = scheme.outline,
             )
@@ -362,7 +556,7 @@ private fun Display(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
 
         when {
             error != null -> Text(error, color = scheme.error, style = MaterialTheme.typography.headlineSmall)
@@ -375,25 +569,36 @@ private fun Display(
                         color = if (isAnswer) scheme.primary else scheme.onSurfaceVariant,
                         textAlign = TextAlign.End,
                         fontWeight = if (isAnswer) FontWeight.SemiBold else FontWeight.Normal,
-                        fontSize = 56.sp,
+                        fontSize = 52.sp,
                     ),
                     maxLines = 1,
-                    autoSize = TextAutoSize.StepBased(minFontSize = 22.sp, maxFontSize = if (isAnswer) 56.sp else 36.sp),
+                    autoSize = TextAutoSize.StepBased(minFontSize = 20.sp, maxFontSize = if (isAnswer) 52.sp else 34.sp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable(onClickLabel = "Copy result") { onCopy(primary) },
                 )
                 if (rounding != 0) {
+                    val direction = if (rounding < 0) "down" else "up"
+                    val modeLabel = when (settings.fractionRounding) {
+                        FractionRounding.NEAREST -> "nearest ${settings.precision.label}\""
+                        FractionRounding.UP -> "${settings.precision.label}\" (round up)"
+                        FractionRounding.DOWN -> "${settings.precision.label}\" (round down)"
+                    }
                     Text(
-                        fractionText("Rounded ${if (rounding < 0) "down" else "up"} to nearest ${settings.precision.label}\""),
+                        fractionText("Rounded $direction to $modeLabel"),
                         style = MaterialTheme.typography.labelMedium,
                         color = scheme.onSurfaceVariant,
                     )
                 }
                 val conversions = FootInchFormat.conversions(result, settings, preferInches)
                 if (conversions.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    ) {
                         conversions.forEach { c ->
                             AssistChip(
                                 onClick = { onCopy(c.value) },
@@ -408,13 +613,14 @@ private fun Display(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ControlRow(
     metric: Boolean,
     precision: Precision,
     onPrecision: (Precision) -> Unit,
-    dualKeypad: Boolean,
-    onToggleDualKeypad: () -> Unit,
+    dualSplit: Boolean,
+    onToggleDualSplit: () -> Unit,
     onBackspace: () -> Unit,
     onClear: () -> Unit,
 ) {
@@ -445,8 +651,8 @@ private fun ControlRow(
         if (!metric) {
             Spacer(Modifier.width(4.dp))
             FilterChip(
-                selected = dualKeypad,
-                onClick = onToggleDualKeypad,
+                selected = dualSplit,
+                onClick = onToggleDualSplit,
                 label = {
                     Text(
                         "Dual",
@@ -456,10 +662,10 @@ private fun ControlRow(
                     )
                 },
                 modifier = Modifier.semantics {
-                    contentDescription = if (dualKeypad) {
-                        "Dual feet and inches keypad enabled. Switch to standard keypad."
+                    contentDescription = if (dualSplit) {
+                        "Dual-Split feet and inches keypad enabled. Switch to Classic keypad."
                     } else {
-                        "Standard keypad enabled. Switch to dual feet and inches keypad."
+                        "Classic keypad enabled. Switch to Dual-Split feet and inches keypad."
                     }
                 },
             )
@@ -490,12 +696,10 @@ private fun HistorySheet(
     settings: AppSettings,
     onPick: (HistoryEntry) -> Unit,
     onDelete: (Long) -> Unit,
-    onRename: (Long, String) -> Unit,
+    onRequestRename: (HistoryEntry) -> Unit,
     onClear: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var labeling by remember { mutableStateOf<HistoryEntry?>(null) }
-
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -526,7 +730,7 @@ private fun HistorySheet(
                                 onClickLabel = "Recall result",
                                 onClick = { onPick(entry) },
                                 onLongClickLabel = "Label calculation",
-                                onLongClick = { labeling = entry },
+                                onLongClick = { onRequestRename(entry) },
                             )
                             .padding(start = 20.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -554,7 +758,7 @@ private fun HistorySheet(
                                 textAlign = TextAlign.End,
                             )
                         }
-                        IconButton(onClick = { labeling = entry }) {
+                        IconButton(onClick = { onRequestRename(entry) }) {
                             Icon(
                                 painterResource(R.drawable.ic_edit),
                                 contentDescription = "Label calculation",
@@ -574,17 +778,6 @@ private fun HistorySheet(
             }
         }
         Spacer(Modifier.height(16.dp))
-    }
-
-    labeling?.let { entry ->
-        TapeLabelDialog(
-            initial = entry.label,
-            onConfirm = { newLabel ->
-                onRename(entry.id, newLabel)
-                labeling = null
-            },
-            onDismiss = { labeling = null },
-        )
     }
 }
 
@@ -620,45 +813,165 @@ private fun TapeLabelDialog(
     )
 }
 
+private val SETTINGS_PREVIEW_LENGTH = Quantity.inches(Rational.of(127, 2)) // 5' 3 1/2"
+
 /** Foot-Inch's page in the app's Settings screen. */
 @Composable
 internal fun FootInchSettingsPage() {
     val context = LocalContext.current
-    val store = LocalAppServices.current.settings.module(FootInchTool.ID)
-    val showFractionKeys = rememberModuleBoolean(FootInchTool.ID, FootInchPrefs.SHOW_FRACTION_KEYS, true)
-    val dualKeypad = rememberModuleBoolean(FootInchTool.ID, FootInchPrefs.DUAL_KEYPAD, false)
+    val repo = LocalAppServices.current.settings
+    val store = repo.module(FootInchTool.ID)
+    val appSettings = rememberAppSettings()
+    val footInchSettings = rememberFootInchSettings()
+
     SettingsGroup("Keypad") {
-        SwitchRow(
-            "Fraction keys",
-            checked = showFractionKeys,
-            onCheckedChange = { store.setBoolean(FootInchPrefs.SHOW_FRACTION_KEYS, it) },
-            subtitle = "One-tap ⅛ ¼ ½ … keys above the keypad.",
+        ChoiceRow(
+            title = "Keypad layout",
+            options = KeypadLayout.entries,
+            selected = footInchSettings.keypadLayout,
+            onSelect = { store.setString(FootInchPrefs.KEYPAD_LAYOUT, it.name) },
+            optionLabel = { it.label },
+            subtitle = "Classic single pad or ArchCalc-style Dual-Split (Feet left, Inches middle, Fractions right).",
+        )
+        ChoiceRow(
+            title = "Input fraction keys",
+            options = InputFractionPrecision.entries,
+            selected = footInchSettings.inputFractionPrecision,
+            onSelect = { store.setString(FootInchPrefs.INPUT_FRACTION_PRECISION, it.name) },
+            optionLabel = { if (it == InputFractionPrecision.MATCH_OUTPUT) "Match" else it.label },
+            subtitle = "Fraction keys shown on the keypad (Match follows output rounding precision).",
         )
         SwitchRow(
-            "Dual feet / inches keypad",
-            checked = dualKeypad,
-            onCheckedChange = { store.setBoolean(FootInchPrefs.DUAL_KEYPAD, it) },
-            subtitle = "Side-by-side Feet and Inches pads for faster mixed entry (imperial).",
+            "Fraction keys (Classic)",
+            checked = footInchSettings.showFractionKeys,
+            onCheckedChange = { store.setBoolean(FootInchPrefs.SHOW_FRACTION_KEYS, it) },
+            subtitle = "One-tap ⅛ ¼ ½ … keys above the Classic keypad.",
+        )
+        SwitchRow(
+            "Function & memory strip",
+            checked = footInchSettings.showFunctionStrip,
+            onCheckedChange = { store.setBoolean(FootInchPrefs.SHOW_FUNCTION_STRIP, it) },
+            subtitle = "Show MC, MR, M+, M−, Ans, parentheses, √ and x² keys.",
+        )
+        SwitchRow(
+            "Color-blind key shapes",
+            checked = footInchSettings.colorBlindShapes,
+            onCheckedChange = { store.setBoolean(FootInchPrefs.COLOR_BLIND_SHAPES, it) },
+            subtitle = "Use square Feet keys and rounded Inches keys in Dual-Split mode.",
         )
     }
-    SettingsGroup("History") {
+
+    SettingsGroup("Footage formatting") {
+        Text(
+            fractionText("Sample (63 1/2\"): ${appSettings.format(SETTINGS_PREVIEW_LENGTH)}"),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+        )
+        ChoiceRow(
+            title = "Units",
+            options = UnitSystem.entries,
+            selected = appSettings.unitSystem,
+            onSelect = repo::setUnitSystem,
+            optionLabel = { it.label },
+        )
+        if (appSettings.isMetric) {
+            ChoiceRow(
+                title = "Show lengths in",
+                options = MetricDisplay.entries,
+                selected = appSettings.metricDisplay,
+                onSelect = repo::setMetricDisplay,
+                optionLabel = { it.label },
+                subtitle = "Auto shows millimeters under 1 m and meters from there.",
+            )
+            ChoiceRow(
+                title = "Round lengths to",
+                options = MetricResolution.entries,
+                selected = appSettings.metricResolution,
+                onSelect = repo::setMetricResolution,
+                optionLabel = { it.label },
+            )
+        } else {
+            ChoiceRow(
+                title = "Show lengths as",
+                options = LengthDisplay.entries,
+                selected = appSettings.lengthDisplay,
+                onSelect = repo::setLengthDisplay,
+                optionLabel = { it.label },
+                subtitle = "Auto answers in inches when you entered inches, or force ft-in / inches.",
+            )
+            ChoiceRow(
+                title = "Feet-inch style",
+                options = FeetInchStyle.entries,
+                selected = appSettings.feetInchStyle,
+                onSelect = repo::setFeetInchStyle,
+                optionLabel = { it.label },
+                subtitle = "Space, hyphenated drawing style, or architectural (10-04-03).",
+            )
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("Output precision", style = MaterialTheme.typography.bodyLarge)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Precision.entries.forEach { p ->
+                        FilterChip(
+                            selected = p == appSettings.precision,
+                            onClick = { repo.setPrecision(p) },
+                            label = { Text(fractionText(p.label + "\"")) },
+                        )
+                    }
+                }
+            }
+            ChoiceRow(
+                title = "Fraction rounding",
+                options = FractionRounding.entries,
+                selected = appSettings.fractionRounding,
+                onSelect = repo::setFractionRounding,
+                optionLabel = {
+                    when (it) {
+                        FractionRounding.NEAREST -> "Nearest"
+                        FractionRounding.UP -> "Round up"
+                        FractionRounding.DOWN -> "Round down"
+                    }
+                },
+                subtitle = "Round fractional inches to nearest step, always up, or always down.",
+            )
+        }
+    }
+
+    SettingsGroup("Calculation tape") {
+        SwitchRow(
+            "Inline calculation tape",
+            checked = footInchSettings.showInlineTape,
+            onCheckedChange = { store.setBoolean(FootInchPrefs.SHOW_INLINE_TAPE, it) },
+            subtitle = "Show a compact scrollable tape above the live expression.",
+        )
         ActionRow("Clear calculation tape", onClick = { FootInchHistory.get(context).clear() })
     }
-    val metric = rememberAppSettings().isMetric
+
     SettingsGroup("Entering measurements") {
         Text(
             fractionText(
-                if (metric) {
-                    "Type a number then m, cm or mm — 1 m 20 cm  →  1.2 m.\n" +
-                        "A number with no unit next to a length counts as millimeters: 1 m + 50 = 1.05 m.\n" +
-                        "Feet and inches (5' 3\") also work using the quick ' and \" keys.\n" +
-                        "Tap the result or a conversion to copy it. Long-press ⌫ to clear."
-                } else
-                "Type feet, then ' — inches — then tap a fraction key (or type \" and a fraction with /).\n" +
-                    "5 ' 3 [1/2]  →  5' 3 1/2\"     [7/16]  →  7/16\"\n" +
-                    "Metric units (mm, cm, m), parentheses, √, x², and memory keys are above the keypad.\n" +
-                    "A number with no mark next to a length counts as inches: 5' + 6 = 5' 6\".\n" +
-                    "Tap the result or a conversion to copy it. Long-press ⌫ to clear.",
+                when {
+                    appSettings.isMetric ->
+                        "Type a number then m, cm or mm — 1 m 20 cm  →  1.2 m.\n" +
+                            "A number with no unit next to a length counts as millimeters: 1 m + 50 = 1.05 m.\n" +
+                            "Feet and inches (5' 3\") also work using the quick ' and \" keys.\n" +
+                            "Tap the result or a conversion to copy it. Long-press ⌫ to clear."
+                    footInchSettings.keypadLayout == KeypadLayout.DUAL_SPLIT ->
+                        "Dual-Split: tap blue Feet keys, green Inches keys, and the Fractions column.\n" +
+                            "5 [Feet] 3 [Inches] [1/2]  →  5' 3 1/2\"     Tap '# Num' for plain numbers (× 3).\n" +
+                            "Tap an inline tape line to recall it, or long-press to copy, label, or delete."
+                    else ->
+                        "Type feet, then ' — inches — then tap a fraction key (or type \" and a fraction with /).\n" +
+                            "5 ' 3 [1/2]  →  5' 3 1/2\"     [7/16]  →  7/16\"\n" +
+                            "Metric units (mm, cm, m), parentheses, √, x², and memory keys are above the keypad.\n" +
+                            "A number with no mark next to a length counts as inches: 5' + 6 = 5' 6\".\n" +
+                            "Tap the result or a conversion to copy it. Long-press ⌫ to clear."
+                },
             ),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

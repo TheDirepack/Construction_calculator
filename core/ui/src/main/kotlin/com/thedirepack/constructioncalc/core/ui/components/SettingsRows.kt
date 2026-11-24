@@ -9,7 +9,13 @@ import com.thedirepack.constructioncalc.core.measure.FeetInchStyle
 
 import androidx.compose.ui.semantics.Role
 
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.RadioButton
+import com.thedirepack.constructioncalc.core.electrical.code.CodeEdition
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRegions
+import com.thedirepack.constructioncalc.core.measure.FractionRounding
 
 import androidx.compose.foundation.layout.heightIn
 
@@ -215,12 +221,12 @@ fun MeasurementSettings() {
                 settings.feetInchStyle,
                 repo::setFeetInchStyle,
                 { it.label },
-                subtitle = "The hyphen style is how drawings write lengths.",
+                subtitle = "Space, hyphenated drawing style, or architectural feet-inches-sixteenths (10-04-03).",
             )
             Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Fraction precision", style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "Lengths are rounded to the nearest fraction of an inch.",
+                    "Step size fractional inches are rounded to.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -234,7 +240,91 @@ fun MeasurementSettings() {
                     }
                 }
             }
+            ChoiceRow(
+                "Fraction rounding",
+                FractionRounding.entries,
+                settings.fractionRounding,
+                repo::setFractionRounding,
+                {
+                    when (it) {
+                        FractionRounding.NEAREST -> "Nearest"
+                        FractionRounding.UP -> "Round up"
+                        FractionRounding.DOWN -> "Round down"
+                    }
+                },
+                subtitle = "Round fractional inches to nearest step, always up, or always down.",
+            )
         }
+    }
+}
+
+/** Default electrical code edition and regional amendment profile. */
+@Composable
+fun CodeSettings() {
+    val repo = LocalAppServices.current.settings
+    val settings = rememberAppSettings()
+    val activeEdition = CodeEdition.entries.firstOrNull { it.name == settings.codeEdition && it.isImplemented } ?: CodeEdition.NEC_2023
+    val selectedRegion = CodeRegions.getOrDefault(settings.codeRegion)
+    SettingsGroup("Electrical Code") {
+        Text(
+            "Default code edition and regional profile for electrical calculations. Projects can override these per job.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 24.dp),
+        )
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp).selectableGroup(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text("Code edition", style = MaterialTheme.typography.bodyLarge)
+            CodeEdition.entries.forEach { edition ->
+                val enabled = edition.isImplemented
+                val selected = enabled && activeEdition == edition
+                val title = if (enabled) "${edition.label} (Active)" else "${edition.label} (Planned)"
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .selectable(
+                            selected = selected,
+                            enabled = enabled,
+                            role = Role.RadioButton,
+                            onClick = { if (enabled) repo.setCodeEdition(edition.name) },
+                        )
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    RadioButton(selected = selected, onClick = null, enabled = enabled)
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            title,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                        )
+                        Text(
+                            edition.statusNote,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                        )
+                    }
+                }
+            }
+        }
+        val regionNote = buildString {
+            append(selectedRegion.description)
+            if (!selectedRegion.hasOverrides && selectedRegion.id != CodeRegions.STANDARD_ID) {
+                append(" Uses unamended ${activeEdition.label} until jurisdiction overrides are verified.")
+            }
+        }
+        ChoiceField(
+            label = "Regional amendment",
+            options = CodeRegions.entries,
+            selected = selectedRegion,
+            onSelect = { repo.setCodeRegion(it.id) },
+            optionLabel = { it.name },
+            supportingText = regionNote,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+        )
     }
 }
 

@@ -86,4 +86,14 @@ object BenderDefaults {
 
     fun spec(type: ConduitType, size: TradeSize): BenderSpec? =
         rows.firstOrNull { it.type == type && it.size == size }?.let { BenderSpec(it.takeUp, gainFor(it.takeUp, it.od)) }
+
+    /** Conduit outside diameter in inches for supported hand-bender sizes. */
+    fun outsideDiameterIn(type: ConduitType, size: TradeSize): Double? =
+        rows.firstOrNull { it.type == type && it.size == size }?.od
+
+    /** Centerline bend radius in inches derived from [spec].takeUp and conduit outside diameter. */
+    fun centerlineRadiusIn(type: ConduitType, size: TradeSize, spec: BenderSpec): Double {
+        val od = outsideDiameterIn(type, size) ?: 0.0
+        return (spec.takeUp.toDouble() - od / 2.0).coerceAtLeast(1.0)
+    }
 }

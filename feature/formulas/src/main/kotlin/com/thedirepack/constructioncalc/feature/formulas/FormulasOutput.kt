@@ -4,6 +4,7 @@ import com.thedirepack.constructioncalc.core.electrical.ConductorResistance
 import com.thedirepack.constructioncalc.core.electrical.ResistanceLength
 import com.thedirepack.constructioncalc.core.electrical.ResistanceLengthResult
 import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.CodeProfile
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.formula.Formula
 import com.thedirepack.constructioncalc.core.electrical.formula.FormulaQuantity
@@ -75,7 +76,11 @@ internal fun publishedValue(q: FormulaQuantity, base: Double): Double = if (q ==
 /** A picked result's exact value → this variable's base unit. */
 internal fun fromPublished(q: FormulaQuantity, exact: Double): Double = if (q == FormulaQuantity.LENGTH) exact / 12 else exact
 
-fun formulasOutput(inputs: FormulaInputs, settings: AppSettings = AppSettings()): FormulasOutput {
+fun formulasOutput(
+    inputs: FormulaInputs,
+    settings: AppSettings = AppSettings(),
+    codeProfile: CodeProfile? = null,
+): FormulasOutput = withOptionalCodeProfile(codeProfile) {
     val system = settings.unitSystem
     val formula = inputs.formula
     val solution = FormulaSolver.solve(formula, inputs.given(system))
@@ -110,7 +115,7 @@ fun formulasOutput(inputs: FormulaInputs, settings: AppSettings = AppSettings())
         formula.notes.forEach { add(Notice(it)) }
     }
     val computed = solution.computed.associateWith { text(it, solution.values.getValue(it)) }
-    return FormulasOutput(solution, results, steps, notices, computed)
+    FormulasOutput(solution, results, steps, notices, computed)
 }
 
 private fun needMore(formula: Formula, inputs: FormulaInputs, system: com.thedirepack.constructioncalc.core.measure.UnitSystem): String =
@@ -124,7 +129,11 @@ data class ResistanceLengthOutput(
     val summary: String,
 )
 
-fun resistanceLengthOutput(inputs: FormulaInputs, settings: AppSettings = AppSettings()): ResistanceLengthOutput {
+fun resistanceLengthOutput(
+    inputs: FormulaInputs,
+    settings: AppSettings = AppSettings(),
+    codeProfile: CodeProfile? = null,
+): ResistanceLengthOutput = withOptionalCodeProfile(codeProfile) {
     val size = inputs.conductorSize
     val material = inputs.wireMaterial
     val stranding = if (ConductorResistance.hasSolidOption(size)) inputs.wireStranding else com.thedirepack.constructioncalc.core.electrical.Stranding.STRANDED
@@ -143,7 +152,7 @@ fun resistanceLengthOutput(inputs: FormulaInputs, settings: AppSettings = AppSet
     }
 
     if (problems.isNotEmpty() || resistance == null || ambientC == null) {
-        return ResistanceLengthOutput(
+        return@withOptionalCodeProfile ResistanceLengthOutput(
             calculation = null,
             results = emptyList(),
             notices = problems.ifEmpty {
@@ -161,7 +170,7 @@ fun resistanceLengthOutput(inputs: FormulaInputs, settings: AppSettings = AppSet
         stranding = stranding,
         ambientC = ambientC,
         roundTrip = inputs.wireRoundTrip,
-    ) ?: return ResistanceLengthOutput(
+    ) ?: return@withOptionalCodeProfile ResistanceLengthOutput(
         calculation = null,
         results = emptyList(),
         notices = listOf(Notice("Temperature or resistance is out of range for ${size.label} ${material.label}.", NoticeLevel.ERROR)),
@@ -214,5 +223,5 @@ fun resistanceLengthOutput(inputs: FormulaInputs, settings: AppSettings = AppSet
     }
 
     val summary = "${size.label} ${material.shortLabel} (${FormulasText.number(resistance)} ${inputs.resistanceUnit.label}): $lengthText"
-    return ResistanceLengthOutput(calc, results, notices, summary)
+    ResistanceLengthOutput(calc, results, notices, summary)
 }

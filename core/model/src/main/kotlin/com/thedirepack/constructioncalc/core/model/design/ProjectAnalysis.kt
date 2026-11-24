@@ -3,6 +3,8 @@ package com.thedirepack.constructioncalc.core.model.design
 import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.CodeEdition
+import com.thedirepack.constructioncalc.core.electrical.code.CodeProfile
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.AmbientCorrection
 import com.thedirepack.constructioncalc.core.electrical.ConductorCountAdjustment
@@ -234,8 +236,26 @@ object ProjectAnalysis {
         return result
     }
 
+    /** Resolves the effective [CodeProfile] for [project] using global fallback + project overrides. */
+    fun codeProfileFor(project: Project): CodeProfile {
+        val base = Code.currentProfile
+        val edition = project.codeEdition?.let { name ->
+            CodeEdition.entries.firstOrNull { it.name == name }
+        } ?: base.edition
+        val regionId = project.codeRegion?.takeIf { it.isNotBlank() } ?: base.regionId
+        val custom = if (project.codeRegion == null || project.codeRegion == base.regionId) base.customAmendment else null
+        return CodeProfile(edition = edition, regionId = regionId, customAmendment = custom)
+    }
+
     /** [units] only changes the text of the notes (°C or °F, lb or N…); the numbers are the same. */
-    fun analyze(project: Project, units: UnitSystem = UnitSystem.IMPERIAL): ProjectDesign {
+    fun analyze(project: Project, units: UnitSystem = UnitSystem.IMPERIAL): ProjectDesign =
+        if (project.codeEdition != null || project.codeRegion != null) {
+            Code.withProfile(codeProfileFor(project)) { analyzeInternal(project, units) }
+        } else {
+            analyzeInternal(project, units)
+        }
+
+    private fun analyzeInternal(project: Project, units: UnitSystem): ProjectDesign {
         val runsById = project.runs.associateBy { it.id }
         val loads = loads(project)
         val allCircuits = project.panels.flatMap { p -> p.circuits.map { p to it } }

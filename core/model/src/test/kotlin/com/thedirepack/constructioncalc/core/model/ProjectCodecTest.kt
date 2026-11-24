@@ -94,6 +94,50 @@ class ProjectCodecTest {
         assertNotEquals(itemId, copy.runs[1].items.single().id)
     }
 
+    @Test fun asNewRevisionGeneratesNonCollidingRevNamesAndFreshIds() {
+        val base = sample().copy(codeEdition = "NEC_2023", codeRegion = "us-ca").archive(5L)
+        val oldItemId = base.runs.first().items.first().id
+
+        val rev2 = base.asNewRevision(existingNames = setOf("Smith Residence"), now = 10L)
+        assertEquals("Smith Residence (Rev 2)", rev2.name)
+        assertNotEquals(base.id, rev2.id)
+        assertNotEquals(oldItemId, rev2.runs.first().items.first().id)
+        assertEquals(10L, rev2.createdAt)
+        assertEquals(10L, rev2.updatedAt)
+        assertEquals(false, rev2.archived)
+        assertNull(rev2.archivedAt)
+        assertEquals("NEC_2023", rev2.codeEdition)
+        assertEquals("us-ca", rev2.codeRegion)
+
+        val rev3 = rev2.asNewRevision(
+            existingNames = setOf("Smith Residence", "Smith Residence (Rev 2)"),
+            now = 20L,
+        )
+        assertEquals("Smith Residence (Rev 3)", rev3.name)
+
+        // Skips existing collisions case-insensitively
+        val rev5 = base.asNewRevision(
+            existingNames = setOf("Smith Residence", "smith residence (rev 2)", "Smith Residence (Rev 3)", "Smith Residence (Rev 4)"),
+            now = 30L,
+        )
+        assertEquals("Smith Residence (Rev 5)", rev5.name)
+    }
+
+    @Test fun projectCodeFieldsRoundTripAndDefaultNullForLegacyJson() {
+        val configured = sample().copy(codeEdition = "NEC_2023", codeRegion = "us-ma")
+        val encoded = ProjectCodec.encode(configured)
+        val decoded = ProjectCodec.decode(encoded)
+        assertEquals("NEC_2023", decoded.codeEdition)
+        assertEquals("us-ma", decoded.codeRegion)
+
+        val legacy = encoded
+            .replace(Regex("""\s*"codeEdition":\s*"[^"]*",?"""), "")
+            .replace(Regex(""",\s*"codeRegion":\s*"[^"]*""""), "")
+        val legacyDecoded = ProjectCodec.decode(legacy)
+        assertNull(legacyDecoded.codeEdition)
+        assertNull(legacyDecoded.codeRegion)
+    }
+
     @Test fun rendersText() {
         val text = ProjectText.render(sample(), toolTitle = { "Foot-Inch" }, zone = ZoneOffset.UTC)
         assertTrue(text, text.contains("■ General"))

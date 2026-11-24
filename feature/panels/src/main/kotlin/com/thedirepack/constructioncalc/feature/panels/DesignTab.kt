@@ -7,12 +7,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -23,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
@@ -38,12 +42,16 @@ import com.thedirepack.constructioncalc.core.electrical.OptionalDwellingInput
 import com.thedirepack.constructioncalc.core.electrical.StandardLoadInput
 import com.thedirepack.constructioncalc.core.electrical.StandardOcpd
 import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.CodeEdition
+import com.thedirepack.constructioncalc.core.electrical.code.CodeProfile
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRegions
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.electrical.code.codePercentValue
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.ResultValue
+import com.thedirepack.constructioncalc.core.model.design.ProjectAnalysis
 import com.thedirepack.constructioncalc.core.model.design.Wire
 import com.thedirepack.constructioncalc.core.ui.components.ChoiceField
 import com.thedirepack.constructioncalc.core.ui.components.FormSection
@@ -113,6 +121,22 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
         }
     }
 
+    val appSettings = rememberAppSettings()
+    val codeProfile = remember(ctx.project.codeEdition, ctx.project.codeRegion, appSettings.codeEdition, appSettings.codeRegion) {
+        ProjectAnalysis.codeProfileFor(ctx.project)
+    }
+    val vdSupportText = remember(codeProfile) {
+        Code.withProfile(codeProfile) {
+            "NEC recommends ${codePercentValue(Code.book.values.voltageDropBranchPercent, spaced = false)} on a branch circuit, ${codePercentValue(Code.book.values.voltageDropTotalPercent, spaced = false)} overall (informational notes)."
+        }
+    }
+    val footerText = remember(codeProfile) {
+        Code.withProfile(codeProfile) {
+            "Sizing follows ${Code.label}: ${CodeRule.AMPACITY_TABLE.cite} ampacity, ${CodeRule.AMPACITY.cite} ambient and conductor-count adjustment, ${CodeRule.TERMINATION_TEMPERATURE.cite} terminals, " +
+                "${CodeRule.CONDUCTOR_PROTECTION.cite} protection, ${CodeRule.FILL_PERCENT.cite}, ${CodeRule.CONDUIT_DIMENSIONS.cite}, ${CodeRule.CONDUCTOR_DIMENSIONS.cite} and ${CodeRule.AC_IMPEDANCE.cite}. It guides fieldwork and doesn't replace a code check."
+        }
+    }
+
     Column(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -128,6 +152,7 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        CodeProfileCard(ctx)
         FormSection("Default conductor") {
             if (ctx.readOnly) {
                 Text(
@@ -141,7 +166,7 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
         FormSection("Conditions") {
             if (ctx.readOnly) {
                 Text(
-                    "Ambient ${rememberAppSettings().show(Measure.TEMPERATURE, design.ambientC, 1)} · voltage-drop target ${formatDecimal(design.voltageDropTargetPercent, 1)}% · " +
+                    "Ambient ${appSettings.show(Measure.TEMPERATURE, design.ambientC, 1)} · voltage-drop target ${formatDecimal(design.voltageDropTargetPercent, 1)}% · " +
                         "upsize for voltage drop: ${if (design.upsizeForVoltageDrop) "on" else "off"}",
                 )
             } else {
@@ -157,7 +182,7 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
                     value = targetText,
                     onValueChange = { targetText = it },
                     unit = "%",
-                    supportingText = "NEC recommends ${codePercentValue(Code.book.values.voltageDropBranchPercent, spaced = false)} on a branch circuit, ${codePercentValue(Code.book.values.voltageDropTotalPercent, spaced = false)} overall (informational notes).",
+                    supportingText = vdSupportText,
                 )
                 ToggleRow(
                     "Upsize wire for voltage drop",
@@ -168,12 +193,11 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
             }
         }
 
-        Article220Card(ctx)
+        Article220Card(ctx, codeProfile)
         ConductorComparisonCard(ctx)
 
         Text(
-            "Sizing follows ${Code.label}: ${CodeRule.AMPACITY_TABLE.cite} ampacity, ${CodeRule.AMPACITY.cite} ambient and conductor-count adjustment, ${CodeRule.TERMINATION_TEMPERATURE.cite} terminals, " +
-                "${CodeRule.CONDUCTOR_PROTECTION.cite} protection, ${CodeRule.FILL_PERCENT.cite}, ${CodeRule.CONDUIT_DIMENSIONS.cite}, ${CodeRule.CONDUCTOR_DIMENSIONS.cite} and ${CodeRule.AC_IMPEDANCE.cite}. It guides fieldwork and doesn't replace a code check.",
+            footerText,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -181,7 +205,122 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun Article220Card(ctx: PanelsContext) {
+private fun CodeProfileCard(ctx: PanelsContext) {
+    val appSettings = rememberAppSettings()
+    val appEdition = CodeEdition.entries.firstOrNull { it.name == appSettings.codeEdition && it.isImplemented } ?: CodeEdition.NEC_2023
+    val appRegion = CodeRegions.getOrDefault(appSettings.codeRegion)
+    val projectEdition = ctx.project.codeEdition?.let { name -> CodeEdition.entries.firstOrNull { it.name == name && it.isImplemented } }
+    val effectiveEdition = projectEdition ?: appEdition
+    val selectedRegionId = ctx.project.codeRegion?.takeIf { CodeRegions.find(it) != null }
+    val effectiveRegion = selectedRegionId?.let(CodeRegions::getOrDefault) ?: appRegion
+
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Code Edition & Region", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Effective: ${effectiveEdition.label} · ${effectiveRegion.name}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (ctx.readOnly) {
+                Text(
+                    "Edition: ${if (ctx.project.codeEdition == null) "Inherit app setting (${appEdition.label})" else effectiveEdition.label}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Region: ${if (selectedRegionId == null) "Inherit app setting (${appRegion.name})" else effectiveRegion.name}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Code edition", style = MaterialTheme.typography.bodyLarge)
+                    CodeEditionOptionRow(
+                        title = "Inherit app setting (${appEdition.label})",
+                        subtitle = "Follows the app-wide electrical code setting.",
+                        selected = ctx.project.codeEdition == null,
+                        enabled = true,
+                        onClick = { ctx.edit { p, now -> p.copy(codeEdition = null, updatedAt = now) } },
+                    )
+                    CodeEdition.entries.forEach { edition ->
+                        val enabled = edition.isImplemented
+                        val title = if (enabled) "${edition.label} (Active)" else "${edition.label} (Planned)"
+                        CodeEditionOptionRow(
+                            title = title,
+                            subtitle = edition.statusNote,
+                            selected = enabled && ctx.project.codeEdition == edition.name,
+                            enabled = enabled,
+                            onClick = { ctx.edit { p, now -> p.copy(codeEdition = edition.name, updatedAt = now) } },
+                        )
+                    }
+                }
+                val regionNote = buildString {
+                    if (selectedRegionId == null) {
+                        append("Inheriting app setting (${appRegion.name}). ")
+                    }
+                    append(effectiveRegion.description)
+                    if (!effectiveRegion.hasOverrides && effectiveRegion.id != CodeRegions.STANDARD_ID) {
+                        append(" Uses unamended ${effectiveEdition.label} until jurisdiction overrides are verified.")
+                    }
+                }
+                ChoiceField<String?>(
+                    label = "Code region",
+                    options = listOf<String?>(null) + CodeRegions.entries.map { it.id },
+                    selected = selectedRegionId,
+                    onSelect = { id -> ctx.edit { p, now -> p.copy(codeRegion = id, updatedAt = now) } },
+                    optionLabel = { id ->
+                        if (id == null) "Inherit app setting (${appRegion.name})" else CodeRegions.getOrDefault(id).name
+                    },
+                    supportingText = regionNote,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodeEditionOptionRow(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .selectable(
+                selected = selected,
+                enabled = enabled,
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        RadioButton(selected = selected, onClick = null, enabled = enabled)
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun Article220Card(ctx: PanelsContext, codeProfile: CodeProfile) {
     var expanded by remember { mutableStateOf(false) }
     var mode by remember { mutableStateOf(Article220Mode.STANDARD) }
     var occupancy by remember { mutableStateOf(LightingOccupancy.DWELLING) }
@@ -202,6 +341,29 @@ private fun Article220Card(ctx: PanelsContext) {
     var voltage by remember { mutableStateOf("240") }
     var phases by remember { mutableStateOf(AcPhases.SINGLE) }
 
+    val codeSubtitle = remember(codeProfile) {
+        Code.withProfile(codeProfile) {
+            "${Code.label} demand factors: lighting, receptacles, ranges, dryers, HVAC, optional dwelling."
+        }
+    }
+    val codeCites = remember(codeProfile) {
+        Code.withProfile(codeProfile) {
+            mapOf(
+                "lighting" to CodeRule.LIGHTING_DEMAND.cite,
+                "dryer" to CodeRule.DRYER_DEMAND.cite,
+                "range" to CodeRule.RANGE_DEMAND.cite,
+                "receptacle" to CodeRule.RECEPTACLE_DEMAND.cite,
+                "noncoincident" to CodeRule.NONCOINCIDENT_LOADS.cite,
+                "smallAppVa" to codeNumber(Code.book.loadCalculation.smallApplianceCircuitVa),
+                "laundryVa" to codeNumber(Code.book.loadCalculation.laundryCircuitVa),
+                "largestMotorAdder" to codePercent(Code.book.loadCalculation.largestMotorAdder, false),
+                "optSqFt" to codeNumber(Code.book.loadCalculation.optionalVaPerSqFt),
+                "optCool" to codePercent(Code.book.loadCalculation.optionalCoolingFactor, false),
+                "optHeat" to codePercent(Code.book.loadCalculation.optionalCentralHeatFactor, false),
+            )
+        }
+    }
+
     Card(
         Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -211,7 +373,7 @@ private fun Article220Card(ctx: PanelsContext) {
                 Column(Modifier.weight(1f)) {
                     Text("Feeder & Service Demand (Article 220)", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "${Code.label} demand factors: lighting, receptacles, ranges, dryers, HVAC, optional dwelling.",
+                        codeSubtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -247,7 +409,7 @@ private fun Article220Card(ctx: PanelsContext) {
                 val vInt = voltage.toIntOrNull()?.takeIf { it > 0 } ?: 240
                 if (mode == Article220Mode.STANDARD) {
                     ChoiceField(
-                        label = "Occupancy (${CodeRule.LIGHTING_DEMAND.cite})",
+                        label = "Occupancy (${codeCites.getValue("lighting")})",
                         options = LightingOccupancy.entries,
                         selected = occupancy,
                         onSelect = { occupancy = it },
@@ -263,21 +425,20 @@ private fun Article220Card(ctx: PanelsContext) {
                     NumberField("Line voltage", voltage, { voltage = it }, unit = "V")
                     NumberField("General lighting", lightingVa, { lightingVa = it }, unit = "VA")
                     if (occupancy == LightingOccupancy.DWELLING) {
-                        val c = Code.book.loadCalculation
-                        NumberField("Small-appliance circuits (${codeNumber(c.smallApplianceCircuitVa)} VA ea)", smallAppCount, { smallAppCount = it })
-                        NumberField("Laundry circuits (${codeNumber(c.laundryCircuitVa)} VA ea)", laundryCount, { laundryCount = it })
+                        NumberField("Small-appliance circuits (${codeCites.getValue("smallAppVa")} VA ea)", smallAppCount, { smallAppCount = it })
+                        NumberField("Laundry circuits (${codeCites.getValue("laundryVa")} VA ea)", laundryCount, { laundryCount = it })
                         NumberField("Fixed appliances total", fixedApplianceVa, { fixedApplianceVa = it }, unit = "VA")
                         NumberField("Fixed appliance count", fixedApplianceCount, { fixedApplianceCount = it })
-                        NumberField("Electric dryers (${CodeRule.DRYER_DEMAND.cite})", dryerCount, { dryerCount = it })
-                        NumberField("Electric ranges (${CodeRule.RANGE_DEMAND.cite})", rangeCount, { rangeCount = it })
+                        NumberField("Electric dryers (${codeCites.getValue("dryer")})", dryerCount, { dryerCount = it })
+                        NumberField("Electric ranges (${codeCites.getValue("range")})", rangeCount, { rangeCount = it })
                         NumberField("Range rating (each)", rangeKw, { rangeKw = it }, unit = "kW")
                     } else {
-                        NumberField("Receptacles (${CodeRule.RECEPTACLE_DEMAND.cite})", receptacleVa, { receptacleVa = it }, unit = "VA")
+                        NumberField("Receptacles (${codeCites.getValue("receptacle")})", receptacleVa, { receptacleVa = it }, unit = "VA")
                     }
-                    NumberField("Heating load (${CodeRule.NONCOINCIDENT_LOADS.cite})", heatingVa, { heatingVa = it }, unit = "VA")
-                    NumberField("Cooling load (${CodeRule.NONCOINCIDENT_LOADS.cite})", coolingVa, { coolingVa = it }, unit = "VA")
+                    NumberField("Heating load (${codeCites.getValue("noncoincident")})", heatingVa, { heatingVa = it }, unit = "VA")
+                    NumberField("Cooling load (${codeCites.getValue("noncoincident")})", coolingVa, { coolingVa = it }, unit = "VA")
                     NumberField(
-                        "Largest motor (${codePercent(Code.book.loadCalculation.largestMotorAdder, false)} adder)",
+                        "Largest motor (${codeCites.getValue("largestMotorAdder")} adder)",
                         largestMotorVa,
                         { largestMotorVa = it },
                         unit = "VA",
@@ -285,53 +446,54 @@ private fun Article220Card(ctx: PanelsContext) {
                     NumberField("Other loads (100%)", otherVa, { otherVa = it }, unit = "VA")
                 } else {
                     NumberField("Line voltage", voltage, { voltage = it }, unit = "V")
-                    val c = Code.book.loadCalculation
-                    NumberField("Floor area (${codeNumber(c.optionalVaPerSqFt)} VA/sq ft)", floorSqFt, { floorSqFt = it }, unit = "sq ft")
+                    NumberField("Floor area (${codeCites.getValue("optSqFt")} VA/sq ft)", floorSqFt, { floorSqFt = it }, unit = "sq ft")
                     NumberField("Small-appliance circuits", smallAppCount, { smallAppCount = it })
                     NumberField("Laundry circuits", laundryCount, { laundryCount = it })
                     NumberField("Appliances, ranges & dryers total", fixedApplianceVa, { fixedApplianceVa = it }, unit = "VA")
-                    NumberField("Cooling load (${codePercent(c.optionalCoolingFactor, false)})", coolingVa, { coolingVa = it }, unit = "VA")
-                    NumberField("Central electric heat (${codePercent(c.optionalCentralHeatFactor, false)})", heatingVa, { heatingVa = it }, unit = "VA")
+                    NumberField("Cooling load (${codeCites.getValue("optCool")})", coolingVa, { coolingVa = it }, unit = "VA")
+                    NumberField("Central electric heat (${codeCites.getValue("optHeat")})", heatingVa, { heatingVa = it }, unit = "VA")
                 }
 
                 val calc = remember(
                     mode, occupancy, lightingVa, floorSqFt, smallAppCount, laundryCount,
                     receptacleVa, fixedApplianceVa, fixedApplianceCount, dryerCount, rangeCount,
-                    rangeKw, heatingVa, coolingVa, largestMotorVa, otherVa, vInt, phases,
+                    rangeKw, heatingVa, coolingVa, largestMotorVa, otherVa, vInt, phases, codeProfile,
                 ) {
-                    if (mode == Article220Mode.STANDARD) {
-                        Article220.standardCalculation(
-                            StandardLoadInput(
-                                occupancy = occupancy,
-                                generalLightingVa = lightingVa.toDecimalOrNull() ?: 0.0,
-                                smallApplianceCircuits = smallAppCount.toIntOrNull() ?: 0,
-                                laundryCircuits = laundryCount.toIntOrNull() ?: 0,
-                                receptacleVa = receptacleVa.toDecimalOrNull() ?: 0.0,
-                                fixedApplianceVa = fixedApplianceVa.toDecimalOrNull() ?: 0.0,
-                                fixedApplianceCount = fixedApplianceCount.toIntOrNull() ?: 0,
-                                dryerCount = dryerCount.toIntOrNull() ?: 0,
-                                rangeCount = rangeCount.toIntOrNull() ?: 0,
-                                rangeEachKw = rangeKw.toDecimalOrNull() ?: 12.0,
-                                heatingVa = heatingVa.toDecimalOrNull() ?: 0.0,
-                                coolingVa = coolingVa.toDecimalOrNull() ?: 0.0,
-                                largestMotorVa = largestMotorVa.toDecimalOrNull() ?: 0.0,
-                                otherNonContinuousVa = otherVa.toDecimalOrNull() ?: 0.0,
-                                lineVoltage = vInt,
-                                phases = phases,
-                            ),
-                        )
-                    } else {
-                        Article220.optionalDwellingCalculation(
-                            OptionalDwellingInput(
-                                floorAreaSqFt = floorSqFt.toDecimalOrNull() ?: 0.0,
-                                smallApplianceCircuits = smallAppCount.toIntOrNull() ?: 0,
-                                laundryCircuits = laundryCount.toIntOrNull() ?: 0,
-                                appliancesVa = fixedApplianceVa.toDecimalOrNull() ?: 0.0,
-                                coolingVa = coolingVa.toDecimalOrNull() ?: 0.0,
-                                centralHeatingVa = heatingVa.toDecimalOrNull() ?: 0.0,
-                                lineVoltage = vInt,
-                            ),
-                        )
+                    Code.withProfile(codeProfile) {
+                        if (mode == Article220Mode.STANDARD) {
+                            Article220.standardCalculation(
+                                StandardLoadInput(
+                                    occupancy = occupancy,
+                                    generalLightingVa = lightingVa.toDecimalOrNull() ?: 0.0,
+                                    smallApplianceCircuits = smallAppCount.toIntOrNull() ?: 0,
+                                    laundryCircuits = laundryCount.toIntOrNull() ?: 0,
+                                    receptacleVa = receptacleVa.toDecimalOrNull() ?: 0.0,
+                                    fixedApplianceVa = fixedApplianceVa.toDecimalOrNull() ?: 0.0,
+                                    fixedApplianceCount = fixedApplianceCount.toIntOrNull() ?: 0,
+                                    dryerCount = dryerCount.toIntOrNull() ?: 0,
+                                    rangeCount = rangeCount.toIntOrNull() ?: 0,
+                                    rangeEachKw = rangeKw.toDecimalOrNull() ?: 12.0,
+                                    heatingVa = heatingVa.toDecimalOrNull() ?: 0.0,
+                                    coolingVa = coolingVa.toDecimalOrNull() ?: 0.0,
+                                    largestMotorVa = largestMotorVa.toDecimalOrNull() ?: 0.0,
+                                    otherNonContinuousVa = otherVa.toDecimalOrNull() ?: 0.0,
+                                    lineVoltage = vInt,
+                                    phases = phases,
+                                ),
+                            )
+                        } else {
+                            Article220.optionalDwellingCalculation(
+                                OptionalDwellingInput(
+                                    floorAreaSqFt = floorSqFt.toDecimalOrNull() ?: 0.0,
+                                    smallApplianceCircuits = smallAppCount.toIntOrNull() ?: 0,
+                                    laundryCircuits = laundryCount.toIntOrNull() ?: 0,
+                                    appliancesVa = fixedApplianceVa.toDecimalOrNull() ?: 0.0,
+                                    coolingVa = coolingVa.toDecimalOrNull() ?: 0.0,
+                                    centralHeatingVa = heatingVa.toDecimalOrNull() ?: 0.0,
+                                    lineVoltage = vInt,
+                                ),
+                            )
+                        }
                     }
                 }
 
@@ -412,7 +574,19 @@ private fun ConductorComparisonCard(ctx: PanelsContext) {
                     onSelect = { conduitType = it },
                     optionLabel = { it.displayName },
                 )
-                ToggleRow("Continuous load (${codePercent(Code.book.values.continuousLoadFactor, false)})", continuous, { continuous = it })
+                val appSettings = rememberAppSettings()
+                val codeProfile = remember(
+                    ctx.project.codeEdition,
+                    ctx.project.codeRegion,
+                    appSettings.codeEdition,
+                    appSettings.codeRegion,
+                ) {
+                    ProjectAnalysis.codeProfileFor(ctx.project)
+                }
+                val continuousPercent = remember(codeProfile) {
+                    Code.withProfile(codeProfile) { codePercent(Code.book.values.continuousLoadFactor, false) }
+                }
+                ToggleRow("Continuous load ($continuousPercent)", continuous, { continuous = it })
                 ToggleRow("Include neutral in each raceway", includeNeutral, { includeNeutral = it })
 
                 val loadAmps = loadText.toDecimalOrNull()?.coerceAtLeast(0.0) ?: 0.0
@@ -420,25 +594,27 @@ private fun ConductorComparisonCard(ctx: PanelsContext) {
                 val lengthFt = (length?.value?.toDouble() ?: 0.0) / 12.0
                 val comparison = remember(
                     ocpd, loadAmps, voltage, phases, lengthFt, conduitType, continuous,
-                    includeNeutral, ctx.project.design,
+                    includeNeutral, ctx.project.design, codeProfile,
                 ) {
-                    ConductorComparison.compare(
-                        ComparisonRequest(
-                            ocpdAmps = ocpd,
-                            loadAmps = loadAmps,
-                            voltage = voltage,
-                            phases = phases,
-                            lengthFeet = lengthFt,
-                            continuous = continuous,
-                            includeNeutral = includeNeutral,
-                            conduitType = conduitType,
-                            insulation = ctx.project.design.conductor.insulation,
-                            insulationRating = ctx.project.design.conductor.insulationRating,
-                            terminationRating = ctx.project.design.conductor.terminationRating,
-                            ambientC = ctx.project.design.ambientC,
-                            voltageDropTargetPercent = ctx.project.design.voltageDropTargetPercent,
-                        ),
-                    )
+                    Code.withProfile(codeProfile) {
+                        ConductorComparison.compare(
+                            ComparisonRequest(
+                                ocpdAmps = ocpd,
+                                loadAmps = loadAmps,
+                                voltage = voltage,
+                                phases = phases,
+                                lengthFeet = lengthFt,
+                                continuous = continuous,
+                                includeNeutral = includeNeutral,
+                                conduitType = conduitType,
+                                insulation = ctx.project.design.conductor.insulation,
+                                insulationRating = ctx.project.design.conductor.insulationRating,
+                                terminationRating = ctx.project.design.conductor.terminationRating,
+                                ambientC = ctx.project.design.ambientC,
+                                voltageDropTargetPercent = ctx.project.design.voltageDropTargetPercent,
+                            ),
+                        )
+                    }
                 }
 
                 listOf(ConductorMaterial.COPPER, ConductorMaterial.ALUMINUM).forEach { mat ->

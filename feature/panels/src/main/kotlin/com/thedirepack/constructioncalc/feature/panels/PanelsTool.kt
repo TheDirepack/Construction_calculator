@@ -32,7 +32,7 @@ import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import com.thedirepack.constructioncalc.core.ui.tool.ToolModule
 import com.thedirepack.constructioncalc.feature.panels.domain.PanelExportLayout
-import com.thedirepack.constructioncalc.feature.panels.domain.PanelTemplate
+import com.thedirepack.constructioncalc.feature.panels.domain.SavedPanelTemplate
 
 object PanelsTool : ToolModule {
     const val ID = ToolIds.PANELS
@@ -56,7 +56,7 @@ private fun PanelsSettingsPage() {
     val store = LocalAppServices.current.settings.module(PanelsTool.ID)
     val defaultLayout = rememberDefaultExportLayout()
     val customTemplates = rememberCustomPanelTemplates()
-    var deleting by remember { mutableStateOf<PanelTemplate?>(null) }
+    var deleting by remember { mutableStateOf<SavedPanelTemplate?>(null) }
 
     SettingsGroup("Default export layout") {
         Column(Modifier.selectableGroup()) {
@@ -102,7 +102,7 @@ private fun PanelsSettingsPage() {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(template.name, style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            "${template.system.label} · ${template.spaces} spaces · ${plural(template.circuits.size, "circuit")}",
+                            "${template.system.label} · ${template.snappedSpaces} spaces · ${plural(template.circuits.size, "circuit")}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

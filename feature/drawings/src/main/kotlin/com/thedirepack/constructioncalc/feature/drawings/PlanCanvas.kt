@@ -74,6 +74,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.data.PlanExportCrop
@@ -393,6 +394,7 @@ internal fun PlanCanvas(
     eraserSizeDp: Int = 16,
     liveMeasureLabel: ((PlanPoint, PlanPoint) -> String?)? = null,
     onTapStagedRef: ((String) -> Unit)? = null,
+    hudBottomPadding: Dp = 6.dp,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1389,7 +1391,7 @@ internal fun PlanCanvas(
                         color = MaterialTheme.colorScheme.surface,
                         shape = MaterialTheme.shapes.medium,
                         shadowElevation = 2.dp,
-                        modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
+                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = hudBottomPadding),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
@@ -1417,7 +1419,7 @@ internal fun PlanCanvas(
                     color = MaterialTheme.colorScheme.surface,
                     shape = MaterialTheme.shapes.medium,
                     shadowElevation = 2.dp,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = hudBottomPadding),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(

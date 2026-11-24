@@ -5,7 +5,9 @@ import com.thedirepack.constructioncalc.core.data.PlanExportCrop
 import com.thedirepack.constructioncalc.core.data.PlanSheetExportMode
 import com.thedirepack.constructioncalc.core.model.PlanSheetSource
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SheetExportRequestTest {
@@ -14,6 +16,7 @@ class SheetExportRequestTest {
 
     @Test fun exportDestinationRoundTripKeepsTheSelectedPageAndCrop() {
         val request = SheetExportRequest(source, PlanExportCrop(12f, 25f, 240f, 350f))
+        assertTrue(request.vector)
         val saved = with(SheetExportSaver) { scope.save(request) }
         assertEquals(request, SheetExportSaver.restore(checkNotNull(saved)))
         assertEquals("E_101 - Rev A_2 - crop.pdf", request.fileName)
@@ -25,10 +28,12 @@ class SheetExportRequestTest {
         assertEquals(request, SheetExportSaver.restore(checkNotNull(saved)))
         assertEquals("E_101 - Rev unassigned - annotated.pdf", request.fileName)
         assertNull(with(SheetExportSaver) { scope.save(null) })
+        assertNull(SheetExportSaver.restore(emptyList<Any>()))
     }
 
     @Test fun rasterSnapshotModeRoundTripsAndUsesDistinctFileNames() {
         val fullSnapshot = SheetExportRequest(source.copy(revision = null), null, PlanSheetExportMode.RASTER)
+        assertFalse(fullSnapshot.vector)
         val savedFull = with(SheetExportSaver) { scope.save(fullSnapshot) }
         assertEquals(fullSnapshot, SheetExportSaver.restore(checkNotNull(savedFull)))
         assertEquals("E_101 - Rev unassigned - snapshot.pdf", fullSnapshot.fileName)
@@ -37,6 +42,24 @@ class SheetExportRequestTest {
         val savedCrop = with(SheetExportSaver) { scope.save(cropSnapshot) }
         assertEquals(cropSnapshot, SheetExportSaver.restore(checkNotNull(savedCrop)))
         assertEquals("E_101 - Rev A_2 - crop-snapshot.pdf", cropSnapshot.fileName)
+    }
+
+    @Test fun vectorBooleanConstructorAndSavedStateRemainCompatible() {
+        val fromBool = SheetExportRequest(source, PlanExportCrop(10f, 20f, 110f, 220f), vector = false)
+        assertEquals(PlanSheetExportMode.RASTER, fromBool.mode)
+        assertFalse(fromBool.vector)
+
+        val booleanVectorSaved = listOf("drawing", "a".repeat(64), 2, "E/101", "A:2", true, 12f, 25f, 240f, 350f)
+        assertEquals(
+            SheetExportRequest(source, PlanExportCrop(12f, 25f, 240f, 350f), PlanSheetExportMode.VECTOR),
+            SheetExportSaver.restore(booleanVectorSaved),
+        )
+
+        val booleanRasterSaved = listOf("drawing", "a".repeat(64), 2, "E/101", "", false)
+        assertEquals(
+            SheetExportRequest(source.copy(revision = null), null, PlanSheetExportMode.RASTER),
+            SheetExportSaver.restore(booleanRasterSaved),
+        )
     }
 
     @Test fun legacySavedStateWithoutModeRestoresAsVector() {

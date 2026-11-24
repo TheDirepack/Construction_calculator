@@ -180,6 +180,11 @@ fun VoltageDropScreen(host: ToolHost) {
 
 ### Rules for tools
 
+- **Progressive disclosure & field ergonomics.** The primary view of a tool must show only the 3–4 essential inputs needed for instant field answers. Never present long walls of expanded forms or unnecessary vertical scrolling. Secondary engineering knobs (power factors, advanced calculation methods, custom target percentages, manual overrides) must collapse behind an "Advanced Options" header.
+- **Lock physical and code constraints.** Inputs governed by the National Electrical Code or physical manufacturing geometry must be locked or constrained in the UI. For example, parallel conductor sets are hidden unless wire size is ≥ 1/0 AWG (strictly enforcing NEC 310.10(G)); electrical panel slot counts are locked to bus phase periodicity (multiples of 6 for 3-phase, multiples of 4 for 1-phase). Never leave code-mandated constants open to accidental user tampering.
+- **Realistic jobsite workflows.** Tools must reflect physical field reality: Conduit Bending models multi-bend sequences on a 10' stick with 3D pipe preview and continuous tape layout from End A; Wire Pull Planner provides an instant 'Quick Pull Check' toggle before detailed segment routing.
+- **Multi-edition & regional code support.** Every citation and calculation references the active `ElectricalCode`. Global edition defaults to NEC 2023 (with NEC 2026 once finalized), supporting per-project and per-tool edition overrides, as well as state/regional code amendments.
+- **Atomic file durability & ZIP manifests.** Project files are written using `AtomicFile` (temporary file swap with `fsync`) to guarantee zero data loss. Backup `.backup.zip` archives include metadata hashes, creation dates, and source app details. Restoring a project appends as a new revision without deleting existing data, prompting with a collision dialog (Overwrite vs New Revision vs Merge).
 - **No permissions.** The app requests none today. If a feature truly needs one, add it in
   `:app`'s manifest with a comment saying why, and request it at the moment of use.
 - **Minimal animation.** Don't add custom animations. Everything runs under the app's

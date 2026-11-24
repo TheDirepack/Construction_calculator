@@ -36,6 +36,7 @@ internal object BackupArchive {
             photoHashes = photos.keys,
             photoFileForHash = photos::getValue,
             requireAllMedia = true,
+            createdAt = backup.exportedAt ?: System.currentTimeMillis(),
         )
     }
 

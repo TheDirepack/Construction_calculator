@@ -40,6 +40,8 @@ class CircuitPrefillTest {
         assertEquals(Quantity.feet(Rational.of(150)), inputs.length!!.toQuantity())
         assertEquals(Table9Conduit.STEEL, inputs.conduit)
         assertEquals("8 AWG", inputs.size) // the design upsized it for 3 % drop
+        assertEquals("8 AWG", inputs.manualSize)
+        assertFalse(inputs.isAutoSizing)
         assertTrue(inputs.checkAmpacity)
         assertEquals("20", inputs.ocpdAmps)
         assertFalse(inputs.continuousLoad)
@@ -55,6 +57,17 @@ class CircuitPrefillTest {
         val ampRes = VoltageDrop.checkAmpacity(out, amp, VoltageDrop.smallestSize(out))
         assertEquals(ConductorSize.AWG_8, ampRes.governingSize)
         assertEquals(GoverningConstraint.VOLTAGE_DROP, ampRes.governing)
+    }
+
+    @Test fun unsizedCircuitDefaultsToAutoSizingMode() {
+        val c = Circuit(slot = 1, breakerAmps = null, loadVa = 1440.0, runIds = listOf(run.id))
+        val project = Project(name = "P", createdAt = 0, runs = listOf(run), panels = listOf(Panel(name = "LP", circuits = listOf(c))))
+        val inputs = voltageDropInputsForCircuit(project, c.id)!!
+        assertNull(inputs.manualSize)
+        assertTrue(inputs.isAutoSizing)
+        assertTrue(inputs.checkAmpacity)
+        assertEquals("", inputs.ocpdAmps)
+        assertEquals("8 AWG", inputs.parse().request!!.size.label)
     }
 
     @Test fun prefillsSingleRunAmbientContinuousAndCustomConductor() {
@@ -86,6 +99,8 @@ class CircuitPrefillTest {
             design = DesignDefaults(ambientC = 30.0),
         )
         val inputs = voltageDropInputsForCircuit(project, c.id)!!
+        assertNull(inputs.manualSize)
+        assertTrue(inputs.isAutoSizing)
         assertTrue(inputs.checkAmpacity)
         assertEquals("", inputs.ocpdAmps)
         assertTrue(inputs.continuousLoad)
@@ -96,6 +111,7 @@ class CircuitPrefillTest {
         assertEquals(ConductorMaterial.ALUMINUM.name, inputs.material)
         val parsed = inputs.parse()
         assertNotNull(parsed.request)
+        assertEquals(ConductorSize.AWG_10, parsed.request!!.size) // ampacity governs over 12 AWG drop min
         val amp = parsed.ampacity!!
         assertNull(amp.ocpdAmps)
         assertEquals(40.0, amp.ambientC, 0.0)

@@ -28,7 +28,7 @@ fun AppSettings.lengthStyle(preferInches: Boolean? = null): LengthStyle = length
 
 /** Everything about how lengths are shown, in the user's unit system. */
 fun AppSettings.lengthFormat(preferInches: Boolean? = null): LengthFormat =
-    LengthFormat(unitSystem, precision, lengthStyle(preferInches), metricDisplay, metricResolution, feetInchStyle)
+    LengthFormat(unitSystem, precision, lengthStyle(preferInches), metricDisplay, metricResolution, feetInchStyle, fractionRounding)
 
 val AppSettings.isMetric: Boolean get() = unitSystem == UnitSystem.METRIC
 

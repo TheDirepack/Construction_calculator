@@ -22,6 +22,7 @@ import com.thedirepack.constructioncalc.BuildConfig
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.data.BackupSections
 import com.thedirepack.constructioncalc.core.ui.components.ActionRow
+import com.thedirepack.constructioncalc.core.ui.components.CodeSettings
 import com.thedirepack.constructioncalc.core.ui.components.rememberBackupExporter
 import com.thedirepack.constructioncalc.core.ui.components.CompanySettings
 import com.thedirepack.constructioncalc.core.ui.components.GeneralSettings
@@ -73,6 +74,7 @@ fun SettingsScreen(
             } else {
                 GeneralSettings()
                 MeasurementSettings()
+                CodeSettings()
                 CompanySettings()
                 val toolsWithSettings = ToolRegistry.all.filter { it.hasSettings }
                 if (toolsWithSettings.isNotEmpty()) {

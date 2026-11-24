@@ -159,6 +159,13 @@ internal data class EditorOutcome(
 
 /** Pure editor rules, kept out of the composables so they can be tested on the JVM. */
 internal object EditorActions {
+    internal const val SCALE_LOCKED_MESSAGE = "Scale locked — unlock to recalibrate"
+
+    /** Returns an error message when switching to [next] is blocked by [PlanDrawing.scaleLocked]. */
+    fun validateModeSwitch(drawing: PlanDrawing, next: DrawingMode): String? =
+        if (drawing.scaleLocked && (next == DrawingMode.Reference || next == DrawingMode.Zone)) SCALE_LOCKED_MESSAGE
+        else null
+
     /** A single tap (or the end of a drag in the route tool) at [point]. */
     fun tap(
         session: EditorSession,
@@ -166,8 +173,11 @@ internal object EditorActions {
         point: PlanPoint,
         hitRadius: Double,
         style: MarkupToolStyle? = null,
-    ): EditorOutcome =
-        when (session.mode) {
+    ): EditorOutcome {
+        if (drawing.scaleLocked && (session.mode == DrawingMode.Reference || session.mode == DrawingMode.Zone)) {
+            return EditorOutcome(session.copy(op = EditOp.Idle), message = SCALE_LOCKED_MESSAGE)
+        }
+        return when (session.mode) {
             DrawingMode.Navigate -> EditorOutcome(session)
             DrawingMode.Text -> EditorOutcome(session.open(EditorDialog.PlaceText(point)))
             DrawingMode.Symbol -> EditorOutcome(session.open(EditorDialog.PickSymbol))
@@ -182,6 +192,7 @@ internal object EditorActions {
                 else span(session, drawing, first, point, style)
             }
         }
+    }
 
     private fun addRoutePoint(session: EditorSession, drawing: PlanDrawing, point: PlanPoint): EditorOutcome {
         val points = session.routePoints
@@ -223,6 +234,9 @@ internal object EditorActions {
                 }
             }
             DrawingMode.Zone -> {
+                if (drawing.scaleLocked) {
+                    return EditorOutcome(cleared, message = SCALE_LOCKED_MESSAGE)
+                }
                 if (first.x == second.x || first.y == second.y) {
                     return EditorOutcome(cleared, message = "An override zone needs a width and height.")
                 }
@@ -234,6 +248,9 @@ internal object EditorActions {
                 }
             }
             DrawingMode.Reference -> {
+                if (drawing.scaleLocked) {
+                    return EditorOutcome(cleared, message = SCALE_LOCKED_MESSAGE)
+                }
                 if (drawing.crossesZoneBoundary(page, first, second)) {
                     return EditorOutcome(cleared, message = "Keep a calibration dimension either inside one override zone or outside all zones.")
                 }
@@ -301,14 +318,14 @@ internal object EditorActions {
         }
     }
 
-    /** Draggable ends on [page]: measurements, and the calibration dimensions when they're shown. */
+    /** Draggable ends on [page]: measurements, and the calibration dimensions when they're shown and unlocked. */
     fun handles(drawing: PlanDrawing, page: Int, includeReferences: Boolean): List<EndpointHandle> = buildList {
         for (m in drawing.measurements) {
             if (m.page != page) continue
             add(EndpointHandle(EndpointTarget.Measurement(m.id), 0, m.first))
             add(EndpointHandle(EndpointTarget.Measurement(m.id), 1, m.second))
         }
-        if (!includeReferences) return@buildList
+        if (!includeReferences || drawing.scaleLocked) return@buildList
         drawing.calibration.references.forEachIndexed { index, ref ->
             if (ref.page != page) return@forEachIndexed
             add(EndpointHandle(EndpointTarget.DocumentReference(index), 0, ref.first))
@@ -327,8 +344,16 @@ internal object EditorActions {
     fun handleAt(handles: List<EndpointHandle>, point: PlanPoint, radius: Double): EndpointHandle? =
         handles.minByOrNull { distance(it.point, point) }?.takeIf { distance(it.point, point) <= radius }
 
-    /** Moves one end of a measurement or known dimension, keeping zone rules intact. */
+    /** Moves one end of a measurement or known dimension, keeping zone and scale-lock rules intact. */
     fun moveEndpoint(session: EditorSession, drawing: PlanDrawing, handle: EndpointHandle, point: PlanPoint): EditorOutcome {
+        if (drawing.scaleLocked && (
+                handle.target is EndpointTarget.DocumentReference ||
+                    handle.target is EndpointTarget.ZoneReference ||
+                    handle.target is EndpointTarget.StagedReference
+                )
+        ) {
+            return EditorOutcome(session, message = SCALE_LOCKED_MESSAGE)
+        }
         if (point == handle.point) return EditorOutcome(session)
         val page = session.page
         return when (val target = handle.target) {

@@ -29,7 +29,7 @@ data class VoltageDropInputs(
     val amps: String = "",
     /** One-way length. */
     val length: StoredQuantity? = null,
-    /** [ConductorSize.label], e.g. "12 AWG". */
+    /** [ConductorSize.label], e.g. "12 AWG". Kept for serialized compatibility. */
     val size: String = ConductorSize.AWG_12.label,
     val parallelSets: Int = 1,
     val method: Method = Method.AC_TABLE_9,
@@ -37,6 +37,8 @@ data class VoltageDropInputs(
     val powerFactor: String = codeNumber(Code.book.values.acImpedanceTablePowerFactor),
     val targetPercent: String = codeNumber(Code.book.values.voltageDropBranchPercent),
     val stranding: Stranding = Stranding.STRANDED,
+    /** Explicit manual wire size override ([ConductorSize.label]), or null for auto-sizing mode. */
+    val manualSize: String? = null,
     val checkAmpacity: Boolean = false,
     val insulation: TemperatureRating = TemperatureRating.C75,
     val termination: TemperatureRating = TemperatureRating.C75,
@@ -48,7 +50,18 @@ data class VoltageDropInputs(
     val conductorMaterial: ConductorMaterial
         get() = ConductorMaterial.entries.firstOrNull { it.name == material } ?: ConductorMaterial.COPPER
 
-    val conductorSize: ConductorSize get() = ConductorSize.fromLabel(size) ?: ConductorSize.AWG_12
+    /** Explicit manual size when overridden, or null when auto-sizing. */
+    val manualConductorSize: ConductorSize?
+        get() = manualSize?.let(ConductorSize::fromLabel)
+
+    /** Legacy/fallback conductor size from [size] when [manualSize] is not set. */
+    val legacyConductorSize: ConductorSize
+        get() = ConductorSize.fromLabel(size) ?: ConductorSize.AWG_12
+
+    val conductorSize: ConductorSize
+        get() = manualConductorSize ?: legacyConductorSize
+
+    val isAutoSizing: Boolean get() = manualSize == null
 
     /** The voltage as typed or chosen; null while a custom voltage is empty or unreadable. */
     val volts: Double? get() = if (voltagePreset in VOLTAGE_PRESETS) voltagePreset.toDouble() else Decimals.parse(customVoltage)
@@ -65,6 +78,10 @@ data class ParsedInputs(
     val missing: List<String>,
     /** Fields with values that can't be used. */
     val problems: List<String>,
+    /** True when auto-sizing mode is active (`manualSize == null`). */
+    val isAutoSized: Boolean = false,
+    /** Smallest compliant wire size for the target drop, or null when none listed meets target. */
+    val smallestSize: ConductorSize? = null,
     val ampacity: AmpacityCheckRequest? = null,
 )
 
@@ -83,6 +100,14 @@ fun VoltageDropInputs.parse(): ParsedInputs {
     if (lengthFeet == null) missing += "Length"
     val pf = if (method == Method.AC_TABLE_9) number(powerFactor, "Power factor") else Code.book.values.acImpedanceTablePowerFactor
     val target = number(targetPercent, "Target drop")
+    val overrideSize = if (manualSize != null) {
+        ConductorSize.fromLabel(manualSize) ?: run {
+            problems += "Conductor size \"$manualSize\" isn't recognized."
+            null
+        }
+    } else {
+        null
+    }
 
     var parsedAmbient: Double? = null
     var parsedCcc: Int? = null
@@ -108,14 +133,18 @@ fun VoltageDropInputs.parse(): ParsedInputs {
         }
     }
 
-    if (missing.isNotEmpty() || problems.isNotEmpty()) return ParsedInputs(null, missing, problems, null)
-    val request = VoltageDropRequest(
+    if (missing.isNotEmpty() || problems.isNotEmpty()) {
+        return ParsedInputs(null, missing, problems, isAutoSized = manualSize == null, ampacity = null)
+    }
+
+    val supported = VoltageDrop.supportedSizes(conductorMaterial, method)
+    val baseRequest = VoltageDropRequest(
         system = system,
         volts = volts!!,
         material = conductorMaterial,
         amps = currentAmps!!,
         lengthFeet = lengthFeet!!,
-        size = conductorSize,
+        size = overrideSize ?: supported.last(),
         parallelSets = parallelSets,
         method = method,
         conduit = conduit,
@@ -123,8 +152,12 @@ fun VoltageDropInputs.parse(): ParsedInputs {
         targetPercent = target!!,
         stranding = stranding,
     )
-    val domainProblems = VoltageDrop.problems(request)
-    if (domainProblems.isNotEmpty()) return ParsedInputs(null, emptyList(), domainProblems, null)
+    val domainProblems = VoltageDrop.problems(baseRequest)
+    if (domainProblems.isNotEmpty()) {
+        return ParsedInputs(null, emptyList(), domainProblems, isAutoSized = overrideSize == null, ampacity = null)
+    }
+
+    val smallest = VoltageDrop.smallestSize(baseRequest)
     val ampacityRequest = if (checkAmpacity) {
         AmpacityCheckRequest(
             insulation = insulation,
@@ -137,5 +170,31 @@ fun VoltageDropInputs.parse(): ParsedInputs {
     } else {
         null
     }
-    return ParsedInputs(request, emptyList(), emptyList(), ampacityRequest)
+
+    val effectiveRequest = if (overrideSize != null) {
+        baseRequest
+    } else if (ampacityRequest == null) {
+        baseRequest.copy(size = smallest ?: supported.last())
+    } else {
+        // In auto-size mode with ampacity checking active, size to the governing NEC conductor
+        // (max of drop minimum and ampacity minimum) so delivered drop and parallel eligibility
+        // reflect the compliant wire without emitting a spurious ampacity failure on dropMin.
+        val ampacityEval = VoltageDrop.checkAmpacity(baseRequest, ampacityRequest, smallest)
+        val autoSize = when {
+            ampacityEval.governingSize != null -> ampacityEval.governingSize
+            smallest == null -> supported.last()
+            ampacityEval.ambientFactor != null -> supported.last()
+            else -> smallest
+        }
+        baseRequest.copy(size = autoSize)
+    }
+
+    return ParsedInputs(
+        request = effectiveRequest,
+        missing = emptyList(),
+        problems = emptyList(),
+        isAutoSized = overrideSize == null,
+        smallestSize = smallest,
+        ampacity = ampacityRequest,
+    )
 }

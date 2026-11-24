@@ -26,7 +26,8 @@ internal object FormulaSheet {
         summary = f.summary,
         source = RefSource.Math,
         tools = listOfNotNull(ToolIds.FORMULAS, f.toolId),
-        keywords = f.keywords + f.group.label + f.variables.map { it.name },
+        keywords = f.keywords + f.group.label + f.variables.flatMap { listOf(it.name, it.symbol) } +
+            f.relations.map { it.expression } + f.notes,
     ) {
         buildList {
             f.relations.forEach { add(Equation(it.expression)) }

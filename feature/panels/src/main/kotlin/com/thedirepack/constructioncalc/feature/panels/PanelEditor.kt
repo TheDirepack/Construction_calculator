@@ -39,7 +39,6 @@ import com.thedirepack.constructioncalc.core.model.design.PanelDesign
 import com.thedirepack.constructioncalc.core.ui.components.ChoiceField
 import com.thedirepack.constructioncalc.core.ui.components.FormSection
 import com.thedirepack.constructioncalc.core.ui.components.SegmentedChoice
-import com.thedirepack.constructioncalc.core.ui.components.TextInputDialog
 import com.thedirepack.constructioncalc.feature.panels.domain.CircuitAt
 import com.thedirepack.constructioncalc.feature.panels.domain.LoadMath
 import com.thedirepack.constructioncalc.feature.panels.domain.PanelFacts
@@ -54,9 +53,6 @@ import com.thedirepack.constructioncalc.feature.panels.domain.newCircuit
 private enum class EditorSection(val label: String) { SCHEDULE("Schedule"), SETTINGS("Settings") }
 
 private data class SheetTarget(val circuit: Circuit, val isNew: Boolean)
-
-private val COMMON_SPACES = listOf(12, 18, 20, 24, 30, 42, 54, 60, 84)
-private const val CUSTOM_SPACES = -1
 
 /** One panel: its schedule with totals, and its settings. */
 @Composable
@@ -178,9 +174,14 @@ private fun Totals(pd: PanelDesign, panel: Panel) {
 
 @Composable
 private fun PanelSettings(ctx: PanelsContext, panel: Panel) {
-    var customSpaces by remember { mutableStateOf(false) }
     fun update(change: (Panel) -> Panel) = ctx.edit { p, now -> p.updatePanel(panel.id, now, change) }
     val locked = ctx.readOnly
+    val validSpaces = remember(panel.system.phases) { Panel.validSpaceCounts(panel.system.phases) }
+    val isLegacyNonStandard = panel.spaces !in validSpaces
+    val spaceOptions = remember(validSpaces, panel.spaces, isLegacyNonStandard) {
+        if (isLegacyNonStandard) (listOf(panel.spaces) + validSpaces).distinct().sorted() else validSpaces
+    }
+    val step = if (panel.system.phases >= 3) 6 else 4
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         FormSection("Panel") {
@@ -214,10 +215,18 @@ private fun PanelSettings(ctx: PanelsContext, panel: Panel) {
             )
             ChoiceField(
                 label = "Spaces",
-                options = (COMMON_SPACES + panel.spaces).distinct().sorted() + CUSTOM_SPACES,
+                options = spaceOptions,
                 selected = panel.spaces,
-                onSelect = { n -> if (n == CUSTOM_SPACES) customSpaces = !locked else update { it.copy(spaces = n) } },
-                optionLabel = { if (it == CUSTOM_SPACES) "Custom…" else "$it spaces" },
+                onSelect = { n -> if (!locked) update { it.copy(spaces = n) } },
+                optionLabel = { n ->
+                    if (n == panel.spaces && isLegacyNonStandard) "$n spaces (legacy non-standard)" else "$n spaces"
+                },
+                supportingText = buildString {
+                    append("Bus-locked to multiples of $step for ${if (panel.system.phases >= 3) "3φ" else "1φ"} panels.")
+                    if (isLegacyNonStandard) {
+                        append(" Current ${panel.spaces}-space count is legacy non-standard; pick a standard bus size to snap.")
+                    }
+                },
             )
             ChoiceField<Int?>(
                 label = "Bus rating",
@@ -254,13 +263,5 @@ private fun PanelSettings(ctx: PanelsContext, panel: Panel) {
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-    }
-
-    if (customSpaces) {
-        TextInputDialog("Number of spaces", panel.spaces.toString(), "Set", { text ->
-            text.toIntOrNull()?.takeIf { it in 2..Panel.MAX_SPACES }?.let { n -> update { it.copy(spaces = n) } }
-                ?: ctx.host.showMessage("Enter a number from 2 to ${Panel.MAX_SPACES}")
-            customSpaces = false
-        }, { customSpaces = false }, label = "Spaces (2–${Panel.MAX_SPACES})")
     }
 }

@@ -588,6 +588,7 @@ data class PlanDrawing(
     val routes: List<PlanRunRoute> = emptyList(),
     val paths: List<PlanPath> = emptyList(),
     val sheetRevisions: Map<Int, SheetRevision> = emptyMap(),
+    val scaleLocked: Boolean = false,
 ) {
     init {
         require(name.isNotBlank() && name.length <= 240)

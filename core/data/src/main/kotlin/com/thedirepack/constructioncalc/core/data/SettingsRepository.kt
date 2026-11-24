@@ -1,7 +1,13 @@
 package com.thedirepack.constructioncalc.core.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.core.content.edit
+import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.CodeEdition
+import com.thedirepack.constructioncalc.core.electrical.code.CodeProfile
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRegions
+import com.thedirepack.constructioncalc.core.measure.FractionRounding
 import com.thedirepack.constructioncalc.core.measure.Precision
 import com.thedirepack.constructioncalc.core.measure.FeetInchStyle
 import com.thedirepack.constructioncalc.core.measure.MetricDisplay
@@ -68,17 +74,30 @@ data class AppSettings(
     val metricDisplay: MetricDisplay = MetricDisplay.AUTO,
     /** Metric only: what lengths are rounded to. */
     val metricResolution: MetricResolution = MetricResolution.MILLIMETER,
-    /** Imperial only: `10' 4"` or drawing-style `10'-4"`. */
+    /** Imperial only: `10' 4"`, drawing-style `10'-4"`, or architectural `10-04-03`. */
     val feetInchStyle: FeetInchStyle = FeetInchStyle.SPACE,
     /** Where "Save to project" goes by default. */
     val activeProjectId: String? = null,
     val activeRunId: String? = null,
     val company: CompanyProfile = CompanyProfile(),
+    /** Active implemented electrical code edition name (`CodeEdition.NEC_2023.name`). */
+    val codeEdition: String = CodeEdition.NEC_2023.name,
+    /** Selected regional code profile id (`CodeRegions.STANDARD_ID`, etc.). */
+    val codeRegion: String = CodeRegions.STANDARD_ID,
+    /** How fractional inches round to the configured [precision] step. */
+    val fractionRounding: FractionRounding = FractionRounding.NEAREST,
 )
 
-class SettingsRepository(private val context: Context) {
-    private val prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
-    private val state = MutableStateFlow(load())
+class SettingsRepository internal constructor(
+    private val prefs: SharedPreferences,
+    private val modulePrefs: (String) -> SharedPreferences,
+) {
+    constructor(context: Context) : this(
+        prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE),
+        modulePrefs = { toolId -> context.getSharedPreferences("module_$toolId", Context.MODE_PRIVATE) },
+    )
+
+    private val state = MutableStateFlow(load().also(::syncCodeProfile))
     val settings: StateFlow<AppSettings> = state.asStateFlow()
 
     fun setThemeMode(mode: ThemeMode) = save { it.copy(themeMode = mode) }
@@ -93,7 +112,7 @@ class SettingsRepository(private val context: Context) {
         modules.getOrPut(toolId) {
             val known = prefs.getStringSet(KEY_MODULES, emptySet()).orEmpty()
             if (toolId !in known) prefs.edit { putStringSet(KEY_MODULES, known + toolId) }
-            ModuleSettings(context.getSharedPreferences("module_$toolId", Context.MODE_PRIVATE))
+            ModuleSettings(modulePrefs(toolId))
         }
     }
 
@@ -113,6 +132,9 @@ class SettingsRepository(private val context: Context) {
             put(KEY_METRIC_DISPLAY, s.metricDisplay.name)
             put(KEY_METRIC_RESOLUTION, s.metricResolution.name)
             put(KEY_FT_IN_STYLE, s.feetInchStyle.name)
+            put(KEY_FRACTION_ROUNDING, s.fractionRounding.name)
+            put(KEY_CODE_EDITION, s.codeEdition)
+            put(KEY_CODE_REGION, s.codeRegion)
             s.activeProjectId?.let { put(KEY_PROJECT, it) }
             s.activeRunId?.let { put(KEY_RUN, it) }
             put(KEY_CO_NAME, s.company.name)
@@ -136,6 +158,9 @@ class SettingsRepository(private val context: Context) {
             metricDisplay = str(KEY_METRIC_DISPLAY)?.let { n -> MetricDisplay.entries.firstOrNull { it.name == n } } ?: current.metricDisplay,
             metricResolution = str(KEY_METRIC_RESOLUTION)?.let { n -> MetricResolution.entries.firstOrNull { it.name == n } } ?: current.metricResolution,
             feetInchStyle = str(KEY_FT_IN_STYLE)?.let { n -> FeetInchStyle.entries.firstOrNull { it.name == n } } ?: current.feetInchStyle,
+            fractionRounding = str(KEY_FRACTION_ROUNDING)?.let { n -> FractionRounding.entries.firstOrNull { it.name == n } } ?: current.fractionRounding,
+            codeEdition = str(KEY_CODE_EDITION)?.let(::parseCodeEditionOrNull)?.name ?: current.codeEdition,
+            codeRegion = str(KEY_CODE_REGION)?.let { id -> CodeRegions.find(id)?.id } ?: current.codeRegion,
             activeProjectId = str(KEY_PROJECT) ?: current.activeProjectId,
             activeRunId = str(KEY_RUN) ?: current.activeRunId,
             company = CompanyProfile(
@@ -179,12 +204,19 @@ class SettingsRepository(private val context: Context) {
 
     fun setFeetInchStyle(style: FeetInchStyle) = save { it.copy(feetInchStyle = style) }
 
+    fun setFractionRounding(rounding: FractionRounding) = save { it.copy(fractionRounding = rounding) }
+
+    fun setCodeEdition(edition: String) = save { it.copy(codeEdition = parseCodeEdition(edition).name) }
+
+    fun setCodeRegion(regionId: String) = save { it.copy(codeRegion = CodeRegions.getOrDefault(regionId).id) }
+
     fun setActiveTarget(projectId: String?, runId: String?) =
         save { it.copy(activeProjectId = projectId, activeRunId = runId) }
 
     private fun save(change: (AppSettings) -> AppSettings) {
         state.update(change)
         val s = state.value
+        syncCodeProfile(s)
         prefs.edit {
             putString(KEY_THEME, s.themeMode.name)
             putBoolean(KEY_ANIMATIONS, s.animations)
@@ -194,6 +226,9 @@ class SettingsRepository(private val context: Context) {
             putString(KEY_METRIC_DISPLAY, s.metricDisplay.name)
             putString(KEY_METRIC_RESOLUTION, s.metricResolution.name)
             putString(KEY_FT_IN_STYLE, s.feetInchStyle.name)
+            putString(KEY_FRACTION_ROUNDING, s.fractionRounding.name)
+            putString(KEY_CODE_EDITION, s.codeEdition)
+            putString(KEY_CODE_REGION, s.codeRegion)
             putString(KEY_PROJECT, s.activeProjectId)
             putString(KEY_RUN, s.activeRunId)
             putString(KEY_CO_NAME, s.company.name)
@@ -219,6 +254,10 @@ class SettingsRepository(private val context: Context) {
         metricResolution = prefs.getString(KEY_METRIC_RESOLUTION, null)?.let { n -> MetricResolution.entries.firstOrNull { it.name == n } }
             ?: MetricResolution.MILLIMETER,
         feetInchStyle = prefs.getString(KEY_FT_IN_STYLE, null)?.let { n -> FeetInchStyle.entries.firstOrNull { it.name == n } } ?: FeetInchStyle.SPACE,
+        fractionRounding = prefs.getString(KEY_FRACTION_ROUNDING, null)?.let { n -> FractionRounding.entries.firstOrNull { it.name == n } }
+            ?: FractionRounding.NEAREST,
+        codeEdition = parseCodeEdition(prefs.getString(KEY_CODE_EDITION, null)).name,
+        codeRegion = prefs.getString(KEY_CODE_REGION, null)?.let { CodeRegions.getOrDefault(it).id } ?: CodeRegions.STANDARD_ID,
         activeProjectId = prefs.getString(KEY_PROJECT, null),
         activeRunId = prefs.getString(KEY_RUN, null),
         company = CompanyProfile(
@@ -231,10 +270,27 @@ class SettingsRepository(private val context: Context) {
         ),
     )
 
+    private fun syncCodeProfile(s: AppSettings) {
+        Code.setGlobalProfile(
+            CodeProfile(
+                edition = parseCodeEdition(s.codeEdition),
+                regionId = CodeRegions.getOrDefault(s.codeRegion).id,
+            ),
+        )
+    }
+
+    private fun parseCodeEditionOrNull(raw: String): CodeEdition? =
+        CodeEdition.entries.firstOrNull { it.name == raw && it.isImplemented }
+
+    private fun parseCodeEdition(raw: String?): CodeEdition =
+        raw?.let(::parseCodeEditionOrNull) ?: CodeEdition.NEC_2023
+
     internal companion object {
         fun validateBackup(settings: JsonObject?, toolSettings: Map<String, JsonObject>) {
             val appKeys = listOf(
-                KEY_THEME, KEY_ANIMATIONS, KEY_PRECISION, KEY_DISPLAY, KEY_UNITS, KEY_METRIC_DISPLAY, KEY_METRIC_RESOLUTION, KEY_FT_IN_STYLE, KEY_PROJECT, KEY_RUN,
+                KEY_THEME, KEY_ANIMATIONS, KEY_PRECISION, KEY_DISPLAY, KEY_UNITS, KEY_METRIC_DISPLAY, KEY_METRIC_RESOLUTION, KEY_FT_IN_STYLE,
+                KEY_FRACTION_ROUNDING, KEY_CODE_EDITION, KEY_CODE_REGION,
+                KEY_PROJECT, KEY_RUN,
                 KEY_CO_NAME, KEY_CO_PREPARED, KEY_CO_LICENSE, KEY_CO_PHONE, KEY_CO_EMAIL, KEY_CO_ADDRESS,
             )
             val badKey = appKeys.firstOrNull { settings?.get(it)?.let { value -> value !is JsonPrimitive } == true }
@@ -261,6 +317,9 @@ class SettingsRepository(private val context: Context) {
         const val KEY_METRIC_DISPLAY = "metric_display"
         const val KEY_METRIC_RESOLUTION = "metric_resolution"
         const val KEY_FT_IN_STYLE = "feet_inch_style"
+        const val KEY_FRACTION_ROUNDING = "fraction_rounding"
+        const val KEY_CODE_EDITION = "code_edition"
+        const val KEY_CODE_REGION = "code_region"
         const val KEY_PROJECT = "active_project"
         const val KEY_RUN = "active_run"
         const val KEY_MODULES = "module_ids"

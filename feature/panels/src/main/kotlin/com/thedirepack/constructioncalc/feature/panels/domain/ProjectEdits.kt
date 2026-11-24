@@ -26,7 +26,7 @@ fun Project.findCircuit(circuitId: String): CircuitAt? =
 fun Project.allCircuits(): List<CircuitAt> = panels.flatMap { p -> p.circuits.map { CircuitAt(p, it) } }
 
 /** A new panel with the app's defaults: 208Y/120 V, 42 spaces, 225 A bus, main lugs only. */
-fun newPanel(name: String): Panel = Panel(name = name.trim().ifEmpty { "Panel" })
+fun newPanel(name: String): Panel = PanelTemplates.default.createPanel(name)
 
 /** A suggested name that isn't taken yet: "Panel 1", "Panel 2"… */
 fun Project.suggestedPanelName(): String {
@@ -94,15 +94,32 @@ fun Project.deleteCircuit(circuitId: String, now: Long): Project = copy(
     updatedAt = now,
 )
 
-/** Replaces a panel's settings. Switching to a single-phase system turns 3-pole breakers into 2-pole. */
+/**
+ * Replaces a panel's supply system. When switching between single-phase and three-phase,
+ * spaces snap to the nearest valid bus count via [Panel.snapSpacesToBus], and switching to
+ * single-phase turns 3-pole breakers into 2-pole.
+ */
 fun Project.changePanelSystem(panelId: String, system: PanelSystem, now: Long): Project =
     updatePanel(panelId, now) { p ->
-        if (system.phases == 1) {
-            p.copy(system = system, circuits = p.circuits.map { if (it.poles > 2) it.copy(poles = 2, neutral = false) else it })
+        val spaces = if (p.system.phases != system.phases) {
+            Panel.snapSpacesToBus(p.spaces, system.phases)
         } else {
-            p.copy(system = system)
+            p.spaces
+        }
+        if (system.phases == 1) {
+            p.copy(
+                system = system,
+                spaces = spaces,
+                circuits = p.circuits.map { if (it.poles > 2) it.copy(poles = 2, neutral = false) else it },
+            )
+        } else {
+            p.copy(system = system, spaces = spaces)
         }
     }
+
+/** Updates whether project-wide automatic voltage-drop conductor upsizing is enabled. */
+fun Project.withUpsizeForVoltageDrop(enabled: Boolean, now: Long): Project =
+    copy(design = design.copy(upsizeForVoltageDrop = enabled), updatedAt = now)
 
 /**
  * A copy of a panel (new ids throughout) placed right after the original. It isn't fed from anything,

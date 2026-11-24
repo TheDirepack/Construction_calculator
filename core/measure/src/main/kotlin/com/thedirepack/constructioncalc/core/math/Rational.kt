@@ -44,6 +44,24 @@ class Rational private constructor(val numerator: BigInteger, val denominator: B
         return twice.divide(denominator.shiftLeft(1)) // BigInteger.divide truncates toward zero
     }
 
+    /**
+     * Rounds `this * step` down toward negative infinity (floor) to an integer number of steps.
+     */
+    fun floorToSteps(step: Long): BigInteger {
+        val scaled = numerator * BigInteger.valueOf(step)
+        val (quot, rem) = scaled.divideAndRemainder(denominator)
+        return if (rem.signum() < 0) quot - BigInteger.ONE else quot
+    }
+
+    /**
+     * Rounds `this * step` up toward positive infinity (ceiling) to an integer number of steps.
+     */
+    fun ceilToSteps(step: Long): BigInteger {
+        val scaled = numerator * BigInteger.valueOf(step)
+        val (quot, rem) = scaled.divideAndRemainder(denominator)
+        return if (rem.signum() > 0) quot + BigInteger.ONE else quot
+    }
+
     fun toBigDecimal(scale: Int): BigDecimal =
         BigDecimal(numerator).divide(BigDecimal(denominator), scale, RoundingMode.HALF_UP)
 

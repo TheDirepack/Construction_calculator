@@ -46,8 +46,15 @@ class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
         get() = lastAnswer ?: history.entries.value.firstOrNull()?.let { Register(it.result.toQuantity(), it.preferInches) }
 
     /** Applies a key. Returns the finished calculation when `=` succeeded. */
-    fun onKey(key: Key, settings: AppSettings): CalcInput.Outcome {
-        val outcome = CalcInput.reduce(state, key)
+    fun onKey(key: Key, settings: AppSettings): CalcInput.Outcome =
+        recordOutcome(CalcInput.reduce(state, key), settings)
+
+    /** Applies an action from the dual-split keypad via [DualSplitKeyMapper]. */
+    internal fun onDualSplitAction(action: DualSplitAction, settings: AppSettings): CalcInput.Outcome =
+        recordOutcome(DualSplitKeyMapper.apply(state, action), settings)
+
+    private fun recordOutcome(outcome: CalcInput.Outcome, settings: AppSettings): CalcInput.Outcome {
+        if (!outcome.accepted && outcome.state == state) return outcome
         state = outcome.state
         outcome.completed?.let { calc ->
             val inches = CalcInput.prefersInches(calc.expression)

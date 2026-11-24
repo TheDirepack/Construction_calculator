@@ -1,6 +1,7 @@
 package com.thedirepack.constructioncalc.feature.reference.content
 
 import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.CodeProfile
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
 
@@ -106,13 +107,30 @@ class RefEntry(
     val keywords: List<String> = emptyList(),
     private val build: (RefContext) -> List<RefBlock>,
 ) {
-    private val built = java.util.concurrent.ConcurrentHashMap<RefContext, List<RefBlock>>()
+    private data class BlockCacheKey(val context: RefContext, val profile: CodeProfile)
 
-    /** The page's content for [context], built once per unit system. */
-    fun blocks(context: RefContext = RefContext.IMPERIAL): List<RefBlock> = built.getOrPut(context) { build(context) }
+    private val built = java.util.concurrent.ConcurrentHashMap<BlockCacheKey, List<RefBlock>>()
 
-    private val searchText: String by lazy {
-        (listOf(title, summary, section.label, source.label) + keywords + tools).joinToString(" ").lowercase()
+    /** The page's content for [context] and the active [Code.currentProfile], built once per pair. */
+    fun blocks(context: RefContext = RefContext.IMPERIAL): List<RefBlock> =
+        built.getOrPut(BlockCacheKey(context, Code.currentProfile)) { build(context) }
+
+    private val staticSearchText: String by lazy {
+        val raw = (listOf(id, title, summary, section.label) + keywords + tools).joinToString(" ")
+        normalizeSearchText(raw)
+    }
+
+    private fun currentSearchText(): String {
+        val dynamicParts = buildList {
+            add(source.label)
+            if (source is RefSource.CodeRef) {
+                source.rules.forEach { rule ->
+                    add(rule.cite)
+                    add(rule.title)
+                }
+            }
+        }
+        return "$staticSearchText ${normalizeSearchText(dynamicParts.joinToString(" "))}"
     }
 
     /**
@@ -120,10 +138,23 @@ class RefEntry(
      * matches rank above the rest.
      */
     fun score(words: List<String>): Int {
-        if (words.isEmpty() || !words.all { it in searchText }) return 0
-        val t = title.lowercase()
+        if (words.isEmpty()) return 0
+        val haystack = currentSearchText()
+        if (!words.all { it in haystack }) return 0
+        val t = normalizeSearchText(title)
         return 1 + words.count { it in t } * 2 + if (t.startsWith(words.first())) 3 else 0
     }
+}
+
+internal fun normalizeSearchText(text: String): String {
+    val lower = text.lowercase()
+    val noApostrophes = lower.replace("'", "").replace("\u2019", "")
+    val spaced = noApostrophes.replace("-", " ")
+    val phaseAliases = buildString {
+        if ("three-phase" in lower || "three phase" in spaced) append(" 3-phase 3 phase 3phase")
+        if ("single-phase" in lower || "single phase" in spaced) append(" 1-phase 1 phase 1phase")
+    }
+    return "$lower $noApostrophes $spaced$phaseAliases"
 }
 
 /** Splits a search box's text into lowercase words. */

@@ -3,6 +3,12 @@ package com.thedirepack.constructioncalc.core.model.design
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
+import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.CodeEdition
+import com.thedirepack.constructioncalc.core.electrical.code.CodeProfile
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRegions
+import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
+import com.thedirepack.constructioncalc.core.electrical.code.RegionalAmendment
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.Circuit
@@ -278,5 +284,71 @@ class ProjectAnalysisTest {
         assertEquals(3, wires.count)
         assertEquals(2, wires.currentCarrying)
         assertEquals(0, r.entries.single { it.ground }.currentCarrying)
+    }
+
+    @Test fun panelValidSpaceCountsAndSnapSpacesToBusFollowPhaseCycles() {
+        // Panel.init remains permissive for 1..MAX_SPACES (e.g. legacy 1-space or 100-space custom panels).
+        assertEquals(1, Panel(name = "Single", spaces = 1).spaces)
+        assertEquals(100, Panel(name = "Custom", spaces = 100).spaces)
+
+        assertEquals((12..84 step 6).toList(), Panel.validSpaceCounts(3))
+        assertEquals((8..60 step 4).toList(), Panel.validSpaceCounts(1))
+
+        // Three-phase snapping (multiples of 6 in 12..84, tie-break upward)
+        assertEquals(12, Panel.snapSpacesToBus(4, 3))
+        assertEquals(12, Panel.snapSpacesToBus(14, 3))
+        assertEquals(18, Panel.snapSpacesToBus(15, 3))
+        assertEquals(42, Panel.snapSpacesToBus(42, 3))
+        assertEquals(84, Panel.snapSpacesToBus(100, 3))
+
+        // Single-phase snapping (multiples of 4 in 8..60, tie-break upward)
+        assertEquals(8, Panel.snapSpacesToBus(2, 1))
+        assertEquals(8, Panel.snapSpacesToBus(9, 1))
+        assertEquals(12, Panel.snapSpacesToBus(10, 1))
+        assertEquals(40, Panel.snapSpacesToBus(40, 1))
+        assertEquals(60, Panel.snapSpacesToBus(96, 1))
+    }
+
+    @Test fun projectCodeEditionAndRegionScopeAnalysisWithGlobalFallback() {
+        val originalGlobal = Code.globalProfile
+        try {
+            val globalCustom = CodeProfile(
+                edition = CodeEdition.NEC_2023,
+                regionId = CodeRegions.CUSTOM_ID,
+                customAmendment = RegionalAmendment(
+                    regionId = CodeRegions.CUSTOM_ID,
+                    label = "Heavy Min Cu",
+                    citationOverrides = mapOf(CodeRule.MINIMUM_CONDUCTOR_SIZE to "Custom 310.3"),
+                    valuesTransform = { it.copy(minimumSizeCopper = ConductorSize.AWG_10) },
+                ),
+            )
+            Code.setGlobalProfile(globalCustom)
+
+            val run = Run(name = "R", raceway = Raceway(ConduitType.EMT))
+            val c = Circuit(slot = 1, breakerAmps = 15, runIds = listOf(run.id))
+
+            // 1. Project with null codeEdition/codeRegion inherits global profile (min 10 AWG Cu).
+            val inheritedProject = Project(name = "Inherited", createdAt = 0, runs = listOf(run), panels = listOf(Panel(name = "LP", circuits = listOf(c))))
+            assertEquals(ConductorSize.AWG_10, ProjectAnalysis.analyze(inheritedProject).circuits.getValue(c.id).minimumSize)
+
+            // 2. Project overriding codeRegion to standard NEC uses unamended NEC 2023 (min 14 AWG Cu)
+            //    while keeping global fallback untouched afterward.
+            val overriddenProject = inheritedProject.copy(codeRegion = CodeRegions.STANDARD_ID)
+            val resolvedProfile = ProjectAnalysis.codeProfileFor(overriddenProject)
+            assertEquals(CodeEdition.NEC_2023, resolvedProfile.edition)
+            assertEquals(CodeRegions.STANDARD_ID, resolvedProfile.regionId)
+            assertEquals(ConductorSize.AWG_14, ProjectAnalysis.analyze(overriddenProject).circuits.getValue(c.id).minimumSize)
+
+            // 3. Project overriding only codeEdition keeps global region/custom amendment.
+            val editionOnly = inheritedProject.copy(codeEdition = CodeEdition.NEC_2023.name)
+            assertEquals(CodeRegions.CUSTOM_ID, ProjectAnalysis.codeProfileFor(editionOnly).regionId)
+            assertEquals(ConductorSize.AWG_10, ProjectAnalysis.analyze(editionOnly).circuits.getValue(c.id).minimumSize)
+
+            // Global profile was not mutated by per-project analysis.
+            assertEquals(globalCustom, Code.globalProfile)
+            assertEquals(ConductorSize.AWG_10, Code.book.values.minimumSizeCopper)
+        } finally {
+            Code.setGlobalProfile(originalGlobal)
+        }
     }
 }

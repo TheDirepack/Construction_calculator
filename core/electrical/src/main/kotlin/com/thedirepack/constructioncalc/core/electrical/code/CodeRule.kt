@@ -2,9 +2,42 @@ package com.thedirepack.constructioncalc.core.electrical.code
 
 import com.thedirepack.constructioncalc.core.electrical.code.nec2023.Nec2023
 
-/** A published code edition that the app's tables and rules come from. */
-enum class CodeEdition(val label: String, val year: Int) {
-    NEC_2023("NEC 2023", 2023),
+/**
+ * A published code edition that the app's tables and rules come from.
+ *
+ * [NEC_2023] is the active implemented base edition. [NEC_2026] is planned and pending
+ * finalization and verification against the printed edition; it is not active until verified.
+ */
+enum class CodeEdition(
+    val label: String,
+    val year: Int,
+    /** True only once all tables, citations, and single values are verified against the printed book. */
+    val isImplemented: Boolean = true,
+    val statusNote: String = "Active implemented base edition.",
+) {
+    NEC_2023(
+        label = "NEC 2023",
+        year = 2023,
+        isImplemented = true,
+        statusNote = "Active implemented base edition.",
+    ),
+
+    /** Planned edition; pending finalization and line-by-line verification before activation. */
+    NEC_2026(
+        label = "NEC 2026",
+        year = 2026,
+        isImplemented = false,
+        statusNote = "Planned / pending finalization; not active until verified against the printed edition.",
+    ),
+    ;
+
+    /** Alias for [isImplemented]: whether this edition can currently be used as an active book. */
+    val isActive: Boolean get() = isImplemented
+
+    companion object {
+        /** Editions backed by a verified [ElectricalCode] implementation. */
+        val activeEntries: List<CodeEdition> get() = entries.filter { it.isImplemented }
+    }
 }
 
 /**
@@ -127,14 +160,75 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
 }
 
 /**
- * The code edition the app's tables and rules follow: every code value and citation is read from
- * [book]. Change it here when moving to a new edition (docs/CODE_UPDATES.md).
+ * The code edition and optional regional amendment profile the app's tables and rules follow.
+ *
+ * Every code value and citation is read from [book], which checks a thread-local [withProfile]
+ * override first and otherwise falls back to [globalProfile]. By default [globalProfile] uses
+ * [CodeEdition.NEC_2023] with [CodeRegions.STANDARD_ID], resolving directly to [Nec2023].
  */
 object Code {
-    val book: ElectricalCode = Nec2023
+    private data class GlobalState(val profile: CodeProfile, val book: ElectricalCode)
+
+    @Volatile
+    private var globalState = GlobalState(CodeProfile(), Nec2023)
+
+    @PublishedApi
+    internal val threadProfile = ThreadLocal<CodeProfile?>()
+
+    val globalProfile: CodeProfile get() = globalState.profile
+
+    /** Effective profile on the current thread (either [withProfile] override or [globalProfile]). */
+    val currentProfile: CodeProfile get() = threadProfile.get() ?: globalState.profile
+
+    @Synchronized
+    fun setGlobalProfile(profile: CodeProfile) {
+        globalState = GlobalState(profile, resolve(profile))
+    }
+
+    /**
+     * Resolves [profile] to an [ElectricalCode].
+     *
+     * Unimplemented editions (such as planned [CodeEdition.NEC_2026]) safely fall back to the
+     * active verified base edition ([Nec2023]) so callers never read unverified numbers.
+     */
+    fun resolve(profile: CodeProfile): ElectricalCode {
+        val base: ElectricalCode = when (profile.edition) {
+            CodeEdition.NEC_2023 -> Nec2023
+            CodeEdition.NEC_2026 -> Nec2023
+        }
+        val regional = CodeRegions.find(profile.regionId)?.amendment
+        val custom = profile.customAmendment
+        var resolved = base
+        if (regional != null && !regional.isEmpty) {
+            resolved = AmendedElectricalCode(resolved, regional)
+        }
+        if (custom != null && !custom.isEmpty) {
+            resolved = AmendedElectricalCode(resolved, custom)
+        }
+        return resolved
+    }
+
+    /**
+     * Temporarily overrides [Code.book] on the calling thread for the duration of [block],
+     * restoring the prior thread-local state in `finally`.
+     */
+    inline fun <T> withProfile(profile: CodeProfile, block: () -> T): T {
+        val previous = threadProfile.get()
+        threadProfile.set(profile)
+        return try {
+            block()
+        } finally {
+            if (previous == null) threadProfile.remove() else threadProfile.set(previous)
+        }
+    }
+
+    val book: ElectricalCode
+        get() = threadProfile.get()?.let(::resolve) ?: globalState.book
 
     val edition: CodeEdition get() = book.edition
 
     /** "NEC 2023", for notes and reports. */
     val label: String get() = edition.label
+
+    val region: CodeRegion get() = CodeRegions.getOrDefault(currentProfile.regionId)
 }

@@ -145,4 +145,26 @@ class ConduitFillInputsTest {
         val bad = ConduitFillInputs(groups = listOf(ConductorGroupInput("1", insulation = CABLE_CODE, cableName = "Mystery")))
         assertTrue(bad.toRequest().problems.single().contains("Mystery"))
     }
+
+    @Test fun wave2AFieldsRoundTripAndLegacyJsonDecodesCleanly() {
+        val wave2A = ConduitFillInputs(
+            voltageSystem = com.thedirepack.constructioncalc.feature.conduitfill.domain.VoltageSystem.WYE_480_277.name,
+            customVoltageLabel = "480V",
+            circuitCount = 3,
+            sharedMwbc = true,
+            nonlinearHarmonic = true,
+            threePhaseCircuits = true,
+        )
+        assertEquals(wave2A, ToolInputs.decode<ConduitFillInputs>(ToolInputs.encode(wave2A)))
+        // Legacy JSON missing new fields still decodes with defaults
+        val legacyJson = kotlinx.serialization.json.buildJsonObject {
+            put("conduitType", kotlinx.serialization.json.JsonPrimitive(ConduitType.RMC.code))
+            put("tradeSize", kotlinx.serialization.json.JsonPrimitive("1"))
+        }
+        val decoded = ToolInputs.decode<ConduitFillInputs>(legacyJson)!!
+        assertEquals(ConduitType.RMC.code, decoded.conduitType)
+        assertEquals("1", decoded.tradeSize)
+        assertEquals(com.thedirepack.constructioncalc.feature.conduitfill.domain.VoltageSystem.V120, decoded.voltagePreset)
+        assertEquals(1, decoded.circuitCount)
+    }
 }

@@ -122,6 +122,39 @@ class ProjectEditsTest {
         val r = project(p).changePanelSystem(p.id, PanelSystem.SINGLE_120_240, now = 1).panel(p.id)!!
         assertEquals(PanelSystem.SINGLE_120_240, r.system)
         assertEquals(2, r.circuits.single().poles)
+        assertEquals(Panel.snapSpacesToBus(42, 1), r.spaces)
+    }
+
+    @Test fun changePanelSystemSnapsSpacesOnlyWhenPhaseCountChanges() {
+        // 3φ 42 spaces -> 1φ snaps to 44 (nearest multiple of 4, tie-breaking upward)
+        val threePhase42 = Panel(name = "3P", system = PanelSystem.WYE_208_120, spaces = 42)
+        val to1Ph = project(threePhase42).changePanelSystem(threePhase42.id, PanelSystem.SINGLE_120_240, now = 2).panel(threePhase42.id)!!
+        assertEquals(44, to1Ph.spaces)
+        assertTrue(to1Ph.spaces in Panel.validSpaceCounts(1))
+
+        // 1φ 40 spaces -> 3φ snaps to 42 (nearest multiple of 6)
+        val singlePhase40 = Panel(name = "1P", system = PanelSystem.SINGLE_120_240, spaces = 40)
+        val to3Ph = project(singlePhase40).changePanelSystem(singlePhase40.id, PanelSystem.WYE_480_277, now = 3).panel(singlePhase40.id)!!
+        assertEquals(42, to3Ph.spaces)
+        assertTrue(to3Ph.spaces in Panel.validSpaceCounts(3))
+
+        // 3φ 24 spaces -> 1φ stays 24 since 24 is valid in both 1φ and 3φ
+        val shared24 = Panel(name = "Shared", system = PanelSystem.DELTA_240, spaces = 24)
+        assertEquals(24, project(shared24).changePanelSystem(shared24.id, PanelSystem.SINGLE_120_240, now = 4).panel(shared24.id)!!.spaces)
+
+        // Switching between two 3φ systems keeps existing (even legacy non-standard) space count
+        val legacy3Ph = Panel(name = "Legacy", system = PanelSystem.WYE_208_120, spaces = 20)
+        val samePhases = project(legacy3Ph).changePanelSystem(legacy3Ph.id, PanelSystem.WYE_480_277, now = 5).panel(legacy3Ph.id)!!
+        assertEquals(20, samePhases.spaces)
+    }
+
+    @Test fun withUpsizeForVoltageDropUpdatesDesignSetting() {
+        val job = project(Panel(name = "LP-1")).copy(
+            design = com.thedirepack.constructioncalc.core.model.DesignDefaults(upsizeForVoltageDrop = false),
+        )
+        val updated = job.withUpsizeForVoltageDrop(true, now = 10)
+        assertTrue(updated.design.upsizeForVoltageDrop)
+        assertEquals(10L, updated.updatedAt)
     }
 
     @Test fun duplicatingAPanelGivesNewIds() {

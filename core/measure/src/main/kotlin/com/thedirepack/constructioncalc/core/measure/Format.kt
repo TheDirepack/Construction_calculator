@@ -38,9 +38,14 @@ data class FeetInches(
 
 object MeasureFormat {
 
-    fun splitInches(totalInches: Rational, precision: Precision, style: LengthStyle): FeetInches {
+    fun splitInches(
+        totalInches: Rational,
+        precision: Precision,
+        style: LengthStyle,
+        rounding: FractionRounding = FractionRounding.NEAREST,
+    ): FeetInches {
         val den = precision.denominator
-        val steps = totalInches.roundToSteps(den.toLong())
+        val steps = roundSteps(totalInches, den.toLong(), rounding)
         val exact = Rational.of(steps, BigInteger.valueOf(den.toLong())) == totalInches
         val negative = steps.signum() < 0
         val abs = steps.abs()
@@ -60,25 +65,33 @@ object MeasureFormat {
     }
 
     /**
-     * Plain-text feet-inch string, e.g. `10' 4 3/16"`, `7/16"`, `−2' 0"`.
+     * Plain-text feet-inch string, e.g. `10' 4 3/16"`, `7/16"`, `−2' 0"`, or architectural `10-04-03`.
      * Fractions are written `n/d`; the UI typesets them.
      */
-    fun feetInches(fi: FeetInches, style: FeetInchStyle = FeetInchStyle.SPACE): String = buildString {
-        if (fi.negative) append('−')
-        val hasFeet = fi.feet.signum() != 0
-        if (hasFeet) append(fi.feet).append(if (style == FeetInchStyle.HYPHEN) "'-" else "' ")
-        // Always show whole inches after feet (`1' 0 1/2"`), and alone when there's no fraction.
-        val showWhole = hasFeet || fi.inches.signum() != 0 || !fi.hasFraction
-        if (showWhole) append(fi.inches)
-        if (fi.hasFraction) {
-            if (showWhole) append(' ')
-            append(fi.fractionNumerator).append('/').append(fi.fractionDenominator)
+    fun feetInches(fi: FeetInches, style: FeetInchStyle = FeetInchStyle.SPACE): String {
+        if (style == FeetInchStyle.ARCHITECTURAL) return formatArchitectural(fi)
+        return buildString {
+            if (fi.negative) append('−')
+            val hasFeet = fi.feet.signum() != 0
+            if (hasFeet) append(fi.feet).append(if (style == FeetInchStyle.HYPHEN) "'-" else "' ")
+            // Always show whole inches after feet (`1' 0 1/2"`), and alone when there's no fraction.
+            val showWhole = hasFeet || fi.inches.signum() != 0 || !fi.hasFraction
+            if (showWhole) append(fi.inches)
+            if (fi.hasFraction) {
+                if (showWhole) append(' ')
+                append(fi.fractionNumerator).append('/').append(fi.fractionDenominator)
+            }
+            append('"')
         }
-        append('"')
     }
 
-    fun length(inches: Rational, precision: Precision, style: LengthStyle, feetInchStyle: FeetInchStyle = FeetInchStyle.SPACE) =
-        feetInches(splitInches(inches, precision, style), feetInchStyle)
+    fun length(
+        inches: Rational,
+        precision: Precision,
+        style: LengthStyle,
+        feetInchStyle: FeetInchStyle = FeetInchStyle.SPACE,
+        rounding: FractionRounding = FractionRounding.NEAREST,
+    ) = feetInches(splitInches(inches, precision, style, rounding), feetInchStyle)
 
     /** Exact-to-[maxDecimals] decimal with trailing zeros removed. */
     fun decimal(value: Rational, maxDecimals: Int): String {
@@ -101,8 +114,11 @@ object MeasureFormat {
     /** The main result in either system, per [format]. */
     fun primary(q: Quantity, format: LengthFormat): String {
         if (!format.isMetric) {
-            return if (q.dimension == Dimension.LENGTH) length(q.value, format.precision, format.style, format.feetInchStyle)
-            else primary(q, format.precision, format.style)
+            return if (q.dimension == Dimension.LENGTH) {
+                length(q.value, format.precision, format.style, format.feetInchStyle, format.rounding)
+            } else {
+                primary(q, format.precision, format.style)
+            }
         }
         return when (q.dimension) {
             Dimension.NUMBER -> number(q.value)
@@ -115,18 +131,24 @@ object MeasureFormat {
     /** Secondary readouts in either system: in metric, the imperial equivalents (and the other way round). */
     fun conversions(q: Quantity, format: LengthFormat): List<Conversion> {
         if (!format.isMetric) {
-            val list = conversions(q, format.precision, format.style)
+            val list = conversions(q, format.precision, format.style, format.rounding)
             if (format.feetInchStyle == FeetInchStyle.SPACE || q.dimension != Dimension.LENGTH) return list
-            return list.map { if (it.label == "Feet-inches") it.copy(value = length(q.value, format.precision, LengthStyle.FEET_INCHES, FeetInchStyle.HYPHEN)) else it }
+            return list.map {
+                if (it.label == "Feet-inches") {
+                    it.copy(value = length(q.value, format.precision, LengthStyle.FEET_INCHES, format.feetInchStyle, format.rounding))
+                } else {
+                    it
+                }
+            }
         }
         val v = q.value
         return when (q.dimension) {
-            Dimension.NUMBER -> conversions(q, format.precision, format.style)
+            Dimension.NUMBER -> conversions(q, format.precision, format.style, format.rounding)
             Dimension.LENGTH -> listOf(
                 Conversion("Millimeters", decimal(v * Units.MM_PER_INCH, 1) + " mm"),
                 Conversion("Meters", decimal(v * Units.MM_PER_INCH / THOUSAND, 4) + " m"),
-                Conversion("Feet-inches", length(v, format.precision, LengthStyle.FEET_INCHES, format.feetInchStyle)),
-                Conversion("Inches", length(v, format.precision, LengthStyle.INCHES)),
+                Conversion("Feet-inches", length(v, format.precision, LengthStyle.FEET_INCHES, format.feetInchStyle, format.rounding)),
+                Conversion("Inches", length(v, format.precision, LengthStyle.INCHES, rounding = format.rounding)),
                 Conversion("Decimal ft", decimal(v / Units.INCHES_PER_FOOT, 4) + " ft"),
             )
             Dimension.AREA -> listOf(
@@ -144,37 +166,54 @@ object MeasureFormat {
     }
 
     /** Whether [primary] had to round a length. */
-    fun isRounded(q: Quantity, precision: Precision): Boolean =
+    fun isRounded(
+        q: Quantity,
+        precision: Precision,
+        rounding: FractionRounding = FractionRounding.NEAREST,
+    ): Boolean =
         q.dimension == Dimension.LENGTH &&
-            !splitInches(q.value, precision, LengthStyle.INCHES).exact
+            !splitInches(q.value, precision, LengthStyle.INCHES, rounding).exact
 
     /**
      * How the displayed length compares with the exact value: -1 if it was rounded down
      * (shown smaller than actual), 1 if rounded up, 0 if exact or not a length.
      */
-    fun roundingDirection(q: Quantity, precision: Precision): Int {
+    fun roundingDirection(
+        q: Quantity,
+        precision: Precision,
+        rounding: FractionRounding = FractionRounding.NEAREST,
+    ): Int {
         if (q.dimension != Dimension.LENGTH) return 0
-        val steps = q.value.roundToSteps(precision.denominator.toLong())
+        val steps = roundSteps(q.value, precision.denominator.toLong(), rounding)
         val shown = Rational.of(steps, BigInteger.valueOf(precision.denominator.toLong()))
         return shown.compareTo(q.value)
     }
 
+    /** [roundingDirection] using [format]'s precision and rounding mode (0 for metric or non-lengths). */
+    fun roundingDirection(q: Quantity, format: LengthFormat): Int =
+        if (format.isMetric) 0 else roundingDirection(q, format.precision, format.rounding)
+
     data class Conversion(val label: String, val value: String)
 
     /** Secondary readouts shown under the main result. */
-    fun conversions(q: Quantity, precision: Precision, style: LengthStyle): List<Conversion> {
+    fun conversions(
+        q: Quantity,
+        precision: Precision,
+        style: LengthStyle,
+        rounding: FractionRounding = FractionRounding.NEAREST,
+    ): List<Conversion> {
         val v = q.value
         return when (q.dimension) {
             Dimension.NUMBER -> buildList {
                 if (!v.isInteger) {
-                    val fi = splitInches(v, precision, LengthStyle.INCHES)
+                    val fi = splitInches(v, precision, LengthStyle.INCHES, rounding)
                     val asFraction = feetInches(fi).removeSuffix("\"")
                     add(Conversion("Fraction", (if (fi.exact) "" else "≈ ") + asFraction))
                 }
             }
             Dimension.LENGTH -> buildList {
-                if (style == LengthStyle.FEET_INCHES) add(Conversion("Inches", length(v, precision, LengthStyle.INCHES)))
-                else add(Conversion("Feet-inches", length(v, precision, LengthStyle.FEET_INCHES)))
+                if (style == LengthStyle.FEET_INCHES) add(Conversion("Inches", length(v, precision, LengthStyle.INCHES, rounding = rounding)))
+                else add(Conversion("Feet-inches", length(v, precision, LengthStyle.FEET_INCHES, rounding = rounding)))
                 add(Conversion("Decimal ft", decimal(v / Units.INCHES_PER_FOOT, 4) + " ft"))
                 add(Conversion("Decimal in", decimal(v, 4) + " in"))
                 add(Conversion("Millimeters", decimal(v * Units.MM_PER_INCH, 1) + " mm"))
@@ -197,6 +236,30 @@ object MeasureFormat {
     /** Plain text for the clipboard: ASCII minus and a hyphenated fraction, e.g. `10' 4-3/16"`. */
     fun forClipboard(text: String): String =
         text.replace('−', '-').replace(WHOLE_AND_FRACTION, "$1-$2")
+
+    private fun roundSteps(value: Rational, denominator: Long, rounding: FractionRounding): BigInteger = when (rounding) {
+        FractionRounding.NEAREST -> value.roundToSteps(denominator)
+        FractionRounding.UP -> value.ceilToSteps(denominator)
+        FractionRounding.DOWN -> value.floorToSteps(denominator)
+    }
+
+    private fun formatArchitectural(fi: FeetInches): String = buildString {
+        if (fi.negative) append('−')
+        append(fi.feet)
+        append('-')
+        append(fi.inches.toString().padStart(2, '0'))
+        append('-')
+        if (!fi.hasFraction) {
+            append("00")
+        } else if (ARCHITECTURAL_BASE % fi.fractionDenominator == 0) {
+            val sixteenths = fi.fractionNumerator * (ARCHITECTURAL_BASE / fi.fractionDenominator)
+            append(sixteenths.toString().padStart(2, '0'))
+        } else {
+            append(fi.fractionNumerator).append('/').append(fi.fractionDenominator)
+        }
+    }
+
+    private const val ARCHITECTURAL_BASE = 16
 
     private val WHOLE_AND_FRACTION = Regex("""(\d) (\d+/\d+)""")
     private val SQ_IN_PER_SQ_FT = Units.INCHES_PER_FOOT * Units.INCHES_PER_FOOT

@@ -45,6 +45,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.plans.SnapTarget
 import com.thedirepack.constructioncalc.feature.drawings.domain.CalibrationStatus
@@ -85,6 +86,7 @@ internal fun ToolTooltipIconButton(
     badgeDotColor: Long? = null,
     expandBadge: Boolean = false,
     tint: Color? = null,
+    buttonSize: Dp = 48.dp,
 ) {
     TooltipBox(
         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
@@ -99,7 +101,7 @@ internal fun ToolTooltipIconButton(
             shape = RoundedCornerShape(12.dp),
             color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
             contentColor = effectiveTint,
-            modifier = modifier.size(48.dp),
+            modifier = modifier.size(buttonSize),
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
@@ -192,6 +194,9 @@ internal fun EditorStatusBar(
     scaleLabel: String,
     scaleStatus: CalibrationStatus,
     onScale: () -> Unit,
+    scaleLocked: Boolean,
+    editable: Boolean,
+    onToggleScaleLock: () -> Unit,
     snapEnabled: Boolean,
     snapTarget: SnapTarget,
     onSnapSelect: (enabled: Boolean, target: SnapTarget) -> Unit,
@@ -265,6 +270,22 @@ internal fun EditorStatusBar(
                         else -> MaterialTheme.colorScheme.onSurface
                     },
                 )
+            },
+        )
+        FilterChip(
+            selected = scaleLocked,
+            onClick = onToggleScaleLock,
+            enabled = editable,
+            leadingIcon = {
+                Icon(
+                    painterResource(if (scaleLocked) R.drawable.ic_plan_lock else R.drawable.ic_plan_lock_open),
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+            },
+            label = { Text(if (scaleLocked) "Locked" else "Unlocked", maxLines = 1) },
+            modifier = Modifier.semantics {
+                contentDescription = if (scaleLocked) "Scale locked. Tap to unlock" else "Scale unlocked. Tap to lock"
             },
         )
         Box {
@@ -345,46 +366,109 @@ internal fun EditorStatusBar(
 internal fun EditorTools(
     mode: DrawingMode,
     vertical: Boolean,
+    pinnedTools: List<DrawingMode>,
+    collapsed: Boolean,
+    onCollapsedChange: (Boolean) -> Unit,
+    scaleLocked: Boolean = false,
     toolColors: Map<DrawingMode, Long> = emptyMap(),
     onMode: (DrawingMode) -> Unit,
+    onCustomizeToolbar: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val primaryBar = listOf(
-        DrawingMode.Adjust,
-        DrawingMode.Measure,
-        DrawingMode.Route,
-        DrawingMode.Symbol,
-        DrawingMode.Pen,
-        DrawingMode.Highlight,
-        DrawingMode.Eraser,
-    )
-    val secondaryMarkup = remember {
-        DrawingMode.entries.filter { it.group == ToolGroup.MARKUP && it !in primaryBar }
+    val effectivePinned = pinnedTools.ifEmpty { DrawingsSettings.DEFAULT_PINNED_TOOLS }
+    val remainingTools = remember(effectivePinned) {
+        DrawingMode.entries.filter { it !in effectivePinned }
     }
-    val secondarySelected = mode in secondaryMarkup || mode == DrawingMode.Navigate
+    val commonRemaining = remember(remainingTools) {
+        remainingTools.filter { it != DrawingMode.Navigate && it != DrawingMode.Reference && it != DrawingMode.Zone }
+    }
+    val utilityRemaining = remember(remainingTools) {
+        listOf(DrawingMode.Navigate, DrawingMode.Reference, DrawingMode.Zone).filter { it in remainingTools }
+    }
+    val overflowSelected = mode in remainingTools
     var showMore by remember { mutableStateOf(false) }
 
-    val controls: @Composable () -> Unit = {
-        for (tool in primaryBar) {
+    if (collapsed) {
+        Surface(
+            onClick = { onCollapsedChange(false) },
+            shape = RoundedCornerShape(24.dp),
+            tonalElevation = 6.dp,
+            shadowElevation = 6.dp,
+            modifier = modifier.semantics { contentDescription = "Expand toolbar (${mode.title})" },
+        ) {
+            if (vertical) {
+                Column(
+                    Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        painterResource(mode.iconRes()),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Icon(
+                        painterResource(R.drawable.ic_plan_prev),
+                        contentDescription = "Expand toolbar",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            } else {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painterResource(mode.iconRes()),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Text(mode.title, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                    Icon(
+                        painterResource(R.drawable.ic_plan_collapse_up),
+                        contentDescription = "Expand toolbar",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+        return
+    }
+
+    val buttonSize = if (vertical) 44.dp else 40.dp
+
+    val pinnedButtons: @Composable () -> Unit = {
+        for (tool in effectivePinned) {
+            val locked = scaleLocked && (tool == DrawingMode.Reference || tool == DrawingMode.Zone)
             ToolTooltipIconButton(
-                label = tool.title,
+                label = if (locked) "${tool.title} (locked)" else tool.title,
                 iconRes = tool.iconRes(),
                 selected = mode == tool,
                 badgeDotColor = toolColors[tool],
+                tint = if (locked) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f) else null,
+                buttonSize = buttonSize,
                 onClick = { onMode(tool) },
             )
         }
+    }
+
+    val moreButton: @Composable () -> Unit = {
         Box {
-            val overflowTool = mode.takeIf { secondarySelected }
+            val overflowTool = mode.takeIf { overflowSelected }
             ToolTooltipIconButton(
-                label = overflowTool?.title ?: "More markup",
+                label = overflowTool?.title ?: "More tools",
                 iconRes = overflowTool?.iconRes() ?: R.drawable.ic_plan_more_markup,
-                selected = secondarySelected,
+                selected = overflowSelected,
                 badgeDotColor = overflowTool?.let { toolColors[it] },
                 expandBadge = true,
+                buttonSize = buttonSize,
                 onClick = { showMore = true },
             )
             DropdownMenu(showMore, onDismissRequest = { showMore = false }) {
-                for (tool in secondaryMarkup) {
+                for (tool in commonRemaining) {
                     DropdownMenuItem(
                         text = { Text(if (mode == tool) "• ${tool.title}" else tool.title) },
                         leadingIcon = {
@@ -396,37 +480,89 @@ internal fun EditorTools(
                         },
                     )
                 }
+                if (commonRemaining.isNotEmpty() && utilityRemaining.isNotEmpty()) {
+                    HorizontalDivider()
+                }
+                for (tool in utilityRemaining) {
+                    val locked = scaleLocked && (tool == DrawingMode.Reference || tool == DrawingMode.Zone)
+                    val titleText = if (tool == DrawingMode.Navigate) "${tool.title} only" else tool.title
+                    DropdownMenuItem(
+                        text = { Text(if (mode == tool) "• $titleText" else titleText) },
+                        leadingIcon = {
+                            Icon(painterResource(tool.iconRes()), contentDescription = null, modifier = Modifier.size(20.dp))
+                        },
+                        trailingIcon = if (locked) {
+                            { Icon(painterResource(R.drawable.ic_plan_lock), contentDescription = "Scale locked", modifier = Modifier.size(16.dp)) }
+                        } else null,
+                        onClick = {
+                            showMore = false
+                            onMode(tool)
+                        },
+                    )
+                }
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text = {
-                        val pan = DrawingMode.Navigate
-                        Text(if (mode == pan) "• ${pan.title} only" else "${pan.title} only")
-                    },
+                    text = { Text("Customize toolbar…") },
                     leadingIcon = {
-                        Icon(painterResource(DrawingMode.Navigate.iconRes()), contentDescription = null, modifier = Modifier.size(20.dp))
+                        Icon(painterResource(R.drawable.ic_plan_settings), contentDescription = null, modifier = Modifier.size(20.dp))
                     },
                     onClick = {
                         showMore = false
-                        onMode(DrawingMode.Navigate)
+                        onCustomizeToolbar()
                     },
                 )
             }
         }
     }
 
-    Surface(tonalElevation = 2.dp) {
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
+        shadowElevation = 6.dp,
+        modifier = modifier,
+    ) {
         if (vertical) {
             Column(
-                Modifier.widthIn(max = 60.dp).verticalScroll(rememberScrollState()).padding(horizontal = 4.dp, vertical = 4.dp),
+                Modifier.widthIn(max = 56.dp).padding(horizontal = 4.dp, vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) { controls() }
+            ) {
+                Column(
+                    Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    pinnedButtons()
+                }
+                moreButton()
+                ToolTooltipIconButton(
+                    label = "Collapse toolbar",
+                    iconRes = R.drawable.ic_plan_next,
+                    buttonSize = 36.dp,
+                    onClick = { onCollapsedChange(true) },
+                )
+            }
         } else {
             Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp, vertical = 2.dp),
+                Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically,
-            ) { controls() }
+            ) {
+                Row(
+                    Modifier.weight(1f, fill = false).horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    pinnedButtons()
+                }
+                moreButton()
+                ToolTooltipIconButton(
+                    label = "Collapse toolbar",
+                    iconRes = R.drawable.ic_plan_expand,
+                    buttonSize = 36.dp,
+                    onClick = { onCollapsedChange(true) },
+                )
+            }
         }
     }
 }
@@ -437,6 +573,7 @@ internal fun EditorOptions(
     busy: Boolean,
     showCalibration: Boolean,
     scale: CalibrationStatus,
+    scaleLocked: Boolean = false,
     onScale: () -> Unit,
     onMode: (DrawingMode) -> Unit,
     onRotate: () -> Unit,
@@ -456,10 +593,22 @@ internal fun EditorOptions(
         }
         DropdownMenu(open, onDismissRequest = { open = false }) {
             val close = { open = false }
-            MenuItem("Scale · ${scale.label}", close, R.drawable.ic_plan_tool_calibrate, onScale)
+            MenuItem("Scale · ${scale.label}", close, R.drawable.ic_plan_tool_calibrate, action = onScale)
             if (editable) {
-                MenuItem("Calibrate with known length", close, R.drawable.ic_plan_tool_calibrate) { onMode(DrawingMode.Reference) }
-                MenuItem("Draw scale zone", close, R.drawable.ic_plan_tool_zone) { onMode(DrawingMode.Zone) }
+                MenuItem(
+                    label = "Calibrate with known length",
+                    close = close,
+                    iconRes = R.drawable.ic_plan_tool_calibrate,
+                    enabled = !scaleLocked,
+                    trailingRes = if (scaleLocked) R.drawable.ic_plan_lock else null,
+                ) { onMode(DrawingMode.Reference) }
+                MenuItem(
+                    label = "Draw scale zone",
+                    close = close,
+                    iconRes = R.drawable.ic_plan_tool_zone,
+                    enabled = !scaleLocked,
+                    trailingRes = if (scaleLocked) R.drawable.ic_plan_lock else null,
+                ) { onMode(DrawingMode.Zone) }
             }
             DropdownMenuItem(
                 text = { Text("Show calibration dimensions") },
@@ -470,25 +619,36 @@ internal fun EditorOptions(
                 if (highlightsVisible) "Hide highlights" else "Show highlights",
                 close,
                 if (highlightsVisible) R.drawable.ic_plan_visibility_off else R.drawable.ic_plan_visibility,
-                onToggleHighlights,
+                action = onToggleHighlights,
             )
-            MenuItem("Rotate view", close, R.drawable.ic_plan_rotate, onRotate)
-            MenuItem("Takeoff totals", close, R.drawable.ic_plan_takeoff, onTakeoff)
-            MenuItem("Page measurements and markups", close, R.drawable.ic_plan_layers, onPageItems)
+            MenuItem("Rotate view", close, R.drawable.ic_plan_rotate, action = onRotate)
+            MenuItem("Takeoff totals", close, R.drawable.ic_plan_takeoff, action = onTakeoff)
+            MenuItem("Page measurements and markups", close, R.drawable.ic_plan_layers, action = onPageItems)
             HorizontalDivider()
-            MenuItem("Export or share this sheet…", close, CoreR.drawable.ic_share, onExportSheet)
-            MenuItem("Export whole PDF (searchable)", close, R.drawable.ic_plan_export, onExportPdf)
-            MenuItem("Export drawing JSON", close, R.drawable.ic_plan_export, onExportJson)
+            MenuItem("Export or share this sheet…", close, CoreR.drawable.ic_share, action = onExportSheet)
+            MenuItem("Export whole PDF (searchable)", close, R.drawable.ic_plan_export, action = onExportPdf)
+            MenuItem("Export drawing JSON", close, R.drawable.ic_plan_export, action = onExportJson)
         }
     }
 }
 
 @Composable
-private fun MenuItem(label: String, close: () -> Unit, iconRes: Int? = null, action: () -> Unit) {
+private fun MenuItem(
+    label: String,
+    close: () -> Unit,
+    iconRes: Int? = null,
+    enabled: Boolean = true,
+    trailingRes: Int? = null,
+    action: () -> Unit,
+) {
     DropdownMenuItem(
         text = { Text(label) },
+        enabled = enabled,
         leadingIcon = iconRes?.let { res ->
             { Icon(painterResource(res), contentDescription = null, modifier = Modifier.size(20.dp)) }
+        },
+        trailingIcon = trailingRes?.let { res ->
+            { Icon(painterResource(res), contentDescription = null, modifier = Modifier.size(16.dp)) }
         },
         onClick = {
             close()

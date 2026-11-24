@@ -10,7 +10,109 @@ import com.thedirepack.constructioncalc.core.model.newId
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 
-/** Groups panel templates in the new-panel picker. */
+private fun normalizePanelName(name: String): String = name.trim().ifEmpty { "Panel" }
+
+private fun busSpaceStep(system: PanelSystem): Int = if (system.phases >= 3) 6 else 4
+
+/**
+ * Standard panelboard starting configuration that locks space counts to the panel's bus system
+ * (multiples of 4 for single-phase, multiples of 6 for three-phase).
+ */
+data class PanelTemplate(
+    val id: String,
+    val label: String,
+    val system: PanelSystem,
+    val defaultSpaces: Int,
+    val defaultBusAmps: Int,
+    val defaultMainAmps: Int?,
+) {
+    /** Step between valid bus space counts for this template's phase configuration. */
+    val spaceStep: Int get() = busSpaceStep(system)
+
+    /** Valid bus-locked space counts for this template. */
+    fun validSpaceCounts(): List<Int> = Panel.validSpaceCounts(system.phases)
+
+    /** Creates a [Panel] from this template with spaces snapped to a valid bus count. */
+    fun createPanel(
+        name: String,
+        spaces: Int = defaultSpaces,
+        busAmps: Int? = defaultBusAmps,
+        mainAmps: Int? = defaultMainAmps,
+        location: String = "",
+    ): Panel = Panel(
+        name = normalizePanelName(name),
+        location = location.trim(),
+        system = system,
+        spaces = Panel.snapSpacesToBus(spaces, system.phases),
+        busAmps = busAmps,
+        mainAmps = mainAmps,
+    )
+}
+
+/** Curated North American panelboard templates for the new-panel dialog. */
+object PanelTemplates {
+    val RESIDENTIAL_120_240 = PanelTemplate(
+        id = "residential_120_240",
+        label = "Residential 120/240V 1φ (L1/L2)",
+        system = PanelSystem.SINGLE_120_240,
+        defaultSpaces = 40,
+        defaultBusAmps = 200,
+        defaultMainAmps = 200,
+    )
+
+    val COMMERCIAL_208Y_120 = PanelTemplate(
+        id = "commercial_208y_120",
+        label = "Commercial 208Y/120V 3φ (A/B/C)",
+        system = PanelSystem.WYE_208_120,
+        defaultSpaces = 42,
+        defaultBusAmps = 225,
+        defaultMainAmps = null,
+    )
+
+    val COMMERCIAL_480Y_277 = PanelTemplate(
+        id = "commercial_480y_277",
+        label = "Commercial 480Y/277V 3φ (A/B/C)",
+        system = PanelSystem.WYE_480_277,
+        defaultSpaces = 42,
+        defaultBusAmps = 225,
+        defaultMainAmps = null,
+    )
+
+    val DELTA_240 = PanelTemplate(
+        id = "delta_240",
+        label = "3φ Delta 240V",
+        system = PanelSystem.DELTA_240,
+        defaultSpaces = 42,
+        defaultBusAmps = 225,
+        defaultMainAmps = null,
+    )
+
+    val DELTA_480 = PanelTemplate(
+        id = "delta_480",
+        label = "3φ Delta 480V",
+        system = PanelSystem.DELTA_480,
+        defaultSpaces = 42,
+        defaultBusAmps = 225,
+        defaultMainAmps = null,
+    )
+
+    val all: List<PanelTemplate> = listOf(
+        RESIDENTIAL_120_240,
+        COMMERCIAL_208Y_120,
+        COMMERCIAL_480Y_277,
+        DELTA_240,
+        DELTA_480,
+    )
+
+    val default: PanelTemplate = COMMERCIAL_208Y_120
+
+    fun find(id: String): PanelTemplate? = all.firstOrNull { it.id == id }
+
+    fun forSystem(system: PanelSystem): PanelTemplate =
+        all.firstOrNull { it.system == system } ?: default
+}
+
+/** Groups starter and user-saved circuit schedule templates in the new-panel picker. */
 @Serializable
 enum class PanelTemplateCategory(val label: String) {
     GENERAL("General"),
@@ -44,7 +146,7 @@ enum class PanelExportLayout(val label: String, val summary: String) {
     }
 }
 
-/** Portable circuit specification stored inside a [PanelTemplate] (without project-scoped IDs). */
+/** Portable circuit specification stored inside a [SavedPanelTemplate] (without project-scoped IDs). */
 @Serializable
 data class TemplateCircuit(
     val slot: Int,
@@ -58,9 +160,12 @@ data class TemplateCircuit(
     val nonlinear: Boolean = false,
 )
 
-/** Reusable starter or user-saved panel layout that instantiates into a project [Panel]. */
+/**
+ * Reusable starter or user-saved panel schedule that instantiates into a project [Panel],
+ * always snapping space counts to the physical bus ([Panel.snapSpacesToBus]).
+ */
 @Serializable
-data class PanelTemplate(
+data class SavedPanelTemplate(
     val id: String,
     val name: String,
     val category: PanelTemplateCategory = PanelTemplateCategory.CUSTOM,
@@ -72,15 +177,40 @@ data class PanelTemplate(
     val note: String = "",
     val builtIn: Boolean = false,
 ) {
+    /** Step between valid bus space counts for this template's phase configuration. */
+    val spaceStep: Int get() = busSpaceStep(system)
+
+    /** Valid bus-locked space counts for this template's phase configuration. */
+    fun validSpaceCounts(): List<Int> = Panel.validSpaceCounts(system.phases)
+
+    /** [spaces] snapped to the nearest valid bus count for [system]. */
+    val snappedSpaces: Int get() = Panel.snapSpacesToBus(spaces, system.phases)
+
+    /** Counts how many template circuits would fall outside [targetSpaces] (after bus snapping). */
+    fun clippedCircuitCount(targetSpaces: Int): Int {
+        val snapped = Panel.snapSpacesToBus(targetSpaces, system.phases)
+        return circuits.count { tc ->
+            tc.poles < 1 || tc.slot < 1 || tc.slot + 2 * (tc.poles - 1) > snapped
+        }
+    }
+
     /**
      * Builds a new [Panel] named [panelName] with fresh IDs for the panel and every circuit,
-     * placing only valid, non-overlapping circuits that fit within [spaces].
+     * snapping [spaces] to the physical bus via [Panel.snapSpacesToBus] and placing only valid,
+     * non-overlapping circuits that fit within the snapped space count.
      */
-    fun instantiate(panelName: String): Panel {
-        val safeSpaces = spaces.coerceIn(1, Panel.MAX_SPACES)
+    fun instantiate(
+        panelName: String,
+        spaces: Int = this.spaces,
+        busAmps: Int? = this.busAmps,
+        mainAmps: Int? = this.mainAmps,
+        location: String = "",
+    ): Panel {
+        val safeSpaces = Panel.snapSpacesToBus(spaces, system.phases)
         var panel = Panel(
             id = newId(),
-            name = panelName.trim().ifEmpty { "Panel" },
+            name = normalizePanelName(panelName),
+            location = location.trim(),
             system = system,
             spaces = safeSpaces,
             busAmps = busAmps?.takeIf { it > 0 },
@@ -111,14 +241,17 @@ data class PanelTemplate(
     }
 
     companion object {
-        /** Captures a reusable template from [panel], stripping project-specific links and IDs. */
-        fun fromPanel(panel: Panel, templateName: String, id: String = newId()): PanelTemplate =
-            PanelTemplate(
+        /**
+         * Captures a reusable template from [panel], stripping project-specific links and IDs
+         * and snapping [Panel.spaces] to the physical bus via [Panel.snapSpacesToBus].
+         */
+        fun fromPanel(panel: Panel, templateName: String, id: String = newId()): SavedPanelTemplate =
+            SavedPanelTemplate(
                 id = id,
                 name = templateName.trim().ifEmpty { panel.name.ifBlank { "Saved template" } },
                 category = PanelTemplateCategory.CUSTOM,
                 system = panel.system,
-                spaces = panel.spaces,
+                spaces = Panel.snapSpacesToBus(panel.spaces, panel.system.phases),
                 busAmps = panel.busAmps,
                 mainAmps = panel.mainAmps,
                 circuits = panel.circuits.sortedBy { it.slot }.map { c ->
@@ -140,14 +273,14 @@ data class PanelTemplate(
     }
 }
 
-/** JSON serialization for custom [PanelTemplate] lists stored in tool settings. */
+/** JSON serialization for custom [SavedPanelTemplate] lists stored in tool settings. */
 object PanelTemplatesCodec {
-    private val listSerializer = ListSerializer(PanelTemplate.serializer())
+    private val listSerializer = ListSerializer(SavedPanelTemplate.serializer())
 
-    fun encode(templates: List<PanelTemplate>): String =
+    fun encode(templates: List<SavedPanelTemplate>): String =
         ProjectCodec.json.encodeToString(listSerializer, templates)
 
-    fun decode(raw: String): List<PanelTemplate> {
+    fun decode(raw: String): List<SavedPanelTemplate> {
         if (raw.isBlank()) return emptyList()
         return runCatching { ProjectCodec.json.decodeFromString(listSerializer, raw) }
             .getOrDefault(emptyList())
@@ -156,7 +289,7 @@ object PanelTemplatesCodec {
 
 /** Curated starter panel schedules covering common commercial, residential, and distribution boards. */
 object BuiltInPanelTemplates {
-    val BLANK_208Y = PanelTemplate(
+    val BLANK_208Y = SavedPanelTemplate(
         id = "builtin-blank-208y",
         name = "Blank 208Y/120 V",
         category = PanelTemplateCategory.GENERAL,
@@ -169,7 +302,7 @@ object BuiltInPanelTemplates {
         builtIn = true,
     )
 
-    val COMMERCIAL_LIGHTING_RECEPTACLES = PanelTemplate(
+    val COMMERCIAL_LIGHTING_RECEPTACLES = SavedPanelTemplate(
         id = "builtin-commercial-208y",
         name = "Commercial Lighting & Receptacles",
         category = PanelTemplateCategory.COMMERCIAL,
@@ -207,7 +340,7 @@ object BuiltInPanelTemplates {
         builtIn = true,
     )
 
-    val COMMERCIAL_480_LIGHTING_HVAC = PanelTemplate(
+    val COMMERCIAL_480_LIGHTING_HVAC = SavedPanelTemplate(
         id = "builtin-commercial-480y",
         name = "Commercial 480Y/277 V Lighting & HVAC",
         category = PanelTemplateCategory.COMMERCIAL,
@@ -233,7 +366,7 @@ object BuiltInPanelTemplates {
         builtIn = true,
     )
 
-    val RESIDENTIAL_MAIN_SERVICE = PanelTemplate(
+    val RESIDENTIAL_MAIN_SERVICE = SavedPanelTemplate(
         id = "builtin-residential-main",
         name = "Residential Main Service",
         category = PanelTemplateCategory.RESIDENTIAL,
@@ -270,7 +403,7 @@ object BuiltInPanelTemplates {
         builtIn = true,
     )
 
-    val RESIDENTIAL_SUBPANEL = PanelTemplate(
+    val RESIDENTIAL_SUBPANEL = SavedPanelTemplate(
         id = "builtin-residential-sub",
         name = "Residential Subpanel",
         category = PanelTemplateCategory.RESIDENTIAL,
@@ -296,7 +429,7 @@ object BuiltInPanelTemplates {
         builtIn = true,
     )
 
-    val DISTRIBUTION_FEEDER = PanelTemplate(
+    val DISTRIBUTION_FEEDER = SavedPanelTemplate(
         id = "builtin-distribution-480y",
         name = "Distribution / Feeder Panel",
         category = PanelTemplateCategory.DISTRIBUTION,
@@ -320,7 +453,7 @@ object BuiltInPanelTemplates {
         builtIn = true,
     )
 
-    val all: List<PanelTemplate> = listOf(
+    val all: List<SavedPanelTemplate> = listOf(
         BLANK_208Y,
         COMMERCIAL_LIGHTING_RECEPTACLES,
         COMMERCIAL_480_LIGHTING_HVAC,
@@ -328,4 +461,7 @@ object BuiltInPanelTemplates {
         RESIDENTIAL_SUBPANEL,
         DISTRIBUTION_FEEDER,
     )
+
+    /** Pre-populated starter circuit schedules (excluding the blank 208Y entry covered by [PanelTemplates.default]). */
+    val schedules: List<SavedPanelTemplate> = all.filter { it.circuits.isNotEmpty() }
 }

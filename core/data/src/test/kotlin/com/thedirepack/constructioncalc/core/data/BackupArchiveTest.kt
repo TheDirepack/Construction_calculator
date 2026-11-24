@@ -2,6 +2,7 @@ package com.thedirepack.constructioncalc.core.data
 
 import com.thedirepack.constructioncalc.core.model.AppFileCodec
 import com.thedirepack.constructioncalc.core.model.BackupDocument
+import com.thedirepack.constructioncalc.core.model.BackupManifest
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
@@ -11,6 +12,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -20,7 +22,9 @@ import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 class BackupArchiveTest {
@@ -159,6 +163,61 @@ class BackupArchiveTest {
         }
         assertThrows(IOException::class.java) {
             BackupArchive.read(bytes.toByteArray().inputStream()) { _, _ -> }
+        }
+    }
+
+    @Test fun backupManifestVerifiesDocumentAndMediaSha256() {
+        val fileA = temp.newFile("m-a.pdf").apply { writeBytes("pdf-a".encodeToByteArray()) }
+        val fileB = temp.newFile("m-b.pdf").apply { writeBytes("pdf-b".encodeToByteArray()) }
+        val files = mapOf(hashA to fileA, hashB to fileB)
+        val out = ByteArrayOutputStream()
+        BackupArchive.write(out, backup) { files.getValue(it) }
+        val bytes = out.toByteArray()
+
+        val entries = mutableListOf<String>()
+        var docBytes: ByteArray? = null
+        var manifest: BackupManifest? = null
+        ZipInputStream(bytes.inputStream()).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                entries += entry.name
+                when (entry.name) {
+                    "backup.json" -> docBytes = zip.readBytes()
+                    AppFileCodec.MANIFEST_FILE -> manifest = AppFileCodec.decodeManifest(zip.readBytes().decodeToString())
+                    else -> zip.readBytes()
+                }
+                zip.closeEntry()
+            }
+        }
+        assertEquals("backup.json", entries.first())
+        assertTrue(AppFileCodec.MANIFEST_FILE in entries)
+        assertNotNull(manifest)
+        val expectedDocSha = MessageDigest.getInstance("SHA-256").digest(docBytes!!).joinToString("") { "%02x".format(it) }
+        assertEquals("backup", manifest!!.kind)
+        assertEquals(expectedDocSha, manifest!!.documentSha256)
+        assertEquals(2, manifest!!.mediaSha256.size)
+
+        // Mismatched manifest documentSha256 is rejected.
+        val badManifestZip = ByteArrayOutputStream()
+        ZipInputStream(bytes.inputStream()).use { src ->
+            ZipOutputStream(badManifestZip).use { dst ->
+                while (true) {
+                    val entry = src.nextEntry ?: break
+                    val content = src.readBytes()
+                    dst.putNextEntry(ZipEntry(entry.name))
+                    if (entry.name == AppFileCodec.MANIFEST_FILE) {
+                        val bad = manifest!!.copy(documentSha256 = "0".repeat(64))
+                        dst.write(AppFileCodec.encodeManifest(bad).encodeToByteArray())
+                    } else {
+                        dst.write(content)
+                    }
+                    dst.closeEntry()
+                    src.closeEntry()
+                }
+            }
+        }
+        assertThrows(IOException::class.java) {
+            BackupArchive.read(badManifestZip.toByteArray().inputStream()) { pdf, _ -> pdf.readBytes() }
         }
     }
 }

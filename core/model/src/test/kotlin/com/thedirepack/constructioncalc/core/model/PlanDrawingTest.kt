@@ -197,5 +197,13 @@ class PlanDrawingTest {
         val drawing = ProjectCodec.json.decodeFromString(PlanDrawing.serializer(), json)
         assertTrue(drawing.routes.isEmpty())
         assertEquals("", drawing.measurements.single().label)
+        assertFalse(drawing.scaleLocked)
+
+        val locked = drawing.copy(scaleLocked = true)
+        val roundTripped = ProjectCodec.json.decodeFromString(
+            PlanDrawing.serializer(),
+            ProjectCodec.fileJson.encodeToString(PlanDrawing.serializer(), locked),
+        )
+        assertTrue(roundTripped.scaleLocked)
     }
 }

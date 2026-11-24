@@ -17,6 +17,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.data.AppSettings
+import com.thedirepack.constructioncalc.feature.conduitfill.ConductorGroupInput
+import com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillInputs
+import com.thedirepack.constructioncalc.feature.conduitfill.toRequest
 
 class ConduitFillReportTest {
     private fun conduit(type: ConduitType, size: TradeSize) = ConduitTable.find(type, size)!!
@@ -176,5 +179,39 @@ class ConduitFillReportTest {
         val report = ConduitFillReport.build(request(TradeSize.S_1_2, 10 to thhn(ConductorSize.AWG_12)), metric)!!
         val min = report.value(ConduitFillReport.KEY_MIN_CONDUIT).text
         assertTrue(min, min.contains("(") && min.endsWith("EMT"))
+    }
+
+    @Test fun reportNoticeMentionsBothDeratingAndRatingIncrease() {
+        val report = ConduitFillReport.build(request(TradeSize.S_3_4, 3 to thhn(ConductorSize.AWG_12)))!!
+        assertTrue(report.has("rating increase"))
+        assertTrue(report.has("derating"))
+        assertTrue(report.has("Named cables aren't derated"))
+    }
+
+    @Test fun presetWorkflowCombinesFillReportNeutralGuidanceAndThermals() {
+        val base = ConduitFillInputs(
+            conduitType = ConduitType.EMT.code,
+            tradeSize = TradeSize.S_1_2.label,
+            groups = listOf(ConductorGroupInput(count = "0")),
+            circuitCount = 0,
+            voltageSystem = VoltageSystem.WYE_208_120.name,
+            ambientC = "15",
+        )
+        val afterThreePhase = CircuitPresets.apply(base, CircuitPreset.THREE_PHASE_CIRCUIT_4W_G)
+        val afterBoth = CircuitPresets.apply(afterThreePhase, CircuitPreset.SINGLE_PHASE_BRANCH_2W_G)
+        // 3 hots (3φ) + 1 neutral (3φ) + 1 hot (1φ) + 1 neutral (1φ) + 1 shared bare ground = 7 wires total
+        val req = afterBoth.toRequest().request!!
+        val report = ConduitFillReport.build(req)!!
+        assertEquals(7, report.analysis.conductorCount)
+        assertEquals(40, report.analysis.limitPercent)
+        // 6 × 0.0133 + 1 × 0.0051 (bare 12 AWG) = 0.0849 in² <= 0.122 (1/2" EMT) -> actually fits 1/2" EMT!
+        assertTrue(report.analysis.withinLimit)
+
+        // Cold ambient 15 °C (×1.12 on 90 °C THHN) with 5 CCC (×0.80)
+        val coldDerating = afterBoth.derating()!!
+        assertEquals(5, coldDerating.currentCarrying)
+        assertEquals(ThermalAdjustmentKind.MIXED, coldDerating.thermalStatus().kind)
+        assertEquals(1.12, coldDerating.rows.first().ambientFactor!!, 0.0)
+        assertEquals(0.80, coldDerating.adjustmentFactor, 0.0)
     }
 }

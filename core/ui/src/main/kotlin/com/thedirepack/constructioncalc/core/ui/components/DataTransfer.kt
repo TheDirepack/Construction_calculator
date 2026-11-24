@@ -8,9 +8,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -24,6 +30,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.data.BackupSections
 import com.thedirepack.constructioncalc.core.data.ProjectSharing
@@ -209,48 +217,143 @@ fun ImportFileDialog(file: AppFile, onFinished: (message: String, openProjectId:
     }
 }
 
+private enum class ImportConflictOption(val title: String, val confirmLabel: String) {
+    NEW_REVISION("Add as new revision (Recommended)", "Add as new revision"),
+    MERGE("Merge changes", "Merge changes"),
+    OVERWRITE("Overwrite existing", "Overwrite"),
+}
+
 @Composable
 private fun ImportProjectDialog(project: Project, onFinished: (String, String?) -> Unit, onDismiss: () -> Unit) {
     val services = LocalAppServices.current
     val all by services.projects.projects.collectAsStateWithLifecycle()
     val existing = all.firstOrNull { it.id == project.id }
     val info = "${project.runs.size} runs · ${project.itemCount} items · updated ${formatDate(project.updatedAt)}"
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (existing == null) "Import “${project.name}”?" else "You already have “${existing.name}”") },
-        text = {
-            Text(
-                if (existing == null) {
-                    info
-                } else {
-                    "This file: $info\nOn this device: updated ${formatDate(existing.updatedAt)}" +
-                        (if (project.updatedAt < existing.updatedAt) "\nThe copy on this device is newer." else "") +
-                        (if (existing.archived) "\nYours is archived (read-only), so this file can only be added as a copy." else "")
-                },
-            )
-        },
-        confirmButton = {
-            TextButton(enabled = existing?.archived != true, onClick = {
-                if (existing == null) {
+    if (existing == null) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Import “${project.name}”?") },
+            text = { Text(info) },
+            confirmButton = {
+                TextButton(onClick = {
                     val imported = services.projects.import(project)
                     onFinished("Imported ${imported.name}", imported.id)
-                } else {
-                    services.projects.replace(project)
-                    onFinished("Replaced ${project.name}", project.id)
+                }) { Text("Import") }
+            },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        )
+        return
+    }
+
+    var selected by remember(existing.id) { mutableStateOf(ImportConflictOption.NEW_REVISION) }
+    val effectiveSelected = if (existing.archived) ImportConflictOption.NEW_REVISION else selected
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("You already have “${existing.name}”") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "This file: $info\nOn this device: updated ${formatDate(existing.updatedAt)}" +
+                        (if (project.updatedAt < existing.updatedAt) "\nThe copy on this device is newer." else "") +
+                        (if (existing.archived) "\nYours is archived (read-only), so it can only be added as a new revision." else ""),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ImportConflictOption.entries.forEach { option ->
+                        val enabled = option == ImportConflictOption.NEW_REVISION || !existing.archived
+                        val detail = when (option) {
+                            ImportConflictOption.NEW_REVISION -> "Keeps your existing project untouched and creates an incremented (Rev N) copy."
+                            ImportConflictOption.MERGE -> if (enabled) {
+                                "Adds incoming runs, items, panels, circuits, groups, and drawings without deleting existing data."
+                            } else {
+                                "Disabled while the existing project is archived."
+                            }
+                            ImportConflictOption.OVERWRITE -> if (enabled) {
+                                "Replaces your local copy with this file."
+                            } else {
+                                "Disabled while the existing project is archived."
+                            }
+                        }
+                        val destructive = option == ImportConflictOption.OVERWRITE && enabled
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = effectiveSelected == option,
+                                    enabled = enabled,
+                                    role = Role.RadioButton,
+                                    onClick = { selected = option },
+                                )
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.Top,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            RadioButton(
+                                selected = effectiveSelected == option,
+                                onClick = null,
+                                enabled = enabled,
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    option.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (effectiveSelected == option) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = when {
+                                        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                        destructive -> MaterialTheme.colorScheme.error
+                                        else -> MaterialTheme.colorScheme.onSurface
+                                    },
+                                )
+                                Text(
+                                    detail,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (enabled) {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    },
+                                )
+                            }
+                        }
+                    }
                 }
-            }) { Text(if (existing == null) "Import" else "Replace mine") }
-        },
-        dismissButton = {
-            Row {
-                if (existing != null) {
-                    TextButton(onClick = {
-                        val copy = services.projects.import(project) // existing id → saved as a copy
-                        onFinished("Imported as ${copy.name}", copy.id)
-                    }) { Text("Keep both") }
-                }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
             }
         },
+        confirmButton = {
+            val enabled = effectiveSelected == ImportConflictOption.NEW_REVISION || !existing.archived
+            TextButton(
+                enabled = enabled,
+                onClick = {
+                    when (effectiveSelected) {
+                        ImportConflictOption.NEW_REVISION -> {
+                            val revision = services.projects.importAsRevision(project)
+                            onFinished("Imported ${revision.name}", revision.id)
+                        }
+                        ImportConflictOption.MERGE -> {
+                            val merged = services.projects.mergeProject(project)
+                            onFinished("Merged into ${merged.name}", merged.id)
+                        }
+                        ImportConflictOption.OVERWRITE -> {
+                            services.projects.replace(project)
+                            onFinished("Overwrote ${project.name}", project.id)
+                        }
+                    }
+                },
+            ) {
+                Text(
+                    effectiveSelected.confirmLabel,
+                    color = if (effectiveSelected == ImportConflictOption.OVERWRITE) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 

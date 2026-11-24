@@ -55,7 +55,15 @@ object ProjectSharing {
         settings: AppSettings,
     ): Intent {
         // The message text follows the user's units; the attached file always holds base units.
-        val format = LengthFormat(settings.unitSystem, settings.precision, settings.lengthDisplay.resolve(null), settings.metricDisplay, settings.metricResolution, settings.feetInchStyle)
+        val format = LengthFormat(
+            settings.unitSystem,
+            settings.precision,
+            settings.lengthDisplay.resolve(null),
+            settings.metricDisplay,
+            settings.metricResolution,
+            settings.feetInchStyle,
+            settings.fractionRounding,
+        )
         return shareFileIntent(
             context,
             fileName = fileName(project),

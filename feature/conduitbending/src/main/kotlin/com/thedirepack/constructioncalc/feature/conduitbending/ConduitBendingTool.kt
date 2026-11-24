@@ -5,9 +5,9 @@ import androidx.compose.runtime.Composable
 import com.thedirepack.constructioncalc.core.model.PathSegment
 import com.thedirepack.constructioncalc.core.model.ProjectItem
 import com.thedirepack.constructioncalc.core.model.ToolInputs
-import com.thedirepack.constructioncalc.feature.conduitbending.domain.BendPlanner
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.BenderTable
 import com.thedirepack.constructioncalc.feature.conduitbending.domain.PathBends
+import com.thedirepack.constructioncalc.feature.conduitbending.domain.StickPlanner
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.tool.ToolCategory
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
@@ -26,11 +26,11 @@ object ConduitBendingTool : ToolModule {
     @Composable
     override fun Content(host: ToolHost) = ConduitBendingScreen(host)
 
-    /** A saved bend's individual bends for its run's path (see [PathBends]). */
+    /** A saved bend stick's individual bends for its run's path (see [PathBends]). */
     override fun pathBends(item: ProjectItem): List<PathSegment.Bend> {
         val inputs = ToolInputs.decode<ConduitBendingInputs>(item.inputs) ?: return emptyList()
-        val request = inputs.toRequest(BenderTable.DEFAULT)
-        return PathBends.of(request, BendPlanner.plan(request))
+        val plan = StickPlanner.plan(inputs.toStick(BenderTable.DEFAULT))
+        return PathBends.of(plan)
     }
 
     @Composable

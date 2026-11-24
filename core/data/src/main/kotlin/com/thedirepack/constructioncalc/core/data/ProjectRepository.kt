@@ -120,6 +120,31 @@ class ProjectRepository(
     /** Writes [project] as-is, replacing any project with the same id (e.g. "Replace mine" on import). */
     fun replace(project: Project) = put(project)
 
+    /**
+     * Imports [project] as a new non-destructive revision with fresh IDs and an incremented
+     * `(Rev N)` suffix that does not collide with existing project names.
+     */
+    fun importAsRevision(project: Project): Project {
+        val now = clock()
+        val existingNames = state.value.mapTo(mutableSetOf()) { it.name }
+        val revision = project.asNewRevision(existingNames, now)
+        put(revision)
+        return revision
+    }
+
+    /**
+     * Merges [incoming] into an existing project with the same id additively without deleting
+     * existing projects or items. If no project with `incoming.id` exists yet, adds it; if the
+     * existing project is archived, returns it unchanged.
+     */
+    fun mergeProject(incoming: Project): Project {
+        val existing = get(incoming.id) ?: return incoming.also(::put)
+        if (existing.archived) return existing
+        val merged = ProjectMerge.mergeSingleProject(existing, incoming, clock())
+        put(merged)
+        return merged
+    }
+
     /** Commits a backup as one store transaction before publishing the restored projects. */
     internal suspend fun restore(incoming: List<Project>, mode: ProjectMergeMode): ProjectMerge.Plan {
         loaded.first { it }

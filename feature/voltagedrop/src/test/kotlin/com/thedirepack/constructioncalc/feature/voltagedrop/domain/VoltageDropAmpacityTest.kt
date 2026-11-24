@@ -266,10 +266,17 @@ class VoltageDropAmpacityTest {
 
         val output = voltageDropOutput(dropOnlyInputs, AppSettings())
         assertEquals(
-            listOf("voltage_drop", "percent_drop", "voltage_at_load", "min_size", "max_length"),
+            listOf("min_size", "percent_drop", "voltage_drop", "voltage_at_load", "max_length"),
             output.results.map { it.key },
         )
         assertTrue(output.notices.any { it.text == "Ampacity, terminal temperature, derating and overcurrent protection are not checked." })
+
+        val manualDropOnly = voltageDropOutput(dropOnlyInputs.copy(manualSize = ConductorSize.AWG_12.label), AppSettings())
+        assertEquals(
+            listOf("voltage_drop", "percent_drop", "voltage_at_load", "wire_size", "min_size", "max_length"),
+            manualDropOnly.results.map { it.key },
+        )
+        assertTrue(manualDropOnly.notices.any { it.text == "Ampacity, terminal temperature, derating and overcurrent protection are not checked." })
     }
 
     @Test fun unitSystemChangesOnlyNoteTemperatures() {

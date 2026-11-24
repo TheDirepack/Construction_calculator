@@ -24,12 +24,12 @@ import kotlin.math.sqrt
 
 /** How the conductor impedance per 1000 ft is found. */
 @Serializable
-enum class Method(val label: String) {
+enum class Method(val label: String, val shortLabel: String) {
     /** NEC Chapter 9 Table 9: effective impedance `Z = R·PF + X·sin(acos PF)`. */
-    AC_TABLE_9("NEC ${CodeRule.AC_IMPEDANCE.cite} (AC impedance)"),
+    AC_TABLE_9("NEC ${CodeRule.AC_IMPEDANCE.cite} (AC impedance)", "AC Table 9"),
 
     /** NEC Chapter 9 Table 8: DC resistance at 75 °C, the same thing a K-factor formula approximates. */
-    DC_TABLE_8("DC resistance (${CodeRule.CONDUCTOR_PROPERTIES.cite} / K-factor)"),
+    DC_TABLE_8("DC resistance (${CodeRule.CONDUCTOR_PROPERTIES.cite} / K-factor)", "DC Table 8"),
 }
 
 /** Everything the calculation needs, in plain units (volts, amps, feet). */
@@ -117,11 +117,22 @@ data class AmpacitySizingResult(
  *
  * Parallel sets split the current equally, so the drop is divided by the number of sets.
  * Maximum length is the same formula solved for `L` at the target percent.
- * Ampacity, terminal temperature limits and overcurrent protection are not checked.
+ * [calculate] and [smallestSize] do not check ampacity, terminal temperature limits, or overcurrent
+ * protection; call [checkAmpacity] for optional NEC ampacity and OCPD verification.
  */
 object VoltageDrop {
     const val MAX_SETS = 6
     const val CONDUCTOR_TEMPERATURE_C = 75
+
+    /** Minimum conductor size permitted in parallel per NEC 310.10(G). */
+    val minParallelSize: ConductorSize get() = Code.book.values.parallelMinimumSize
+
+    /** True if [size] is permitted for parallel installations per NEC 310.10(G) (≥ 1/0 AWG). */
+    fun allowsParallel(size: ConductorSize): Boolean = size >= minParallelSize
+
+    /** True when [parallelSets] > 1 violates NEC 310.10(G) because [size] is smaller than 1/0 AWG. */
+    fun violatesParallelMinimum(size: ConductorSize, parallelSets: Int): Boolean =
+        parallelSets > 1 && !allowsParallel(size)
 
     /** Sizes the chosen method's table covers for [material], smallest first. */
     fun supportedSizes(material: ConductorMaterial, method: Method): List<ConductorSize> = when (method) {
@@ -184,12 +195,20 @@ object VoltageDrop {
     /**
      * The smallest size in the method's table that meets the target with every other input
      * unchanged, or null if even the largest listed size does not.
+     *
+     * When [enforceParallelMinimum] is true (default whenever [VoltageDropRequest.parallelSets] > 1),
+     * enforces NEC 310.10(G) minimum conductor size (`1/0 AWG`) for parallel conductors.
      */
-    fun smallestSize(request: VoltageDropRequest): ConductorSize? {
+    @JvmOverloads
+    fun smallestSize(
+        request: VoltageDropRequest,
+        enforceParallelMinimum: Boolean = request.parallelSets > 1,
+    ): ConductorSize? {
         if (problemsIgnoringSize(request).isNotEmpty()) return null
-        return supportedSizes(request.material, request.method).firstOrNull { size ->
-            calculate(request.copy(size = size))?.meetsTarget == true
-        }
+        val minSize = if (enforceParallelMinimum) minParallelSize else null
+        return supportedSizes(request.material, request.method)
+            .filter { minSize == null || it >= minSize }
+            .firstOrNull { size -> calculate(request.copy(size = size))?.meetsTarget == true }
     }
 
     private fun problemsIgnoringSize(request: VoltageDropRequest): List<String> {
