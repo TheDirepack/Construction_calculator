@@ -37,16 +37,20 @@ import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.measure.Geometry
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.measure.Spacing
+import com.thedirepack.constructioncalc.core.measure.StairTopMount
+import com.thedirepack.constructioncalc.core.measure.Stairs
 import com.thedirepack.constructioncalc.core.ui.components.FormSection
 import com.thedirepack.constructioncalc.core.ui.components.MeasureField
 import com.thedirepack.constructioncalc.core.ui.components.NumberField
 import com.thedirepack.constructioncalc.core.ui.components.SegmentedChoice
 import com.thedirepack.constructioncalc.core.ui.format
 import com.thedirepack.constructioncalc.core.ui.fractionText
+import com.thedirepack.constructioncalc.core.ui.isMetric
 
 private enum class HelperTab(val label: String) {
     TRIANGLE("Right Triangle"),
     SPACING("Layout Marks"),
+    STAIRS("Stairs"),
 }
 
 private enum class SpacingMode(val label: String) {
@@ -55,8 +59,9 @@ private enum class SpacingMode(val label: String) {
 }
 
 /**
- * Compact Helpers sheet for Foot-Inch: Right-Triangle solver and Repeating Spacing / Layout Marks.
- * Lets the user drop any result straight into the calculator or copy the full mark list.
+ * Compact Helpers sheet for Foot-Inch: Right-Triangle solver, Repeating Spacing / Layout Marks,
+ * and Stair Stringer layout. Lets the user drop any result straight into the calculator or copy
+ * the full mark list.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,6 +99,11 @@ internal fun FootInchToolsSheet(
                     onCopy = onCopy,
                 )
                 HelperTab.SPACING -> SpacingHelper(
+                    settings = settings,
+                    onUseQuantity = onUseQuantity,
+                    onCopy = onCopy,
+                )
+                HelperTab.STAIRS -> StairsHelper(
                     settings = settings,
                     onUseQuantity = onUseQuantity,
                     onCopy = onCopy,
@@ -292,33 +302,202 @@ private fun SpacingHelper(
                 HorizontalDivider()
                 formattedMarks.forEachIndexed { idx, (num, text) ->
                     val markQty = layout.marks[idx]
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable(onClickLabel = "Use mark $num") { onUseQuantity(markQty) }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
+                    LayoutMarkRow(num, text, onUse = { onUseQuantity(markQty) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StairsHelper(
+    settings: AppSettings,
+    onUseQuantity: (Quantity) -> Unit,
+    onCopy: (String) -> Unit,
+) {
+    var totalRise by remember { mutableStateOf<Quantity?>(null) }
+    var targetRiser by remember { mutableStateOf<Quantity?>(Quantity.inches(Rational.of(15, 2))) }
+    var treadDepth by remember { mutableStateOf<Quantity?>(Quantity.inches(Rational.of(10))) }
+    var riserOverrideText by remember { mutableStateOf("") }
+    var mount by remember { mutableStateOf(StairTopMount.FLUSH) }
+
+    val overrideTrimmed = riserOverrideText.trim()
+    val parsedOverride = overrideTrimmed.toIntOrNull()
+    val overrideInvalid = overrideTrimmed.isNotEmpty() && (parsedOverride == null || parsedOverride !in 1..Stairs.MAX_RISERS)
+
+    val result = remember(totalRise, targetRiser, treadDepth, parsedOverride, overrideInvalid, mount) {
+        if (overrideInvalid) return@remember null
+        val rise = totalRise ?: return@remember null
+        val target = targetRiser ?: return@remember null
+        val tread = treadDepth ?: return@remember null
+        Stairs.calculate(
+            totalRise = rise,
+            targetRiser = target,
+            treadDepth = tread,
+            riserCountOverride = parsedOverride,
+            mount = mount,
+        )
+    }
+
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "Enter total rise to lay out risers, treads, and stringer marks.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        if (totalRise != null || riserOverrideText.isNotEmpty()) {
+            TextButton(onClick = {
+                totalRise = null
+                riserOverrideText = ""
+            }) { Text("Clear") }
+        }
+    }
+
+    FormSection("Stair inputs") {
+        MeasureField("Total rise", totalRise, { totalRise = it })
+        MeasureField("Target riser height", targetRiser, { targetRiser = it })
+        MeasureField("Tread depth", treadDepth, { treadDepth = it })
+        NumberField(
+            label = "Riser count override (optional)",
+            value = riserOverrideText,
+            onValueChange = { riserOverrideText = it },
+            isError = overrideInvalid,
+            supportingText = if (overrideInvalid) {
+                "Enter a whole number 1–${Stairs.MAX_RISERS}."
+            } else {
+                "Leave blank to compute from target riser."
+            },
+        )
+        SegmentedChoice(
+            options = StairTopMount.entries,
+            selected = mount,
+            onSelect = { mount = it },
+            label = "Top step mount",
+            optionLabel = { it.label },
+        )
+    }
+
+    if (result == null && totalRise != null && !overrideInvalid) {
+        Text(
+            "Total rise, target riser, and tread depth must be greater than zero (1–${Stairs.MAX_RISERS} risers).",
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+
+    if (result != null) {
+        val formattedMarks = remember(result, settings) {
+            result.layoutMarks.mapIndexed { idx, q -> idx + 1 to settings.format(q) }
+        }
+        val twoRPlusTValue = if (settings.isMetric) {
+            "${Decimals.trim(result.twoRPlusTInches * 25.4, 0)} mm (ideal 610–635 mm)"
+        } else {
+            "${Decimals.trim(result.twoRPlusTInches, 2)}\" (ideal 24\"–25\")"
+        }
+        val copyMarksText = remember(formattedMarks, result, settings) {
+            buildString {
+                appendLine("Stringer marks (${settings.format(result.stepHypotenuse)} step)")
+                formattedMarks.forEach { (num, text) -> appendLine("$num. $text") }
+            }.trimEnd()
+        }
+        val copyAllText = remember(result, formattedMarks, settings, twoRPlusTValue, mount) {
+            buildString {
+                appendLine("Stair Stringer (${mount.label})")
+                appendLine("Total rise: ${settings.format(result.totalRise)}")
+                appendLine("Risers: ${result.riserCount} @ ${settings.format(result.riserHeight)}")
+                appendLine("Treads: ${result.treadCount} @ ${settings.format(result.treadDepth)}")
+                appendLine("Total run: ${settings.format(result.totalRun)}")
+                appendLine("Stringer length: ${settings.format(result.stringerLength)}")
+                appendLine("Step hypotenuse: ${settings.format(result.stepHypotenuse)}")
+                appendLine("Angle: ${Decimals.trim(result.angleDegrees, 2)}° (${Decimals.trim(result.risePerFoot, 2)} : 12)")
+                appendLine("2R + T: $twoRPlusTValue")
+                if (formattedMarks.isNotEmpty()) {
+                    appendLine("Layout marks:")
+                    formattedMarks.forEach { (num, text) -> appendLine("$num. $text") }
+                }
+            }.trimEnd()
+        }
+
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${result.riserCount} risers · ${result.treadCount} treads",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { onCopy(copyAllText) }) { Text("Copy all") }
+                }
+                LengthResultRow("Riser height", result.riserHeight, settings, onUseQuantity, onCopy)
+                LengthResultRow("Total run", result.totalRun, settings, onUseQuantity, onCopy)
+                LengthResultRow("Stringer length", result.stringerLength, settings, onUseQuantity, onCopy)
+                LengthResultRow("Step hypotenuse", result.stepHypotenuse, settings, onUseQuantity, onCopy)
+                HorizontalDivider()
+                PlainResultRow("Tread count", "${result.treadCount}", onCopy)
+                PlainResultRow("Angle", "${Decimals.trim(result.angleDegrees, 2)}°", onCopy)
+                PlainResultRow("Pitch", "${Decimals.trim(result.risePerFoot, 2)} : 12", onCopy)
+                PlainResultRow("2R + T check", twoRPlusTValue, onCopy)
+                if (result.notices.isNotEmpty()) {
+                    HorizontalDivider()
+                    result.notices.forEach { notice ->
                         Text(
-                            "#$num",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(end = 12.dp),
+                            fractionText("⚠ $notice"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary,
                         )
+                    }
+                }
+                if (formattedMarks.isNotEmpty()) {
+                    HorizontalDivider()
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            fractionText(text),
-                            style = MaterialTheme.typography.titleMedium,
+                            "Stringer layout marks (${formattedMarks.size})",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.weight(1f),
                         )
-                        Text(
-                            "Use",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                        TextButton(onClick = { onCopy(copyMarksText) }) { Text("Copy marks") }
+                    }
+                    formattedMarks.forEachIndexed { idx, (num, text) ->
+                        val markQty = result.layoutMarks[idx]
+                        LayoutMarkRow(num, text, onUse = { onUseQuantity(markQty) })
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun LayoutMarkRow(num: Int, text: String, onUse: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClickLabel = "Use mark $num", onClick = onUse)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "#$num",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(end = 12.dp),
+        )
+        Text(
+            fractionText(text),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            "Use",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
     }
 }
 

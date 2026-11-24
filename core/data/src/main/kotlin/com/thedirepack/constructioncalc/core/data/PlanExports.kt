@@ -23,11 +23,13 @@ import com.thedirepack.constructioncalc.core.model.PlanPathMeasurement
 import com.thedirepack.constructioncalc.core.model.PlanSheetSource
 import com.thedirepack.constructioncalc.core.model.measurePath
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.multipdf.LayerUtility
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
+import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
 import com.tom_roush.pdfbox.util.Matrix
 import java.io.File
 import java.io.IOException
@@ -42,6 +44,9 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
+/** Controls whether a single-sheet or viewport-crop export preserves vector PDF content or flattens to a raster snapshot. */
+enum class PlanSheetExportMode { VECTOR, RASTER }
+
 /** Bounds in displayed source-page points, with the origin at the top left. */
 data class PlanExportCrop(val left: Float, val top: Float, val right: Float, val bottom: Float) {
     init {
@@ -51,6 +56,33 @@ data class PlanExportCrop(val left: Float, val top: Float, val right: Float, val
 
     val width: Float get() = right - left
     val height: Float get() = bottom - top
+}
+
+/**
+ * Computes the PDF transform matrix that maps unrotated source page coordinates inside
+ * `[cropX, cropX + cropW] × [cropY, cropY + cropH]` to output page coordinates inside the
+ * region placed at `(contentLeft, contentBottom)`.
+ */
+internal fun vectorSheetSourceMatrix(
+    cropX: Float,
+    cropY: Float,
+    cropW: Float,
+    cropH: Float,
+    rotationDegrees: Int,
+    region: PlanExportCrop,
+    contentLeft: Float,
+    contentBottom: Float,
+): Matrix {
+    val rot = ((rotationDegrees % 360) + 360) % 360
+    val displayedH = if (rot == 90 || rot == 270) cropW else cropH
+    val shiftX = contentLeft - region.left
+    val shiftY = contentBottom - (displayedH - region.bottom)
+    return when (rot) {
+        90 -> Matrix(0f, -1f, 1f, 0f, shiftX - cropY, shiftY + cropX + cropW)
+        180 -> Matrix(-1f, 0f, 0f, -1f, shiftX + cropX + cropW, shiftY + cropY + cropH)
+        270 -> Matrix(0f, 1f, -1f, 0f, shiftX + cropY + cropH, shiftY - cropX)
+        else -> Matrix(1f, 0f, 0f, 1f, shiftX - cropX, shiftY - cropY)
+    }
 }
 
 object PlanExports {
@@ -264,7 +296,7 @@ object PlanExports {
         }
     }
 
-    /** A flattened sheet or viewport crop. Only visible pixels enter the exported PDF. */
+    /** Exports one sheet or viewport crop as a searchable vector PDF or a flattened raster snapshot. */
     fun writeSheetPdf(
         context: Context,
         drawing: PlanDrawing,
@@ -273,11 +305,149 @@ object PlanExports {
         out: OutputStream,
         format: (Quantity) -> String,
         routeLabel: (String) -> String,
+        mode: PlanSheetExportMode = PlanSheetExportMode.VECTOR,
     ) {
         require(source.drawingId == drawing.id && source.sha256 == drawing.sha256)
+        when (mode) {
+            PlanSheetExportMode.VECTOR -> writeVectorSheetPdf(context, drawing, source, crop, out, format, routeLabel)
+            PlanSheetExportMode.RASTER -> writeRasterSheetPdf(context, drawing, source, crop, out, format, routeLabel)
+        }
+    }
+
+    private fun writeVectorSheetPdf(
+        context: Context,
+        drawing: PlanDrawing,
+        source: PlanSheetSource,
+        crop: PlanExportCrop?,
+        out: OutputStream,
+        format: (Quantity) -> String,
+        routeLabel: (String) -> String,
+    ) {
+        val file = PlanFiles(context).file(source.sha256)
+        PDFBoxResourceLoader.init(context.applicationContext)
+        val memory = { MemoryUsageSetting.setupMixed(24L * 1024 * 1024).setTempDir(context.cacheDir) }
+        PDDocument.load(file, memory()).use { srcDoc ->
+            if (source.page !in 0 until srcDoc.numberOfPages) {
+                throw IOException("A markup refers to a missing PDF page.")
+            }
+            val srcPage = srcDoc.getPage(source.page)
+            val cropBox = srcPage.cropBox ?: srcPage.mediaBox ?: throw IOException("This PDF page has no bounds.")
+            val cropX = cropBox.lowerLeftX
+            val cropY = cropBox.lowerLeftY
+            val cropW = cropBox.width
+            val cropH = cropBox.height
+            if (!cropW.isFinite() || !cropH.isFinite() || cropW <= 0f || cropH <= 0f) {
+                throw IOException("This PDF page has an empty crop box.")
+            }
+            val rotation = ((srcPage.rotation % 360) + 360) % 360
+            val displayedW = if (rotation == 90 || rotation == 270) cropH else cropW
+            val displayedH = if (rotation == 90 || rotation == 270) cropW else cropH
+            val region = if (crop == null) {
+                PlanExportCrop(0f, 0f, displayedW, displayedH)
+            } else {
+                require(crop.right <= displayedW + 1f && crop.bottom <= displayedH + 1f)
+                PlanExportCrop(crop.left, crop.top, min(crop.right, displayedW), min(crop.bottom, displayedH))
+            }
+            val headerH = 36f
+            val pageW = maxOf(180f, ceil(region.width))
+            val pageH = ceil(region.height) + headerH
+            val contentLeft = (pageW - region.width) / 2f
+            val contentBottom = pageH - headerH - region.height
+
+            val overlay = File.createTempFile("plan-sheet-overlay-", ".pdf", context.cacheDir)
+            try {
+                writeVectorSheetOverlay(overlay, drawing, source, region, pageW, pageH, headerH, contentLeft, format, routeLabel)
+                PDDocument().use { outDoc ->
+                    val outPage = PDPage(PDRectangle(pageW, pageH))
+                    outDoc.addPage(outPage)
+                    val layers = LayerUtility(outDoc)
+                    val srcForm = layers.importPageAsForm(srcDoc, source.page)
+                    // LayerUtility sets a rotation/offset matrix on imported pages; clear it so
+                    // vectorSheetSourceMatrix maps unrotated source cropBox space cleanly.
+                    srcForm.cosObject.removeItem(COSName.MATRIX)
+                    val sourceMatrix = vectorSheetSourceMatrix(
+                        cropX = cropX,
+                        cropY = cropY,
+                        cropW = cropW,
+                        cropH = cropH,
+                        rotationDegrees = rotation,
+                        region = region,
+                        contentLeft = contentLeft,
+                        contentBottom = contentBottom,
+                    )
+                    PDDocument.load(overlay, memory()).use { markupDoc ->
+                        val overlayForm = layers.importPageAsForm(markupDoc, 0)
+                        overlayForm.cosObject.removeItem(COSName.MATRIX)
+                        PDPageContentStream(outDoc, outPage).use { stream ->
+                            stream.saveGraphicsState()
+                            stream.addRect(contentLeft, contentBottom, region.width, region.height)
+                            stream.clip()
+                            stream.transform(sourceMatrix)
+                            stream.drawForm(srcForm)
+                            stream.restoreGraphicsState()
+
+                            stream.saveGraphicsState()
+                            stream.drawForm(overlayForm)
+                            stream.restoreGraphicsState()
+                        }
+                        outDoc.save(out)
+                    }
+                }
+            } finally {
+                overlay.delete()
+            }
+        }
+    }
+
+    private fun writeVectorSheetOverlay(
+        overlay: File,
+        drawing: PlanDrawing,
+        source: PlanSheetSource,
+        region: PlanExportCrop,
+        pageW: Float,
+        pageH: Float,
+        headerH: Float,
+        contentLeft: Float,
+        format: (Quantity) -> String,
+        routeLabel: (String) -> String,
+    ) {
+        val document = PdfDocument()
+        try {
+            val page = document.startPage(
+                PdfDocument.PageInfo.Builder(ceil(pageW).toInt(), ceil(pageH).toInt(), 1).create(),
+            )
+            try {
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+                drawSheetHeader(page.canvas, pageW, source, paint)
+                page.canvas.save()
+                page.canvas.clipRect(contentLeft, headerH, contentLeft + region.width, headerH + region.height)
+                page.canvas.translate(contentLeft - region.left, headerH - region.top)
+                drawAnnotations(page.canvas, drawing, source.page, format, routeLabel)
+                page.canvas.restore()
+            } finally {
+                document.finishPage(page)
+            }
+            overlay.outputStream().use(document::writeTo)
+        } finally {
+            document.close()
+        }
+    }
+
+    private fun writeRasterSheetPdf(
+        context: Context,
+        drawing: PlanDrawing,
+        source: PlanSheetSource,
+        crop: PlanExportCrop?,
+        out: OutputStream,
+        format: (Quantity) -> String,
+        routeLabel: (String) -> String,
+    ) {
         val file = PlanFiles(context).file(source.sha256)
         ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
             PdfRenderer(descriptor).use { renderer ->
+                if (source.page !in 0 until renderer.pageCount) {
+                    throw IOException("A markup refers to a missing PDF page.")
+                }
                 renderer.openPage(source.page).use { page ->
                     val region = crop ?: PlanExportCrop(0f, 0f, page.width.toFloat(), page.height.toFloat())
                     require(region.right <= page.width && region.bottom <= page.height)
@@ -306,6 +476,19 @@ object PlanExports {
         }
     }
 
+    private fun drawSheetHeader(canvas: Canvas, width: Float, source: PlanSheetSource, paint: Paint) {
+        val lines = listOf("Sheet ${source.sheetId}", source.revision?.let { "Revision $it" } ?: "Revision unassigned")
+        paint.color = Color.BLACK
+        paint.style = Paint.Style.FILL
+        paint.typeface = Typeface.DEFAULT_BOLD
+        paint.textSize = 11f
+        lines.forEachIndexed { index, line ->
+            paint.textScaleX = 1f
+            paint.textScaleX = min(1f, (width - 16f) / paint.measureText(line).coerceAtLeast(1f))
+            canvas.drawText(line, 8f, 13f + index * 14f, paint)
+        }
+    }
+
     private fun writeStampedSheet(bitmap: Bitmap, region: PlanExportCrop, source: PlanSheetSource, out: OutputStream) {
         val header = 36
         val width = maxOf(180, ceil(region.width).toInt())
@@ -315,14 +498,8 @@ object PlanExports {
             val page = document.startPage(PdfDocument.PageInfo.Builder(width, ceil(region.height).toInt() + header, 1).create())
             try {
                 val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-                val lines = listOf("Sheet ${source.sheetId}", source.revision?.let { "Revision $it" } ?: "Revision unassigned")
-                paint.typeface = Typeface.DEFAULT_BOLD
-                paint.textSize = 11f
-                lines.forEachIndexed { index, line ->
-                    paint.textScaleX = 1f
-                    paint.textScaleX = min(1f, (width - 16f) / paint.measureText(line).coerceAtLeast(1f))
-                    page.canvas.drawText(line, 8f, 13f + index * 14f, paint)
-                }
+                drawSheetHeader(page.canvas, width.toFloat(), source, paint)
+                paint.textScaleX = 1f
                 page.canvas.drawBitmap(bitmap, null, RectF(left, header.toFloat(), left + region.width, header + region.height), paint)
             } finally {
                 document.finishPage(page)

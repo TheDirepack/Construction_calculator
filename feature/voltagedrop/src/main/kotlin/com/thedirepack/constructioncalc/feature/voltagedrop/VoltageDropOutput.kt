@@ -19,6 +19,7 @@ import com.thedirepack.constructioncalc.core.ui.show
 import com.thedirepack.constructioncalc.core.ui.isMetric
 import com.thedirepack.constructioncalc.core.measure.Measure
 import com.thedirepack.constructioncalc.core.ui.formatDecimal
+import com.thedirepack.constructioncalc.feature.voltagedrop.domain.GoverningConstraint
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.Method
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDrop
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropRequest
@@ -55,6 +56,10 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
         ?: return VoltageDropOutput(emptyList(), listOf(Notice("This circuit can't be calculated.", NoticeLevel.ERROR)), "")
 
     val smallest = VoltageDrop.smallestSize(request)
+    val maxListed = VoltageDrop.supportedSizes(request.material, request.method).last().label
+    val ampacityResult = parsed.ampacity?.let {
+        VoltageDrop.checkAmpacity(request, it, smallest, settings.unitSystem)
+    }
     val results = buildList {
         add(decimalResult("voltage_drop", "Voltage drop", ValueKind.VOLTAGE, result.dropVolts, 2, " V"))
         add(decimalResult("percent_drop", "Voltage drop %", ValueKind.PERCENT, result.percent, 2, " %"))
@@ -63,9 +68,30 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
             ResultValue.text(
                 "min_size",
                 "Smallest size for ${formatDecimal(request.targetPercent, 2)} %",
-                smallest?.let { sizeText(request, it, settings) } ?: "None up to ${VoltageDrop.supportedSizes(request.material, request.method).last().label}",
+                smallest?.let { sizeText(request, it, settings) } ?: "None up to $maxListed",
             ),
         )
+        if (ampacityResult != null) {
+            val ampacityText = ampacityResult.minimumSize?.let { min ->
+                val usable = ampacityResult.minimumUsableAmpacity?.let { formatDecimal(it, 1) } ?: "—"
+                "${sizeText(request, min, settings)} ($usable A usable)"
+            } ?: if (ampacityResult.ambientFactor == null) {
+                "None (exceeds ${parsed.ampacity.insulation.label} ambient)"
+            } else {
+                "None up to $maxListed"
+            }
+            add(ResultValue.text("ampacity_size", "Minimum size (ampacity)", ampacityText))
+            val governingText = when (ampacityResult.governing) {
+                GoverningConstraint.VOLTAGE_DROP ->
+                    "${sizeText(request, ampacityResult.governingSize!!, settings)} · ${GoverningConstraint.VOLTAGE_DROP.label} governs"
+                GoverningConstraint.AMPACITY ->
+                    "${sizeText(request, ampacityResult.governingSize!!, settings)} · ${GoverningConstraint.AMPACITY.label} governs"
+                GoverningConstraint.BOTH ->
+                    "${sizeText(request, ampacityResult.governingSize!!, settings)} · Drop & ampacity match"
+                GoverningConstraint.UNSOLVED -> GoverningConstraint.UNSOLVED.label
+            }
+            add(ResultValue.text("governing_size", "Recommended size", governingText))
+        }
         add(maxLengthResult(result, settings))
     }
 
@@ -83,6 +109,19 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
                     NoticeLevel.WARNING,
                 ),
             )
+        }
+        if (ampacityResult != null && !ampacityResult.selectedMeetsAmpacity) {
+            val selectedLabel = sizeText(request, request.size, settings)
+            val reason = ampacityResult.selectedFailure ?: "Selected size does not meet NEC ampacity requirements."
+            val suggestion = when {
+                ampacityResult.minimumSize != null ->
+                    " ${sizeText(request, ampacityResult.minimumSize, settings)} is the minimum size for ampacity."
+                ampacityResult.ambientFactor == null -> ""
+                request.parallelSets < VoltageDrop.MAX_SETS ->
+                    " No single size is large enough; try more parallel sets."
+                else -> " No listed size is large enough."
+            }
+            add(Notice("$selectedLabel fails ampacity check: $reason$suggestion", NoticeLevel.WARNING))
         }
         add(Notice("Assumes conductors at ${tempBoth(VoltageDrop.CONDUCTOR_TEMPERATURE_C.toDouble(), settings)} and a balanced load.", NoticeLevel.INFO))
         add(
@@ -115,7 +154,11 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
         if (request.system == AcPhases.THREE) {
             add(Notice("Three-phase: voltage is line-to-line.", NoticeLevel.INFO))
         }
-        add(Notice("Ampacity, terminal temperature, derating and overcurrent protection are not checked.", NoticeLevel.INFO))
+        if (ampacityResult != null) {
+            ampacityResult.notes.forEach { add(Notice(it, NoticeLevel.INFO)) }
+        } else {
+            add(Notice("Ampacity, terminal temperature, derating and overcurrent protection are not checked.", NoticeLevel.INFO))
+        }
     }
 
     val summary = buildString {
@@ -125,6 +168,13 @@ internal fun voltageDropOutput(inputs: VoltageDropInputs, settings: AppSettings)
         append(settings.format(Quantity.feet(Rational.of(request.lengthFeet)))).append(" of ")
         append(sizeText(request, request.size, settings)).append(": ")
         append(formatDecimal(result.dropVolts, 2)).append(" V (").append(formatDecimal(result.percent, 2)).append(" %)")
+        if (ampacityResult != null) {
+            append(" · ")
+            append(
+                ampacityResult.governingSize?.let { "${sizeText(request, it, settings)} (${ampacityResult.governing.label})" }
+                    ?: ampacityResult.governing.label,
+            )
+        }
     }
     return VoltageDropOutput(results, notices, summary)
 }

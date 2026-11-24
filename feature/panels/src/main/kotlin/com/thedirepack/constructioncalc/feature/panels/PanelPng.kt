@@ -6,6 +6,7 @@ import android.graphics.Color
 import com.thedirepack.constructioncalc.core.model.Panel
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.design.ProjectDesign
+import com.thedirepack.constructioncalc.feature.panels.domain.PanelExportLayout
 import java.io.OutputStream
 
 /**
@@ -25,6 +26,7 @@ internal object PanelPng {
         date: String,
         pageNumber: Int = 1,
         pageCount: Int = 1,
+        layout: PanelExportLayout = PanelExportLayout.BRANCH_STANDARD,
     ) {
         val widthPx = (PanelPdf.PAGE_W * SCALE).toInt()
         val heightPx = (PanelPdf.PAGE_H * SCALE).toInt()
@@ -34,7 +36,18 @@ internal object PanelPng {
             canvas.drawColor(Color.WHITE)
             canvas.save()
             canvas.scale(SCALE, SCALE)
-            PanelPdf.drawPanel(canvas, project, design, panel, header, date, pageNumber, pageCount, overflowHint = "all are in the shared text")
+            PanelPdf.drawPanel(
+                canvas,
+                project,
+                design,
+                panel,
+                header,
+                date,
+                pageNumber,
+                pageCount,
+                overflowHint = "all are in the shared text",
+                layout = layout,
+            )
             canvas.restore()
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
         } finally {

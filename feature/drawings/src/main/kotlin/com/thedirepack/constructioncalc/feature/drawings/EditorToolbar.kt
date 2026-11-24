@@ -476,8 +476,8 @@ internal fun EditorOptions(
             MenuItem("Takeoff totals", close, R.drawable.ic_plan_takeoff, onTakeoff)
             MenuItem("Page measurements and markups", close, R.drawable.ic_plan_layers, onPageItems)
             HorizontalDivider()
-            MenuItem("Export or share this sheet", close, CoreR.drawable.ic_share, onExportSheet)
-            MenuItem("Export annotated PDF", close, R.drawable.ic_plan_export, onExportPdf)
+            MenuItem("Export or share this sheet…", close, CoreR.drawable.ic_share, onExportSheet)
+            MenuItem("Export whole PDF (searchable)", close, R.drawable.ic_plan_export, onExportPdf)
             MenuItem("Export drawing JSON", close, R.drawable.ic_plan_export, onExportJson)
         }
     }

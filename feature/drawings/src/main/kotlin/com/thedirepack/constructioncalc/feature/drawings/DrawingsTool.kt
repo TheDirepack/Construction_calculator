@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -65,6 +66,7 @@ import com.thedirepack.constructioncalc.core.ui.tool.ToolModule
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 object DrawingsTool : ToolModule {
     const val ID = "drawings"
@@ -115,6 +117,26 @@ private fun DrawingsScreen(host: ToolHost) {
     val file = drawing?.let { files.file(it.sha256) }
     val scope = rememberCoroutineScope()
     var importing by remember { mutableStateOf(false) }
+    var pendingJsonImport by remember { mutableStateOf<PlanDrawing?>(null) }
+
+    fun attachImportedDrawing(source: PlanDrawing, projectId: String, chosenName: String? = null) {
+        val resolvedName = (chosenName ?: source.name).trim().ifBlank { "Drawing" }.take(240)
+        var savedId = source.id
+        val result = services.projects.edit(projectId) { current, now ->
+            val needsNewId = current.drawings.any { it.id == source.id }
+            val attached = source.copy(
+                id = if (needsNewId) newId() else source.id,
+                name = resolvedName,
+            )
+            savedId = attached.id
+            current.copy(drawings = current.drawings + attached, updatedAt = now)
+        }
+        if (result != null && !result.archived && result.drawings.any { it.id == savedId }) {
+            activeDrawingId = savedId
+        } else {
+            host.showMessage("The project is unavailable for editing.")
+        }
+    }
 
     fun importDrawing(uri: Uri?, asJson: Boolean) {
         val projectId = project?.id
@@ -131,12 +153,11 @@ private fun DrawingsScreen(host: ToolHost) {
                         host.showMessage("This PDF is already in the project as “${duplicate.name}”.")
                         return@launch
                     }
-                    val attached = if (existing.any { it.id == source.id }) source.copy(id = newId()) else source
-                    val result = services.projects.edit(projectId) { current, now ->
-                        current.copy(drawings = current.drawings + attached, updatedAt = now)
+                    if (asJson && existing.any { it.id == source.id || it.name.equals(source.name, ignoreCase = true) }) {
+                        pendingJsonImport = source
+                        return@launch
                     }
-                    if (result?.drawings?.any { it.id == attached.id } == true) activeDrawingId = attached.id
-                    else host.showMessage("The project is unavailable for editing.")
+                    attachImportedDrawing(source, projectId)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
@@ -299,7 +320,7 @@ private fun DrawingsScreen(host: ToolHost) {
                 project = project,
                 importing = importing,
                 onImport = { importPdf.launch(arrayOf("application/pdf")) },
-                onImportJson = { importJson.launch(arrayOf("application/json", "application/octet-stream")) },
+                onImportJson = { importJson.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*")) },
                 onDrawing = { activeDrawingId = it },
                 onRename = { d, name -> renameDrawing(d, name) },
                 onDelete = { deleteDrawing(it) },
@@ -308,6 +329,62 @@ private fun DrawingsScreen(host: ToolHost) {
 
         }
     }
+
+    pendingJsonImport?.let { source ->
+        if (project == null) {
+            pendingJsonImport = null
+        } else {
+            val suggestedName = remember(source, project.drawings) {
+                uniqueImportedDrawingName(source.name, project.drawings.map { it.name })
+            }
+            RenameDialog(
+                title = "Name imported drawing",
+                label = "Drawing name",
+                initialName = suggestedName,
+                maxLength = 240,
+                onDismiss = { pendingJsonImport = null },
+                onConfirm = { chosenName ->
+                    pendingJsonImport = null
+                    attachImportedDrawing(source, project.id, chosenName)
+                },
+            )
+        }
+    }
+}
+
+internal fun uniqueImportedDrawingName(requested: String, existingNames: Collection<String>): String {
+    val normalizedExisting = existingNames.mapTo(HashSet()) { it.trim().lowercase(Locale.ROOT) }
+    val base = requested.trim().ifBlank { "Drawing" }.take(240)
+    if (base.lowercase(Locale.ROOT) !in normalizedExisting) return base
+    val hasPdfExt = base.endsWith(".pdf", ignoreCase = true) && base.length > 4
+    val ext = if (hasPdfExt) base.takeLast(4) else ""
+    val stem = if (hasPdfExt) base.dropLast(4) else base
+    var copyIndex = 1
+    while (true) {
+        val suffix = if (copyIndex == 1) " (copy)" else " (copy $copyIndex)"
+        val maxStem = (240 - suffix.length - ext.length).coerceAtLeast(1)
+        val candidate = "${stem.take(maxStem)}$suffix$ext"
+        if (candidate.lowercase(Locale.ROOT) !in normalizedExisting) return candidate
+        copyIndex++
+    }
+}
+
+internal fun drawingRowSubtitle(drawing: PlanDrawing): String {
+    fun count(n: Int, singular: String, plural: String = "${singular}s"): String =
+        if (n == 1) "1 $singular" else "$n $plural"
+
+    val parts = buildList {
+        if (drawing.measurements.isNotEmpty()) add(count(drawing.measurements.size, "measurement"))
+        if (drawing.marks.isNotEmpty()) add(count(drawing.marks.size, "markup"))
+        if (drawing.routes.isNotEmpty()) add(count(drawing.routes.size, "route"))
+        if (drawing.paths.isNotEmpty()) add(count(drawing.paths.size, "path"))
+        if (drawing.zones.isNotEmpty()) add(count(drawing.zones.size, "zone"))
+        if (drawing.sheetRevisions.isNotEmpty()) add(count(drawing.sheetRevisions.size, "sheet rev"))
+    }
+    val details = if (parts.isEmpty()) "No markups or measurements" else parts.joinToString(" · ")
+    val calibrated = drawing.calibration.preset != null || drawing.calibration.references.any { !it.check }
+    val scale = if (calibrated) "Calibrated" else "Uncalibrated"
+    return "$scale · $details"
 }
 
 @Composable
@@ -342,7 +419,14 @@ private fun DrawingList(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = { onDrawing(drawing.id) }, modifier = Modifier.weight(1f)) {
-                    Text(drawing.name, modifier = Modifier.fillMaxWidth())
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(drawing.name)
+                        Text(
+                            drawingRowSubtitle(drawing),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 if (!project.archived) {
                     TextButton(onClick = { renaming = drawing }) { Text("Rename") }

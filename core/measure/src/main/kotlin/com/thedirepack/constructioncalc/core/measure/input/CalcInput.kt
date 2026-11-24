@@ -20,6 +20,12 @@ sealed interface Key {
     data object Clear : Key
     /** A fraction-of-an-inch key: adds (or replaces) the fraction on the current measurement. */
     data class Fraction(val numerator: Int, val denominator: Int) : Key
+    /** Digit (`'0'..'9'`) or `'.'` entered on the Feet side of the dual keypad. */
+    data class FeetDigit(val char: kotlin.Char) : Key
+    /** Digit (`'0'..'9'`) or `'.'` entered on the Inches side of the dual keypad. */
+    data class InchDigit(val char: kotlin.Char) : Key
+    /** Removes the fraction part from the current imperial measurement literal. */
+    data object ClearFraction : Key
     /** Insert a known value, e.g. from history. */
     data class Recall(val quantity: Quantity, val preferInches: Boolean? = null) : Key
     /** Open grouping parenthesis `(`. */
@@ -66,6 +72,9 @@ object CalcInput {
         Key.Backspace -> backspace(state)
         Key.Clear -> Outcome(CalcState())
         is Key.Fraction -> typeFraction(state, key.numerator, key.denominator)
+        is Key.FeetDigit -> typeFeetDigit(state, key.char)
+        is Key.InchDigit -> typeInchDigit(state, key.char)
+        Key.ClearFraction -> clearFraction(state)
         is Key.Recall -> recall(state, Token.Value(key.quantity, key.preferInches))
         Key.OpenParen -> typeOpenParen(state)
         Key.CloseParen -> typeCloseParen(state)
@@ -253,6 +262,96 @@ object CalcInput {
             is Token.Op, Token.OpenParen, Token.Sqrt, null -> tokens + Token.Literal(fraction)
         }
         return Outcome(CalcState(newTokens))
+    }
+
+    private fun typeFeetDigit(state: CalcState, c: Char): Outcome {
+        if (!isDualPadChar(c)) return rejected(state)
+        val tokens = if (state.answer != null) emptyList() else state.tokens
+        val parts = trailingImperialParts(tokens) ?: return rejected(state)
+        if (MeasureLiteral.SLASH in parts.feet) return rejected(state)
+        if (c == MeasureLiteral.DOT &&
+            (MeasureLiteral.DOT in parts.feet || parts.inches.isNotEmpty() || parts.fraction.isNotEmpty())
+        ) {
+            return rejected(state)
+        }
+        val rebuilt = buildImperialLiteral(appendDualDigit(parts.feet, c), parts.inches, parts.fraction)
+        return replaceOrAppendLiteral(state, tokens, rebuilt)
+    }
+
+    private fun typeInchDigit(state: CalcState, c: Char): Outcome {
+        if (!isDualPadChar(c)) return rejected(state)
+        val tokens = if (state.answer != null) emptyList() else state.tokens
+        val parts = trailingImperialParts(tokens) ?: return rejected(state)
+        if (MeasureLiteral.DOT in parts.feet) return rejected(state)
+        if (c == MeasureLiteral.DOT && (MeasureLiteral.DOT in parts.inches || parts.fraction.isNotEmpty())) {
+            return rejected(state)
+        }
+        val rebuilt = buildImperialLiteral(parts.feet, appendDualDigit(parts.inches, c), parts.fraction)
+        return replaceOrAppendLiteral(state, tokens, rebuilt)
+    }
+
+    private fun clearFraction(state: CalcState): Outcome {
+        if (state.answer != null) return rejected(state)
+        val last = state.tokens.lastOrNull() as? Token.Literal ?: return rejected(state)
+        val parts = splitImperialLiteral(last.text) ?: return rejected(state)
+        if (parts.fraction.isEmpty()) return rejected(state)
+        val base = state.tokens.dropLast(1)
+        val newTokens = if (parts.feet.isEmpty() && parts.inches.isEmpty()) {
+            base
+        } else {
+            val rebuilt = buildImperialLiteral(parts.feet, parts.inches, "")
+            if (!MeasureLiteral.isValidPrefix(rebuilt)) return rejected(state)
+            base + Token.Literal(rebuilt)
+        }
+        return Outcome(CalcState(newTokens))
+    }
+
+    private fun isDualPadChar(c: Char): Boolean = c in '0'..'9' || c == MeasureLiteral.DOT
+
+    private fun appendDualDigit(existing: String, c: Char): String =
+        if (existing.isEmpty() && c == MeasureLiteral.DOT) "0." else existing + c
+
+    private fun trailingImperialParts(tokens: List<Token>): ImperialParts? = when (val last = tokens.lastOrNull()) {
+        is Token.Literal -> splitImperialLiteral(last.text)
+        else -> ImperialParts("", "", "")
+    }
+
+    private fun replaceOrAppendLiteral(state: CalcState, tokens: List<Token>, rebuilt: String): Outcome {
+        if (!MeasureLiteral.isValidPrefix(rebuilt)) return rejected(state)
+        val newTokens = when (tokens.lastOrNull()) {
+            is Token.Literal, is Token.Value -> tokens.dropLast(1) + Token.Literal(rebuilt)
+            Token.CloseParen, Token.Square -> tokens + Token.Op(Operator.MULTIPLY) + Token.Literal(rebuilt)
+            is Token.Op, Token.OpenParen, Token.Sqrt, null -> tokens + Token.Literal(rebuilt)
+        }
+        return Outcome(CalcState(newTokens))
+    }
+
+    private data class ImperialParts(val feet: String, val inches: String, val fraction: String)
+
+    private fun splitImperialLiteral(text: String): ImperialParts? {
+        if (text.any { it == 'm' || it == 'c' }) return null
+        val parsed = runCatching { MeasureLiteral.parts(text) }.getOrNull() ?: return null
+        if (parsed.metric != null) return null
+        val rawInches = parsed.inches.orEmpty()
+        return if (!parsed.isLength && MeasureLiteral.SLASH in rawInches) {
+            ImperialParts(feet = "", inches = "", fraction = rawInches)
+        } else {
+            ImperialParts(
+                feet = parsed.feet.orEmpty(),
+                inches = rawInches,
+                fraction = parsed.fraction.orEmpty(),
+            )
+        }
+    }
+
+    /** Formats structured imperial components back into canonical [MeasureLiteral] syntax. */
+    internal fun buildImperialLiteral(feet: String, inches: String, fraction: String): String = buildString {
+        if (feet.isNotEmpty()) append(feet).append(MeasureLiteral.FEET)
+        if (inches.isNotEmpty()) append(inches).append(MeasureLiteral.INCH)
+        if (fraction.isNotEmpty()) {
+            append(fraction)
+            if (!fraction.endsWith(MeasureLiteral.INCH)) append(MeasureLiteral.INCH)
+        }
     }
 
     /**

@@ -34,9 +34,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -60,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.data.PlanExportCrop
 import com.thedirepack.constructioncalc.core.data.PlanExports
 import com.thedirepack.constructioncalc.core.data.PlanFiles
+import com.thedirepack.constructioncalc.core.data.PlanSheetExportMode
 import com.thedirepack.constructioncalc.core.data.ProjectSharing
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
@@ -209,9 +212,6 @@ internal fun DrawingEditor(
     var comparison by remember(drawing.id, session.page) { mutableStateOf<IssuedSheet?>(null) }
     var sheetExportOpen by remember(drawing.id, session.page) { mutableStateOf(false) }
     var cropProvider by remember(drawing.id) { mutableStateOf<(() -> PlanExportCrop?)?>(null) }
-    var pendingExport by rememberSaveable(drawing.id, stateSaver = SheetExportSaver) {
-        mutableStateOf<SheetExportRequest?>(null)
-    }
     val files = remember(context) { PlanFiles(context.applicationContext) }
 
     fun publish(measurement: PlanMeasurement, quantity: Quantity) {
@@ -566,34 +566,37 @@ internal fun DrawingEditor(
     }
 
     val routeLabel = project::drawingRunName
+    fun finalizeStagedSave(file: File?, uri: Uri?, successMessage: String, errorFallback: String) {
+        if (file == null) return
+        busy = true
+        scope.launch {
+            try {
+                if (uri != null) {
+                    withContext(Dispatchers.IO) {
+                        file.inputStream().use { input ->
+                            val output = context.contentResolver.openOutputStream(uri, "wt")
+                                ?: throw IOException("Could not open the export destination.")
+                            output.use { input.copyTo(it) }
+                        }
+                    }
+                    host.showMessage(successMessage)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                host.showMessage(error.message ?: errorFallback)
+            } finally {
+                file.delete()
+                busy = false
+            }
+        }
+    }
+
     var pendingPdf by rememberSaveable { mutableStateOf<String?>(null) }
     val pdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         val file = pendingPdf?.let { File(context.cacheDir, it) }
         pendingPdf = null
-        if (file != null) {
-            busy = true
-            scope.launch {
-                try {
-                    if (uri != null) {
-                        withContext(Dispatchers.IO) {
-                            file.inputStream().use { input ->
-                                val output = context.contentResolver.openOutputStream(uri, "wt")
-                                    ?: throw IOException("Could not open the export destination.")
-                                output.use { input.copyTo(it) }
-                            }
-                        }
-                        host.showMessage("Annotated PDF saved.")
-                    }
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    host.showMessage(error.message ?: "Could not save the drawing.")
-                } finally {
-                    file.delete()
-                    busy = false
-                }
-            }
-        }
+        finalizeStagedSave(file, uri, "Annotated PDF saved.", "Could not save the drawing.")
     }
     val baseName = drawing.name.substringBeforeLast('.').ifBlank { "Drawing" }
 
@@ -644,26 +647,74 @@ internal fun DrawingEditor(
         }
     }
 
-    fun exportSheet(request: SheetExportRequest, uri: Uri? = null, share: Boolean = false) {
+    var pendingSheetFile by rememberSaveable { mutableStateOf<String?>(null) }
+    val saveSheet = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val file = pendingSheetFile?.let { File(context.cacheDir, it) }
+        pendingSheetFile = null
+        finalizeStagedSave(file, uri, "Sheet PDF saved.", "Could not save this sheet.")
+    }
+
+    fun prepareSheetSave(request: SheetExportRequest) {
+        if (pendingSheetFile != null || busy) return
+        busy = true
+        val file = File(context.cacheDir, "plan-sheet-${UUID.randomUUID()}.pdf")
+        scope.launch {
+            try {
+                PdfWork.render {
+                    file.outputStream().use { stream ->
+                        PlanExports.writeSheetPdf(
+                            context,
+                            drawing,
+                            request.source,
+                            request.crop,
+                            stream,
+                            { quantity -> settings.format(quantity) },
+                            routeLabel,
+                            mode = request.mode,
+                        )
+                    }
+                }
+                pendingSheetFile = file.name
+                saveSheet.launch(request.fileName)
+            } catch (cancelled: CancellationException) {
+                file.delete()
+                throw cancelled
+            } catch (error: Exception) {
+                pendingSheetFile = null
+                file.delete()
+                host.showMessage(error.message ?: "Could not export this sheet.")
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun shareSheet(request: SheetExportRequest) {
+        if (busy) return
         busy = true
         scope.launch {
             try {
                 val chooser = PdfWork.render {
-                    val write: (java.io.OutputStream) -> Unit = { stream ->
-                        PlanExports.writeSheetPdf(context, drawing, request.source, request.crop, stream,
-                            { quantity -> settings.format(quantity) }, routeLabel)
-                    }
-                    if (share) {
-                        ProjectSharing.shareFileIntent(context, request.fileName, "application/pdf",
-                            request.source.label, drawing.name, write)
-                    } else {
-                        context.contentResolver.openOutputStream(checkNotNull(uri), "wt")?.use(write)
-                            ?: error("Could not open the export destination.")
-                        null
+                    ProjectSharing.shareFileIntent(
+                        context,
+                        request.fileName,
+                        "application/pdf",
+                        request.source.label,
+                        drawing.name,
+                    ) { stream ->
+                        PlanExports.writeSheetPdf(
+                            context,
+                            drawing,
+                            request.source,
+                            request.crop,
+                            stream,
+                            { quantity -> settings.format(quantity) },
+                            routeLabel,
+                            mode = request.mode,
+                        )
                     }
                 }
-                if (chooser != null) context.startActivity(chooser)
-                else host.showMessage("Annotated PDF saved.")
+                context.startActivity(chooser)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -672,11 +723,6 @@ internal fun DrawingEditor(
                 busy = false
             }
         }
-    }
-    val saveSheet = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
-        val request = pendingExport
-        pendingExport = null
-        if (uri != null && request != null) exportSheet(request, uri)
     }
 
     Column(modifier.fillMaxSize()) {
@@ -788,25 +834,66 @@ internal fun DrawingEditor(
         }
         if (sheetExportOpen) {
             val crop = remember { cropProvider?.invoke() }
-            fun request(region: PlanExportCrop?, share: Boolean) {
+            fun request(region: PlanExportCrop?, mode: PlanSheetExportMode, share: Boolean) {
                 sheetExportOpen = false
-                val request = SheetExportRequest(source, region)
-                if (share) exportSheet(request, share = true)
-                else {
-                    pendingExport = request
-                    saveSheet.launch(request.fileName)
-                }
+                val req = SheetExportRequest(source, region, mode)
+                if (share) shareSheet(req) else prepareSheetSave(req)
             }
             AlertDialog(
                 onDismissRequest = { sheetExportOpen = false },
                 title = { Text(source.label) },
                 text = {
-                    Column {
-                        TextButton(onClick = { request(null, false) }) { Text("Save annotated sheet") }
-                        TextButton(onClick = { request(null, true) }) { Text("Share annotated sheet") }
+                    Column(
+                        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            "Searchable vector PDF (text & crisp lines)",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                        )
+                        TextButton(onClick = { request(null, PlanSheetExportMode.VECTOR, false) }) {
+                            Text("Save sheet PDF")
+                        }
+                        TextButton(onClick = { request(null, PlanSheetExportMode.VECTOR, true) }) {
+                            Text("Share sheet PDF")
+                        }
                         if (crop != null) {
-                            TextButton(onClick = { request(crop, false) }) { Text("Save current crop") }
-                            TextButton(onClick = { request(crop, true) }) { Text("Share current crop") }
+                            TextButton(onClick = { request(crop, PlanSheetExportMode.VECTOR, false) }) {
+                                Text("Save current crop PDF")
+                            }
+                            TextButton(onClick = { request(crop, PlanSheetExportMode.VECTOR, true) }) {
+                                Text("Share current crop PDF")
+                            }
+                        }
+                        HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                        Text(
+                            "Raster snapshot (flattened image)",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 2.dp),
+                        )
+                        TextButton(onClick = { request(null, PlanSheetExportMode.RASTER, false) }) {
+                            Text("Save sheet snapshot")
+                        }
+                        TextButton(onClick = { request(null, PlanSheetExportMode.RASTER, true) }) {
+                            Text("Share sheet snapshot")
+                        }
+                        if (crop != null) {
+                            TextButton(onClick = { request(crop, PlanSheetExportMode.RASTER, false) }) {
+                                Text("Save current crop snapshot")
+                            }
+                            TextButton(onClick = { request(crop, PlanSheetExportMode.RASTER, true) }) {
+                                Text("Share current crop snapshot")
+                            }
+                        }
+                        HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                        TextButton(onClick = {
+                            sheetExportOpen = false
+                            preparePdfExport()
+                        }) {
+                            Text("Export whole document (searchable PDF)")
                         }
                     }
                 },

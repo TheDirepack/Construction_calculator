@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,6 +35,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -98,7 +100,10 @@ fun FootInchScreen(host: ToolHost) {
     val settings = rememberAppSettings()
     val context = LocalContext.current
     val view = LocalView.current
+    val services = LocalAppServices.current
+    val store = remember(services) { services.settings.module(FootInchTool.ID) }
     val showFractionKeys = rememberModuleBoolean(FootInchTool.ID, FootInchPrefs.SHOW_FRACTION_KEYS, true)
+    val dualKeypad = rememberModuleBoolean(FootInchTool.ID, FootInchPrefs.DUAL_KEYPAD, false)
     var showHistory by remember { mutableStateOf(false) }
     var showHelpers by remember { mutableStateOf(false) }
     val state = viewModel.state
@@ -131,7 +136,7 @@ fun FootInchScreen(host: ToolHost) {
         onSave = viewModel.draft(settings)?.let { draft -> { host.saveToProject(draft) } },
         actions = {
             IconButton(onClick = { showHelpers = true }) {
-                Icon(painterResource(R.drawable.ic_function), contentDescription = "Helpers: Right triangle and layout marks")
+                Icon(painterResource(R.drawable.ic_function), contentDescription = "Helpers: Right triangle, layout marks, and stairs")
             }
             IconButton(onClick = { showHistory = true }) {
                 Icon(painterResource(R.drawable.ic_history), contentDescription = "Calculation tape")
@@ -166,7 +171,9 @@ fun FootInchScreen(host: ToolHost) {
             ControlRow(
                 metric = settings.isMetric,
                 precision = settings.precision,
-                onPrecision = LocalAppServices.current.settings::setPrecision,
+                onPrecision = services.settings::setPrecision,
+                dualKeypad = dualKeypad,
+                onToggleDualKeypad = { store.setBoolean(FootInchPrefs.DUAL_KEYPAD, !dualKeypad) },
                 onBackspace = { press(Key.Backspace) },
                 onClear = { press(Key.Clear) },
             )
@@ -186,7 +193,11 @@ fun FootInchScreen(host: ToolHost) {
                 FractionPad(settings.precision, onKey = press)
                 Spacer(Modifier.height(6.dp))
             }
-            MeasureKeypad(onKey = press, metric = settings.isMetric, modifier = Modifier.weight(1.45f).fillMaxWidth())
+            if (dualKeypad && !settings.isMetric) {
+                DualMeasureKeypad(onKey = press, modifier = Modifier.weight(1.45f).fillMaxWidth())
+            } else {
+                MeasureKeypad(onKey = press, metric = settings.isMetric, modifier = Modifier.weight(1.45f).fillMaxWidth())
+            }
         }
     }
 
@@ -402,6 +413,8 @@ private fun ControlRow(
     metric: Boolean,
     precision: Precision,
     onPrecision: (Precision) -> Unit,
+    dualKeypad: Boolean,
+    onToggleDualKeypad: () -> Unit,
     onBackspace: () -> Unit,
     onClear: () -> Unit,
 ) {
@@ -410,9 +423,10 @@ private fun ControlRow(
         if (!metric) Box {
             TextButton(
                 onClick = { menu = true },
+                contentPadding = PaddingValues(horizontal = 8.dp),
                 modifier = Modifier.semantics { contentDescription = "Precision ${precision.label} inch. Change." },
             ) {
-                Text(fractionText("± ${precision.label}\""), style = MaterialTheme.typography.titleSmall)
+                Text(fractionText("± ${precision.label}\""), style = MaterialTheme.typography.titleSmall, maxLines = 1)
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 Precision.entries.forEach { p ->
@@ -428,7 +442,29 @@ private fun ControlRow(
         }
         Spacer(Modifier.width(4.dp))
         LengthDisplayToggle(Modifier.weight(1f))
-        Spacer(Modifier.width(8.dp))
+        if (!metric) {
+            Spacer(Modifier.width(4.dp))
+            FilterChip(
+                selected = dualKeypad,
+                onClick = onToggleDualKeypad,
+                label = {
+                    Text(
+                        "Dual",
+                        maxLines = 1,
+                        softWrap = false,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                },
+                modifier = Modifier.semantics {
+                    contentDescription = if (dualKeypad) {
+                        "Dual feet and inches keypad enabled. Switch to standard keypad."
+                    } else {
+                        "Standard keypad enabled. Switch to dual feet and inches keypad."
+                    }
+                },
+            )
+        }
+        Spacer(Modifier.width(4.dp))
         Box(
             Modifier
                 .size(48.dp)
@@ -590,12 +626,19 @@ internal fun FootInchSettingsPage() {
     val context = LocalContext.current
     val store = LocalAppServices.current.settings.module(FootInchTool.ID)
     val showFractionKeys = rememberModuleBoolean(FootInchTool.ID, FootInchPrefs.SHOW_FRACTION_KEYS, true)
+    val dualKeypad = rememberModuleBoolean(FootInchTool.ID, FootInchPrefs.DUAL_KEYPAD, false)
     SettingsGroup("Keypad") {
         SwitchRow(
             "Fraction keys",
             checked = showFractionKeys,
             onCheckedChange = { store.setBoolean(FootInchPrefs.SHOW_FRACTION_KEYS, it) },
             subtitle = "One-tap ⅛ ¼ ½ … keys above the keypad.",
+        )
+        SwitchRow(
+            "Dual feet / inches keypad",
+            checked = dualKeypad,
+            onCheckedChange = { store.setBoolean(FootInchPrefs.DUAL_KEYPAD, it) },
+            subtitle = "Side-by-side Feet and Inches pads for faster mixed entry (imperial).",
         )
     }
     SettingsGroup("History") {

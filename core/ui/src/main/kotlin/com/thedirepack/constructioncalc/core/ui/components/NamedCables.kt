@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.thedirepack.constructioncalc.core.data.ModuleSettings
@@ -42,12 +45,21 @@ import java.util.UUID
  * `module(NamedCable.MODULE_ID)`, so a full backup carries them.
  */
 class NamedCableStore(private val settings: ModuleSettings) {
-    fun all(): List<NamedCable> = NamedCableCodec.decode(settings.getString(NamedCable.SETTINGS_KEY, ""))
+    fun all(): List<NamedCable> = NamedCable.sortedForPicker(
+        NamedCableCodec.decode(settings.getString(NamedCable.SETTINGS_KEY, "")),
+    )
 
     /** Adds [cable], replacing one with the same id or (ignoring case) the same name. */
     fun save(cable: NamedCable) {
         val kept = all().filterNot { it.id == cable.id || it.name.trim().equals(cable.name.trim(), ignoreCase = true) }
-        write((kept + cable).sortedBy { it.name.lowercase() })
+        write(NamedCable.sortedForPicker(kept + cable))
+    }
+
+    /** Toggles whether the cable with [id] is marked as a favorite. */
+    fun toggleFavorite(id: String) {
+        val current = all()
+        val updated = current.map { if (it.id == id) it.copy(favorite = !it.favorite) else it }
+        if (updated != current) write(NamedCable.sortedForPicker(updated))
     }
 
     fun delete(id: String) = write(all().filterNot { it.id == id })
@@ -74,15 +86,31 @@ fun NamedCableActions(
     /** What "Save as named cable" starts from (the cable currently entered); null hides the button. */
     current: NamedCable? = null,
     pickLabel: String = "Saved cables…",
+    showFavoriteChips: Boolean = false,
 ) {
     val (store, cables) = rememberNamedCables()
     var picking by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<NamedCable?>(null) }
     var creating by remember { mutableStateOf(false) }
-    FlowRow(modifier) {
-        TextButton(onClick = { picking = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text(pickLabel) }
-        if (current != null) {
-            TextButton(onClick = { editing = current }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Save as named cable…") }
+    val favoriteCables = remember(cables, showFavoriteChips) {
+        if (showFavoriteChips) cables.filter { it.favorite }.take(4) else emptyList()
+    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (favoriteCables.isNotEmpty()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                favoriteCables.forEach { cable ->
+                    AssistChip(
+                        onClick = { onPick(cable) },
+                        label = { Text(cable.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    )
+                }
+            }
+        }
+        FlowRow {
+            TextButton(onClick = { picking = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text(pickLabel) }
+            if (current != null) {
+                TextButton(onClick = { editing = current }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Save as named cable…") }
+            }
         }
     }
     if (picking) {
@@ -92,14 +120,21 @@ fun NamedCableActions(
             onNew = { picking = false; creating = true },
             onDelete = { store.delete(it.id) },
             onDismiss = { picking = false },
+            onToggleFavorite = { store.toggleFavorite(it.id) },
         )
     }
     if (creating || editing != null) {
         NamedCableEditorDialog(
             initial = editing,
             onSave = { cable ->
-                store.save(cable)
-                if (creating) onPick(cable)
+                val existing = cables.firstOrNull { it.name.trim().equals(cable.name.trim(), ignoreCase = true) }
+                val toSave = if (existing != null && !cable.favorite && existing.id != cable.id) {
+                    cable.copy(favorite = existing.favorite)
+                } else {
+                    cable
+                }
+                store.save(toSave)
+                if (creating) onPick(toSave)
                 creating = false
                 editing = null
             },
@@ -108,7 +143,7 @@ fun NamedCableActions(
     }
 }
 
-/** A list of the saved cables to pick from, with delete and "New cable". */
+/** A list of the saved cables to pick from, with favorite toggle, delete and "New cable". */
 @Composable
 fun NamedCablePickerDialog(
     cables: List<NamedCable>,
@@ -116,20 +151,33 @@ fun NamedCablePickerDialog(
     onNew: () -> Unit,
     onDelete: (NamedCable) -> Unit,
     onDismiss: () -> Unit,
+    onToggleFavorite: ((NamedCable) -> Unit)? = null,
 ) {
     val settings = rememberAppSettings()
+    val hasFavorites = remember(cables) { cables.any { it.favorite } }
+    var favoritesOnly by remember { mutableStateOf(false) }
+    val shown = remember(cables, favoritesOnly, hasFavorites) {
+        NamedCable.sortedForPicker(if (favoritesOnly && hasFavorites) cables.filter { it.favorite } else cables)
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Named cables") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (hasFavorites) {
+                    FilterChip(
+                        selected = favoritesOnly,
+                        onClick = { favoritesOnly = !favoritesOnly },
+                        label = { Text("Favorites only") },
+                    )
+                }
                 if (cables.isEmpty()) {
                     Text(
                         "No saved cables yet. Save a cable's measured or catalog OD, weight and ratings once and use it in Conduit Fill, the Wire Pull Planner and Reel Length.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
-                cables.forEach { cable ->
+                shown.forEach { cable ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         TextButton(onClick = { onPick(cable) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
                             Column(Modifier.fillMaxWidth()) {
@@ -138,6 +186,15 @@ fun NamedCablePickerDialog(
                                     describe(cable, settings),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        if (onToggleFavorite != null) {
+                            IconButton(onClick = { onToggleFavorite(cable) }) {
+                                Icon(
+                                    painterResource(if (cable.favorite) R.drawable.ic_star else R.drawable.ic_star_border),
+                                    contentDescription = if (cable.favorite) "Remove ${cable.name} from favorites" else "Favorite ${cable.name}",
+                                    tint = if (cable.favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
@@ -198,6 +255,7 @@ fun NamedCableEditorDialog(initial: NamedCable?, onSave: (NamedCable) -> Unit, o
                 maxTensionLb = t,
                 maxSwbpLbPerFt = p,
                 note = note.trim(),
+                favorite = initial?.favorite ?: false,
             )
         }.getOrNull()
     }

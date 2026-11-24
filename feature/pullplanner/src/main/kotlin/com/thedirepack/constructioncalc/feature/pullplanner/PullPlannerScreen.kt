@@ -1,5 +1,8 @@
 package com.thedirepack.constructioncalc.feature.pullplanner
 
+import android.content.ActivityNotFoundException
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -15,15 +18,20 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.thedirepack.constructioncalc.core.data.ProjectSharing
 import com.thedirepack.constructioncalc.core.electrical.FrictionPreset
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
 import com.thedirepack.constructioncalc.core.model.PathSegment
 import com.thedirepack.constructioncalc.core.model.Project
+import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import com.thedirepack.constructioncalc.core.model.PullCable
 import com.thedirepack.constructioncalc.core.model.Run
 import com.thedirepack.constructioncalc.core.model.RunPath
@@ -57,7 +65,9 @@ import androidx.compose.ui.res.painterResource
 import com.thedirepack.constructioncalc.core.ui.tool.RunRoute
 import com.thedirepack.constructioncalc.core.ui.tool.ToolHost
 import com.thedirepack.constructioncalc.core.ui.tool.toolViewModel
+import com.thedirepack.constructioncalc.feature.pullplanner.domain.PullPdfReport
 import com.thedirepack.constructioncalc.feature.pullplanner.domain.PullReport
+import com.thedirepack.constructioncalc.feature.pullplanner.domain.PullReportModel
 import com.thedirepack.constructioncalc.feature.pullplanner.domain.RunEdits
 import com.thedirepack.constructioncalc.feature.pullplanner.domain.STANDALONE_RACEWAY
 import com.thedirepack.constructioncalc.feature.pullplanner.domain.NamedCables
@@ -66,6 +76,17 @@ import com.thedirepack.constructioncalc.core.ui.components.NamedCableActions
 import com.thedirepack.constructioncalc.core.ui.tool.ToolIds
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import com.thedirepack.constructioncalc.core.math.Rational
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.IOException
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.UUID
 
 private data class RunChoice(val projectId: String, val runId: String, val label: String)
 private data class SegmentEdit(val index: Int, val kind: SegmentKind)
@@ -74,7 +95,10 @@ private data class SegmentEdit(val index: Int, val kind: SegmentKind)
 @Composable
 internal fun PullPlannerScreen(host: ToolHost) {
     val vm: PullPlannerViewModel = toolViewModel(PullPlannerTool.ID, host)
-    val repository = LocalAppServices.current.projects
+    val services = LocalAppServices.current
+    val repository = services.projects
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val projects by repository.projects.collectAsStateWithLifecycle()
     val loaded by repository.loaded.collectAsStateWithLifecycle()
     val settings = rememberAppSettings()
@@ -121,6 +145,125 @@ internal fun PullPlannerScreen(host: ToolHost) {
     var cableIndex by remember(selected) { mutableStateOf<Int?>(null) }
     var editingRaceway by remember(selected) { mutableStateOf(false) }
     var editingRatings by remember(selected) { mutableStateOf(false) }
+    var pdfBusy by remember { mutableStateOf(false) }
+    var pendingPdfFile by rememberSaveable { mutableStateOf<String?>(null) }
+    val savePdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf"),
+    ) { uri ->
+        val stagedName = pendingPdfFile
+        pendingPdfFile = null
+        val stagedFile = stagedName?.let { File(context.cacheDir, it) } ?: return@rememberLauncherForActivityResult
+        pdfBusy = true
+        scope.launch {
+            try {
+                if (uri != null) {
+                    withContext(Dispatchers.IO) {
+                        stagedFile.inputStream().use { input ->
+                            val output = context.contentResolver.openOutputStream(uri, "wt")
+                                ?: throw IOException("Could not open the export destination.")
+                            output.use { input.copyTo(it) }
+                        }
+                    }
+                    host.showMessage("PDF report saved.")
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                host.showMessage(error.message ?: "Could not save the PDF report.")
+            } finally {
+                withContext(NonCancellable + Dispatchers.IO) { stagedFile.delete() }
+                pdfBusy = false
+            }
+        }
+    }
+
+    fun reportDate(): String = DateTimeFormatter.ofPattern("MMM d, yyyy")
+        .withZone(ZoneId.systemDefault())
+        .format(Instant.ofEpochMilli(services.clock()))
+
+    fun buildPdfReport(): PullPdfReport = PullReportModel.build(
+        result = analysis,
+        projectName = project?.name,
+        companyHeader = settings.company.headerLines(),
+        date = reportDate(),
+        units = settings.unitSystem,
+        lengthText = lengthText,
+    )
+
+    fun pdfFileName(): String {
+        val base = listOfNotNull(
+            project?.name?.trim()?.takeIf { it.isNotEmpty() },
+            run.name.trim().takeIf { it.isNotEmpty() },
+        ).joinToString(" - ")
+        val suffix = if (base.lowercase().endsWith("pull")) "report.pdf" else "pull report.pdf"
+        return "${ProjectCodec.safeFileName(base, "Wire pull")} $suffix"
+    }
+
+    fun sharePdf() {
+        if (pdfBusy) return
+        pdfBusy = true
+        val report = buildPdfReport()
+        val resultSnapshot = analysis
+        val fileName = pdfFileName()
+        val subject = "Wire pull: ${run.name}"
+        val body = summary
+        scope.launch {
+            try {
+                val intent = withContext(Dispatchers.IO) {
+                    ProjectSharing.shareFileIntent(
+                        context = context,
+                        fileName = fileName,
+                        mimeType = "application/pdf",
+                        subject = subject,
+                        body = body,
+                    ) { out -> PullReportPdf.write(out, report, resultSnapshot) }
+                }
+                try {
+                    context.startActivity(intent)
+                } catch (_: ActivityNotFoundException) {
+                    host.showMessage("No app available to share with")
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                host.showMessage(error.message ?: "Couldn't create the PDF report.")
+            } finally {
+                pdfBusy = false
+            }
+        }
+    }
+
+    fun savePdf() {
+        if (pendingPdfFile != null || pdfBusy) return
+        pdfBusy = true
+        val report = buildPdfReport()
+        val resultSnapshot = analysis
+        val suggestedName = pdfFileName()
+        val staged = File(context.cacheDir, "pull-report-${UUID.randomUUID()}.pdf")
+        scope.launch {
+            var launched = false
+            try {
+                withContext(Dispatchers.IO) {
+                    staged.outputStream().use { out ->
+                        PullReportPdf.write(out, report, resultSnapshot)
+                    }
+                }
+                pendingPdfFile = staged.name
+                savePdfLauncher.launch(suggestedName)
+                launched = true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                pendingPdfFile = null
+                host.showMessage(error.message ?: "Couldn't create the PDF report.")
+            } finally {
+                if (!launched) {
+                    withContext(NonCancellable + Dispatchers.IO) { staged.delete() }
+                }
+                pdfBusy = false
+            }
+        }
+    }
 
     fun update(change: (Run) -> Run) {
         if (!canEdit) return
@@ -270,7 +413,19 @@ internal fun PullPlannerScreen(host: ToolHost) {
                     }
                 }) { Text("Check on reel") }
             }
-            if (results.isNotEmpty()) TextButton(onClick = { host.shareText("Wire pull: ${run.name}", summary) }) { Text("Share pull report") }
+            if (results.isNotEmpty()) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { host.shareText("Wire pull: ${run.name}", summary) }) {
+                        Text("Share pull report")
+                    }
+                    TextButton(enabled = !pdfBusy, onClick = { sharePdf() }) {
+                        Text("Share PDF report")
+                    }
+                    TextButton(enabled = !pdfBusy, onClick = { savePdf() }) {
+                        Text("Save PDF report")
+                    }
+                }
+            }
         }
     }
 

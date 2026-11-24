@@ -8,8 +8,10 @@ import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.Stranding
 import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
+import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
 import com.thedirepack.constructioncalc.core.measure.Dimension
 import com.thedirepack.constructioncalc.core.model.StoredQuantity
+import com.thedirepack.constructioncalc.feature.voltagedrop.domain.AmpacityCheckRequest
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.Method
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDrop
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.VoltageDropRequest
@@ -35,6 +37,13 @@ data class VoltageDropInputs(
     val powerFactor: String = codeNumber(Code.book.values.acImpedanceTablePowerFactor),
     val targetPercent: String = codeNumber(Code.book.values.voltageDropBranchPercent),
     val stranding: Stranding = Stranding.STRANDED,
+    val checkAmpacity: Boolean = false,
+    val insulation: TemperatureRating = TemperatureRating.C75,
+    val termination: TemperatureRating = TemperatureRating.C75,
+    val continuousLoad: Boolean = false,
+    val ambientC: String = codeNumber(Code.book.values.ambientBasisC),
+    val currentCarrying: String = "3",
+    val ocpdAmps: String = "",
 ) {
     val conductorMaterial: ConductorMaterial
         get() = ConductorMaterial.entries.firstOrNull { it.name == material } ?: ConductorMaterial.COPPER
@@ -56,6 +65,7 @@ data class ParsedInputs(
     val missing: List<String>,
     /** Fields with values that can't be used. */
     val problems: List<String>,
+    val ampacity: AmpacityCheckRequest? = null,
 )
 
 fun VoltageDropInputs.parse(): ParsedInputs {
@@ -74,7 +84,31 @@ fun VoltageDropInputs.parse(): ParsedInputs {
     val pf = if (method == Method.AC_TABLE_9) number(powerFactor, "Power factor") else Code.book.values.acImpedanceTablePowerFactor
     val target = number(targetPercent, "Target drop")
 
-    if (missing.isNotEmpty() || problems.isNotEmpty()) return ParsedInputs(null, missing, problems)
+    var parsedAmbient: Double? = null
+    var parsedCcc: Int? = null
+    var parsedOcpd: Int? = null
+    if (checkAmpacity) {
+        parsedAmbient = number(ambientC, "Ambient temperature")
+        parsedCcc = if (currentCarrying.isBlank()) {
+            missing += "Current-carrying conductors"
+            null
+        } else {
+            currentCarrying.trim().toIntOrNull()?.takeIf { it >= 1 } ?: run {
+                problems += "Current-carrying conductors must be a whole number of 1 or more."
+                null
+            }
+        }
+        parsedOcpd = if (ocpdAmps.isBlank()) {
+            null
+        } else {
+            ocpdAmps.trim().toIntOrNull()?.takeIf { it >= 1 } ?: run {
+                problems += "Breaker / fuse rating must be a positive whole number."
+                null
+            }
+        }
+    }
+
+    if (missing.isNotEmpty() || problems.isNotEmpty()) return ParsedInputs(null, missing, problems, null)
     val request = VoltageDropRequest(
         system = system,
         volts = volts!!,
@@ -90,5 +124,18 @@ fun VoltageDropInputs.parse(): ParsedInputs {
         stranding = stranding,
     )
     val domainProblems = VoltageDrop.problems(request)
-    return ParsedInputs(if (domainProblems.isEmpty()) request else null, emptyList(), domainProblems)
+    if (domainProblems.isNotEmpty()) return ParsedInputs(null, emptyList(), domainProblems, null)
+    val ampacityRequest = if (checkAmpacity) {
+        AmpacityCheckRequest(
+            insulation = insulation,
+            termination = termination,
+            ambientC = parsedAmbient!!,
+            currentCarrying = parsedCcc!!,
+            continuousLoad = continuousLoad,
+            ocpdAmps = parsedOcpd,
+        )
+    } else {
+        null
+    }
+    return ParsedInputs(request, emptyList(), emptyList(), ampacityRequest)
 }

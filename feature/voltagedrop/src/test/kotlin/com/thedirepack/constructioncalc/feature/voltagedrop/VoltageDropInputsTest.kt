@@ -4,6 +4,7 @@ import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.Stranding
+import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.measure.MetricDisplay
@@ -16,6 +17,7 @@ import com.thedirepack.constructioncalc.core.ui.components.NoticeLevel
 import com.thedirepack.constructioncalc.feature.voltagedrop.domain.Method
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -142,5 +144,97 @@ class VoltageDropInputsTest {
         // exact values and electrical results don't change with the system
         assertEquals(imperial.results.map { it.exact }, si.results.map { it.exact })
         assertEquals(imperial.results.first().text, si.results.first().text)
+    }
+
+    @Test fun ampacityInputsRoundTripAndDefaultsPreserved() {
+        val custom = filled.copy(
+            checkAmpacity = true,
+            insulation = TemperatureRating.C90,
+            termination = TemperatureRating.C60,
+            continuousLoad = true,
+            ambientC = "40",
+            currentCarrying = "6",
+            ocpdAmps = "30",
+        )
+        assertEquals(custom, ToolInputs.decode<VoltageDropInputs>(ToolInputs.encode(custom)))
+        val decodedDefaults = ToolInputs.decode<VoltageDropInputs>(JsonObject(emptyMap()))!!
+        assertFalse(decodedDefaults.checkAmpacity)
+        assertEquals(TemperatureRating.C75, decodedDefaults.insulation)
+        assertEquals(TemperatureRating.C75, decodedDefaults.termination)
+        assertFalse(decodedDefaults.continuousLoad)
+        assertEquals("30", decodedDefaults.ambientC)
+        assertEquals("3", decodedDefaults.currentCarrying)
+        assertEquals("", decodedDefaults.ocpdAmps)
+    }
+
+    @Test fun ampacityValidationErrorsAndOptionalOcpd() {
+        val enabled = filled.copy(checkAmpacity = true)
+        assertNull(enabled.copy(ambientC = "hot").parse().request)
+        assertTrue(enabled.copy(ambientC = "hot").parse().problems.isNotEmpty())
+        assertTrue("Ambient temperature" in enabled.copy(ambientC = "").parse().missing)
+
+        for (badCcc in listOf("0", "-1", "3.5", "abc")) {
+            val parsed = enabled.copy(currentCarrying = badCcc).parse()
+            assertNull(parsed.request)
+            assertNull(parsed.ampacity)
+            assertTrue(parsed.problems.isNotEmpty())
+        }
+        assertTrue("Current-carrying conductors" in enabled.copy(currentCarrying = "").parse().missing)
+
+        for (badOcpd in listOf("0", "-20", "15.5", "abc")) {
+            val parsed = enabled.copy(ocpdAmps = badOcpd).parse()
+            assertNull(parsed.request)
+            assertTrue(parsed.problems.isNotEmpty())
+        }
+
+        val blankOcpd = enabled.copy(ocpdAmps = "").parse()
+        assertNotNull(blankOcpd.request)
+        assertNull(blankOcpd.ampacity!!.ocpdAmps)
+
+        val negativeAmbientOk = enabled.copy(ambientC = "-5").parse()
+        assertNotNull(negativeAmbientOk.request)
+        assertEquals(-5.0, negativeAmbientOk.ampacity!!.ambientC, 0.0)
+    }
+
+    @Test fun ampacityOutputShowsGoverningConstraintAndWarnings() {
+        val dropGoverns = voltageDropOutput(filled.copy(checkAmpacity = true, ocpdAmps = "20"), AppSettings())
+        val byKey = dropGoverns.results.associateBy { it.key }
+        assertEquals("8 AWG Cu", byKey.getValue("min_size").text)
+        assertEquals("12 AWG Cu (25 A usable)", byKey.getValue("ampacity_size").text)
+        assertEquals("8 AWG Cu · Voltage drop governs", byKey.getValue("governing_size").text)
+        assertTrue(dropGoverns.notices.any { it.text.contains("20 A OCPD") })
+        assertFalse(dropGoverns.notices.any { it.text.contains("Ampacity, terminal temperature, derating and overcurrent protection are not checked.") })
+
+        val ampGoverns = voltageDropOutput(
+            filled.copy(
+                amps = "25",
+                length = Quantity.feet(Rational.of(10)).stored(),
+                method = Method.AC_TABLE_9,
+                checkAmpacity = true,
+            ),
+            AppSettings(),
+        ).results.associateBy { it.key }
+        assertEquals("14 AWG Cu", ampGoverns.getValue("min_size").text)
+        assertEquals("12 AWG Cu (25 A usable)", ampGoverns.getValue("ampacity_size").text)
+        assertEquals("12 AWG Cu · Ampacity governs", ampGoverns.getValue("governing_size").text)
+
+        val tieOut = voltageDropOutput(
+            filled.copy(
+                amps = "25",
+                length = Quantity.feet(Rational.of(25)).stored(),
+                stranding = Stranding.STRANDED,
+                checkAmpacity = true,
+            ),
+            AppSettings(),
+        )
+        assertEquals("12 AWG Cu · Drop & ampacity match", tieOut.results.first { it.key == "governing_size" }.text)
+        assertTrue(tieOut.notices.any { it.text.contains("not checked") })
+
+        val ampFail = voltageDropOutput(
+            filled.copy(amps = "30", size = "12 AWG", checkAmpacity = true, ocpdAmps = "30"),
+            AppSettings(),
+        )
+        val warnings = ampFail.notices.filter { it.level == NoticeLevel.WARNING }
+        assertTrue(warnings.any { it.text.contains("12 AWG Cu fails ampacity check") && it.text.contains("10 AWG Cu") })
     }
 }

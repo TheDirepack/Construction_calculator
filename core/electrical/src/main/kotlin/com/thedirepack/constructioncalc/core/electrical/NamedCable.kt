@@ -16,6 +16,7 @@ import kotlin.math.PI
  * @property maxTensionLb optional maximum pulling tension rating, lb (> 0 if set)
  * @property maxSwbpLbPerFt optional maximum sidewall bearing pressure rating, lb/ft (> 0 if set)
  * @property note optional user note (manufacturer, catalog number, etc.)
+ * @property favorite whether this cable is marked as a favorite in pickers
  */
 data class NamedCable(
     val id: String,
@@ -26,6 +27,7 @@ data class NamedCable(
     val maxTensionLb: Double? = null,
     val maxSwbpLbPerFt: Double? = null,
     val note: String = "",
+    val favorite: Boolean = false,
 ) {
     init {
         require(id.isNotBlank()) { "Cable id cannot be blank" }
@@ -52,6 +54,10 @@ data class NamedCable(
             val r = diameterIn / 2.0
             return PI * r * r
         }
+
+        /** Orders [cables] for pickers: favorited cables first, then alphabetically by name. */
+        fun sortedForPicker(cables: List<NamedCable>): List<NamedCable> =
+            cables.sortedWith(compareByDescending<NamedCable> { it.favorite }.thenBy { it.name.lowercase() })
     }
 }
 
@@ -73,6 +79,7 @@ object NamedCableCodec {
             c.maxTensionLb?.let { append(",\"maxTensionLb\":").append(it) }
             c.maxSwbpLbPerFt?.let { append(",\"maxSwbpLbPerFt\":").append(it) }
             if (c.note.isNotEmpty()) append(",\"note\":").append(quote(c.note))
+            if (c.favorite) append(",\"favorite\":true")
             append('}')
         }
         append(']')
@@ -166,6 +173,7 @@ object NamedCableCodec {
             val tension = (fields["maxTensionLb"] as? Number)?.toDouble()
             val swbp = (fields["maxSwbpLbPerFt"] as? Number)?.toDouble()
             val note = (fields["note"] as? String).orEmpty()
+            val favorite = fields["favorite"] as? Boolean ?: false
             return runCatching {
                 NamedCable(
                     id = id,
@@ -176,12 +184,21 @@ object NamedCableCodec {
                     maxTensionLb = tension,
                     maxSwbpLbPerFt = swbp,
                     note = note,
+                    favorite = favorite,
                 )
             }.getOrNull()
         }
 
         private fun readValue(): Any? = when (peek()) {
             '"' -> readString()
+            't' -> if (s.startsWith("true", pos)) {
+                pos += 4
+                true
+            } else null
+            'f' -> if (s.startsWith("false", pos)) {
+                pos += 5
+                false
+            } else null
             'n' -> {
                 if (s.startsWith("null", pos)) pos += 4
                 null

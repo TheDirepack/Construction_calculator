@@ -3,6 +3,7 @@ package com.thedirepack.constructioncalc.feature.voltagedrop
 import com.thedirepack.constructioncalc.core.electrical.AcPhases
 import com.thedirepack.constructioncalc.core.electrical.ConductorSize
 import com.thedirepack.constructioncalc.core.electrical.Table9Conduit
+import com.thedirepack.constructioncalc.core.electrical.code.codeNumber
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.measure.Quantity
@@ -13,8 +14,9 @@ import com.thedirepack.constructioncalc.core.model.stored
 /**
  * Voltage Drop started from a project circuit: its voltage and phases, its load current (from VA,
  * or the panels a feeder serves), its length (override or the sum of its runs), its wire as the
- * design sized it, the first run's conduit for Table 9, and the project's drop target. Null if the
- * circuit is gone.
+ * design sized it, the first run's conduit for Table 9, the project's drop target, and the
+ * circuit's ampacity conditions (insulation/termination ratings, breaker, continuous flag, ambient).
+ * Null if the circuit is gone.
  */
 fun voltageDropInputsForCircuit(project: Project, circuitId: String): VoltageDropInputs? {
     val panel = project.panels.firstOrNull { p -> p.circuits.any { it.id == circuitId } } ?: return null
@@ -24,6 +26,8 @@ fun voltageDropInputsForCircuit(project: Project, circuitId: String): VoltageDro
     val preset = volts.takeIf { it in VoltageDropInputs.VOLTAGE_PRESETS }
     val conduit = circuit.runIds.firstNotNullOfOrNull { project.run(it)?.raceway?.conduitType }
         ?.let(ProjectAnalysis::table9Conduit) ?: Table9Conduit.PVC
+    val singleRunAmbient = circuit.runIds.singleOrNull()?.let { project.run(it)?.raceway?.ambientC }
+    val ambientC = singleRunAmbient ?: project.design.ambientC
     return VoltageDropInputs(
         system = if (circuit.poles >= 3 && panel.system.phases == 3) AcPhases.THREE else AcPhases.SINGLE,
         voltagePreset = preset ?: 0,
@@ -34,5 +38,12 @@ fun voltageDropInputsForCircuit(project: Project, circuitId: String): VoltageDro
         size = (design.size ?: design.minimumSize ?: ConductorSize.AWG_12).label,
         conduit = conduit,
         targetPercent = Decimals.trim(project.design.voltageDropTargetPercent, 2),
+        checkAmpacity = true,
+        insulation = design.conductor.insulationRating,
+        termination = design.conductor.terminationRating,
+        continuousLoad = circuit.continuous,
+        ambientC = codeNumber(ambientC),
+        currentCarrying = design.currentCarrying.takeIf { it > 0 }?.toString() ?: "3",
+        ocpdAmps = circuit.breakerAmps?.toString().orEmpty(),
     )
 }
