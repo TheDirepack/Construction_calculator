@@ -363,3 +363,23 @@ override is enabled. Do **not** use that override for final training:
 prepare manually verified complete crops/regions, or implement a masked-loss
 objective that ignores unverified pixels. Whole-page evaluation still needs
 a smaller *fully reviewed* held-out set.
+
+## VLM batch labeling of the label queue
+
+`work/pool/label_queue/` holds the triaged pages with real symbols (no labels
+yet). Vision-model agents propose boxes through `annotator/agent_cli.py`,
+driven from the laptop with `remote/vlm_label.sh`; the agent instructions are in
+`annotator/VLM_LABELING.md`. Their boxes are saved `unreviewed` /
+`review_source: vlm_agent`, so `dataset_manifest` ignores them until a human
+accepts them in the annotator. Agents can't mark a page as verified symbol-free.
+
+```
+# on the remote, once: split the queue into per-agent batches (whole PDFs together)
+PYTHONPATH=code .venv/bin/python -m annotator.agent_cli batches \
+  --queue work/pool/label_queue --out work/pool/vlm_batches --count 10
+# from the laptop: progress
+remote/vlm_label.sh status work/pool/label_queue
+```
+
+A backup of the untouched queue JSONs is in
+`work/pool/label_queue_json_backup_20261124.tgz`.

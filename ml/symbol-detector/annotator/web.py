@@ -32,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from annotator import agent_api
 from annotator.model import (
     FAMILY_DISCIPLINES,
     FAMILY_VARIANT_SUGGESTIONS,
@@ -971,6 +972,11 @@ class LabelingSession:
                 pass
             return _geometric_wall_snap(instance_dict, self.walls)
 
+    def page_document(self, index: int) -> tuple[dict, str | None, Path]:
+        """Public accessor for the page JSON, its revision and rendered image path."""
+        with self.lock:
+            return self._load(index)
+
     def page_state(self, index: int) -> dict:
         with self.lock:
             data, revision, _ = self._load(index)
@@ -1396,6 +1402,8 @@ class LabelingSession:
                             raise LabelingError(f"metadata.{key} must be a short string")
                         baseline[key] = val.strip()
 
+            if metadata is not None and "vlm_assessment" in metadata:
+                baseline["vlm_assessment"] = agent_api.validate_assessment(metadata["vlm_assessment"])
             if metadata is not None and "verified_no_symbols" in metadata:
                 baseline["verified_no_symbols"] = metadata["verified_no_symbols"]
             baseline["instances"] = [_normalize_instance_for_save(item) for item in instances]
@@ -1486,6 +1494,15 @@ def make_handler(session: LabelingSession):
                     self._json(200, {"documents": session.list_documents()})
                 elif url.path == "/api/server_sources":
                     self._json(200, {"sources": session.list_server_sources(self._page(url.query))})
+                elif url.path == "/api/agent/tools":
+                    self._json(200, agent_api.tool_manifest(session))
+                elif url.path == "/api/agent/context":
+                    page_idx, kwargs = agent_api.parse_context_query(session, url.query)
+                    self._json(200, agent_api.page_context(session, page_idx, **kwargs))
+                elif url.path == "/api/agent/view":
+                    page_idx, kwargs = agent_api.parse_view_query(session, url.query)
+                    data, mime = agent_api.render_view(session, page_idx, **kwargs)
+                    self._reply(200, data, mime)
                 else:
                     self._json(404, {"error": "unknown endpoint"})
             except (LabelingError, ValueError, FileNotFoundError) as exc:
@@ -1512,6 +1529,7 @@ def make_handler(session: LabelingSession):
             valid_endpoints = (
                 "/api/save", "/api/validate", "/api/open", "/api/snap",
                 "/api/document", "/api/server_export", "/api/server_import",
+                "/api/agent/act",
             )
             if url.path not in valid_endpoints:
                 self._json(404, {"error": "unknown endpoint"})
@@ -1525,6 +1543,19 @@ def make_handler(session: LabelingSession):
                 data = json.loads(raw)
                 if not isinstance(data, dict):
                     raise LabelingError("request body must be an object")
+                if url.path == "/api/agent/act":
+                    page_idx = agent_api.page_from_query(session, url.query)[0]
+                    dry_run = data.get("dry_run", False)
+                    if type(dry_run) is not bool:
+                        raise LabelingError("dry_run must be boolean")
+                    result = agent_api.apply_actions(
+                        session, page_idx,
+                        revision=data.get("revision"),
+                        actions=data.get("actions"),
+                        dry_run=dry_run,
+                    )
+                    self._json(200, result)
+                    return
                 if url.path == "/api/document":
                     target_path = data.get("path") or data.get("name")
                     if not target_path:
