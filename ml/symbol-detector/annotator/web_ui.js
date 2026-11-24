@@ -117,7 +117,8 @@ const state = {
   clipboard: null,
   qualityWarnings: [],
   warningCursor: 0,
-  activeAnchorName: "circle_center",
+  activeAnchorName: "auto",
+  anchorTargetId: null,
   pointerImg: null, pointerScreen: null,
   orientedDraft: null,
   snapPreview: null,
@@ -465,6 +466,32 @@ function drawBadge(ctx, x, y, text, bg = "rgba(14,21,28,.9)", fg = "#e8f0f4") {
   ctx.restore();
 }
 
+// The loupe magnifies what is being placed or dragged: the anchor snap point,
+// the corner or edge handle of a box being resized, the far end of a box being
+// drawn. Only with nothing more specific does it fall back to the pointer.
+function loupeFocus() {
+  const d = state.drag;
+  if (state.mode === "anchor" && state.activeAnchorSnap) return state.activeAnchorSnap.xy;
+  if (d && d.current && (d.type === "draw" || d.type === "oriented" || d.type === "snap" ||
+                         d.type === "oriented-axis")) {
+    return d.current;
+  }
+  if (d && d.selected) {
+    const item = state.doc?.instances.find(x => x.instance_id === d.selected);
+    if (item) {
+      if (d.type.startsWith("rot-") && item.bbox_rotated) {
+        const corners = rotatedCorners(item.bbox_rotated);
+        const idx = { "rot-nw": 0, "rot-ne": 1, "rot-se": 2, "rot-sw": 3 }[d.type];
+        if (idx !== undefined) return corners[idx];
+      }
+      const [x0, y0, x1, y1] = item.bbox_xyxy;
+      const handle = { nw: [x0, y0], ne: [x1, y0], sw: [x0, y1], se: [x1, y1] }[d.type];
+      if (handle) return handle;
+    }
+  }
+  return state.pointerImg;
+}
+
 function drawLoupe(ctx, canvasW, canvasH) {
   if (!state.showLoupe || !state.image || !state.pointerImg) return;
   const activePrecision =
@@ -479,7 +506,7 @@ function drawLoupe(ctx, canvasW, canvasH) {
   if (lx < 160 || ly < 80) return;
 
   const zoom = Math.max(4, state.scale * 2.5);
-  const [ix, iy] = state.pointerImg;
+  const [ix, iy] = loupeFocus();
   const srcHalf = (size / 2) / zoom;
 
   ctx.save();
@@ -840,8 +867,16 @@ function draw() {
   }
 
   if (state.mode === "anchor") {
-    const item = chosen();
+    const item = anchorTargetItem();
     if (item) {
+      const [hx0, hy0] = imageToScreen(item.bbox_xyxy[0], item.bbox_xyxy[1], viewport());
+      const [hx1, hy1] = imageToScreen(item.bbox_xyxy[2], item.bbox_xyxy[3], viewport());
+      ctx.save();
+      ctx.strokeStyle = "rgba(255, 159, 67, 0.9)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 3]);
+      ctx.strokeRect(hx0 - 3, hy0 - 3, hx1 - hx0 + 6, hy1 - hy0 + 6);
+      ctx.restore();
       const boxPts = getBoxSnapPoints(item);
       ctx.save();
       for (const bp of boxPts) {
@@ -1586,7 +1621,9 @@ function refreshControls() {
     banner.textContent = "Oriented box: drag or tap to spawn rotated box auto-aligned to walls (Esc to exit)";
   } else if (state.mode === "anchor") {
     banner.hidden = false;
-    banner.textContent = `Anchor mode: click to place "${state.activeAnchorName}" (snaps to Center, Edges, or Feature Tip · Esc to exit)`;
+    const named = state.activeAnchorName && state.activeAnchorName !== "auto"
+      ? `"${state.activeAnchorName}"` : "anchors (auto-named: centre / wall_attachment)";
+    banner.textContent = `Anchor mode: click on or beside any box to place ${named}; it attaches to the nearest box and stays on for the next one (snaps to Center, Edges, Feature Tip · Esc to exit)`;
   } else if (state.mode === "snap") {
     banner.hidden = false;
     banner.textContent = "Snap vector mode: drag from origin toward wall (Shift snaps 15° · Esc to exit)";
@@ -2182,9 +2219,17 @@ function toggleSelect(id) {
 
 function setMode(mode) {
   if (state.busy) return;
-  if ((mode === "anchor" || mode === "snap") && !chosen()) {
-    notify("Select a box first before placing an anchor or snap vector.", "warning");
+  if (mode === "snap" && !chosen()) {
+    notify("Select a box first before drawing a snap vector.", "warning");
     return;
+  }
+  if (mode === "anchor" && !state.doc?.instances?.length) {
+    notify("Draw a box first; anchors attach to boxes.", "warning");
+    return;
+  }
+  if (mode !== "anchor") {
+    state.anchorTargetId = null;
+    state.activeAnchorSnap = null;
   }
   state.orientedDraft = null;
   state.mode = mode;
@@ -2680,26 +2725,36 @@ function pointerDown(event) {
       state.drag = { type: "oriented", start: clampedPt, current: clampedPt };
     }
   } else if (state.mode === "anchor") {
-    const item = chosen();
-    if (!item) { setMode("select"); return; }
+    updateAnchorSnap(pt);
+    const item = anchorTargetItem();
+    if (!item) {
+      notify("No box near the pointer; move onto or next to the box to anchor.", "warning");
+      return;
+    }
     let ax = clamp(pt[0], 0, state.doc.image_width);
     let ay = clamp(pt[1], 0, state.doc.image_height);
     let snapLabel = "manual";
+    let snapKey = null;
 
     if (state.activeAnchorSnap) {
       ax = state.activeAnchorSnap.xy[0];
       ay = state.activeAnchorSnap.xy[1];
       snapLabel = state.activeAnchorSnap.label;
+      snapKey = state.activeAnchorSnap.key || state.activeAnchorSnap.kind;
     } else {
       const tip = findFeatureTipInArea(pt, item, 22 / state.scale);
       if (tip) {
-        ax = tip[0];
-        ay = tip[1];
+        ax = tip.xy ? tip.xy[0] : tip[0];
+        ay = tip.xy ? tip.xy[1] : tip[1];
         snapLabel = "Feature Tip";
+        snapKey = "tip";
       }
     }
 
-    const name = state.activeAnchorName || "circle_center";
+    const name = resolveAnchorName(item, snapKey);
+    // Attach to the box under the pointer without a separate select step; the
+    // tool stays active so a whole page can be anchored box after box.
+    if (state.selectedId !== item.instance_id) select(item.instance_id);
     modifySelection(x => {
       x.anchors ||= {};
       x.anchors[name] = {
@@ -2708,9 +2763,10 @@ function pointerDown(event) {
         annotated: true,
       };
     });
-    notify(`Placed anchor "${name}" at (${ax.toFixed(1)}, ${ay.toFixed(1)}) [${snapLabel}].`, "saved");
+    notify(`Anchor "${name}" on ${item.instance_id} at (${ax.toFixed(1)}, ${ay.toFixed(1)}) [${snapLabel}].`, "saved");
     state.activeAnchorSnap = null;
-    setMode("select");
+    updateAnchorSnap(pt);
+    draw();
     return;
   } else if (state.mode === "snap") {
     const item = chosen();
@@ -2752,8 +2808,49 @@ function pointerDown(event) {
   draw();
 }
 
+const CIRCULAR_ANCHOR_FAMILIES = ["receptacle", "luminaire", "junction_box", "fire_alarm_device",
+                                  "sprinkler_head", "sensor"];
+
+// "auto" names the anchor by where it lands: the centre becomes circle_center
+// (round symbols) or visual_center, an edge or ink tip becomes wall_attachment.
+function resolveAnchorName(item, snapKey) {
+  const chosenName = state.activeAnchorName;
+  if (chosenName && chosenName !== "auto") return chosenName;
+  if (snapKey === "center" || snapKey == null) {
+    return CIRCULAR_ANCHOR_FAMILIES.includes(item.symbol_family) ? "circle_center" : "visual_center";
+  }
+  return "wall_attachment";
+}
+
+function anchorTargetItem() {
+  if (!state.anchorTargetId || !state.doc) return null;
+  return state.doc.instances.find(x => x.instance_id === state.anchorTargetId) || null;
+}
+
+// The box an anchor click attaches to: the box the pointer is inside or
+// closest to (within a margin that grows with box size), preferring the
+// selected box on ties and the smaller box when boxes nest.
+function findAnchorTarget(pt) {
+  if (!state.doc || !pt) return null;
+  let best = null, bestScore = Infinity;
+  for (const item of state.doc.instances) {
+    const [x0, y0, x1, y1] = item.bbox_xyxy;
+    const size = Math.max(x1 - x0, y1 - y0);
+    const margin = Math.max(18 / state.scale, size * 0.35);
+    const dx = Math.max(x0 - pt[0], 0, pt[0] - x1);
+    const dy = Math.max(y0 - pt[1], 0, pt[1] - y1);
+    const dist = Math.hypot(dx, dy);
+    if (dist > margin) continue;
+    const area = (x1 - x0) * (y1 - y0);
+    const score = dist * 1000 + area * 1e-3 - (item.instance_id === state.selectedId ? 0.5 : 0);
+    if (score < bestScore) { bestScore = score; best = item; }
+  }
+  return best;
+}
+
 function updateAnchorSnap(pt) {
-  const item = chosen();
+  const item = findAnchorTarget(pt);
+  state.anchorTargetId = item ? item.instance_id : null;
   if (!item || !pt) {
     state.activeAnchorSnap = null;
     return;
@@ -2768,7 +2865,7 @@ function updateAnchorSnap(pt) {
     const d = Math.hypot(pt[0] - sp.xy[0], pt[1] - sp.xy[1]);
     if (d < minD) {
       minD = d;
-      closestSnap = { xy: [...sp.xy], label: sp.name, kind: "box" };
+      closestSnap = { xy: [...sp.xy], label: sp.name, kind: "box", key: sp.key };
     }
   }
 
@@ -3269,6 +3366,34 @@ function placeBoxSnapAnchor(snapKey) {
   });
   notify(`Placed anchor "${name}" at ${found.name} (${ax.toFixed(1)}, ${ay.toFixed(1)}).`, "saved");
   draw();
+}
+
+function anchorAllBoxes() {
+  if (state.busy || !state.doc) return;
+  const selected = chosenList();
+  const targets = selected.length > 1 ? selected : state.doc.instances;
+  const todo = targets.filter(x => !(x.anchors?.circle_center || x.anchors?.visual_center));
+  if (!todo.length) {
+    notify("Every box already has a centre anchor.", "info");
+    return;
+  }
+  remember();
+  for (const item of todo) {
+    const before = reviewEvidenceKey(item);
+    const [cx, cy] = getBoxSnapPoints(item).find(p => p.key === "center").xy;
+    const name = CIRCULAR_ANCHOR_FAMILIES.includes(item.symbol_family) ? "circle_center" : "visual_center";
+    item.anchors ||= {};
+    item.anchors[name] = {
+      xy: [Math.round(cx * 1000) / 1000, Math.round(cy * 1000) / 1000],
+      visible: true,
+      annotated: true,
+    };
+    invalidateReviewOnChange(item, before);
+  }
+  editState();
+  refresh();
+  notify(`Placed centre anchors on ${todo.length} box${todo.length === 1 ? "" : "es"}` +
+         (selected.length > 1 ? " in the selection." : " on this page."), "saved");
 }
 
 function autoPlaceCenterAnchor() {
@@ -4557,7 +4682,7 @@ function wireEvents() {
   $("selectTool").addEventListener("click", () => setMode("select"));
   $("drawTool").addEventListener("click", () => setMode("draw"));
   $("orientedTool").addEventListener("click", () => setMode("oriented"));
-  $("anchorTool").addEventListener("click", () => setMode("anchor"));
+  $("anchorTool").addEventListener("click", () => { state.activeAnchorName = "auto"; setMode("anchor"); });
   $("snapTool").addEventListener("click", () => setMode("snap"));
   $("panTool").addEventListener("click", () => setMode("pan"));
   $("fit").addEventListener("click", fit);
@@ -4700,6 +4825,8 @@ function wireEvents() {
   $("placeVisualCenter").addEventListener("click", () => { state.activeAnchorName = "visual_center"; setMode("anchor"); });
   $("placeWallAttach").addEventListener("click", () => { state.activeAnchorName = "wall_attachment"; setMode("anchor"); });
   $("autoCenterAnchor")?.addEventListener("click", autoPlaceCenterAnchor);
+  $("anchorAllBoxes")?.addEventListener("click", anchorAllBoxes);
+  $("placeAutoAnchor")?.addEventListener("click", () => { state.activeAnchorName = "auto"; setMode("anchor"); });
   $("snapAnchorCenter")?.addEventListener("click", () => placeBoxSnapAnchor("center"));
   $("snapAnchorTop")?.addEventListener("click", () => placeBoxSnapAnchor("top"));
   $("snapAnchorBottom")?.addEventListener("click", () => placeBoxSnapAnchor("bottom"));
@@ -4807,7 +4934,7 @@ function wireEvents() {
     else if (key === "o") setMode("oriented");
     else if (key === "v") setMode("select");
     else if (key === "h" || key === "p") setMode("pan");
-    else if (key === "k") setMode("anchor");
+    else if (key === "k") { state.activeAnchorName = "auto"; setMode("anchor"); }
     else if (key === "c") {
       if ($("deviceCatalogModal")?.hidden) openDeviceCatalogModal();
       else closeDeviceCatalogModal();

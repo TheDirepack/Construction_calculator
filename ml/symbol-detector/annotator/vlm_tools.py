@@ -6,11 +6,9 @@ sheet tells you what each glyph means in *this* set, and only then do the
 plan sheets make sense. A vision model is also poor at pixel-exact boxes but
 good at choosing between numbered candidates. This module supplies:
 
-* a **document index** over every rendered page in the pool (queue,
-  background, reserve, negative) grouped by source PDF;
-* **PDF text access** when the source PDF can be found (matched by
-  normalised filename under ``data/blueprints_and_libraries``): sheet numbers
-  and titles, legend/index detection, and words with page-pixel boxes;
+* **PDF text access** for label-store documents (``annotator.label_store``):
+  sheet numbers and titles, legend/index detection, and words with
+  page-pixel boxes;
 * **marks**: numbered candidate boxes (ink blobs with walls and leaders
   removed; on PDF pages, blobs under PDF text are dropped exactly) cached per
   page, so an agent can write ``"mark": "m12"`` instead of estimating
@@ -26,7 +24,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -34,10 +31,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-POOL_FOLDERS = ("label_queue", "background", "reserve", "negative")
-INDEX_NAME = "vlm_doc_index.json"
-LEGEND_DIR = "vlm_legends"
-MARKS_DIR = "vlm_marks"
+LEGEND_DIR = "legend"
+MARKS_DIR = "marks"
 KEYWORDS = {
     "legend": ("LEGEND", "SYMBOL LIST", "SYMBOLS", "SYMBOL SCHEDULE", "ELECTRICAL SYMBOLS"),
     "index": ("SHEET INDEX", "DRAWING INDEX", "SHEET LIST", "INDEX OF DRAWINGS", "LIST OF DRAWINGS",
@@ -53,92 +48,8 @@ Box = list  # [x0, y0, x1, y1] in page pixels
 
 
 # --------------------------------------------------------------------------
-# pool and document index
-# --------------------------------------------------------------------------
-
-def pool_root_for(page_json: Path) -> Path:
-    """The pool directory that holds ``label_queue/`` etc. for a page JSON."""
-    page_json = Path(page_json).resolve()
-    if page_json.parent.name in POOL_FOLDERS:
-        return page_json.parent.parent
-    return page_json.parent
-
-
-def doc_key(source_path: str) -> str:
-    stem = re.sub(r"[^A-Za-z0-9]+", "_", str(source_path)).strip("_")
-    return stem[-120:] or "unknown"
-
-
-def build_index(pool_root: Path) -> dict:
-    """Scan every pool folder once and group pages by source document."""
-    pool_root = Path(pool_root).resolve()
-    documents: dict[str, list[dict]] = {}
-    for folder in POOL_FOLDERS:
-        directory = pool_root / folder
-        if not directory.is_dir():
-            continue
-        for path in directory.glob("*.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            pool = data.get("pool") or {}
-            source = str(pool.get("source_path") or data.get("document_id") or path.stem)
-            documents.setdefault(source, []).append({
-                "pdf_page": pool.get("page"),
-                "folder": folder,
-                "json": str(path),
-                "role_reason": pool.get("role_reason"),
-                "source_id": data.get("source_id"),
-                "source_type": data.get("source_type"),
-                "dpi": pool.get("dpi"),
-                "downscale": pool.get("downscale"),
-            })
-    for pages in documents.values():
-        pages.sort(key=lambda row: (row["pdf_page"] is None, row["pdf_page"] or 0, row["folder"]))
-    index = {"format_version": 1, "documents": documents}
-    (pool_root / INDEX_NAME).write_text(json.dumps(index), encoding="utf-8")
-    return index
-
-
-@lru_cache(maxsize=4)
-def _load_index(path: str, mtime: float) -> dict:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
-
-
-def load_index(pool_root: Path) -> dict:
-    path = Path(pool_root) / INDEX_NAME
-    if not path.is_file():
-        return build_index(pool_root)
-    return _load_index(str(path), path.stat().st_mtime)
-
-
-def page_record(page_json: Path) -> dict:
-    data = json.loads(Path(page_json).read_text(encoding="utf-8"))
-    pool = data.get("pool") or {}
-    return {
-        "source_path": str(pool.get("source_path") or data.get("document_id") or Path(page_json).stem),
-        "pdf_page": pool.get("page"),
-        "dpi": pool.get("dpi"),
-        "downscale": pool.get("downscale") or 1.0,
-        "width": int(data["image_width"]),
-        "height": int(data["image_height"]),
-        "source_type": data.get("source_type"),
-        "assessment": data.get("vlm_assessment"),
-        "boxes": len(data.get("instances") or []),
-    }
-
-
-# --------------------------------------------------------------------------
 # source PDFs: text, sheet titles, vectors
 # --------------------------------------------------------------------------
-
-def pdf_roots(pool_root: Path) -> list[Path]:
-    roots = [Path(p) for p in os.environ.get("VLM_PDF_ROOTS", "").split(os.pathsep) if p]
-    project = Path(pool_root).resolve().parent.parent       # <project>/work/pool -> <project>
-    roots += [project / "data" / "pdf_sources", project / "data" / "blueprints_and_libraries"]
-    return [r for r in roots if r.is_dir()]
-
 
 def _norm_name(name: str) -> str:
     """Filename key that survives the flattening done when PDFs were filed
@@ -159,10 +70,11 @@ def _pdf_lookup(roots: tuple[str, ...]) -> dict[str, str]:
     return table
 
 
-def find_pdf(pool_root: Path, source_path: str) -> Path | None:
+def find_pdf(roots: list[Path], source_path: str) -> Path | None:
+    """Locate a source PDF under ``roots`` by path, then by normalised filename."""
     if not str(source_path).lower().endswith(".pdf"):
         return None
-    roots = pdf_roots(pool_root)
+    roots = [Path(r) for r in roots if Path(r).is_dir()]
     name = Path(source_path).name
     for root in roots:
         for candidate in (root / source_path, root / name):
@@ -172,21 +84,13 @@ def find_pdf(pool_root: Path, source_path: str) -> Path | None:
     return Path(hit) if hit else None
 
 
-def _pdf_index(pool_page: object, page_count: int) -> int:
-    """Pool page numbers are 1-based (scripts_build_page_pool.py); fitz is 0-based."""
-    index = int(pool_page) - 1
-    if not 0 <= index < page_count:
-        raise ValueError(f"pool page {pool_page} is outside the source PDF ({page_count} pages)")
-    return index
-
-
 def _fitz():
     import fitz  # type: ignore
     return fitz
 
 
 def _page_matrix(page, width: int, height: int):
-    """Matrix from PDF user space to the pool image's pixels."""
+    """Matrix from PDF user space to the rendered page image's pixels."""
     fitz = _fitz()
     rotated = page.rect * page.rotation_matrix
     zoom_x = width / max(rotated.width, 1e-6)
@@ -224,7 +128,7 @@ def _title_block(page) -> dict:
 
 
 def document_outline(pdf_path: Path, *, max_pages: int = 400) -> list[dict]:
-    """One row per PDF page (1-based, like pool pages): sheet id, title and keyword flags."""
+    """One row per PDF page (1-based): sheet id, title and keyword flags."""
     fitz = _fitz()
     rows = []
     with fitz.open(pdf_path) as doc:
@@ -250,17 +154,20 @@ def document_outline(pdf_path: Path, *, max_pages: int = 400) -> list[dict]:
     return rows
 
 
-def pdf_words(page_json: Path, region: Box | None = None, *, limit: int = 400) -> list[dict] | None:
-    """Words from the source PDF page with boxes in pool-image pixels, or None."""
-    record = page_record(page_json)
-    pdf = find_pdf(pool_root_for(page_json), record["source_path"])
-    if pdf is None or record["pdf_page"] is None:
+def pdf_words(page_json: Path, size: tuple[int, int], region: Box | None = None, *,
+              limit: int = 400) -> list[dict] | None:
+    """Words of a label-store PDF page with boxes in rendered-page pixels, or None
+    for photos. ``size`` is the rendered page's (width, height)."""
+    from annotator import label_store
+    document = label_store.document_for(page_json)
+    if document.kind != "pdf":
         return None
+    number = label_store.page_number(page_json)
     fitz = _fitz()
     out = []
-    with fitz.open(pdf) as doc:
-        page = doc[_pdf_index(record["pdf_page"], len(doc))]
-        matrix = _page_matrix(page, record["width"], record["height"])
+    with fitz.open(document.source) as doc:
+        page = doc[number - 1]
+        matrix = _page_matrix(page, size[0], size[1])
         for x0, y0, x1, y1, word, *_ in page.get_text("words"):
             r = fitz.Rect(x0, y0, x1, y1) * matrix
             box = [round(r.x0, 1), round(r.y0, 1), round(r.x1, 1), round(r.y1, 1)]
@@ -441,7 +348,7 @@ def _drop_text_runs(boxes: list[Box]) -> list[Box]:
 # --------------------------------------------------------------------------
 
 def _marks_path(page_json: Path) -> Path:
-    path = pool_root_for(page_json) / MARKS_DIR / f"{Path(page_json).stem}.json"
+    path = Path(page_json).resolve().parent / MARKS_DIR / f"{Path(page_json).stem}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -461,7 +368,9 @@ def find_marks(page_json: Path, image_path: Path, region: Box, *, min_px: float 
     # PDF is used for what it does exactly: knowing where the text is.
     found = _raster_candidates(image_path, region, min_px, max_px)
     source = "raster"
-    words = pdf_words(page_json, region, limit=5000)
+    with Image.open(image_path) as source:
+        size = source.size
+    words = pdf_words(page_json, size, region, limit=5000)
     if words is not None:
         source = "raster+pdf_text"
         text_boxes = [w["box"] for w in words]
@@ -487,8 +396,8 @@ def find_marks(page_json: Path, image_path: Path, region: Box, *, min_px: float 
 # --------------------------------------------------------------------------
 
 def _legend_dir(page_json: Path) -> Path:
-    record = page_record(page_json)
-    path = pool_root_for(page_json) / LEGEND_DIR / doc_key(record["source_path"])
+    """A document's legend library lives in its label-store folder."""
+    path = Path(page_json).resolve().parent / LEGEND_DIR
     path.mkdir(parents=True, exist_ok=True)
     return path
 

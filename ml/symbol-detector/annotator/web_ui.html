@@ -132,7 +132,7 @@
       <option value="high" selected>Sensitivity: High (Grid &amp; faint lines)</option>
       <option value="max">Sensitivity: Max Edge (Ultra-sensitive)</option>
     </select>
-    <button id="anchorTool" class="ghost" aria-pressed="false" title="Place anchor point on selected box (K)">Anchor · K</button>
+    <button id="anchorTool" class="ghost" aria-pressed="false" title="Place anchor points on any box: click on or beside a box (K)">Anchor · K</button>
     <button id="snapTool" class="ghost" aria-pressed="false" hidden title="Draw extra wall-snap vector on selected box">Snap Vec</button>
   </div>
   <div class="toolbar-group">
@@ -344,6 +344,10 @@
           <button type="button" id="placeVisualCenter" class="ghost" title="Visual center for non-circular symbols">visual_center</button>
           <button type="button" id="placeWallAttach" class="ghost" title="Exact point where symbol touches wall">wall_attachment</button>
           <button type="button" id="autoCenterAnchor" class="ghost" title="Place center anchor at exact geometric box center">Auto-center</button>
+        </div>
+        <div class="row wrap">
+          <button type="button" id="placeAutoAnchor" class="ghost" title="Anchor tool with automatic names: centre snaps become circle_center/visual_center, edges and tips become wall_attachment. Click any box, no selection needed.">Anchor any box · K</button>
+          <button type="button" id="anchorAllBoxes" class="ghost" title="Place a centre anchor on every box on this page (or every selected box) that has none">Anchor all boxes</button>
         </div>
         <div class="small" style="margin:6px 0 3px">Direct snap anchor to bounding box points or feature tip:</div>
         <div class="row wrap">

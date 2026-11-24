@@ -191,7 +191,7 @@ def _cached_electrical_device_catalog() -> dict[str, Any]:
 
 
 def load_electrical_device_catalog() -> dict[str, Any]:
-    """Return a copy of the curated 104-device electrical catalog."""
+    """Return a copy of the curated electrical device catalog."""
     return json.loads(json.dumps(_cached_electrical_device_catalog()))
 
 

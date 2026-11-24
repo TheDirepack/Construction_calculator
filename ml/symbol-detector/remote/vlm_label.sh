@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Run annotator.agent_cli on the training machine from the laptop.
 #
-# Batch labeling agents run here, but the page images and label JSONs live on
-# the remote box. This wrapper forwards one agent_cli command over ssh. Page
-# and batch paths are REMOTE paths (as printed by `next` and the batch files).
+# Batch labeling agents run here, but the PDFs and the label store live on the
+# remote box. This wrapper forwards one agent_cli command over ssh. Page and
+# batch paths are REMOTE paths (as printed by `next` and `doc`).
 #
-#   remote/vlm_label.sh next    work/pool/vlm_batches/batch_01.txt
-#   remote/vlm_label.sh context <page.json>
+#   remote/vlm_label.sh next    work/labels/batches/batch_01.txt
+#   remote/vlm_label.sh doc     work/labels/batches/batch_01.txt --doc 1
+#   remote/vlm_label.sh context work/labels/<doc>/<name>_p0012.json
 #   remote/vlm_label.sh view    <page.json> --out work/vlm_views/b01/full.png [--region x0,y0,x1,y1]
 #   remote/vlm_label.sh act     <page.json> --actions local_actions.json --agent nemotron
-#   remote/vlm_label.sh tools   <page.json>
-#   remote/vlm_label.sh status  work/pool/vlm_batches/batch_01.txt
+#   remote/vlm_label.sh status  work/labels/batches/batch_01.txt
 #
 # Relative remote paths resolve against $REMOTE_DIR (default
 # ~/Projects/blueprint-symbols). `view --out` and `act --actions` are LOCAL
@@ -21,7 +21,7 @@ REMOTE="${REMOTE:-max@192.168.1.30}"
 REMOTE_DIR="${REMOTE_DIR:-Projects/blueprint-symbols}"
 
 if [[ $# -lt 1 ]]; then
-  sed -n '2,17p' "$0"
+  sed -n '2,16p' "$0"
   exit 64
 fi
 

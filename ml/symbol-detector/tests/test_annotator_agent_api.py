@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+from pathlib import Path
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -376,123 +377,146 @@ def test_unknown_vocabulary_is_written_but_flagged(tmp_path):
 
 
 # --------------------------------------------------------------- batch CLI
+# Label-store documents are real PDFs rendered at 150 dpi: 1 pt = 150/72 px.
+# A 192 x 144 pt page renders to 400 x 300 px; PX converts pixels to points.
 
-def _queue_page(directory, name, *, source_id, source_path, page, draw=None):
-    from PIL import Image, ImageDraw
-    directory.mkdir(parents=True, exist_ok=True)
-    image = Image.new("RGB", (400, 300), "white")
-    if draw:
-        draw(ImageDraw.Draw(image))
-    image.save(directory / f"{name}.png")
-    (directory / f"{name}.json").write_text(json.dumps({
-        "format_version": 1, "source_id": source_id, "document_id": name, "page_index": 0,
-        "source_type": "rendered_drawing", "image_path": f"{name}.png",
-        "image_width": 400, "image_height": 300,
-        "coordinate_system": "original_page_pixels_top_left_y_down",
-        "exhaustive_families": [], "instances": [],
-        "pool": {"role": "label_queue", "source_path": source_path, "page": page},
-    }))
-    return directory / f"{name}.json"
+PX = 72 / 150
 
 
-def test_cli_batches_next_act_and_status(tmp_path, capsys):
+def _store_pdf(path, pages, *, draw=None, text=None):
+    doc = fitz.open()
+    for number in range(pages):
+        page = doc.new_page(width=400 * PX, height=300 * PX)
+        if draw and number in draw:
+            draw[number](page)
+        if text and number in text:
+            page.insert_text((20 * PX, 280 * PX), text[number], fontsize=8)
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def _store(tmp_path):
+    return tmp_path / "work" / "labels"
+
+
+def _doc(tmp_path, name, pages, *, targets, source_id="s", draw=None, text=None):
+    from annotator import label_store
+    pdf = _store_pdf(tmp_path / f"{name}.pdf", pages, draw=draw, text=text)
+    return label_store.create_document(_store(tmp_path), pdf, targets=targets,
+                                       meta={"source_id": source_id, "source_rel": f"{name}.pdf"})
+
+
+def _run(capsys):
     from annotator import agent_cli
-
-    queue = tmp_path / "label_queue"
-    scan = [_queue_page(queue, f"scan_p{i}", source_id="user_scans", source_path="scan.pdf", page=i)
-            for i in range(3)]
-    bulk = [_queue_page(queue, f"bulk_p{i}", source_id="new_downloads", source_path="bulk.pdf", page=i)
-            for i in range(2)]
 
     def run(*argv):
         code = agent_cli.main([str(a) for a in argv])
         return code, json.loads(capsys.readouterr().out)
+    return run
 
-    code, built = run("batches", "--queue", queue, "--out", tmp_path / "batches", "--count", "2")
-    assert code == 0 and built["documents"] == 2 and built["pages"] == 5
-    first = (tmp_path / "batches" / "batch_01.txt").read_text().splitlines()
-    assert first[0] == "# scan.pdf" and len(first) == 4      # whole documents stay together
-    code, again = run("batches", "--queue", queue, "--out", tmp_path / "batches", "--count", "2")
-    assert code == 2 and "--force" in again["error"]
 
-    batch = tmp_path / "batches" / "batch_01.txt"
+def test_cli_batches_next_act_and_status(tmp_path, capsys):
+    run = _run(capsys)
+    scan = _doc(tmp_path, "scan", 4, targets={1: "text:ELECTRICAL", 2: "x", 3: "x"},
+                source_id="field_plans_album_1")
+    bulk = _doc(tmp_path, "bulk", 2, targets={1: "x", 2: "x"}, source_id="new_downloads")
+
+    code, built = run("batches", "--store", _store(tmp_path), "--count", "2")
+    assert code == 0 and built["documents"] == 2 and built["added"] == 2
+    batch = _store(tmp_path) / "batches" / "batch_01.txt"
+    assert batch.read_text().split() == [scan.folder.name]          # priority source first
+    code, again = run("batches", "--store", _store(tmp_path), "--count", "2")
+    assert again["added"] == 0                                      # existing assignment kept
+
     code, nxt = run("next", batch)
-    assert nxt["next"] == str(scan[0].resolve()) and nxt["doc_pages_total"] == 3
-    assert nxt["survey_done"] is False and nxt["document"] == 1
+    assert nxt["survey_done"] is False and nxt["document"] == 1 and nxt["page_count"] == 4
+    assert nxt["next"] == str(scan.page_json(1)) and nxt["doc_pages_total"] == 3
+    assert not Path(nxt["next"]).exists()                           # created on first write
 
-    code, context = run("context", scan[0])
-    assert context["source"]["source_path"] == "scan.pdf" and context["width"] == 400
+    code, context = run("context", nxt["next"])
+    assert context["width"] == 400 and context["source"]["pdf_page"] == 1
+    assert context["source"]["triage_reason"] == "text:ELECTRICAL"
 
     actions = tmp_path / "actions.json"
     actions.write_text(json.dumps([
-        _add(box=(10.0, 10.0, 40.0, 40.0)),
+        _add(box=(10.0, 10.0, 40.0, 40.0), tighten=False),
         {"kind": "assess_page", "page_kind": "electrical_plan", "symbols_present": "yes",
          "labeling_complete": True},
     ]))
-    code, acted = run("act", scan[0], "--actions", actions, "--agent", "test-vlm")
+    code, acted = run("act", nxt["next"], "--actions", actions, "--agent", "test-vlm")
     assert code == 0 and acted["written"] is True
     assert acted["page_flags"]["vlm_assessment"]["agent"] == "test-vlm"
+    saved = json.loads(scan.page_json(1).read_text())
+    assert saved["source_pdf_sha256"] == scan.sha256 and (scan.folder / saved["image_path"]).is_file()
+
+    # Survey: page 4 is an electrical plan triage missed, page 3 is not electrical.
+    code, survey = run("survey", batch, "--doc", 1, "--label-pages", "4", "--skip-pages", "3",
+                       "--legend-pages", "2", "--note", "legend on p2")
+    assert survey["pages_to_label"] == [1, 2, 4]
+    code, bad = run("survey", batch, "--doc", 1, "--label-pages", "E1.1")
+    assert code == 2 and "PDF page numbers" in bad["error"]
 
     code, nxt = run("next", batch)
-    assert nxt["next"] == str(scan[1].resolve()) and nxt["batch_done"] == 1
+    assert nxt["survey_done"] is True and nxt["next"] == str(scan.page_json(2))
+    assert nxt["batch_done"] == 1 and nxt["batch_total"] == 3
 
-    code, status = run("status", queue)
-    assert status == {"pages": 5, "assessed": 1, "agent_boxes": 1,
-                      "symbols_present": {"yes": 1}, "page_kind": {"electrical_plan": 1}}
+    code, status = run("status", _store(tmp_path))
+    assert status["documents"] == 2 and status["pages"] == 5 and status["assessed"] == 1
+    assert status["agent_boxes"] == 1 and status["symbols_present"] == {"yes": 1}
 
     view = tmp_path / "v.png"
-    code, written = run("view", scan[0], "--out", view, "--region", "0,0,200,150")
+    code, written = run("view", scan.page_json(2), "--out", view, "--region", "0,0,200,150")
     assert code == 0 and view.read_bytes().startswith(b"\x89PNG")
 
-    code, error = run("act", scan[0], "--actions", actions, "--revision", "0" * 64)
+    code, error = run("act", scan.page_json(1), "--actions", actions, "--revision", "0" * 64)
     assert code == 2 and error["type"] == "RevisionConflict"
-    assert bulk[0].exists()
+    code, error = run("context", scan.folder / "elsewhere.json")
+    assert code == 2 and "_pNNNN" in error["error"]
+    code, error = run("context", scan.page_json(9))
+    assert code == 2 and "outside" in error["error"]
+    assert bulk.page_count == 2
 
 
-def _plan(d):
-    """A wall, a receptacle-like circle with two ticks, and a line of text."""
-    d.line([(0, 150), (400, 150)], fill="black", width=3)           # wall
-    d.ellipse([200, 130, 224, 154], outline="black", width=2)       # device glyph
-    d.line([(206, 142), (218, 142)], fill="black", width=2)
-    for i, x in enumerate(range(40, 120, 9)):                       # a row of "letters"
-        d.rectangle([x, 60, x + 6, 70], outline="black")
+def _plan(page):
+    """A wall, a receptacle-like circle with a tick, and a row of letter-like boxes."""
+    page.draw_line((0, 150 * PX), (400 * PX, 150 * PX), color=(0, 0, 0), width=3 * PX)
+    page.draw_circle((212 * PX, 142 * PX), 12 * PX, color=(0, 0, 0), width=2 * PX)
+    page.draw_line((206 * PX, 142 * PX), (218 * PX, 142 * PX), color=(0, 0, 0), width=2 * PX)
+    for x in range(40, 120, 9):
+        page.draw_rect(fitz.Rect(x * PX, 60 * PX, (x + 6) * PX, 70 * PX), color=(0, 0, 0), width=PX)
+
+
+def _legend(page):
+    page.draw_circle((32 * PX, 32 * PX), 12 * PX, color=(0, 0, 0), width=2 * PX)
 
 
 def test_marks_tighten_legend_and_document_tools(tmp_path, capsys):
-    from annotator import agent_cli
+    run = _run(capsys)
+    doc = _doc(tmp_path, "set", 3, targets={3: "text:ELECTRICAL"},
+               draw={0: _legend, 2: _plan}, text={0: "ELECTRICAL LEGEND", 2: "E101 POWER PLAN"})
+    plan, legend_page = doc.page_json(3), doc.page_json(1)
+    code, built = run("batches", "--store", _store(tmp_path), "--count", "1")
+    batch = _store(tmp_path) / "batches" / "batch_01.txt"
 
-    queue = tmp_path / "pool" / "label_queue"
-    reserve = tmp_path / "pool" / "reserve"
-    plan = _queue_page(queue, "set_p2", source_id="s", source_path="set.pdf", page=2, draw=_plan)
-    legend_page = _queue_page(reserve, "set_p0", source_id="s", source_path="set.pdf", page=0,
-                              draw=lambda d: d.ellipse([20, 20, 44, 44], outline="black", width=2))
+    code, listing = run("doc", batch, "--doc", 1)
+    assert code == 0 and [p["pdf_page"] for p in listing["pages"]] == [1, 2, 3]
+    assert [p["to_label"] for p in listing["pages"]] == [False, False, True]
+    assert "legend" in listing["pages"][0]["flags"] and "electrical" in listing["pages"][2]["flags"]
+    assert (doc.folder / "outline.json").is_file()
 
-    def run(*argv):
-        code = agent_cli.main([str(a) for a in argv])
-        out = capsys.readouterr().out
-        return code, json.loads(out)
-
-    batch = tmp_path / "batch.txt"
-    batch.write_text(f"# set.pdf\n{plan}\n")
-    import os
-    os.chdir(tmp_path)                                   # relative --pool, as used on the remote
-    code, built = run("index", "--pool", "pool")
-    assert built == {"documents": 1, "pages": 2}
-
-    code, doc = run("doc", batch, "--doc", 1)
-    assert [p["folder"] for p in doc["pages"]] == ["reserve", "label_queue"]
-    assert doc["pages"][1]["yours_to_label"] is True and doc["source_pdf_available"] is False
+    code, thumbs = run("thumbs", batch, "--doc", 1, "--out", tmp_path / "t.png")
+    assert code == 0 and thumbs["pages"] == [1, 2, 3]
 
     # Marks find the device glyph, not the wall or the run of letters.
     code, marks = run("marks", plan, "--out", tmp_path / "m.png", "--region", "0,0,400,300",
                       "--min-px", "12", "--max-px", "60")
-    assert marks["source"] == "raster"
+    assert code == 0 and marks["source"] == "raster+pdf_text"
     hits = [m for m in marks["marks"] if m["box"][0] >= 190 and m["box"][2] <= 235]
     assert len(hits) == 1, marks["marks"]
     assert not any(m["box"][1] < 80 for m in marks["marks"])          # text row dropped
     mark_id = hits[0]["id"]
 
-    # Writing by mark id; tightening keeps the box on the glyph.
     actions = tmp_path / "a.json"
     actions.write_text(json.dumps([{"kind": "add_box", "family": "receptacle", "variant": "duplex",
                                     "mark": mark_id}]))
@@ -508,34 +532,127 @@ def test_marks_tighten_legend_and_document_tools(tmp_path, capsys):
     tight = acted["applied"][0]
     assert tight["tighten"] == "tightened" and tight["box"][0] >= 195 and tight["box"][2] <= 229
 
-    # A box on empty paper is flagged.
     actions.write_text(json.dumps([{"kind": "add_box", "family": "receptacle",
                                     "box": [300, 200, 330, 230]}]))
     code, acted = run("act", plan, "--actions", actions, "--dry-run")
     assert any("empty paper" in w for w in acted["warnings"])
 
-    # Reference pages are read-only.
-    code, refused = run("act", legend_page, "--actions", actions)
-    assert code == 2 and "read-only" in refused["error"]
-
-    # Legend entries come from any page of the document and are shared across it.
+    # The legend sheet is part of the same PDF: viewable, and a legend source.
     code, added = run("legend", "add", legend_page, "--box", "15,15,50,50", "--family", "receptacle",
                       "--variant", "duplex", "--label", "DUPLEX RECEPTACLE")
-    assert added["added"]["id"] == "L1" and added["entries"] == 1
+    assert code == 0 and added["added"]["id"] == "L1" and added["entries"] == 1
     code, listed = run("legend", "list", plan)
     assert listed["entries"][0]["label"] == "DUPLEX RECEPTACLE"
+    assert (doc.folder / "legend" / "L1.png").is_file()
 
     code, viewed = run("view", plan, "--out", tmp_path / "v.png",
                        "--regions", "0,0,200,150;200,0,400,150;0,150,200,300", "--legend")
     from PIL import Image
-    image = Image.open(tmp_path / "v.png")
-    assert image.width > 400                                          # montage + legend panel
+    assert Image.open(tmp_path / "v.png").width > 400                # montage + legend panel
 
     code, nxt = run("next", batch)
     assert nxt["legend_entries"] == 1 and nxt["survey_done"] is False
-    code, saved = run("survey", batch, "--doc", 1, "--note", "legend on p0", "--legend-pages", "0")
+    code, saved = run("survey", batch, "--doc", 1, "--note", "legend on p1", "--legend-pages", "1")
     code, nxt = run("next", batch)
-    assert nxt["survey_done"] is True
+    assert nxt["survey_done"] is True and nxt["next"] == str(plan)
 
-    code, text = run("text", plan)
-    assert text["available"] is False
+    code, text = run("text", plan, "--grep", "POWER")
+    assert text["available"] is True and text["count"] == 1
+    x0, y0, x1, y1 = text["words"][0]["box"]
+    assert 0 < x0 < x1 <= 400 and 250 < y1 <= 300                      # page pixels, not points
+
+
+def test_store_document_matches_web_annotator_folder(tmp_path, monkeypatch):
+    """Opening the same PDF in the browser annotator lands on the agents' pages."""
+    from annotator import label_store
+    doc = _doc(tmp_path, "Some Plan Set (rev 2)", 2, targets={2: "x"})
+    session, index, _ = label_store.open_page(doc.page_json(2))
+    agent_api.apply_actions(session, index, revision=None, actions=[_add(box=(10, 10, 60, 60))])
+    monkeypatch.setenv("BPS_LABELS_DIR", str(_store(tmp_path)))
+    browser = LabelingSession(pdf=doc.source)
+    assert browser.out_dir == doc.folder
+    data, revision, _ = browser.page_document(1)
+    assert revision is not None and len(data["instances"]) == 1
+
+
+def test_build_store_migrates_pool_labels_and_photos(tmp_path):
+    from PIL import Image
+    import scripts_build_label_store as builder
+    from annotator import label_store
+
+    data_root = tmp_path / "data" / "blueprints_and_libraries"
+    (data_root / "1_blueprints").mkdir(parents=True)
+    pdf = _store_pdf(data_root / "1_blueprints" / "Job_Plans.pdf", 3, draw={1: _plan})
+    pool = tmp_path / "work" / "pool"
+    queue = pool / "label_queue"
+    queue.mkdir(parents=True)
+    # Pool raster at half the store resolution: boxes must double.
+    Image.new("RGB", (200, 150), "white").save(queue / "job_p002.jpg")
+    (queue / "job_p002.json").write_text(json.dumps({
+        "format_version": 1, "source_id": "s", "document_id": "job_p002", "page_index": 1,
+        "source_type": "rendered_drawing", "image_path": "job_p002.jpg",
+        "image_width": 200, "image_height": 150,
+        "coordinate_system": "original_page_pixels_top_left_y_down", "exhaustive_families": [],
+        "instances": [{"instance_id": "a2_1", "symbol_family": "receptacle", "symbol_variant": "duplex",
+                       "bbox_xyxy": [100.0, 65.0, 112.0, 77.0], "review_status": "unreviewed",
+                       "review_source": "vlm_agent", "verified_ground_truth": False, "uncertain": True}],
+        "vlm_assessment": {"page_kind": "electrical_plan", "symbols_present": "yes",
+                           "labeling_complete": False, "note": "", "agent": "x",
+                           "assessed_at": "2026-11-24T00:00:00Z"},
+        "pool": {"role": "label_queue", "source_path": "1_blueprints/Job Plans.pdf", "page": 2,
+                 "role_reason": "text:ELECTRICAL"},
+    }))
+    Image.new("RGB", (120, 90), "gray").save(queue / "album_photo.jpg")
+    (queue / "album_photo.json").write_text(json.dumps({
+        "format_version": 1, "source_id": "field_plans_album_1", "document_id": "album_photo",
+        "page_index": 0, "source_type": "real_construction_photo", "image_path": "album_photo.jpg",
+        "image_width": 120, "image_height": 90,
+        "coordinate_system": "original_page_pixels_top_left_y_down", "exhaustive_families": [],
+        "instances": [],
+        "pool": {"role": "label_queue", "source_path": "1_blueprints/album/photo.jpg", "page": 1},
+    }))
+    store = tmp_path / "work" / "labels"
+    assert builder.main(["--store", str(store), "--data-root", str(data_root),
+                         "--from-pool", str(pool)]) == 0
+    docs = {d.kind: d for d in label_store.iter_documents(store)}
+    pdf_doc, photo = docs["pdf"], docs["image"]
+    assert pdf_doc.source == pdf.resolve() and pdf_doc.targets == {2: "text:ELECTRICAL"}
+    page = json.loads(pdf_doc.page_json(2).read_text())
+    assert page["image_width"] == 400 and page["vlm_assessment"]["symbols_present"] == "yes"
+    assert page["instances"][0]["bbox_xyxy"] == [200.0, 130.0, 224.0, 154.0]
+    assert photo.source.parent == photo.folder / "images" and photo.page_count == 1
+    session, index, _ = label_store.open_page(photo.page_json(1))
+    assert session.page_document(index)[0]["image_width"] == 120
+    # Re-running is a no-op for pages that already exist.
+    assert builder.main(["--store", str(store), "--data-root", str(data_root),
+                         "--from-pool", str(pool)]) == 0
+    assert len(list(label_store.iter_documents(store))) == 2
+
+
+def test_scan_triages_new_pdfs_and_skips_evaluation(tmp_path):
+    import scripts_build_label_store as builder
+    from annotator import label_store
+    data_root = tmp_path / "data"
+    blue = data_root / "1_blueprints"
+    (blue / "evaluation").mkdir(parents=True)
+    _store_pdf(blue / "new_set.pdf", 3, text={1: "ELECTRICAL POWER PLAN"})
+    _store_pdf(blue / "arch_only.pdf", 2, text={0: "ARCHITECTURAL FLOOR PLAN"})
+    _store_pdf(blue / "evaluation" / "held.pdf", 1, text={0: "ELECTRICAL"})
+    store = tmp_path / "labels"
+    assert builder.main(["--store", str(store), "--data-root", str(data_root), "--scan", str(blue)]) == 0
+    docs = list(label_store.iter_documents(store))
+    assert [d.source.name for d in docs] == ["new_set.pdf"] and docs[0].pages_to_label() == [2]
+
+
+def test_scan_remembers_pdfs_without_electrical_pages(tmp_path, monkeypatch):
+    import scripts_build_label_store as builder
+    blue = tmp_path / "data" / "1_blueprints"
+    blue.mkdir(parents=True)
+    _store_pdf(blue / "arch.pdf", 1, text={0: "ARCHITECTURAL"})
+    store = tmp_path / "labels"
+    args = ["--store", str(store), "--data-root", str(tmp_path / "data"), "--scan", str(blue)]
+    assert builder.main(args) == 0
+    calls = []
+    monkeypatch.setattr(builder.vlm_tools, "document_outline",
+                        lambda *a, **k: calls.append(a) or [])
+    assert builder.main(args) == 0 and calls == []                   # not re-read

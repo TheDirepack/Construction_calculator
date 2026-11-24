@@ -189,6 +189,32 @@ def _find_proposals_for_pdf(pdf: Path, work_dir: Path | None = None) -> Path | N
     return None
 
 
+def default_out_dir(pdf: Path, source_hash: str) -> Path:
+    """Where a PDF's page labels live when no --out-dir is given.
+
+    With ``BPS_LABELS_DIR`` set (the shared label store used by labeling
+    agents and model pre-labeling), every PDF gets ``<store>/<stem>_<hash12>``,
+    so a human opening the same drawing sees and corrects the same pages.
+    """
+    name = re.sub(r"[^a-zA-Z0-9_-]+", "_", Path(pdf).stem)[:48]
+    root = os.environ.get("BPS_LABELS_DIR")
+    base = Path(root).expanduser() if root else Path.cwd() / "annotations"
+    return base / f"{name}_{source_hash[:12]}"
+
+
+def _store_json_prefix(out_dir: Path) -> str | None:
+    """Label-store folders fix the page JSON name prefix in document.json."""
+    meta = Path(out_dir) / "document.json"
+    if meta.is_file():
+        try:
+            prefix = json.loads(meta.read_text(encoding="utf-8")).get("json_prefix")
+        except (OSError, ValueError):
+            return None
+        if isinstance(prefix, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", prefix):
+            return prefix
+    return None
+
+
 def _import_fitz():
     try:
         import fitz  # type: ignore
@@ -647,6 +673,7 @@ class LabelingSession:
         out_dir: Path | None = None, page: int = 0, dpi: int = 150,
         proposals: Path | None = None, walls: Path | None = None, neca_catalog: Path | None = None,
         page_presence: Path | None = None,
+        source_sha256: str | None = None, auto_proposals: bool = True,
     ) -> None:
         if (pdf is None) == (edit is None):
             raise LabelingError("specify exactly one of --pdf or --edit")
@@ -676,7 +703,9 @@ class LabelingSession:
         self.lock = threading.RLock()
         self.token = secrets.token_urlsafe(32)
         self._render_cache: dict[int, tuple[Path, int, int, str]] = {}
-        self.source_hash = sha256_file(self.pdf) if self.pdf else None
+        # Callers that already know the PDF's hash (the label store records it
+        # with size and mtime) skip re-reading a large drawing set per command.
+        self.source_hash = (source_sha256 or sha256_file(self.pdf)) if self.pdf else None
         self.source_stat = self.pdf.stat() if self.pdf else None
         self.walls = _load_walls(walls)
         self.variants_by_family = _load_neca_subtypes(neca_catalog)
@@ -692,11 +721,11 @@ class LabelingSession:
         self.start_page = page
         if page < 0 or page >= self.page_count:
             raise LabelingError("initial page outside source document")
-        name = re.sub(r"[^a-zA-Z0-9_-]+", "_", self.pdf.stem)[:48] if self.pdf else ""
         self.out_dir = (self._initial_out_dir if self._initial_out_dir else
-                        Path.cwd() / "annotations" / f"{name}_{self.source_hash[:12]}" if self.pdf else
+                        default_out_dir(self.pdf, self.source_hash) if self.pdf else
                         self.edit.parent)
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.json_prefix = (_store_json_prefix(self.out_dir) or self.pdf.stem[:48]) if self.pdf else None
         # Read-only, source-hash-matched heuristics. They never attest negatives.
         self.page_presence: dict[int, dict] = {}
         if page_presence is not None:
@@ -740,7 +769,7 @@ class LabelingSession:
             if (not self.proposals.get("source_pdf_sha256") and
                     self.proposals.get("source_file") != self.pdf.name):
                 raise LabelingError("unhashed proposals must match the PDF filename")
-        elif self.pdf:
+        elif self.pdf and auto_proposals:
             auto_prop = _find_proposals_for_pdf(self.pdf)
             if auto_prop and auto_prop.is_file():
                 try:
@@ -766,7 +795,7 @@ class LabelingSession:
     def _json_path(self, index: int) -> Path:
         if self.edit:
             return self.edit_files[index]
-        return self.out_dir / f"{self.pdf.stem[:48]}_p{index + 1:04d}.json"
+        return self.out_dir / f"{self.json_prefix}_p{index + 1:04d}.json"
 
     def _raster(self, index: int) -> tuple[Path, int, int, str]:
         self._assert_pdf_unchanged()
@@ -791,6 +820,16 @@ class LabelingSession:
             result = image, width, height, sha256_file(image)
             self._render_cache[index] = result
             return result
+        # A page rendered earlier for this PDF revision and DPI is reused: the
+        # render is deterministic and the annotation pins its SHA-256 anyway.
+        rendered = sorted((self.out_dir / "images").glob(
+            f"page_{index + 1:04d}_{self.source_hash[:12]}_d{self.dpi}_*.png"))
+        if len(rendered) == 1:
+            match = re.search(r"_(\d+)x(\d+)\.png$", rendered[0].name)
+            if match:
+                result = rendered[0], int(match.group(1)), int(match.group(2)), sha256_file(rendered[0])
+                self._render_cache[index] = result
+                return result
         fitz = _import_fitz()
         with fitz.open(self.pdf) as doc:
             sheet = doc[index]
@@ -799,7 +838,8 @@ class LabelingSession:
                 factor = math.sqrt(MAX_PDF_PIXELS / (sheet.rect.width * sheet.rect.height))
             pix = sheet.get_pixmap(matrix=fitz.Matrix(factor, factor), alpha=False)
             width, height = pix.width, pix.height
-            path = self.out_dir / "images" / f"page_{index + 1:04d}_{self.source_hash[:12]}_{width}x{height}.png"
+            path = (self.out_dir / "images" /
+                    f"page_{index + 1:04d}_{self.source_hash[:12]}_d{self.dpi}_{width}x{height}.png")
             png = pix.tobytes("png")
             if not path.is_file() or path.read_bytes() != png:
                 _atomic_bytes(path, png)
@@ -1096,9 +1136,9 @@ class LabelingSession:
             self.start_page = 0
 
             if not self._initial_out_dir:
-                name = re.sub(r"[^a-zA-Z0-9_-]+", "_", self.pdf.stem)[:48]
-                self.out_dir = Path.cwd() / "annotations" / f"{name}_{self.source_hash[:12]}"
+                self.out_dir = default_out_dir(self.pdf, self.source_hash)
                 self.out_dir.mkdir(parents=True, exist_ok=True)
+            self.json_prefix = _store_json_prefix(self.out_dir) or self.pdf.stem[:48]
 
             prop_file = _find_proposals_for_pdf(self.pdf)
             if prop_file and prop_file.is_file():

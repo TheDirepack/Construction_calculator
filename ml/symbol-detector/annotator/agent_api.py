@@ -616,12 +616,10 @@ def _vocabulary_warning(session, ident: str, family: str, variant: str, warnings
         warnings.append(f"{ident}: variant {variant!r} is not in the vocabulary for {family!r}")
 
 
-def _mark_box(session, ident: object) -> list[float]:
+def _mark_box(session, ident: object, page: int = 0) -> list[float]:
     """Box of a numbered candidate from the last ``marks`` call on this page."""
-    if not session.edit:
-        raise ValueError("marks are only available for page JSON sessions")
     from annotator import vlm_tools
-    marks = vlm_tools.load_marks(session.edit)
+    marks = vlm_tools.load_marks(session._json_path(page))
     if not isinstance(ident, str) or ident not in marks:
         raise ValueError(f"unknown mark {ident!r}; run marks on this region first")
     return [float(v) for v in marks[ident]]
@@ -645,7 +643,7 @@ def _add_box(session, page, instances, action, *, width, height, warnings) -> di
         raise ValueError("add_box requires 'family'")
     variant = str(action.get("variant") or action.get("symbol_variant") or "unspecified").strip()
     if "mark" in action:
-        box = _mark_box(session, action["mark"])
+        box = _mark_box(session, action["mark"], page)
     else:
         box = _box4(action.get("box") if "box" in action else action.get("bbox_xyxy"))
     _check_box(box, width, height)
@@ -724,7 +722,7 @@ def _update_box(session, page, instances, action, *, width, height, warnings) ->
     tighten_note = None
     if "box" in action or "bbox_xyxy" in action or "mark" in action:
         if "mark" in action:
-            box = _mark_box(session, action["mark"])
+            box = _mark_box(session, action["mark"], page)
         else:
             box = _box4(action.get("box") if "box" in action else action.get("bbox_xyxy"))
         _check_box(box, width, height)

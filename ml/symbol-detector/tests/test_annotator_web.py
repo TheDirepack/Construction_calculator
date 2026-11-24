@@ -434,10 +434,10 @@ def test_electrical_device_catalog_completeness_and_http_endpoint(tmp_path):
     from blueprint_symbols.catalog import FAMILIES
 
     catalog = load_electrical_device_catalog()
-    assert catalog["summary"]["categories_count"] == 11
-    assert catalog["summary"]["total_devices"] == 104
-    assert len(catalog["categories"]) == 11
-    assert len(catalog["devices"]) == 104
+    assert catalog["summary"]["categories_count"] == 13
+    assert catalog["summary"]["total_devices"] == 181
+    assert len(catalog["categories"]) == 13
+    assert len(catalog["devices"]) == 181
 
     pdf = _pdf(tmp_path / "catalog_plan.pdf", pages=1)
     session = LabelingSession(pdf=pdf, out_dir=tmp_path / "labels")
@@ -469,14 +469,14 @@ def test_electrical_device_catalog_completeness_and_http_endpoint(tmp_path):
             r1 = conn.getresponse()
             session_body = json.loads(r1.read())
             assert r1.status == 200
-            assert len(session_body["device_catalog"]["devices"]) == 104
+            assert len(session_body["device_catalog"]["devices"]) == 181
 
             conn.request("GET", "/api/device_catalog")
             r2 = conn.getresponse()
             cat_body = json.loads(r2.read())
             assert r2.status == 200
-            assert len(cat_body["devices"]) == 104
-            assert len(cat_body["categories"]) == 11
+            assert len(cat_body["devices"]) == 181
+            assert len(cat_body["categories"]) == 13
             labels = {d["label"]: d for d in cat_body["devices"]}
             assert labels["Card Reader - Long Range"]["symbol_family"] == "security_device"
             assert labels["Card Reader - Long Range"]["symbol_variant"] == "card_reader_long_range"

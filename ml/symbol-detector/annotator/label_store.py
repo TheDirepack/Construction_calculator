@@ -1,0 +1,276 @@
+"""The label store: one folder per source document, labeled straight from the PDF.
+
+Layout (``work/labels`` by default, or ``$BPS_LABELS_DIR``)::
+
+    <store>/<stem>_<sha12>/document.json       source, hash, page count, pages to label
+    <store>/<stem>_<sha12>/<prefix>_p0012.json annotation page (web annotator --pdf format)
+    <store>/<stem>_<sha12>/images/             pages rendered on demand from the PDF
+    <store>/<stem>_<sha12>/legend/             per-document legend crops (agents)
+    <store>/<stem>_<sha12>/marks/              numbered candidate cache (agents)
+    <store>/<stem>_<sha12>/survey.json         what an agent learned about the set
+    <store>/batches/batch_NN.txt               document folders, one per line
+
+A folder name is the ``<stem>_<sha12>`` the web annotator uses for a PDF, so
+``BPS_LABELS_DIR=work/labels python -m annotator.web --pdf X.pdf`` opens the
+pages that agents and the model labeled. Page JSONs are named by 1-based PDF
+page number.
+
+Photos (no PDF) are ``kind: "image"`` documents: one page whose JSON points at
+the photo kept in the document's ``images/`` folder.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from annotator.web import LabelingSession, sha256_file
+
+DOCUMENT_FILE = "document.json"
+BATCH_DIR = "batches"
+PAGE_NAME = re.compile(r"_p(\d{4,5})\.json$")
+SAFE = re.compile(r"[^a-zA-Z0-9_-]+")
+
+
+def default_store(project: Path | None = None) -> Path:
+    env = os.environ.get("BPS_LABELS_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
+    base = Path(project) if project else Path.cwd()
+    return (base / "work" / "labels").resolve()
+
+
+def doc_folder_name(source: Path, sha256: str) -> str:
+    """Same as ``web.default_out_dir``: ``<sanitized stem[:48]>_<sha12>``."""
+    return f"{SAFE.sub('_', Path(source).stem)[:48]}_{sha256[:12]}"
+
+
+def json_prefix(source: Path) -> str:
+    return SAFE.sub("_", Path(source).stem)[:48].strip("_") or "page"
+
+
+def parse_pages(raw: str | None, page_count: int) -> list[int]:
+    """``"3, 7-9"`` -> [3, 7, 8, 9] (1-based PDF pages, checked against the document)."""
+    pages: set[int] = set()
+    for part in (raw or "").replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        lo, sep, hi = part.partition("-")
+        if sep and lo.strip().isdigit() and hi.strip().isdigit():
+            pages.update(range(int(lo), int(hi) + 1))
+        elif part.isdigit():
+            pages.add(int(part))
+        else:
+            raise ValueError(f"bad page {part!r}: use PDF page numbers (1-based) like 7 or 7-9, "
+                             "not sheet ids")
+    bad = [p for p in sorted(pages) if not 1 <= p <= page_count]
+    if bad:
+        raise ValueError(f"pages {bad[:5]} are outside this document (1-{page_count})")
+    return sorted(pages)
+
+
+@dataclass
+class Document:
+    folder: Path
+    kind: str                       # "pdf" | "image"
+    source: Path                    # the PDF, or the photo in images/
+    sha256: str
+    page_count: int
+    json_prefix: str
+    targets: dict[int, str] = field(default_factory=dict)   # page -> why it should be labeled
+    meta: dict = field(default_factory=dict)
+
+    @property
+    def name(self) -> str:
+        return str(self.meta.get("source_rel") or self.source.name)
+
+    def page_json(self, page: int) -> Path:
+        return self.folder / f"{self.json_prefix}_p{page:04d}.json"
+
+    @property
+    def survey_path(self) -> Path:
+        return self.folder / "survey.json"
+
+    def survey(self) -> dict | None:
+        path = self.survey_path
+        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+    def pages_to_label(self) -> list[int]:
+        """Triage pages plus pages added in the survey, minus pages the survey skipped."""
+        pages = set(self.targets)
+        survey = self.survey() or {}
+        pages.update(int(p) for p in survey.get("label_pages", []) if 1 <= int(p) <= self.page_count)
+        pages.difference_update(int(p) for p in survey.get("skip_pages", []))
+        return sorted(pages)
+
+    def save_meta(self) -> None:
+        data = dict(self.meta)
+        stat = self.source.stat()
+        data.update({"format_version": 1, "kind": self.kind, "source": str(self.source),
+                     "sha256": self.sha256, "page_count": self.page_count,
+                     "json_prefix": self.json_prefix, "size": stat.st_size,
+                     "mtime_ns": stat.st_mtime_ns,
+                     "targets": {str(k): v for k, v in sorted(self.targets.items())}})
+        self.folder.mkdir(parents=True, exist_ok=True)
+        tmp = self.folder / (DOCUMENT_FILE + ".tmp")
+        tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        tmp.replace(self.folder / DOCUMENT_FILE)
+        self.meta = data
+
+
+def load_document(folder: Path) -> Document:
+    folder = Path(folder).resolve()
+    path = folder / DOCUMENT_FILE
+    if not path.is_file():
+        raise FileNotFoundError(f"{folder} is not a label-store document (no {DOCUMENT_FILE})")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    source = Path(data["source"])
+    if not source.is_absolute():
+        source = (folder / source).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"source of {folder.name} is missing: {source}")
+    doc = Document(folder=folder, kind=data["kind"], source=source, sha256=data["sha256"],
+                   page_count=int(data["page_count"]), json_prefix=data["json_prefix"],
+                   targets={int(k): v for k, v in (data.get("targets") or {}).items()}, meta=data)
+    stat = source.stat()
+    if (stat.st_size, stat.st_mtime_ns) != (data.get("size"), data.get("mtime_ns")):
+        current = sha256_file(source)
+        if current != doc.sha256:
+            raise ValueError(f"{source.name} changed since its labels were started "
+                             f"(sha {current[:12]} != {doc.sha256[:12]})")
+        doc.save_meta()                     # same bytes, new mtime: refresh the recorded stat
+    return doc
+
+
+def document_for(page_json: Path) -> Document:
+    return load_document(Path(page_json).resolve().parent)
+
+
+def page_number(page_json: Path) -> int:
+    match = PAGE_NAME.search(Path(page_json).name)
+    if not match:
+        raise ValueError(f"{Path(page_json).name} is not a label-store page "
+                         "(expected <name>_pNNNN.json as printed by next/doc)")
+    return int(match.group(1))
+
+
+def open_page(page_json: Path) -> tuple[LabelingSession, int, Document]:
+    """A session on one page of a store document, and that page's session index.
+
+    A PDF page's JSON need not exist yet: it is created on the first save.
+    """
+    page_json = Path(page_json).resolve()
+    doc = document_for(page_json)
+    page = page_number(page_json)
+    if not 1 <= page <= doc.page_count:
+        raise ValueError(f"page {page} is outside {doc.name} (1-{doc.page_count})")
+    if page_json != doc.page_json(page):
+        raise ValueError(f"this document's page {page} is {doc.page_json(page).name}")
+    if doc.kind == "image":
+        return LabelingSession(edit=page_json), 0, doc
+    session = LabelingSession(pdf=doc.source, out_dir=doc.folder, page=page - 1,
+                              source_sha256=doc.sha256, auto_proposals=False)
+    return session, page - 1, doc
+
+
+def page_status(doc: Document, page: int) -> dict:
+    path = doc.page_json(page)
+    row = {"pdf_page": page, "page": str(path), "assessed": False, "boxes": 0, "agent_boxes": 0,
+           "model_boxes": 0, "human_verified": 0, "symbols_present": None, "page_kind": None}
+    if path.is_file():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assessment = data.get("vlm_assessment") or {}
+        instances = data.get("instances") or []
+        row.update({
+            "assessed": bool(assessment),
+            "boxes": len(instances),
+            "agent_boxes": sum(1 for i in instances if i.get("review_source") == "vlm_agent"),
+            "model_boxes": sum(1 for i in instances if i.get("review_source") == "model"),
+            "human_verified": sum(1 for i in instances if i.get("verified_ground_truth")),
+            "symbols_present": assessment.get("symbols_present"),
+            "page_kind": assessment.get("page_kind"),
+        })
+    return row
+
+
+def iter_documents(store: Path):
+    for meta in sorted(Path(store).glob(f"*/{DOCUMENT_FILE}")):
+        yield load_document(meta.parent)
+
+
+def batch_documents(batch: Path) -> list[Path]:
+    """Document folders listed in a batch file; relative lines resolve against the store."""
+    batch = Path(batch).resolve()
+    store = batch.parent.parent if batch.parent.name == BATCH_DIR else batch.parent
+    out = []
+    for line in batch.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            path = Path(line)
+            out.append(path if path.is_absolute() else (store / path).resolve())
+    return out
+
+
+IMAGE_PAGE_FIELDS = ("format_version", "source_id", "source_license", "project_family_id",
+                     "source_group_verified", "document_id", "page_index", "source_type",
+                     "exhaustive_families", "verified_no_symbols", "annotation_completeness",
+                     "annotation_completeness_verified", "annotation_scope", "instances",
+                     "rejected_proposals", "vlm_assessment")
+
+
+def create_document(store: Path, source: Path, *, targets: dict[int, str] | None = None,
+                    meta: dict | None = None, image_page: dict | None = None) -> Document:
+    """Add a PDF or a photo to the store (or merge triage targets into an existing entry).
+
+    A PDF is referenced in place. A photo is copied into the document's
+    ``images/`` folder (photos have no other durable home) and gets a single
+    edit-mode page JSON; ``image_page`` seeds that JSON's metadata and labels.
+    """
+    from PIL import Image
+
+    store = Path(store).resolve()
+    source = Path(source).resolve()
+    sha = sha256_file(source)
+    folder = store / doc_folder_name(source, sha)
+    if (folder / DOCUMENT_FILE).is_file():
+        doc = load_document(folder)
+        for page, reason in (targets or {}).items():
+            doc.targets.setdefault(int(page), reason)
+        doc.meta.update({k: v for k, v in (meta or {}).items() if k not in doc.meta})
+        doc.save_meta()
+        return doc
+    folder.mkdir(parents=True, exist_ok=True)
+    if source.suffix.lower() == ".pdf":
+        import fitz  # type: ignore
+        with fitz.open(source) as pdf:
+            page_count = len(pdf)
+        doc = Document(folder=folder, kind="pdf", source=source, sha256=sha, page_count=page_count,
+                       json_prefix=json_prefix(source),
+                       targets={int(k): v for k, v in (targets or {}).items()}, meta=dict(meta or {}))
+        doc.save_meta()
+        return doc
+    images = folder / "images"
+    images.mkdir(exist_ok=True)
+    copy = images / f"{json_prefix(source)}{source.suffix.lower()}"
+    copy.write_bytes(source.read_bytes())
+    with Image.open(copy) as image:
+        width, height = image.size
+    doc = Document(folder=folder, kind="image", source=copy, sha256=sha, page_count=1,
+                   json_prefix=json_prefix(source), targets={1: (targets or {}).get(1, "photo")},
+                   meta=dict(meta or {}))
+    page = {k: v for k, v in (image_page or {}).items() if k in IMAGE_PAGE_FIELDS}
+    page.setdefault("format_version", 1)
+    page.setdefault("document_id", source.stem)
+    page.setdefault("page_index", 0)
+    page.setdefault("source_type", "real_construction_photo")
+    page.setdefault("exhaustive_families", [])
+    page.setdefault("instances", [])
+    page.update({"image_path": f"images/{copy.name}", "image_sha256": sha,
+                 "image_width": width, "image_height": height,
+                 "coordinate_system": "original_page_pixels_top_left_y_down"})
+    doc.page_json(1).write_text(json.dumps(page, indent=1), encoding="utf-8")
+    doc.save_meta()
+    return doc

@@ -599,7 +599,7 @@ def test_browser_electrical_device_catalog_search_modal_and_save(tmp_path):
                 page = browser.new_page(viewport={"width": 1420, "height": 900})
                 page.goto(f"http://127.0.0.1:{server.server_port}/")
                 page.wait_for_function(
-                    "() => document.querySelector('#deviceCatalogCount')?.textContent === '104'"
+                    "() => document.querySelector('#deviceCatalogCount')?.textContent === '181'"
                 )
                 page.locator("#drawTool").click()
                 canvas = page.locator("#canvas").bounding_box()
@@ -793,6 +793,75 @@ def test_browser_save_conflict_reloads_the_conflicting_page(tmp_path):
                 assert page.locator("#conflictBanner").is_hidden()
                 saved = json.loads((tmp_path / "labels" / "conflict_p0001.json").read_text())
                 assert saved["verified_no_symbols"] is True
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
+
+
+def test_browser_anchor_any_box_without_selecting_it(tmp_path):
+    """Anchor mode attaches each click to the nearest box, stays on, and can anchor all."""
+    document = fitz.open()
+    document.new_page(width=400, height=300)
+    pdf = tmp_path / "anchors.pdf"
+    document.save(pdf)
+    document.close()
+
+    session = LabelingSession(pdf=pdf, out_dir=tmp_path / "labels", dpi=144)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1420, "height": 900})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function(
+                    "() => document.querySelector('#pageIndicator').textContent === 'Page 1 / 1'")
+                canvas = page.locator("#canvas").bounding_box()
+                assert canvas is not None
+                boxes = [(canvas["x"] + 230, canvas["y"] + 190), (canvas["x"] + 420, canvas["y"] + 190)]
+                for n, (sx, sy) in enumerate(boxes, start=1):
+                    page.locator("#drawTool").click()
+                    page.mouse.move(sx, sy)
+                    page.mouse.down()
+                    page.mouse.move(sx + 48, sy + 36, steps=4)
+                    page.mouse.up()
+                    page.wait_for_function(
+                        f"() => document.querySelector('#count').textContent.includes('{n} pending')")
+
+                # The second box is selected; anchor the first one anyway by
+                # clicking just outside its left edge (snaps to Left Edge).
+                page.keyboard.press("k")
+                assert "attaches to the nearest box" in page.locator("#modeBanner").inner_text()
+                lx, ly = boxes[0][0] - 3, boxes[0][1] + 18
+                page.mouse.move(lx - 20, ly)
+                page.mouse.move(lx, ly, steps=3)
+                page.mouse.click(lx, ly)
+                # Still in anchor mode: anchor the second box's centre next.
+                assert not page.locator("#modeBanner").is_hidden()
+                cx, cy = boxes[1][0] + 24, boxes[1][1] + 18
+                page.mouse.move(cx, cy, steps=3)
+                page.mouse.click(cx, cy)
+                page.keyboard.press("Escape")
+
+                page.locator("#anchorAllBoxes").click()
+                page.locator("#save").click()
+                page.wait_for_function("() => document.querySelector('#dirty').textContent === 'Saved'")
+                saved = json.loads((tmp_path / "labels" / "anchors_p0001.json").read_text())
+                first, second = sorted(saved["instances"], key=lambda i: i["bbox_xyxy"][0])
+                round_families = {"receptacle", "luminaire", "junction_box", "fire_alarm_device",
+                                  "sprinkler_head", "sensor"}
+
+                def centre(item):
+                    return "circle_center" if item["symbol_family"] in round_families else "visual_center"
+                assert set(first["anchors"]) == {"wall_attachment", centre(first)}, first["anchors"]
+                left_x = first["bbox_xyxy"][0]
+                assert abs(first["anchors"]["wall_attachment"]["xy"][0] - left_x) < 1e-6
+                assert set(second["anchors"]) == {centre(second)}, second["anchors"]
             finally:
                 browser.close()
     finally:

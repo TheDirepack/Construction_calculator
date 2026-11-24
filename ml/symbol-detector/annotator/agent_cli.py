@@ -1,18 +1,20 @@
 """Command-line twin of the vision-model tool API, for batch labeling agents.
 
-The HTTP surface in ``agent_api`` needs a running server and a session token.
-A coding agent working through hundreds of pages is better served by one
-stateless command per step that opens the page JSON in ``--edit`` mode, does
-one thing and exits. Every write still runs through ``LabelingSession.save``,
-so revision checks, validation and atomic writes are identical to the browser.
+Agents label documents in the label store (``annotator.label_store``): one
+folder per source PDF, pages rendered straight from the PDF on demand. A page
+is named by its JSON path inside that folder (``<doc>/<name>_p0012.json``) as
+printed by ``next`` and ``doc``; the JSON is created on the first write. Every
+write runs through ``LabelingSession.save``, so revision checks, validation
+and atomic writes are identical to the browser.
 
-  python -m annotator.agent_cli tools   PAGE.json
+  python -m annotator.agent_cli next    BATCH.txt         # current document + next page
+  python -m annotator.agent_cli doc     BATCH.txt --doc N # every page of document N
+  python -m annotator.agent_cli thumbs  BATCH.txt --doc N --out t.png
   python -m annotator.agent_cli context PAGE.json
-  python -m annotator.agent_cli view    PAGE.json --out view.png [--region x0,y0,x1,y1] [--max-side 1400]
+  python -m annotator.agent_cli view    PAGE.json --out view.png [--region x0,y0,x1,y1]
   python -m annotator.agent_cli act     PAGE.json --actions actions.json [--dry-run] [--agent NAME]
-  python -m annotator.agent_cli next    BATCH.txt         # first page in the batch without an assessment
-  python -m annotator.agent_cli status  BATCH.txt|QUEUE_DIR
-  python -m annotator.agent_cli batches --queue QUEUE_DIR --out BATCH_DIR --count N
+  python -m annotator.agent_cli status  BATCH.txt|STORE_DIR
+  python -m annotator.agent_cli batches --store STORE_DIR --count N
 
 All commands print one JSON object on stdout (``view`` with ``--out -`` prints
 the PNG instead). Failures print ``{"error": ...}`` and exit with status 2.
@@ -29,22 +31,22 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from annotator import agent_api, vlm_tools
-from annotator.web import LabelingError, LabelingSession, RevisionConflict
+from annotator import agent_api, label_store, vlm_tools
+from annotator.web import LabelingError, RevisionConflict
 
-# Lower rank is labeled first: scans and photos of real jobs are the rarest
-# and most valuable sources; bulk downloaded drawing sets come last.
+# Lower rank is labeled first: photos of real jobs are the rarest and most
+# valuable sources; bulk downloaded drawing sets come last.
 SOURCE_PRIORITY = {
-    "user_scans": 0,
-    "field_plans_album_1": 1,
-    "rinker_hall": 2,
-    "state_dot_samples": 3,
-    "freefarmhouse": 4,
+    "field_plans_album_1": 0,
+    "rinker_hall": 1,
+    "state_dot_samples": 2,
+    "freefarmhouse": 3,
 }
+OUTLINE_FILE = "outline.json"
 
 
-def _session(page_json: Path) -> LabelingSession:
-    return LabelingSession(edit=Path(page_json))
+def _open(page_json: Path):
+    return label_store.open_page(Path(page_json))
 
 
 def _emit(payload: dict) -> None:
@@ -64,52 +66,28 @@ def _read_actions(args) -> object:
     return {"actions": data}
 
 
-def _batch_pages(path: Path) -> list[Path]:
-    pages = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            pages.append(Path(line))
-    return pages
-
-
-def _page_status(page: Path) -> dict:
-    data = json.loads(page.read_text(encoding="utf-8"))
-    assessment = data.get("vlm_assessment") or None
-    instances = data.get("instances") or []
-    return {
-        "page": str(page),
-        "assessed": bool(assessment),
-        "boxes": len(instances),
-        "agent_boxes": sum(1 for i in instances if i.get("review_source") == "vlm_agent"),
-        "symbols_present": (assessment or {}).get("symbols_present"),
-        "page_kind": (assessment or {}).get("page_kind"),
-    }
-
-
 def cmd_tools(args) -> None:
-    _emit(agent_api.tool_manifest(_session(args.page_json)))
+    session, _, _ = _open(args.page_json)
+    _emit(agent_api.tool_manifest(session))
 
 
 def cmd_context(args) -> None:
-    session = _session(args.page_json)
-    context = agent_api.page_context(session, 0, include_walls=False, max_boxes=args.max_boxes)
-    data, _, _ = session.page_document(0)
-    pool = data.get("pool") or {}
+    session, index, doc = _open(args.page_json)
+    context = agent_api.page_context(session, index, include_walls=False, max_boxes=args.max_boxes)
     context["source"] = {
-        "source_id": data.get("source_id"),
-        "source_type": data.get("source_type"),
-        "source_path": pool.get("source_path"),
-        "pdf_page": pool.get("page"),
-        "triage_reason": pool.get("role_reason"),
+        "document": doc.name,
+        "kind": doc.kind,
+        "pdf_page": label_store.page_number(args.page_json),
+        "page_count": doc.page_count,
+        "triage_reason": doc.targets.get(label_store.page_number(args.page_json)),
     }
     for key in ("image_url", "view_url", "act_url"):
         context.pop(key, None)
     _emit(context)
 
 
-def _region(session, raw: str | None):
-    doc, _, _ = session.page_document(0)
+def _region(session, index: int, raw: str | None):
+    doc, _, _ = session.page_document(index)
     width, height = int(doc["image_width"]), int(doc["image_height"])
     if not raw:
         return None, width, height
@@ -157,7 +135,7 @@ def _montage(images: list[Image.Image]) -> Image.Image:
 
 
 def cmd_view(args) -> None:
-    session = _session(args.page_json)
+    session, index, _ = _open(args.page_json)
     _check_side(args.max_side)
     regions = [r for r in (args.regions or "").split(";") if r.strip()]
     if args.region:
@@ -167,11 +145,11 @@ def cmd_view(args) -> None:
     common = {"grid": not args.no_grid, "labels": not args.no_labels,
               "hide_existing": args.hide_existing, "as_image": True}
     if len(regions) <= 1:
-        region, _, _ = _region(session, regions[0] if regions else None)
-        image = agent_api.render_view(session, 0, region=region, max_side=args.max_side, **common)
+        region, _, _ = _region(session, index, regions[0] if regions else None)
+        image = agent_api.render_view(session, index, region=region, max_side=args.max_side, **common)
     else:
         side = max(agent_api.MIN_MAX_SIDE, args.max_side // 2 + 100)
-        image = _montage([agent_api.render_view(session, 0, region=_region(session, r)[0],
+        image = _montage([agent_api.render_view(session, index, region=_region(session, index, r)[0],
                                                 max_side=side, **common) for r in regions])
     if args.legend:
         panel = _legend_panel(Path(args.page_json), image.height)
@@ -183,26 +161,27 @@ def cmd_view(args) -> None:
 
 
 def cmd_marks(args) -> None:
-    session = _session(args.page_json)
+    session, index, _ = _open(args.page_json)
     _check_side(args.max_side)
-    region, width, height = _region(session, args.region)
+    region, width, height = _region(session, index, args.region)
     region = list(region or (0, 0, width, height))
-    _, _, image_path = session.page_document(0)
+    _, _, image_path = session.page_document(index)
     marks, source = vlm_tools.find_marks(Path(args.page_json), image_path, region,
                                          min_px=args.min_px, max_px=args.max_px, limit=args.limit)
     side = _legend_panel(Path(args.page_json), 600) if args.legend else None
-    image = agent_api.render_view(session, 0, region=tuple(int(v) for v in region),
+    image = agent_api.render_view(session, index, region=tuple(int(v) for v in region),
                                   max_side=args.max_side, grid=not args.no_grid, labels=True,
                                   marks=marks, side_image=side, as_image=True)
     _write_png(image, args.out, {"source": source, "count": len(marks), "marks": marks})
 
 
 def cmd_text(args) -> None:
-    session = _session(args.page_json)
-    region, _, _ = _region(session, args.region)
-    words = vlm_tools.pdf_words(Path(args.page_json), list(region) if region else None, limit=args.limit)
+    session, index, _ = _open(args.page_json)
+    region, width, height = _region(session, index, args.region)
+    words = vlm_tools.pdf_words(Path(args.page_json), (width, height),
+                                list(region) if region else None, limit=args.limit)
     if words is None:
-        _emit({"available": False, "note": "source PDF not found; read text from the image instead"})
+        _emit({"available": False, "note": "this document is a photo; read text from the image"})
         return
     if args.grep:
         needle = args.grep.upper()
@@ -212,19 +191,20 @@ def cmd_text(args) -> None:
 
 def cmd_legend(args) -> None:
     page = Path(args.page_json)
+    label_store.page_number(page)                    # refuse paths outside the store early
     if args.action == "list":
         _emit({"entries": vlm_tools.load_legend(page)})
     elif args.action == "add":
         if not (args.box or args.mark) or not args.family:
             raise ValueError("legend add needs --family and --box or --mark")
-        session = _session(page)
-        _, width, height = _region(session, None)
+        session, index, _ = _open(page)
+        _, width, height = _region(session, index, None)
         if args.mark:
-            box = agent_api._mark_box(session, args.mark)
+            box = agent_api._mark_box(session, args.mark, index)
         else:
             box = agent_api._box4([float(v) for v in args.box.split(",")])
         agent_api._check_box(box, width, height)
-        _, _, image_path = session.page_document(0)
+        _, _, image_path = session.page_document(index)
         if not args.no_tighten:
             box, _ = vlm_tools.tighten_box(image_path, box, pad=3)
         entry = vlm_tools.add_legend_entry(page, image_path, box, family=args.family,
@@ -240,214 +220,200 @@ def cmd_legend(args) -> None:
         _write_png(sheet, args.out or "-")
 
 
-def _guard_write(page_json: Path) -> None:
-    if Path(page_json).resolve().parent.name != "label_queue":
-        raise ValueError("only label_queue pages can be written; other pool pages are read-only references")
-
-
 def cmd_act(args) -> None:
-    _guard_write(args.page_json)
-    session = _session(args.page_json)
+    session, index, _ = _open(args.page_json)
     body = _read_actions(args)
     revision = body.get("revision", "latest") if args.revision is None else args.revision
     if revision == "latest":
-        # Batch agents own their pages exclusively, so "whatever is on disk now"
-        # is the right base. Explicit revisions still get optimistic locking.
-        _, revision, _ = session.page_document(0)
+        # Batch agents own their documents exclusively, so "whatever is on disk
+        # now" is the right base. Explicit revisions still get optimistic locking.
+        _, revision, _ = session.page_document(index)
     elif revision in ("null", "none"):
         revision = None
     dry_run = args.dry_run or body.get("dry_run") is True
-    _emit(agent_api.apply_actions(session, 0, revision=revision, actions=body.get("actions"),
+    _emit(agent_api.apply_actions(session, index, revision=revision, actions=body.get("actions"),
                                   dry_run=dry_run, agent=args.agent))
 
 
-def _batch_documents(path: Path) -> list[dict]:
-    """Batch file sections: ``# source_path`` header followed by its queue pages."""
-    documents: list[dict] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("#"):
-            documents.append({"source_path": line[1:].strip(), "pages": []})
-        elif documents:
-            documents[-1]["pages"].append(Path(line))
-        else:
-            documents.append({"source_path": "", "pages": [Path(line)]})
-    return documents
+# --------------------------------------------------------------------------
+# documents and batches
+# --------------------------------------------------------------------------
+
+def _batch_docs(batch: Path) -> list[label_store.Document]:
+    return [label_store.load_document(folder) for folder in label_store.batch_documents(batch)]
 
 
-def _survey_path(page_json: Path) -> Path:
-    return vlm_tools._legend_dir(page_json) / "survey.json"
+def _pick(batch: Path, number: int) -> label_store.Document:
+    documents = label_store.batch_documents(batch)
+    if not 1 <= number <= len(documents):
+        raise ValueError(f"--doc must be between 1 and {len(documents)}")
+    return label_store.load_document(documents[number - 1])
+
+
+def _outline(doc: label_store.Document) -> dict[int, dict]:
+    """Sheet ids, titles and keyword flags per page, cached in the document folder."""
+    if doc.kind != "pdf":
+        return {}
+    path = doc.folder / OUTLINE_FILE
+    if path.is_file():
+        cached = json.loads(path.read_text(encoding="utf-8"))
+        if cached.get("sha256") == doc.sha256:
+            return {int(k): v for k, v in cached["pages"].items()}
+    rows = vlm_tools.document_outline(doc.source, max_pages=2000)
+    pages = {row["pdf_page"]: row for row in rows}
+    path.write_text(json.dumps({"sha256": doc.sha256, "pages": pages}), encoding="utf-8")
+    return pages
+
+
+def _survey_needed(doc: label_store.Document) -> bool:
+    return doc.kind == "pdf" and doc.page_count > 1 and not doc.survey_path.is_file()
 
 
 def cmd_next(args) -> None:
-    documents = _batch_documents(args.batch)
-    total = sum(len(d["pages"]) for d in documents)
-    done = 0
-    for number, document in enumerate(documents, start=1):
-        statuses = [_page_status(p) for p in document["pages"]]
+    documents = _batch_docs(args.batch)
+    total = done = 0
+    current = None
+    for number, doc in enumerate(documents, start=1):
+        statuses = [label_store.page_status(doc, p) for p in doc.pages_to_label()]
         doc_done = sum(s["assessed"] for s in statuses)
+        total += len(statuses)
         done += doc_done
         pending = [s for s in statuses if not s["assessed"]]
-        if not pending:
-            continue
-        first = Path(pending[0]["page"])
-        survey = _survey_path(first)
-        _emit({
-            "document": number,
-            "source_path": document["source_path"],
-            "survey_done": survey.is_file(),
-            "legend_entries": len(vlm_tools.load_legend(first)),
-            "doc_pages_done": doc_done,
-            "doc_pages_total": len(statuses),
-            "next": str(first),
-            "batch_done": done,
-            "batch_total": total,
-            "hint": ("survey this document first: doc, then legend" if not survey.is_file()
-                     else "label the next page"),
-        })
+        if current is None and (pending or _survey_needed(doc)):
+            current = (number, doc, statuses, doc_done, pending)
+    if current is None:
+        _emit({"next": None, "batch_done": done, "batch_total": total})
         return
-    _emit({"next": None, "batch_done": total, "batch_total": total})
-
-
-def cmd_doc(args) -> None:
-    documents = _batch_documents(args.batch)
-    if args.doc is None:
-        rows = []
-        for number, document in enumerate(documents, start=1):
-            statuses = [_page_status(p) for p in document["pages"]]
-            rows.append({"document": number, "source_path": document["source_path"],
-                         "queue_pages": len(statuses),
-                         "assessed": sum(s["assessed"] for s in statuses)})
-        _emit({"documents": rows})
-        return
-    if not 1 <= args.doc <= len(documents):
-        raise ValueError(f"--doc must be between 1 and {len(documents)}")
-    document = documents[args.doc - 1]
-    if not document["pages"]:
-        raise ValueError("document has no pages")
-    first = document["pages"][0]
-    pool = vlm_tools.pool_root_for(first)
-    index = vlm_tools.load_index(pool)
-    known = index["documents"].get(document["source_path"], [])
-    queue = {str(Path(p).resolve()) for p in document["pages"]}
-    pdf = vlm_tools.find_pdf(pool, document["source_path"])
-    outline = {}
-    if pdf is not None:
-        outline = {row["pdf_page"]: row for row in vlm_tools.document_outline(pdf)}
-    rows = []
-    seen_pages = set()
-    for entry in known:
-        mine = str(Path(entry["json"]).resolve()) in queue
-        row = {"pdf_page": entry["pdf_page"], "json": entry["json"], "folder": entry["folder"],
-               "yours_to_label": mine, "triage": entry["role_reason"]}
-        if mine:
-            status = _page_status(Path(entry["json"]))
-            row["assessed"] = status["assessed"]
-            row["boxes"] = status["boxes"]
-        if entry["pdf_page"] in outline:
-            o = outline[entry["pdf_page"]]
-            row.update({"sheet": o.get("sheet"), "title": o.get("title"), "flags": o.get("flags")})
-        seen_pages.add(entry["pdf_page"])
-        rows.append(row)
-    for number, o in outline.items():
-        if number not in seen_pages:
-            rows.append({"pdf_page": number, "json": None, "folder": "pdf_only",
-                         "sheet": o.get("sheet"), "title": o.get("title"), "flags": o.get("flags")})
-    rows.sort(key=lambda r: (r["pdf_page"] is None, r["pdf_page"] or 0))
-    survey = _survey_path(first)
+    number, doc, statuses, doc_done, pending = current
+    survey_done = not _survey_needed(doc)
+    first = pending[0] if pending else None
     _emit({
-        "document": args.doc,
-        "source_path": document["source_path"],
-        "source_pdf_available": pdf is not None,
-        "pages": rows,
-        "legend_entries": len(vlm_tools.load_legend(first)),
-        "survey": json.loads(survey.read_text()) if survey.is_file() else None,
-        "note": ("pages with folder background/reserve are read-only references (view them, "
-                 "never act on them); pdf_only pages can be seen with pdfview"),
+        "document": number,
+        "name": doc.name,
+        "kind": doc.kind,
+        "page_count": doc.page_count,
+        "survey_done": survey_done,
+        "legend_entries": len(vlm_tools.load_legend(doc.page_json(1))),
+        "doc_pages_done": doc_done,
+        "doc_pages_total": len(statuses),
+        "next": first["page"] if first else None,
+        "pdf_page": first["pdf_page"] if first else None,
+        "triage": doc.targets.get(first["pdf_page"]) if first else None,
+        "batch_done": done,
+        "batch_total": total,
+        "hint": ("survey this document first: doc, then legend, then survey" if not survey_done
+                 else "label the next page"),
     })
 
 
+def cmd_doc(args) -> None:
+    if args.doc is None:
+        rows = []
+        for number, doc in enumerate(_batch_docs(args.batch), start=1):
+            pages = doc.pages_to_label()
+            rows.append({"document": number, "name": doc.name, "kind": doc.kind,
+                         "page_count": doc.page_count, "pages_to_label": len(pages),
+                         "assessed": sum(label_store.page_status(doc, p)["assessed"] for p in pages)})
+        _emit({"documents": rows})
+        return
+    doc = _pick(args.batch, args.doc)
+    outline = _outline(doc)
+    to_label = set(doc.pages_to_label())
+    rows = []
+    for page in range(1, doc.page_count + 1):
+        row = {"pdf_page": page, "page": str(doc.page_json(page)), "to_label": page in to_label}
+        if page in doc.targets:
+            row["triage"] = doc.targets[page]
+        if page in outline:
+            o = outline[page]
+            row.update({"sheet": o.get("sheet"), "title": o.get("title"), "flags": o.get("flags")})
+        if doc.page_json(page).is_file():
+            status = label_store.page_status(doc, page)
+            row.update({"assessed": status["assessed"], "boxes": status["boxes"]})
+        rows.append(row)
+    _emit({
+        "document": args.doc,
+        "name": doc.name,
+        "kind": doc.kind,
+        "page_count": doc.page_count,
+        "pages": rows,
+        "legend_entries": len(vlm_tools.load_legend(doc.page_json(1))),
+        "survey": doc.survey(),
+        "note": ("every page can be viewed and labeled with its `page` path; to_label pages are "
+                 "the ones `next` will hand you (add more with survey --label-pages)"),
+    })
+
+
+def _page_thumbnail(doc: label_store.Document, page: int, side: int) -> Image.Image:
+    if doc.kind != "pdf":
+        with Image.open(doc.source) as image:
+            image.draft("RGB", (side * 2, side * 2))
+            thumb = image.convert("RGB")
+        thumb.thumbnail((side, side))
+        return thumb
+    import fitz  # type: ignore
+    with fitz.open(doc.source) as pdf:
+        sheet = pdf[page - 1]
+        rect = sheet.rect
+        zoom = side / max(rect.width, rect.height)
+        pix = sheet.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+
 def cmd_thumbs(args) -> None:
-    """Up to 16 sheets of one document as a single labelled contact sheet."""
-    documents = _batch_documents(args.batch)
-    if not 1 <= args.doc <= len(documents):
-        raise ValueError(f"--doc must be between 1 and {len(documents)}")
-    document = documents[args.doc - 1]
-    first = document["pages"][0]
-    index = vlm_tools.load_index(vlm_tools.pool_root_for(first))
-    known = index["documents"].get(document["source_path"], [])
-    rows = known[args.start:args.start + 16]
-    if not rows:
+    """Up to 16 pages of one document as a single labelled contact sheet, rendered from the PDF."""
+    doc = _pick(args.batch, args.doc)
+    pages = list(range(1, doc.page_count + 1))[args.start:args.start + 16]
+    if not pages:
         raise ValueError("no pages at that --start")
+    to_label = set(doc.pages_to_label())
     cell = args.cell
-    columns = 4 if len(rows) > 9 else 3 if len(rows) > 4 else 2 if len(rows) > 1 else 1
-    grid_rows = (len(rows) + columns - 1) // columns
+    columns = 4 if len(pages) > 9 else 3 if len(pages) > 4 else 2 if len(pages) > 1 else 1
+    grid_rows = (len(pages) + columns - 1) // columns
     sheet = Image.new("RGB", (columns * cell, grid_rows * (cell + 22)), (40, 42, 48))
     draw = ImageDraw.Draw(sheet)
     font = agent_api._font(14)
-    listing = []
-    for n, row in enumerate(rows):
+    for n, page in enumerate(pages):
         x, y = (n % columns) * cell, (n // columns) * (cell + 22)
         try:
-            record = json.loads(Path(row["json"]).read_text(encoding="utf-8"))
-            from annotator.web import _resolve_edit_image
-            with Image.open(_resolve_edit_image(Path(row["json"]), record["image_path"])) as page:
-                page.draft("RGB", (cell * 2, cell * 2))
-                thumb = page.convert("RGB")
-                thumb.thumbnail((cell - 6, cell - 6))
+            thumb = _page_thumbnail(doc, page, cell - 6)
             sheet.paste(thumb, (x + (cell - thumb.width) // 2, y + 22 + (cell - thumb.height) // 2))
-        except (OSError, KeyError, ValueError):
+        except Exception:                                    # one bad page must not sink the sheet
             pass
-        mine = "LABEL" if row["folder"] == "label_queue" else "ref"
-        draw.text((x + 4, y + 3), f"p{row['pdf_page']} {mine}", font=font, fill=(255, 236, 140))
-        listing.append({"pdf_page": row["pdf_page"], "folder": row["folder"], "json": row["json"]})
-    _write_png(sheet, args.out, {"pages": listing, "more": len(known) > args.start + 16})
+        tag = "LABEL" if page in to_label else ""
+        draw.text((x + 4, y + 3), f"p{page} {tag}", font=font, fill=(255, 236, 140))
+    _write_png(sheet, args.out, {"pages": pages, "more": doc.page_count > args.start + 16})
 
 
 def cmd_survey(args) -> None:
-    documents = _batch_documents(args.batch)
-    if not 1 <= args.doc <= len(documents):
-        raise ValueError(f"--doc must be between 1 and {len(documents)}")
-    first = documents[args.doc - 1]["pages"][0]
-    record = {"note": (args.note or "")[:1500], "legend_pages": args.legend_pages or "",
-              "electrical_sheets": args.electrical_sheets or "", "agent": args.agent or ""}
-    _survey_path(first).write_text(json.dumps(record, indent=1), encoding="utf-8")
-    _emit({"saved": record})
+    doc = _pick(args.batch, args.doc)
+    previous = doc.survey() or {}
+    record = {
+        "note": (args.note or previous.get("note") or "")[:1500],
+        "legend_pages": label_store.parse_pages(args.legend_pages, doc.page_count)
+        if args.legend_pages is not None else previous.get("legend_pages", []),
+        "label_pages": label_store.parse_pages(args.label_pages, doc.page_count)
+        if args.label_pages is not None else previous.get("label_pages", []),
+        "skip_pages": label_store.parse_pages(args.skip_pages, doc.page_count)
+        if args.skip_pages is not None else previous.get("skip_pages", []),
+        "electrical_sheets": (args.electrical_sheets or previous.get("electrical_sheets") or "")[:300],
+        "agent": args.agent or previous.get("agent") or "",
+    }
+    doc.survey_path.write_text(json.dumps(record, indent=1), encoding="utf-8")
+    _emit({"saved": record, "pages_to_label": doc.pages_to_label()})
 
 
-def cmd_pdfview(args) -> None:
-    record = vlm_tools.page_record(args.page_json)
-    pool = vlm_tools.pool_root_for(args.page_json)
-    pdf = vlm_tools.find_pdf(pool, record["source_path"])
-    if pdf is None:
-        raise FileNotFoundError("source PDF for this document is not available")
-    import fitz  # type: ignore
-    with fitz.open(pdf) as doc:
-        if not 1 <= args.pdf_page <= len(doc):
-            raise ValueError(f"pdf-page must be between 1 and {len(doc)}")
-        page = doc[args.pdf_page - 1]
-        rect = page.rect * page.rotation_matrix
-        zoom = args.max_side / max(rect.width, rect.height)
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-        image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-    _write_png(image, args.out, {"pdf_page": args.pdf_page, "note": "reference only; not a labeling page"})
-
-
-def cmd_index(args) -> None:
-    index = vlm_tools.build_index(Path(args.pool))
-    _emit({"documents": len(index["documents"]),
-           "pages": sum(len(v) for v in index["documents"].values())})
+def _status_rows(docs) -> list[dict]:
+    rows = []
+    for doc in docs:
+        rows.extend(label_store.page_status(doc, p) for p in doc.pages_to_label())
+    return rows
 
 
 def cmd_status(args) -> None:
     target = Path(args.target)
-    if target.is_dir():
-        pages = sorted(p for p in target.glob("*.json"))
-    else:
-        pages = _batch_pages(target)
-    rows = [_page_status(p) for p in pages]
+    docs = list(label_store.iter_documents(target)) if target.is_dir() else _batch_docs(target)
+    rows = _status_rows(docs)
     by_presence: dict[str, int] = defaultdict(int)
     by_kind: dict[str, int] = defaultdict(int)
     for row in rows:
@@ -455,47 +421,53 @@ def cmd_status(args) -> None:
             by_presence[row["symbols_present"]] += 1
             by_kind[row["page_kind"]] += 1
     _emit({
+        "documents": len(docs),
+        "surveyed": sum(1 for d in docs if not _survey_needed(d)),
         "pages": len(rows),
         "assessed": sum(r["assessed"] for r in rows),
         "agent_boxes": sum(r["agent_boxes"] for r in rows),
+        "model_boxes": sum(r["model_boxes"] for r in rows),
         "symbols_present": dict(by_presence),
         "page_kind": dict(by_kind),
     })
 
 
 def cmd_batches(args) -> None:
-    queue = Path(args.queue).resolve()
-    documents: dict[tuple[int, str], list[tuple[int, Path]]] = defaultdict(list)
-    for page in sorted(queue.glob("*.json")):
-        data = json.loads(page.read_text(encoding="utf-8"))
-        pool = data.get("pool") or {}
-        source_id = str(data.get("source_id") or "")
-        source_path = str(pool.get("source_path") or page.stem)
-        rank = SOURCE_PRIORITY.get(source_id, 10)
-        documents[(rank, source_path)].append((int(pool.get("page") or 0), page))
+    """Split the store's documents into per-agent batch files.
 
-    # Whole documents stay together so one agent sees a drawing set's legend,
-    # title block conventions and symbol style consistently.
-    ordered = sorted(documents.items(), key=lambda item: (item[0][0], item[0][1]))
+    Existing batch files are kept and only documents not yet in any batch are
+    added (to the smallest batches), so agents keep their place when new PDFs
+    arrive. ``--force`` redistributes everything.
+    """
+    store = Path(args.store).resolve()
+    out = store / label_store.BATCH_DIR
+    out.mkdir(parents=True, exist_ok=True)
     count = max(1, args.count)
     bins: list[list[str]] = [[] for _ in range(count)]
-    sizes = [0] * count
-    for (rank, source_path), pages in ordered:
+    if not args.force:
+        for number in range(count):
+            path = out / f"batch_{number + 1:02d}.txt"
+            if path.is_file():
+                bins[number] = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()
+                                if line.strip() and not line.startswith("#")]
+    assigned = {name for lines in bins for name in lines}
+    docs = list(label_store.iter_documents(store))
+    sizes_by_name = {d.folder.name: max(1, len(d.pages_to_label())) for d in docs}
+    sizes = [sum(sizes_by_name.get(name, 1) for name in lines) for lines in bins]
+    fresh = [d for d in docs if d.folder.name not in assigned]
+    fresh.sort(key=lambda d: (SOURCE_PRIORITY.get(str(d.meta.get("source_id") or ""), 10), d.name))
+    # Whole documents stay together so one agent sees a drawing set's legend,
+    # title block conventions and symbol style consistently.
+    for doc in fresh:
         target = min(range(count), key=lambda i: (sizes[i], i))
-        bins[target].append(f"# {source_path}")
-        bins[target].extend(str(p) for _, p in sorted(pages))
-        sizes[target] += len(pages)
-
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
+        bins[target].append(doc.folder.name)
+        sizes[target] += sizes_by_name[doc.folder.name]
     written = []
     for number, lines in enumerate(bins, start=1):
         path = out / f"batch_{number:02d}.txt"
-        if path.exists() and not args.force:
-            raise LabelingError(f"{path} exists; pass --force to rebuild batches")
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        written.append({"batch": str(path), "pages": sizes[number - 1]})
-    _emit({"documents": len(documents), "pages": sum(sizes), "batches": written})
+        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        written.append({"batch": str(path), "documents": len(lines), "pages": sizes[number - 1]})
+    _emit({"documents": len(docs), "added": len(fresh), "batches": written})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -545,7 +517,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("legend", help="per-document legend library: list, add, remove, show")
     p.add_argument("action", choices=("list", "add", "remove", "show"))
-    p.add_argument("page_json", type=Path, help="any page of the document (legend page for add)")
+    p.add_argument("page_json", type=Path, help="any page of the document (the legend page for add)")
     p.add_argument("--box", help="x0,y0,x1,y1 of the legend glyph (not its text)")
     p.add_argument("--family"); p.add_argument("--variant"); p.add_argument("--label")
     p.add_argument("--mark", help="use a mark id from the last marks call on this page")
@@ -553,12 +525,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-tighten", action="store_true")
     p.set_defaults(func=cmd_legend)
 
-    p = sub.add_parser("doc", help="documents in a batch, or every known page of one document")
+    p = sub.add_parser("doc", help="documents in a batch, or every page of one document")
     p.add_argument("batch", type=Path)
     p.add_argument("--doc", type=int)
     p.set_defaults(func=cmd_doc)
 
-    p = sub.add_parser("thumbs", help="up to 16 sheets of a document as one contact-sheet image")
+    p = sub.add_parser("thumbs", help="up to 16 pages of a document as one contact-sheet image")
     p.add_argument("batch", type=Path)
     p.add_argument("--doc", type=int, required=True)
     p.add_argument("--start", type=int, default=0)
@@ -566,23 +538,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", required=True)
     p.set_defaults(func=cmd_thumbs)
 
-    p = sub.add_parser("survey", help="record what you learned about a document (legend pages, notes)")
+    p = sub.add_parser("survey", help="record what you learned about a document")
     p.add_argument("batch", type=Path)
     p.add_argument("--doc", type=int, required=True)
-    p.add_argument("--note"); p.add_argument("--legend-pages"); p.add_argument("--electrical-sheets")
+    p.add_argument("--note")
+    p.add_argument("--legend-pages", help="PDF pages holding the symbol legend, e.g. 3 or 3-4")
+    p.add_argument("--label-pages", help="extra PDF pages to label (electrical plans), e.g. 12,14-18")
+    p.add_argument("--skip-pages", help="queued PDF pages that need no labeling (not electrical)")
+    p.add_argument("--electrical-sheets", help="sheet ids as printed, e.g. E1.1-E1.4")
     p.add_argument("--agent")
     p.set_defaults(func=cmd_survey)
-
-    p = sub.add_parser("pdfview", help="render any page of the source PDF (reference only)")
-    p.add_argument("page_json", type=Path)
-    p.add_argument("--pdf-page", type=int, required=True, help="1-based, as listed by doc")
-    p.add_argument("--out", required=True)
-    p.add_argument("--max-side", type=int, default=1400)
-    p.set_defaults(func=cmd_pdfview)
-
-    p = sub.add_parser("index", help="rebuild the pool document index")
-    p.add_argument("--pool", required=True)
-    p.set_defaults(func=cmd_index)
 
     p = sub.add_parser("act", help="apply a batch of box edits and save")
     p.add_argument("page_json", type=Path)
@@ -597,15 +562,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("batch", type=Path)
     p.set_defaults(func=cmd_next)
 
-    p = sub.add_parser("status", help="progress summary for a batch file or queue directory")
+    p = sub.add_parser("status", help="progress summary for a batch file or the whole store")
     p.add_argument("target")
     p.set_defaults(func=cmd_status)
 
-    p = sub.add_parser("batches", help="split a label queue into per-agent batch files")
-    p.add_argument("--queue", required=True)
-    p.add_argument("--out", required=True)
-    p.add_argument("--count", type=int, default=8)
-    p.add_argument("--force", action="store_true")
+    p = sub.add_parser("batches", help="assign store documents to per-agent batch files")
+    p.add_argument("--store", required=True)
+    p.add_argument("--count", type=int, default=9)
+    p.add_argument("--force", action="store_true", help="redistribute every document")
     p.set_defaults(func=cmd_batches)
     return parser
 
@@ -615,7 +579,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args.func(args)
     except (LabelingError, RevisionConflict, ValueError, FileNotFoundError, OSError,
-            json.JSONDecodeError) as exc:
+            json.JSONDecodeError, KeyError) as exc:
         _emit({"error": str(exc) or exc.__class__.__name__, "type": exc.__class__.__name__})
         return 2
     return 0

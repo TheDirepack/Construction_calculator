@@ -364,22 +364,36 @@ prepare manually verified complete crops/regions, or implement a masked-loss
 objective that ignores unverified pixels. Whole-page evaluation still needs
 a smaller *fully reviewed* held-out set.
 
-## VLM batch labeling of the label queue
+## Label store: labeling straight from the PDFs
 
-`work/pool/label_queue/` holds the triaged pages with real symbols (no labels
-yet). Vision-model agents propose boxes through `annotator/agent_cli.py`,
-driven from the laptop with `remote/vlm_label.sh`; the agent instructions are in
-`annotator/VLM_LABELING.md`. Their boxes are saved `unreviewed` /
-`review_source: vlm_agent`, so `dataset_manifest` ignores them until a human
-accepts them in the annotator. Agents can't mark a page as verified symbol-free.
+Labels live in the label store, `work/labels/`, with one folder per source
+document named `<stem>_<sha12>`. Each folder holds:
+
+- `document.json`: the source PDF, its hash, page count and pages to label;
+- page JSONs `<name>_p0012.json`, numbered by 1-based PDF page;
+- `images/`: pages rendered from the PDF on demand;
+- `legend/`, `survey.json` and `outline.json`.
+
+Photos are one-page `image` documents, kept in the folder's `images/`. The
+page format is the web annotator's `--pdf` format. With
+`BPS_LABELS_DIR=work/labels`, `python -m annotator.web --pdf X.pdf` opens the
+same pages that agents and the model labeled.
+
+Vision-model agents propose boxes through `annotator/agent_cli.py`, which
+they drive from the laptop with `remote/vlm_label.sh`. Their instructions are
+in `annotator/VLM_LABELING.md`. A detector pre-labels pages with
+`remote/run_model_labeling.sh`. Both save boxes as `unreviewed`, so
+`dataset_manifest` ignores them until a human accepts them.
 
 ```
-# on the remote, once: split the queue into per-agent batches (whole PDFs together)
-PYTHONPATH=code .venv/bin/python -m annotator.agent_cli batches \
-  --queue work/pool/label_queue --out work/pool/vlm_batches --count 10
+# on the remote: add new PDFs (text triage) and append them to agent batches
+code/remote/update_label_store.sh
+# one-time migration from the old page pool (done 2026-11-24)
+PYTHONPATH=code .venv/bin/python code/scripts_build_label_store.py --store work/labels \
+  --data-root data/blueprints_and_libraries --from-pool work/pool
 # from the laptop: progress
-remote/vlm_label.sh status work/pool/label_queue
+remote/vlm_label.sh status work/labels
 ```
 
-A backup of the untouched queue JSONs is in
+A backup of the pool queue JSONs from before the migration is in
 `work/pool/label_queue_json_backup_20261124.tgz`.
