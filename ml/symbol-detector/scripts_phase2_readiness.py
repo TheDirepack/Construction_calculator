@@ -13,10 +13,11 @@ import json
 from pathlib import Path
 
 from blueprint_symbols.neca_svg_compositor import CANONICAL_CLASSES
+from blueprint_symbols.dataset_manifest import trusted_training_instance
 
 
 def audit_verified_eval(paths: list[Path], families: set[str] | None = None) -> dict:
-    families = families or set(CANONICAL_CLASSES)
+    families = set(CANONICAL_CLASSES) if families is None else set(families)
     counts = Counter()
     groups: dict[str, Counter] = defaultdict(Counter)
     problems: list[str] = []
@@ -39,15 +40,25 @@ def audit_verified_eval(paths: list[Path], families: set[str] | None = None) -> 
             exhaustive = doc.get("exhaustive_families", [])
             if not isinstance(exhaustive, list) or not all(isinstance(x, str) for x in exhaustive):
                 raise ValueError("exhaustive_families must be a list of class names")
+            attestation = doc.get("annotation_completeness_attestation")
+            explicit_attestation = (
+                isinstance(attestation, dict)
+                and attestation.get("method") == "dataset_or_source_coverage_explicitly_verified_by_user"
+                and isinstance(attestation.get("scope"), list)
+                and families.issubset(set(attestation["scope"]))
+            )
             if negative:
                 counts["verified_empty_pages"] += 1
-            elif doc.get("annotation_completeness_verified") is not True or not families.issubset(set(exhaustive)):
-                raise ValueError("missing human-verified exhaustive annotations for all detector classes")
+            elif not families.issubset(set(exhaustive)) or not (
+                doc.get("annotation_completeness_verified") is True or explicit_attestation
+            ):
+                raise ValueError("missing human-attested exhaustive annotations for all detector classes")
             real_positive = sum(
                 1 for x in instances if isinstance(x, dict)
                 and x.get("symbol_family") in families
-                and not x.get("uncertain", False)
-                and x.get("source", {}).get("kind") != "synthetic_composite"
+                and trusted_training_instance(x)
+                and not (isinstance(x.get("source"), dict)
+                         and x["source"].get("kind") == "synthetic_composite")
             )
             groups[group]["pages"] += 1
             groups[group]["real_positives"] += real_positive
