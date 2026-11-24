@@ -353,13 +353,69 @@ the default requires every selected coarse silhouette to survive
 reference screening. If there are no valid devices in the test PDF,
 that is not sufficient evidence of recall.
 
-### Partially annotated real drawings
+### Phase-two detection training after SSL v3
 
-Import real device annotations as `annotation_completeness=partial` with
-`exhaustive_families=[]`. Individually verified positive boxes are useful,
-but missing objects must not become negative targets. The existing strict YOLO
-export will intentionally refuse incomplete pages unless its exploratory
-override is enabled. Do **not** use that override for final training:
-prepare manually verified complete crops/regions, or implement a masked-loss
-objective that ignores unverified pixels. Whole-page evaluation still needs
-a smaller *fully reviewed* held-out set.
+The 60-epoch SSL reconstruction model provides a blueprint-specific
+YOLO26n-P2 **backbone and neck**, not a trained object detector. Phase two
+initializes a new detection head from scratch and fine-tunes all trainable
+detection layers with MuSGD. Check the checkpoint and source review before
+starting a GPU job:
+
+```bash
+BASE="$HOME/Projects/blueprint-symbols"
+ls -lh "$BASE/work/pretrain_v3/best_yolo26n_p2_backbone.pt"
+cd "$BASE/code"
+"$BASE/.venv/bin/python" scripts_verify_ssl_transfer.py \
+  "$BASE/work/pretrain_v3/best_yolo26n_p2_backbone.pt" --classes 6
+```
+
+Import the `*DEVICES.json` pages only as **partial positives**. A bounding
+box with `verified_ground_truth=false` is provisional and does not become a
+supervised target. The class-masked loss is implemented and is the **required**
+default for incomplete drawing pages. Never set
+`PHASE2_ALLOW_UNVERIFIED=1` or pass
+`--allow-unverified-completeness`: these create false negatives for missed
+real symbols.
+
+Prepare a separate set of fully reviewed original real pages with exhaustive
+coverage for **all six active device families**. Confirm original
+`project_family_id`/source grouping; use multiple different projects, and
+reserve the evaluation PDF projects from *all* SSL pretraining. A correct
+`verified_no_symbols=true` page supplies real negative coverage, but
+validation/test also require **real reviewed positive symbols**.
+
+After actual whole-page review, the existing
+`scripts_attest_dataset_coverage.py` can make non-destructive copies with
+explicit user attestation and the six `exhaustive_families`. Never invoke
+`--assert-exhaustive` on unreviewed, provisional or partially labeled
+pages. Put the audited copies into
+`work/phase2_v4/verified_real/`, or set
+`PHASE2_VERIFIED_ANNOTATIONS_GLOB` to the reviewed JSON glob. These are
+**not** imported merely because they reside in a folder: the readiness
+script checks the actual JSON fields, positive provenance, source groups, and
+the final validation/test group assignments.
+
+To provide extra trustworthy negative/positive pairs, optionally set
+`PHASE2_WALL_MANIFEST` to a manifest for fully verified, symbol-free
+drawings. The existing `scripts_generate_phase2_wall_only.py` composites
+some variants with synthetic positives and retains empty negative variants.
+Never promote pages without review or synthetic-positive crops to negatives.
+
+```bash
+cd "$HOME/Projects/blueprint-symbols/code"
+PHASE2_DRY_RUN=1 bash remote/run_phase2_train.sh
+# Only after this succeeds:
+systemd-run --user --unit=bps-phase2-v4 --collect \
+  bash "$HOME/Projects/blueprint-symbols/code/remote/run_phase2_train.sh"
+journalctl --user -fu bps-phase2-v4.service
+```
+
+The script uses a new `work/phase2_v4/` directory, preserves incomplete
+outputs for manual inspection rather than deleting them, and defaults to
+batch 12, 512px tiles and 200 epochs. Override with `PHASE2_BATCH`,
+`PHASE2_EPOCHS`, `PHASE2_RUN_NAME`, or `PHASE2_WORK`. If there is no
+trusted training-negative tile or the reviewed held-out sets contain no
+real targets, it **fails closed** rather than launching a detector likely
+to overspawn false positives. Successfully training still does **not** prove
+real-world detection quality; measure held-out per-class recall/precision,
+false positives per negative page, and localization errors.
