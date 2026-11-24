@@ -175,6 +175,8 @@ internal fun DrawingEditor(
     val styleStore = remember(views) { MarkupStyleStore(views) }
     var styleVersion by remember { mutableStateOf(0) }
     var settingsOpen by rememberSaveable(drawing.id) { mutableStateOf(false) }
+    var customizeToolbarOpen by rememberSaveable(drawing.id) { mutableStateOf(false) }
+    var toolbarCollapsed by rememberSaveable(drawing.id) { mutableStateOf(false) }
     var sheetsOpen by rememberSaveable(drawing.id) { mutableStateOf(false) }
     val sheetBrowserState = rememberSaveableStateHolder()
     var routeFinished by remember(drawing.id) { mutableStateOf(false) }
@@ -268,8 +270,11 @@ internal fun DrawingEditor(
         )
     }
 
-    LaunchedEffect(mode) {
-        if (mode == DrawingMode.Reference && calibrationDraft == null) {
+    LaunchedEffect(mode, drawing.scaleLocked) {
+        if (drawing.scaleLocked && (mode == DrawingMode.Reference || mode == DrawingMode.Zone)) {
+            calibrationDraft = null
+            session = session.withMode(DrawingMode.Adjust)
+        } else if (mode == DrawingMode.Reference && calibrationDraft == null) {
             calibrationDraft = seedCalibrationDraft()
             DrawingsSettings.setShowCalibrationLayer(prefsStore, true)
         } else if (mode != DrawingMode.Reference && calibrationDraft != null) {
@@ -278,6 +283,10 @@ internal fun DrawingEditor(
     }
 
     fun switchMode(next: DrawingMode) {
+        EditorActions.validateModeSwitch(drawing, next)?.let { msg ->
+            host.showMessage(msg)
+            return
+        }
         if (next != mode) {
             clearSelection()
             routeFinished = false
@@ -292,7 +301,18 @@ internal fun DrawingEditor(
         if (next == DrawingMode.Symbol && symbol == null) session = session.open(EditorDialog.PickSymbol)
     }
 
-    BackHandler(enabled = session.dialog == null && !settingsOpen && !sheetsOpen &&
+    fun toggleScaleLock() {
+        if (!editable) return
+        val nextLocked = !drawing.scaleLocked
+        onChange { it.copy(scaleLocked = nextLocked) }
+        if (nextLocked && (mode == DrawingMode.Reference || mode == DrawingMode.Zone)) {
+            calibrationDraft = null
+            session = session.withMode(DrawingMode.Adjust)
+        }
+        host.showMessage(if (nextLocked) "Scale locked." else "Scale unlocked.")
+    }
+
+    BackHandler(enabled = session.dialog == null && !settingsOpen && !customizeToolbarOpen && !sheetsOpen &&
         (selectedMarkId != null || selectedPathId != null || selectedMeasurementId != null || session.op != EditOp.Idle || mode != DrawingMode.Adjust && editable)
     ) {
         when {
@@ -438,17 +458,17 @@ internal fun DrawingEditor(
         onChange(change)
     }
 
-    // Markup undo preserves run links and sheet identity.
+    // Markup undo preserves run links, sheet identity, and scale lock.
     fun undo() {
         val (restored, next) = history.undo(drawing) ?: return
         history = next
-        onChange { current -> restored.copy(routes = current.routes, sheetRevisions = current.sheetRevisions) }
+        onChange { current -> restored.copy(routes = current.routes, sheetRevisions = current.sheetRevisions, scaleLocked = current.scaleLocked) }
     }
 
     fun redo() {
         val (restored, next) = history.redo(drawing) ?: return
         history = next
-        onChange { current -> restored.copy(routes = current.routes, sheetRevisions = current.sheetRevisions) }
+        onChange { current -> restored.copy(routes = current.routes, sheetRevisions = current.sheetRevisions, scaleLocked = current.scaleLocked) }
     }
 
     fun apply(outcome: EditorOutcome) {
@@ -670,7 +690,7 @@ internal fun DrawingEditor(
                             stream,
                             { quantity -> settings.format(quantity) },
                             routeLabel,
-                            mode = request.mode,
+                            vector = request.vector,
                         )
                     }
                 }
@@ -710,7 +730,7 @@ internal fun DrawingEditor(
                             stream,
                             { quantity -> settings.format(quantity) },
                             routeLabel,
-                            mode = request.mode,
+                            vector = request.vector,
                         )
                     }
                 }
@@ -765,6 +785,7 @@ internal fun DrawingEditor(
                 busy = busy,
                 showCalibration = prefs.showCalibrationLayer,
                 scale = docSummary.status,
+                scaleLocked = drawing.scaleLocked,
                 onMode = { switchMode(it) },
                 onScale = { session = session.open(EditorDialog.Calibration) },
                 onRotate = { rotation = (rotation + 1) % 4 },
@@ -792,6 +813,9 @@ internal fun DrawingEditor(
             scaleLabel = activeScaleLabel,
             scaleStatus = activeScaleStatus,
             onScale = { session = session.open(EditorDialog.Calibration) },
+            scaleLocked = drawing.scaleLocked,
+            editable = editable,
+            onToggleScaleLock = ::toggleScaleLock,
             snapEnabled = if (mode == DrawingMode.Reference) prefs.snapCalibration else prefs.snapMeasurements,
             snapTarget = if (mode == DrawingMode.Reference) prefs.calibrationTarget else prefs.measurementTarget,
             onSnapSelect = { enabled, target ->
@@ -927,7 +951,12 @@ internal fun DrawingEditor(
             }
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val landscape = maxWidth > maxHeight && maxWidth >= 560.dp
+            val verticalToolbar = maxWidth >= 600.dp || (maxWidth > maxHeight && maxWidth >= 560.dp)
+            val hudBottomPadding = if (editable && !verticalToolbar) {
+                if (toolbarCollapsed) 52.dp else 64.dp
+            } else {
+                6.dp
+            }
             val toolColors = remember(styleVersion, mode) {
                 buildMap {
                     put(DrawingMode.Pen, styleStore.read(DrawingMode.Pen).color)
@@ -935,13 +964,7 @@ internal fun DrawingEditor(
                     if (mode.supportsStyle()) put(mode, styleStore.read(mode).color)
                 }
             }
-            val strip: @Composable () -> Unit = {
-                if (editable) {
-                    EditorTools(mode, landscape, toolColors) { switchMode(it) }
-                }
-            }
-            val canvas: @Composable (Modifier) -> Unit = { canvasModifier ->
-                Box(canvasModifier) {
+            Box(Modifier.fillMaxSize()) {
                     PlanCanvas(
                         file = file,
                         pageIndex = page,
@@ -1065,6 +1088,7 @@ internal fun DrawingEditor(
                             else draftDrawing.calibrationFor(page, a, b)?.let { fit -> "≈ ${settings.format(fit.distance(a, b))}" }
                         },
                         onTapStagedRef = { stagedId -> session = session.open(EditorDialog.EditStagedReference(stagedId)) },
+                        hudBottomPadding = hudBottomPadding,
                         modifier = Modifier.fillMaxSize(),
                     )
                     val selectedMeasurement = fittedMeasurements.firstOrNull { it.first.id == selectedMeasurementId }
@@ -1451,17 +1475,30 @@ internal fun DrawingEditor(
                             }
                         }
                     }
-                }
-            }
-            if (landscape) {
-                Row(Modifier.fillMaxSize()) { canvas(Modifier.weight(1f)); strip() }
-            } else {
-                Column(Modifier.fillMaxSize()) { canvas(Modifier.weight(1f)); strip() }
+                    if (editable) {
+                        EditorTools(
+                            mode = mode,
+                            vertical = verticalToolbar,
+                            pinnedTools = prefs.pinnedTools,
+                            collapsed = toolbarCollapsed,
+                            onCollapsedChange = { toolbarCollapsed = it },
+                            scaleLocked = drawing.scaleLocked,
+                            toolColors = toolColors,
+                            onMode = { switchMode(it) },
+                            onCustomizeToolbar = { customizeToolbarOpen = true },
+                            modifier = if (verticalToolbar) {
+                                Modifier.align(Alignment.CenterEnd).padding(end = 8.dp, top = 8.dp, bottom = 64.dp)
+                            } else {
+                                Modifier.align(Alignment.BottomCenter).padding(horizontal = 8.dp, vertical = 8.dp)
+                            },
+                        )
+                    }
             }
         }
     }
 
     if (settingsOpen) DrawingSettingsDialog { settingsOpen = false }
+    if (customizeToolbarOpen) CustomizeToolbarDialog { customizeToolbarOpen = false }
     if (eraserSizeOpen) {
         EraserSizeDialog(
             initialDp = prefs.eraserSizeDp,
@@ -1530,6 +1567,8 @@ internal fun DrawingEditor(
         },
         onCalibrationDraftChange = { calibrationDraft = it },
         onStartCalibrating = { switchMode(DrawingMode.Reference) },
+        onStartZone = { switchMode(DrawingMode.Zone) },
+        onToggleScaleLock = ::toggleScaleLock,
         onSubmitCalibrationDraft = { draft ->
             val committed = applyDraftToDrawing(draft)
             editDrawing { it.copy(calibration = committed.calibration, zones = committed.zones) }
@@ -1626,6 +1665,8 @@ private fun EditorDialogs(
     onSession: (EditorSession) -> Unit,
     onCalibrationDraftChange: (List<StagedCalibrationRef>) -> Unit,
     onStartCalibrating: () -> Unit,
+    onStartZone: () -> Unit,
+    onToggleScaleLock: () -> Unit,
     onSubmitCalibrationDraft: (List<StagedCalibrationRef>) -> Unit,
     editDrawing: ((PlanDrawing) -> PlanDrawing) -> Unit,
     addMark: (PlanMark) -> Unit,
@@ -1849,6 +1890,8 @@ private fun EditorDialogs(
             pageSize = pageSize,
             pageZones = pageZones,
             editable = editable,
+            scaleLocked = drawing.scaleLocked,
+            onToggleScaleLock = onToggleScaleLock,
             onCalibrationChange = { updated -> editDrawing { it.copy(calibration = updated) } },
             onZoneChange = { updateZone(it) },
             onZoneDelete = { deleteZone(it) },
@@ -1858,7 +1901,7 @@ private fun EditorDialogs(
             },
             onDrawScaleZone = {
                 close()
-                onSession(session.withMode(DrawingMode.Zone))
+                onStartZone()
             },
             onDismiss = close,
         )
@@ -1868,6 +1911,7 @@ private fun EditorDialogs(
             paths = pagePaths,
             marks = marks,
             editable = editable,
+            scaleLocked = drawing.scaleLocked,
             publish = publish,
             onZoneChange = { updateZone(it) },
             onZoneDelete = { deleteZone(it) },

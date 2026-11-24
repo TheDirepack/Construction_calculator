@@ -127,6 +127,14 @@ data class Panel(
 
     companion object {
         const val MAX_SPACES = 120
+
+        /** Standard panelboard space counts: multiples of 6 in 12..84 (3φ) or multiples of 4 in 8..60 (1φ). */
+        fun validSpaceCounts(phases: Int): List<Int> =
+            if (phases >= 3) (12..84 step 6).toList() else (8..60 step 4).toList()
+
+        /** Snaps an arbitrary [spaces] count to the nearest valid bus count for [phases] (tie-breaking upward). */
+        fun snapSpacesToBus(spaces: Int, phases: Int): Int =
+            validSpaceCounts(phases).minWith(compareBy<Int>({ kotlin.math.abs(it - spaces) }, { -it }))
     }
 }
 

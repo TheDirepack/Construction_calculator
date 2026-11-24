@@ -27,6 +27,7 @@ internal object ProjectArchive {
         fileForHash = fileForHash,
         photoHashes = photoHashes(project),
         photoFileForHash = photoFileForHash,
+        createdAt = now,
     )
 
     fun read(input: InputStream, storePdf: (InputStream, String) -> Unit): Project =

@@ -3,10 +3,16 @@ package com.thedirepack.constructioncalc.feature.pullplanner
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -49,12 +55,19 @@ internal enum class SegmentKind(val label: String) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PullSegmentDialog(
     kind: SegmentKind,
     initial: PathSegment?,
     onSave: (PathSegment) -> Unit,
     onDismiss: () -> Unit,
+    positionLabel: String? = null,
+    canMoveUp: Boolean = false,
+    canMoveDown: Boolean = false,
+    onMoveUp: (() -> Unit)? = null,
+    onMoveDown: (() -> Unit)? = null,
+    onRemove: (() -> Unit)? = null,
 ) {
     val straight = initial as? PathSegment.Straight
     val bend = initial as? PathSegment.Bend
@@ -82,6 +95,9 @@ internal fun PullSegmentDialog(
         SegmentKind.PULL_POINT -> PathSegment.PullPoint(label.trim())
     }
     PullOptionsDialog(kind.label, segment?.let { { onSave(it) } }, onDismiss) {
+        if (positionLabel != null) {
+            Text(positionLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         when (kind) {
             SegmentKind.STRAIGHT -> {
                 MeasureField("Length", length, { length = it })
@@ -96,11 +112,35 @@ internal fun PullSegmentDialog(
             SegmentKind.PULL_POINT ->
                 OutlinedTextField(label, { label = it.take(200) }, label = { Text("Name (optional)") }, singleLine = true)
         }
+        if (onMoveUp != null || onMoveDown != null || onRemove != null) {
+            HorizontalDivider(Modifier.padding(top = 4.dp))
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (onMoveUp != null) {
+                    TextButton(onClick = onMoveUp, enabled = canMoveUp) { Text("Move up") }
+                }
+                if (onMoveDown != null) {
+                    TextButton(onClick = onMoveDown, enabled = canMoveDown) { Text("Move down") }
+                }
+                if (onRemove != null) {
+                    TextButton(onClick = onRemove) {
+                        Text("Remove", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
     }
 }
 
 @Composable
-internal fun PullCableDialog(initial: PullCable, onSave: (PullCable) -> Unit, onDismiss: () -> Unit) {
+internal fun PullCableDialog(
+    initial: PullCable,
+    onSave: (PullCable) -> Unit,
+    onDismiss: () -> Unit,
+    onRemove: (() -> Unit)? = null,
+) {
     var count by remember { mutableStateOf(initial.count.toString()) }
     var size by remember { mutableStateOf(initial.size) }
     var insulation by remember { mutableStateOf(initial.insulation) }
@@ -122,6 +162,12 @@ internal fun PullCableDialog(initial: PullCable, onSave: (PullCable) -> Unit, on
         UnitField("Outside diameter", Measure.SMALL_LENGTH, od, { od = it }, supportingText = "Leave blank to use the table value.")
         UnitField("Weight per conductor", Measure.LINEAR_WEIGHT, weight, { weight = it }, supportingText = "Leave blank for an estimate.")
         ToggleRow("Bears pulling tension", bears, { bears = it })
+        if (onRemove != null) {
+            HorizontalDivider(Modifier.padding(top = 4.dp))
+            TextButton(onClick = onRemove) {
+                Text("Remove cable", color = MaterialTheme.colorScheme.error)
+            }
+        }
     }
 }
 

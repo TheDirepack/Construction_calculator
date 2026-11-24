@@ -1,7 +1,8 @@
 package com.thedirepack.constructioncalc.feature.panels
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,13 +12,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -27,19 +25,21 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,23 +47,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import com.thedirepack.constructioncalc.core.electrical.StandardOcpd
 import com.thedirepack.constructioncalc.core.model.CircuitKind
 import com.thedirepack.constructioncalc.core.model.Panel
+import com.thedirepack.constructioncalc.core.model.PanelSystem
 import com.thedirepack.constructioncalc.core.model.design.Wire
 import com.thedirepack.constructioncalc.core.ui.R
 import com.thedirepack.constructioncalc.core.ui.components.ChoiceField
 import com.thedirepack.constructioncalc.core.ui.components.ConfirmDialog
+import com.thedirepack.constructioncalc.core.ui.components.SegmentedChoice
 import com.thedirepack.constructioncalc.core.ui.components.TextInputDialog
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 import com.thedirepack.constructioncalc.feature.panels.domain.BuiltInPanelTemplates
 import com.thedirepack.constructioncalc.feature.panels.domain.PanelExportLayout
 import com.thedirepack.constructioncalc.feature.panels.domain.PanelFacts
 import com.thedirepack.constructioncalc.feature.panels.domain.PanelTemplate
+import com.thedirepack.constructioncalc.feature.panels.domain.PanelTemplates
+import com.thedirepack.constructioncalc.feature.panels.domain.SavedPanelTemplate
 import com.thedirepack.constructioncalc.feature.panels.domain.duplicatePanel
 import com.thedirepack.constructioncalc.feature.panels.domain.suggestedPanelName
 
@@ -80,7 +87,7 @@ internal fun PanelsTab(ctx: PanelsContext, export: ExportActions, onOpen: (Strin
     var prompt by remember { mutableStateOf<PanelPrompt?>(null) }
     val services = LocalAppServices.current
     val templateStore = remember(services) { services.settings.module(PanelsTool.ID) }
-    val templates = rememberPanelTemplates()
+    val customTemplates = rememberCustomPanelTemplates()
     val defaultLayout = rememberDefaultExportLayout()
     var selectedLayout by remember(defaultLayout) { mutableStateOf(defaultLayout) }
 
@@ -171,11 +178,10 @@ internal fun PanelsTab(ctx: PanelsContext, export: ExportActions, onOpen: (Strin
 
     when (val p = prompt) {
         null -> Unit
-        PanelPrompt.Add -> AddPanelDialog(
+        PanelPrompt.Add -> CreatePanelDialog(
             suggestedName = ctx.project.suggestedPanelName(),
-            templates = templates,
-            onConfirm = { name, template ->
-                val panel = template.instantiate(name)
+            customTemplates = customTemplates,
+            onCreate = { panel ->
                 ctx.edit { project, now -> project.addPanel(panel, now) }
                 prompt = null
                 onOpen(panel.id)
@@ -208,131 +214,6 @@ internal fun PanelsTab(ctx: PanelsContext, export: ExportActions, onOpen: (Strin
             },
             onDismiss = { prompt = null },
         )
-    }
-}
-
-@Composable
-private fun AddPanelDialog(
-    suggestedName: String,
-    templates: List<PanelTemplate>,
-    onConfirm: (String, PanelTemplate) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var name by rememberSaveable(suggestedName) { mutableStateOf(suggestedName) }
-    var selectedId by rememberSaveable { mutableStateOf(BuiltInPanelTemplates.BLANK_208Y.id) }
-    val selectedTemplate = templates.firstOrNull { it.id == selectedId }
-        ?: templates.firstOrNull()
-        ?: BuiltInPanelTemplates.BLANK_208Y
-    val canConfirm = name.isNotBlank()
-
-    val savedTemplates = templates.filter { !it.builtIn }
-    val builtInTemplates = templates.filter { it.builtIn }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("New panel") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Panel name, e.g. LP-1") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Characters,
-                        imeAction = ImeAction.Done,
-                    ),
-                    keyboardActions = KeyboardActions(onDone = { if (canConfirm) onConfirm(name.trim(), selectedTemplate) }),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    "Template",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 280.dp)
-                        .verticalScroll(rememberScrollState())
-                        .selectableGroup(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (savedTemplates.isNotEmpty()) {
-                        Text(
-                            "Saved templates",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        savedTemplates.forEach { template ->
-                            TemplateChoiceRow(
-                                template = template,
-                                selected = template.id == selectedTemplate.id,
-                                onSelect = { selectedId = template.id },
-                            )
-                        }
-                        Text(
-                            "Starter templates",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                    }
-                    builtInTemplates.forEach { template ->
-                        TemplateChoiceRow(
-                            template = template,
-                            selected = template.id == selectedTemplate.id,
-                            onSelect = { selectedId = template.id },
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(name.trim(), selectedTemplate) }, enabled = canConfirm) {
-                Text("Add")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
-}
-
-@Composable
-private fun TemplateChoiceRow(
-    template: PanelTemplate,
-    selected: Boolean,
-    onSelect: () -> Unit,
-) {
-    val summary = buildList {
-        add(template.category.label)
-        add(template.system.label)
-        add("${template.spaces} spaces")
-        if (template.circuits.isNotEmpty()) add(plural(template.circuits.size, "circuit"))
-    }.joinToString(" · ")
-
-    Surface(
-        shape = MaterialTheme.shapes.small,
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
-        border = BorderStroke(
-            width = 1.dp,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect),
-    ) {
-        Row(
-            Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            RadioButton(selected = selected, onClick = null)
-            Column(Modifier.padding(start = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(template.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
     }
 }
 
@@ -397,6 +278,250 @@ private fun PanelCard(
                 }
                 if (warnings.isNotEmpty()) {
                     WarningText(warnings.first() + if (warnings.size > 1) " (+${warnings.size - 1} more)" else "")
+                }
+            }
+        }
+    }
+}
+
+private enum class PanelMainMode(val label: String) {
+    MLO("MLO"),
+    MAIN("Main breaker"),
+}
+
+private sealed interface TemplateChoice {
+    val key: String
+    val title: String
+    val system: PanelSystem
+    val defaultSpaces: Int
+    val defaultBusAmps: Int?
+    val defaultMainAmps: Int?
+    val circuitCount: Int
+
+    data class Bus(val template: PanelTemplate) : TemplateChoice {
+        override val key: String get() = "bus:${template.id}"
+        override val title: String get() = template.label
+        override val system: PanelSystem get() = template.system
+        override val defaultSpaces: Int get() = template.defaultSpaces
+        override val defaultBusAmps: Int get() = template.defaultBusAmps
+        override val defaultMainAmps: Int? get() = template.defaultMainAmps
+        override val circuitCount: Int get() = 0
+    }
+
+    data class Saved(val template: SavedPanelTemplate) : TemplateChoice {
+        override val key: String get() = "saved:${template.id}"
+        override val title: String get() = template.name
+        override val system: PanelSystem get() = template.system
+        override val defaultSpaces: Int get() = template.snappedSpaces
+        override val defaultBusAmps: Int? get() = template.busAmps
+        override val defaultMainAmps: Int? get() = template.mainAmps
+        override val circuitCount: Int get() = template.circuits.size
+    }
+}
+
+@Composable
+private fun CreatePanelDialog(
+    suggestedName: String,
+    customTemplates: List<SavedPanelTemplate>,
+    onCreate: (Panel) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sections = remember(customTemplates) {
+        buildList {
+            if (customTemplates.isNotEmpty()) {
+                add("Saved templates" to customTemplates.map(TemplateChoice::Saved))
+            }
+            add("Standard bus (blank)" to PanelTemplates.all.map(TemplateChoice::Bus))
+            add("Starter schedules" to BuiltInPanelTemplates.schedules.map(TemplateChoice::Saved))
+        }
+    }
+    val allOptions = remember(sections) { sections.flatMap { it.second } }
+    val defaultKey = remember { TemplateChoice.Bus(PanelTemplates.default).key }
+
+    var selectedKey by rememberSaveable { mutableStateOf(defaultKey) }
+    val selected = allOptions.firstOrNull { it.key == selectedKey } ?: TemplateChoice.Bus(PanelTemplates.default)
+
+    var name by rememberSaveable(suggestedName) { mutableStateOf(suggestedName) }
+    var spaces by rememberSaveable(selected.key) { mutableIntStateOf(selected.defaultSpaces) }
+    var mainMode by rememberSaveable(selected.key) {
+        mutableStateOf(if (selected.defaultMainAmps != null) PanelMainMode.MAIN else PanelMainMode.MLO)
+    }
+    var mainAmps by rememberSaveable(selected.key) {
+        mutableIntStateOf(selected.defaultMainAmps ?: selected.defaultBusAmps ?: 225)
+    }
+
+    val validSpaces = remember(selected.system.phases) { Panel.validSpaceCounts(selected.system.phases) }
+    val snappedSpaces = Panel.snapSpacesToBus(spaces, selected.system.phases)
+    val step = if (selected.system.phases >= 3) 6 else 4
+    val clippedCount = remember(selected, snappedSpaces) {
+        when (selected) {
+            is TemplateChoice.Bus -> 0
+            is TemplateChoice.Saved -> selected.template.clippedCircuitCount(snappedSpaces)
+        }
+    }
+    val spacesSupportText = buildString {
+        append("Multiples of $step for ${if (selected.system.phases >= 3) "3φ" else "1φ"} bus.")
+        if (clippedCount > 0) {
+            append(" ${plural(clippedCount, "circuit")} past $snappedSpaces spaces will be omitted.")
+        }
+    }
+
+    val ocpdOptions = remember { StandardOcpd.ratings.filter { it in 15..6000 } }
+    val mainBreakerOptions = remember(mainAmps, ocpdOptions) {
+        if (mainAmps in ocpdOptions) ocpdOptions else (listOf(mainAmps) + ocpdOptions).sorted()
+    }
+    val canCreate = name.isNotBlank()
+
+    fun submit() {
+        val effectiveMain = if (mainMode == PanelMainMode.MAIN) mainAmps else null
+        val effectiveBus = maxOf(selected.defaultBusAmps ?: 0, effectiveMain ?: 0).takeIf { it > 0 }
+        val panel = when (selected) {
+            is TemplateChoice.Bus -> selected.template.createPanel(
+                name = name,
+                spaces = snappedSpaces,
+                busAmps = effectiveBus,
+                mainAmps = effectiveMain,
+            )
+            is TemplateChoice.Saved -> selected.template.instantiate(
+                panelName = name,
+                spaces = snappedSpaces,
+                busAmps = effectiveBus,
+                mainAmps = effectiveMain,
+            )
+        }
+        onCreate(panel)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("New panel") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                TemplatePickerField(
+                    selected = selected,
+                    sections = sections,
+                    onSelect = { next -> selectedKey = next.key },
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Panel name, e.g. LP-1") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Characters,
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { if (canCreate) submit() }),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                ChoiceField(
+                    label = "Spaces (bus-locked)",
+                    options = validSpaces,
+                    selected = snappedSpaces,
+                    onSelect = { spaces = it },
+                    optionLabel = { "$it spaces" },
+                    supportingText = spacesSupportText,
+                )
+                SegmentedChoice(
+                    options = PanelMainMode.entries,
+                    selected = mainMode,
+                    onSelect = { mainMode = it },
+                    label = "Main / MLO",
+                    optionLabel = { it.label },
+                )
+                if (mainMode == PanelMainMode.MAIN) {
+                    ChoiceField(
+                        label = "Main breaker",
+                        options = mainBreakerOptions,
+                        selected = mainAmps,
+                        onSelect = { mainAmps = it },
+                        optionLabel = { "$it A" },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = canCreate, onClick = { submit() }) { Text("Add") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun TemplatePickerField(
+    selected: TemplateChoice,
+    sections: List<Pair<String, List<TemplateChoice>>>,
+    onSelect: (TemplateChoice) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val openPicker by rememberUpdatedState { expanded = true }
+    LaunchedEffect(interaction) {
+        interaction.interactions.collect { if (it is PressInteraction.Release) openPicker() }
+    }
+    val supporting = buildList {
+        add(selected.system.label)
+        selected.defaultBusAmps?.let { add("$it A bus") }
+        if (selected.circuitCount > 0) add(plural(selected.circuitCount, "circuit"))
+    }.joinToString(" · ")
+
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = selected.title,
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
+            label = { Text("Template") },
+            trailingIcon = { Text("▾", style = MaterialTheme.typography.titleMedium) },
+            supportingText = { Text(supporting) },
+            interactionSource = interaction,
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics {
+                    role = Role.DropdownList
+                    contentDescription = "Template: ${selected.title}"
+                    onClick { openPicker(); true }
+                },
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            sections.forEachIndexed { sectionIndex, (header, items) ->
+                if (sectionIndex > 0) HorizontalDivider()
+                Text(
+                    header,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+                items.forEach { option ->
+                    val meta = buildList {
+                        if (option is TemplateChoice.Saved) add(option.template.category.label)
+                        add(option.system.label)
+                        add("${option.defaultSpaces} spaces")
+                        if (option.circuitCount > 0) add(plural(option.circuitCount, "circuit"))
+                    }.joinToString(" · ")
+                    DropdownMenuItem(
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                Text(
+                                    option.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (option.key == selected.key) FontWeight.SemiBold else FontWeight.Normal,
+                                )
+                                Text(
+                                    meta,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        onClick = {
+                            onSelect(option)
+                            expanded = false
+                        },
+                    )
                 }
             }
         }

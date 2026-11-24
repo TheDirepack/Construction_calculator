@@ -9,10 +9,12 @@ import com.thedirepack.constructioncalc.core.electrical.TemperatureRating
 import com.thedirepack.constructioncalc.feature.conduitfill.ConduitFillInputs
 import com.thedirepack.constructioncalc.core.electrical.AmbientCorrection
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
-import com.thedirepack.constructioncalc.core.data.AppSettings
+import com.thedirepack.constructioncalc.feature.conduitfill.ConductorGroupInput
 
 /** Hand-checked against NEC 2023 Tables 310.16, 310.15(B)(1)(1), 310.15(C)(1) and 240.4(B)/(D). */
 class FillDeratingTest {
@@ -21,8 +23,13 @@ class FillDeratingTest {
         DeratingGroup(count, size, InsulationType.THHN, ccc)
     private val ground = DeratingGroup(1, ConductorSize.AWG_12, null, false)
 
-    private fun compute(groups: List<DeratingGroup>, ambient: Double = 30.0, rooftop: Boolean = false, nipple: Boolean = false) =
-        FillDerating.compute(groups, ambient, rooftop, cu, TemperatureRating.C75, nipple)
+    private fun compute(
+        groups: List<DeratingGroup>,
+        ambient: Double = 30.0,
+        rooftop: Boolean = false,
+        nipple: Boolean = false,
+        termination: TemperatureRating = TemperatureRating.C75,
+    ) = FillDerating.compute(groups, ambient, rooftop, cu, termination, nipple)
 
     @Test fun sixCurrentCarryingConductors() {
         val r = compute(listOf(thhn(6), ground))
@@ -33,6 +40,8 @@ class FillDeratingTest {
         assertEquals(24.0, row.adjusted!!, 1e-9)
         assertEquals(24.0, row.usable!!, 1e-9) // under the 25 A 75 °C terminal limit
         assertEquals(20, row.maxOcpd) // 240.4(B) would allow 25, but 240.4(D) caps 12 AWG Cu at 20 A
+        assertEquals(ThermalAdjustmentKind.DERATING, r.thermalStatus().kind)
+        assertTrue(r.toResults()[1].label.contains("derated"))
     }
 
     @Test fun nippleHasNoCountAdjustment() {
@@ -43,6 +52,83 @@ class FillDeratingTest {
         val r = compute(listOf(thhn(3), thhn(1, ccc = false)))
         assertEquals(3, r.currentCarrying)
         assertEquals(1.0, r.adjustmentFactor, 0.0)
+        assertEquals(ThermalAdjustmentKind.NOMINAL, r.thermalStatus().kind)
+    }
+
+    @Test fun coldAmbientUnder30CAppliesRatingIncreaseAbove100Percent() {
+        // 10 °C (50 °F): Table 310.15(B)(1)(1) 90 °C column factor = 1.15 (> 1.00)
+        val r = compute(listOf(thhn(3)), ambient = 10.0)
+        val row = r.rows.single()
+        assertEquals(1.15, row.ambientFactor!!, 0.0)
+        assertTrue(row.hasAmbientRatingIncrease())
+        assertTrue(row.hasNetAmpacityIncrease())
+        assertEquals(34.5, row.adjusted!!, 1e-9) // 30 A * 1.15 = 34.5 A (> 30 A table rating)
+        assertEquals(25.0, row.usable!!, 1e-9)   // 75 °C terminal cap per 110.14(C)
+
+        val status = r.thermalStatus(UnitSystem.IMPERIAL)
+        assertEquals(ThermalAdjustmentKind.RATING_INCREASE, status.kind)
+        assertTrue(status.hasAmbientIncrease)
+        assertTrue(status.hasNetAmpacityIncrease)
+        assertTrue(status.compactLabel.contains("rating increase"))
+
+        val results = r.toResults()
+        val wireResult = results[1]
+        assertTrue(wireResult.label, wireResult.label.contains("increased"))
+        assertFalse(wireResult.label.contains("derated"))
+        assertTrue(wireResult.text, wireResult.text.contains("34.5 A"))
+        assertTrue(wireResult.text, wireResult.text.contains("1.15"))
+
+        val notices = r.noticeTexts(UnitSystem.METRIC)
+        assertTrue(notices.any { it.contains("rating increase", ignoreCase = true) && it.contains("> 1.00") })
+    }
+
+    @Test fun coldAmbientOffsetsCountDeratingForMoreThanThreeConductors() {
+        // 10 °C (×1.15) with 10 CCC (×0.50): 30 * 1.15 * 0.50 = 17.25 A (vs 15.0 A at 30 °C)
+        val cold = compute(listOf(thhn(10)), ambient = 10.0)
+        val nominal = compute(listOf(thhn(10)), ambient = 30.0)
+        val coldRow = cold.rows.single()
+        assertEquals(1.15, coldRow.ambientFactor!!, 0.0)
+        assertEquals(17.25, coldRow.adjusted!!, 1e-9)
+        assertEquals(17.25, coldRow.usable!!, 1e-9)
+        assertTrue(coldRow.usable!! > nominal.rows.single().usable!!)
+
+        val status = cold.thermalStatus()
+        assertEquals(ThermalAdjustmentKind.MIXED, status.kind)
+        assertTrue(status.hasAmbientIncrease)
+
+        val wireResult = cold.toResults()[1]
+        assertTrue(wireResult.label, wireResult.label.contains("adjusted"))
+        assertFalse(wireResult.label.contains("derated"))
+        assertTrue(wireResult.text, wireResult.text.contains("1.15"))
+    }
+
+    @Test fun warmAmbientOver30CDeratesAmpacity() {
+        // 45 °C (113 °F): 90 °C column factor = 0.87 (< 1.00)
+        val r = compute(listOf(thhn(3)), ambient = 45.0)
+        val row = r.rows.single()
+        assertEquals(0.87, row.ambientFactor!!, 0.0)
+        assertFalse(row.hasAmbientRatingIncrease())
+        assertEquals(26.1, row.adjusted!!, 1e-9) // 30 A * 0.87
+        assertEquals(25.0, row.usable!!, 1e-9)
+        assertEquals(ThermalAdjustmentKind.DERATING, r.thermalStatus().kind)
+        assertTrue(r.toResults()[1].label.contains("derated"))
+    }
+
+    @Test fun hasNonDefaultThermalsFlagsNon30COrRooftopOrOver3Ccc() {
+        val nominal = ConduitFillInputs()
+        assertFalse(nominal.hasNonDefaultThermals(nominal.derating()))
+
+        val cold = ConduitFillInputs(ambientC = "15")
+        assertTrue(cold.hasNonDefaultThermals(cold.derating()))
+
+        val hot = ConduitFillInputs(ambientC = "40")
+        assertTrue(hot.hasNonDefaultThermals(hot.derating()))
+
+        val roof = ConduitFillInputs(rooftop = true)
+        assertTrue(roof.hasNonDefaultThermals(roof.derating()))
+
+        val fourCcc = ConduitFillInputs(groups = listOf(ConductorGroupInput(count = "4")))
+        assertTrue(fourCcc.hasNonDefaultThermals(fourCcc.derating()))
     }
 
     @Test fun rooftopAdderAndXhhw2Exemption() {

@@ -17,7 +17,11 @@ import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.electrical.ConductorGroup
 import com.thedirepack.constructioncalc.core.electrical.FillConductor
 import com.thedirepack.constructioncalc.core.electrical.NamedCable
+import com.thedirepack.constructioncalc.feature.conduitfill.domain.ConductorRole
 import com.thedirepack.constructioncalc.feature.conduitfill.domain.FillRequest
+import com.thedirepack.constructioncalc.feature.conduitfill.domain.NeutralGuidance
+import com.thedirepack.constructioncalc.feature.conduitfill.domain.NeutralGuidanceResult
+import com.thedirepack.constructioncalc.feature.conduitfill.domain.VoltageSystem
 import kotlinx.serialization.Serializable
 
 /** Insulation code for a bare conductor (Table 8); every other code is an [InsulationType.code]. */
@@ -40,8 +44,12 @@ data class ConductorGroupInput(
     val cableName: String = "",
     val cableOdIn: Double? = null,
     val cableAreaSqIn: Double? = null,
+    /** Optional role tag from presets (Hot / Neutral / Ground / Wire). */
+    val role: ConductorRole = ConductorRole.GENERAL,
 ) {
     val isCable: Boolean get() = insulation == CABLE_CODE
+
+    val isGround: Boolean get() = insulation == BARE_CODE || role == ConductorRole.GROUND
 
     /** The conductor this group describes, or null when the tables (or the cable data) don't give its size. */
     fun spec(): FillConductor? = if (isCable) {
@@ -60,6 +68,7 @@ data class ConductorGroupInput(
             cableName = cable.name,
             cableOdIn = cable.diameterIn,
             cableAreaSqIn = cable.areaSqIn,
+            role = ConductorRole.GENERAL,
         )
     }
 }
@@ -80,7 +89,7 @@ data class ConduitFillInputs(
     /** The wire used for the "how many fit" count. */
     val fitInsulation: String = InsulationType.THHN.code,
     val fitSize: String = ConductorSize.AWG_12.label,
-    // Derating
+    // Thermals & Derating
     val ambientC: String = "30",
     /** In direct sunlight less than 3/4 in. above a roof (310.15(B)(2)). */
     val rooftop: Boolean = false,
@@ -88,8 +97,15 @@ data class ConduitFillInputs(
     val material: String = ConductorMaterial.COPPER.name,
     /** Lowest terminal temperature rating, °C (110.14(C)). */
     val termination: Int = 75,
+    // Wave 2A: Voltage system & neutral/CCC guidance
+    val voltageSystem: String = VoltageSystem.V120.name,
+    val customVoltageLabel: String = "",
+    val circuitCount: Int = 1,
+    val sharedMwbc: Boolean = false,
+    val nonlinearHarmonic: Boolean = false,
+    val threePhaseCircuits: Boolean = false,
 ) {
-    /** Derating inputs, or null while the ambient temperature isn't a number. */
+    /** Derating / thermal inputs, or null while the ambient temperature isn't a number. */
     fun deratingGroups(): List<DeratingGroup> = groups.mapNotNull { g ->
         if (g.isCable) return@mapNotNull null // a named cable has no Table 310.16 row to derate
         val count = g.count.trim().toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
@@ -101,6 +117,16 @@ data class ConduitFillInputs(
     val conductorMaterial: ConductorMaterial get() = ConductorMaterial.entries.firstOrNull { it.name == material } ?: ConductorMaterial.COPPER
 
     val terminationRating: TemperatureRating get() = TemperatureRating.fromCelsius(termination) ?: TemperatureRating.C75
+
+    val voltagePreset: VoltageSystem get() = VoltageSystem.fromKey(voltageSystem)
+
+    fun neutralGuidance(): NeutralGuidanceResult = NeutralGuidance.evaluate(
+        voltageSystem = voltagePreset,
+        circuitCount = circuitCount,
+        sharedMwbc = sharedMwbc,
+        nonlinearHarmonic = nonlinearHarmonic,
+        threePhaseCircuits = threePhaseCircuits,
+    )
 
     fun derating(units: UnitSystem = UnitSystem.IMPERIAL): DeratingResult? {
         val ambient = ambientC.trim().replace(',', '.').toDoubleOrNull() ?: return null

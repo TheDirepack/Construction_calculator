@@ -32,4 +32,15 @@ object PathBends {
         if (!plan.hasResults) return emptyList()
         return angles(request.type, request.angleDeg, request.backToBack).map { PathSegment.Bend(it, sourceItemId = sourceItemId) }
     }
+
+    /**
+     * Path bends for every planned bend on a multi-bend stick ([StickPlan]), in order from End A to
+     * End B, tagged with [sourceItemId]. Empty when no bend on the stick has results yet.
+     */
+    fun of(stickPlan: StickPlan, sourceItemId: String? = null): List<PathSegment.Bend> {
+        if (!stickPlan.hasResults) return emptyList()
+        return stickPlan.physicalBends
+            .filter { it.angleDeg.isFinite() && it.angleDeg > 0.0 && it.angleDeg <= 180.0 }
+            .map { PathSegment.Bend(it.angleDeg, sourceItemId = sourceItemId) }
+    }
 }

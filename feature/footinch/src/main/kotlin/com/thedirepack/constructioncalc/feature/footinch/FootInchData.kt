@@ -2,8 +2,10 @@ package com.thedirepack.constructioncalc.feature.footinch
 
 import android.content.Context
 import androidx.core.content.edit
+import com.thedirepack.constructioncalc.core.data.ModuleSettings
 import com.thedirepack.constructioncalc.core.data.ToolBackup
 import com.thedirepack.constructioncalc.core.measure.Operator
+import com.thedirepack.constructioncalc.core.measure.Precision
 import com.thedirepack.constructioncalc.core.measure.Token
 import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import com.thedirepack.constructioncalc.core.model.StoredQuantity
@@ -179,5 +181,59 @@ class FootInchHistory private constructor(context: Context) {
 
         fun get(context: Context): FootInchHistory =
             instance ?: synchronized(this) { instance ?: FootInchHistory(context.applicationContext).also { instance = it } }
+    }
+}
+
+/** Keypad layout options for Foot-Inch. */
+enum class KeypadLayout(val label: String) {
+    CLASSIC("Classic"),
+    DUAL_SPLIT("Dual-Split");
+
+    companion object {
+        val DEFAULT = CLASSIC
+        fun parse(raw: String?): KeypadLayout =
+            entries.firstOrNull { it.name == raw } ?: DEFAULT
+    }
+}
+
+/** Input fraction-key precision on the Foot-Inch keypad, decoupled from output rounding. */
+enum class InputFractionPrecision(val label: String, val precision: Precision?) {
+    MATCH_OUTPUT("Match output", null),
+    EIGHTHS("1/8\"", Precision.EIGHTH),
+    SIXTEENTHS("1/16\"", Precision.SIXTEENTH),
+    THIRTY_SECONDS("1/32\"", Precision.THIRTY_SECOND);
+
+    fun resolve(outputPrecision: Precision): Precision = precision ?: outputPrecision
+
+    companion object {
+        val DEFAULT = MATCH_OUTPUT
+        fun parse(raw: String?): InputFractionPrecision =
+            entries.firstOrNull { it.name == raw } ?: DEFAULT
+    }
+}
+
+/** Resolved per-tool customization preferences for Foot-Inch. */
+internal data class FootInchSettings(
+    val keypadLayout: KeypadLayout = KeypadLayout.DEFAULT,
+    val showFractionKeys: Boolean = true,
+    val showInlineTape: Boolean = true,
+    val inputFractionPrecision: InputFractionPrecision = InputFractionPrecision.DEFAULT,
+    val showFunctionStrip: Boolean = true,
+    val colorBlindShapes: Boolean = false,
+) {
+    fun effectiveFractionPrecision(outputPrecision: Precision): Precision =
+        inputFractionPrecision.resolve(outputPrecision)
+
+    companion object {
+        fun read(store: ModuleSettings): FootInchSettings = FootInchSettings(
+            keypadLayout = KeypadLayout.parse(store.getString(FootInchPrefs.KEYPAD_LAYOUT, KeypadLayout.DEFAULT.name)),
+            showFractionKeys = store.getBoolean(FootInchPrefs.SHOW_FRACTION_KEYS, true),
+            showInlineTape = store.getBoolean(FootInchPrefs.SHOW_INLINE_TAPE, true),
+            inputFractionPrecision = InputFractionPrecision.parse(
+                store.getString(FootInchPrefs.INPUT_FRACTION_PRECISION, InputFractionPrecision.DEFAULT.name),
+            ),
+            showFunctionStrip = store.getBoolean(FootInchPrefs.SHOW_FUNCTION_STRIP, true),
+            colorBlindShapes = store.getBoolean(FootInchPrefs.COLOR_BLIND_SHAPES, false),
+        )
     }
 }

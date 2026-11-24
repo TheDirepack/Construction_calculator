@@ -37,6 +37,7 @@ import com.thedirepack.constructioncalc.core.electrical.PullBoxSizing
 import com.thedirepack.constructioncalc.core.electrical.PullBoxType
 import com.thedirepack.constructioncalc.core.electrical.RacewayInstall
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
+import com.thedirepack.constructioncalc.core.electrical.code.CodeProfile
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.measure.Measure
@@ -58,18 +59,18 @@ import com.thedirepack.constructioncalc.feature.reference.content.QuickCalc
 
 /** A Reference page's quick calculator, in a card under the page's text. */
 @Composable
-internal fun QuickCalculator(kind: QuickCalc) {
+internal fun QuickCalculator(kind: QuickCalc, codeProfile: CodeProfile? = null) {
     val settings = rememberAppSettings()
     OutlinedCard(Modifier.fillMaxWidth(), colors = CardDefaults.outlinedCardColors()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(kind.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             when (kind) {
-                QuickCalc.BOX_FILL -> BoxFillCalc(settings)
-                QuickCalc.PULL_BOX -> PullBoxCalc(settings)
-                QuickCalc.GEC -> GecCalc(settings)
-                QuickCalc.MOTOR_CIRCUIT -> MotorCalc(settings)
-                QuickCalc.RACEWAY_SUPPORT -> SupportCalc(settings)
-                QuickCalc.PVC_EXPANSION -> PvcCalc(settings)
+                QuickCalc.BOX_FILL -> BoxFillCalc(settings, codeProfile)
+                QuickCalc.PULL_BOX -> PullBoxCalc(settings, codeProfile)
+                QuickCalc.GEC -> GecCalc(settings, codeProfile)
+                QuickCalc.MOTOR_CIRCUIT -> MotorCalc(settings, codeProfile)
+                QuickCalc.RACEWAY_SUPPORT -> SupportCalc(settings, codeProfile)
+                QuickCalc.PVC_EXPANSION -> PvcCalc(settings, codeProfile)
             }
         }
     }
@@ -84,8 +85,8 @@ private fun AppSettings.volume(cuIn: Double) = if (isMetric) "${Decimals.trim(cu
 private fun sizeName(settings: AppSettings, size: ConductorSize) = settings.conductorSizeLabel(size).replace("/0", "∕0")
 
 @Composable
-private fun BoxFillCalc(settings: AppSettings) {
-    val sizes = BoxFill.supportedSizes
+private fun BoxFillCalc(settings: AppSettings, codeProfile: CodeProfile?) {
+    val sizes = remember(codeProfile) { withOptionalCodeProfile(codeProfile) { BoxFill.supportedSizes } }
     var sizeA by rememberSaveable { mutableStateOf(ConductorSize.AWG_12) }
     var countA by rememberSaveable { mutableStateOf("4") }
     var sizeB by rememberSaveable { mutableStateOf(ConductorSize.AWG_14) }
@@ -122,7 +123,10 @@ private fun BoxFillCalc(settings: AppSettings) {
         egcCount = count(egcs),
         largestEgcSize = largest,
     )
-    val result = remember(request) { if (conductors.isEmpty()) null else BoxFill.calculate(request) }
+    val result = remember(request, codeProfile) {
+        if (conductors.isEmpty()) null else withOptionalCodeProfile(codeProfile) { BoxFill.calculate(request) }
+    }
+    val boxFillCite = remember(codeProfile) { withOptionalCodeProfile(codeProfile) { CodeRule.BOX_FILL.cite } }
     val own = Decimals.parse(boxVolume)?.takeIf { it > 0 }?.let { if (settings.isMetric) it / 16.387064 else it }
     val results = result?.let { r ->
         listOfNotNull(
@@ -139,13 +143,13 @@ private fun BoxFillCalc(settings: AppSettings) {
     )
     ResultCard(
         results,
-        notices = listOf(Notice("Each device is counted against the largest conductor in the box (${CodeRule.BOX_FILL.cite}).")),
+        notices = listOf(Notice("Each device is counted against the largest conductor in the box ($boxFillCite).")),
         emptyText = "Enter at least one conductor.",
     )
 }
 
 @Composable
-private fun PullBoxCalc(settings: AppSettings) {
+private fun PullBoxCalc(settings: AppSettings, codeProfile: CodeProfile?) {
     val trade = TradeSize.entries.filter { it >= TradeSize.S_1_2 }
     var type by rememberSaveable { mutableStateOf(PullBoxType.ANGLE) }
     var largestA by rememberSaveable { mutableStateOf(TradeSize.S_3) }
@@ -173,10 +177,17 @@ private fun PullBoxCalc(settings: AppSettings) {
     }
     val rowA = listOf(largestA) + List(count(othersA).coerceAtMost(20)) { otherSizeA }
     val rowB = listOf(largestB) + List(count(othersB).coerceAtMost(20)) { otherSizeB }
-    val result = when (type) {
-        PullBoxType.STRAIGHT -> PullBoxSizing.straightPull(listOf(largestA))
-        PullBoxType.ANGLE -> PullBoxSizing.anglePull(rowA, rowB)
-        PullBoxType.U_PULL -> PullBoxSizing.uPull(rowA)
+    val result = remember(type, largestA, rowA, rowB, codeProfile) {
+        withOptionalCodeProfile(codeProfile) {
+            when (type) {
+                PullBoxType.STRAIGHT -> PullBoxSizing.straightPull(listOf(largestA))
+                PullBoxType.ANGLE -> PullBoxSizing.anglePull(rowA, rowB)
+                PullBoxType.U_PULL -> PullBoxSizing.uPull(rowA)
+            }
+        }
+    }
+    val pullBoxCites = remember(codeProfile) {
+        withOptionalCodeProfile(codeProfile) { "${CodeRule.PULL_BOX_STRAIGHT.cite}, ${CodeRule.PULL_BOX_ANGLE.cite}" }
     }
     fun len(inches: Double) = settings.show(Measure.SMALL_LENGTH, inches, if (settings.isMetric) 0 else 2)
     val results = result?.let { r ->
@@ -191,14 +202,14 @@ private fun PullBoxCalc(settings: AppSettings) {
     ResultCard(
         results,
         notices = buildList {
-            add(Notice("For conductors 4 AWG and larger (${CodeRule.PULL_BOX_STRAIGHT.cite}, ${CodeRule.PULL_BOX_ANGLE.cite})."))
+            add(Notice("For conductors 4 AWG and larger ($pullBoxCites)."))
             if (othersLargerA || othersLargerB) add(Notice("An \"other\" raceway is larger than the one marked largest; the larger one governs.", NoticeLevel.WARNING))
         },
     )
 }
 
 @Composable
-private fun GecCalc(settings: AppSettings) {
+private fun GecCalc(settings: AppSettings, codeProfile: CodeProfile?) {
     val sizes = ConductorSize.entries.filter { it >= ConductorSize.AWG_8 }
     var size by rememberSaveable { mutableStateOf(ConductorSize.KCMIL_350) }
     var sets by rememberSaveable { mutableStateOf("1") }
@@ -215,8 +226,15 @@ private fun GecCalc(settings: AppSettings) {
     SegmentedChoice(materials, gecMaterial, { gecMaterial = it }, label = "Grounding conductor", optionLabel = { it.label })
     ChoiceField("Electrode", GroundingElectrodeType.entries, electrode, { electrode = it }, optionLabel = { it.label })
     val parallel = count(sets).coerceAtLeast(1)
-    val r = remember(size, parallel, serviceMaterial, gecMaterial, electrode) {
-        GecBonding.size(size, serviceMaterial, gecMaterial, parallel, electrode)
+    val r = remember(size, parallel, serviceMaterial, gecMaterial, electrode, codeProfile) {
+        withOptionalCodeProfile(codeProfile) {
+            GecBonding.size(size, serviceMaterial, gecMaterial, parallel, electrode)
+        }
+    }
+    val (rodCites, bondingCite) = remember(codeProfile) {
+        withOptionalCodeProfile(codeProfile) {
+            "${CodeRule.GEC_GROUND_ROD_MAX.cite}, ${CodeRule.GEC_CONCRETE_ENCASED_MAX.cite}" to CodeRule.SUPPLY_SIDE_BONDING.cite
+        }
     }
     ResultCard(
         listOfNotNull(
@@ -225,9 +243,9 @@ private fun GecCalc(settings: AppSettings) {
             ResultValue.text("service_area", "Service conductor area", "${Decimals.trim(r.totalServiceCmil / 1000.0, 1)} kcmil"),
         ),
         notices = buildList {
-            if (r.gecCapped) add(Notice("Limited by the electrode: the table alone would ask for more (${CodeRule.GEC_GROUND_ROD_MAX.cite}, ${CodeRule.GEC_CONCRETE_ENCASED_MAX.cite})."))
+            if (r.gecCapped) add(Notice("Limited by the electrode: the table alone would ask for more ($rodCites)."))
             if (r.bondingJumperCmilRequired != null) {
-                add(Notice("Bonding jumper: ${Decimals.trim(r.bondingJumperCmilRequired!! / 1000.0, 1)} kcmil needed, ${CodeRule.SUPPLY_SIDE_BONDING.cite}. With different materials, adjust for the equivalent area."))
+                add(Notice("Bonding jumper: ${Decimals.trim(r.bondingJumperCmilRequired!! / 1000.0, 1)} kcmil needed, $bondingCite. With different materials, adjust for the equivalent area."))
             }
             if (gecMaterial == ConductorMaterial.ALUMINUM) add(Notice("Aluminum grounding conductors have installation limits near earth and masonry; check the code.", NoticeLevel.WARNING))
         },
@@ -235,12 +253,12 @@ private fun GecCalc(settings: AppSettings) {
 }
 
 @Composable
-private fun MotorCalc(settings: AppSettings) {
+private fun MotorCalc(settings: AppSettings, codeProfile: CodeProfile?) {
     var phases by rememberSaveable { mutableStateOf(AcPhases.THREE) }
-    val voltages = MotorFullLoadCurrent.voltages(phases)
+    val voltages = remember(phases, codeProfile) { withOptionalCodeProfile(codeProfile) { MotorFullLoadCurrent.voltages(phases) } }
     var voltsPick by rememberSaveable { mutableStateOf(460) }
     val volts = voltsPick.takeIf { it in voltages } ?: voltages.last()
-    val hps = MotorFullLoadCurrent.horsepowers(phases, volts)
+    val hps = remember(phases, volts, codeProfile) { withOptionalCodeProfile(codeProfile) { MotorFullLoadCurrent.horsepowers(phases, volts) } }
     var hpPick by rememberSaveable { mutableStateOf(10.0) }
     val hp = hps.firstOrNull { kotlin.math.abs(it - hpPick) < 1e-6 } ?: hps.minByOrNull { kotlin.math.abs(it - hpPick) } ?: hps.first()
     val types = if (phases == AcPhases.SINGLE) listOf(MotorType.SINGLE_PHASE) else MotorType.entries.filter { it != MotorType.SINGLE_PHASE }
@@ -268,7 +286,7 @@ private fun MotorCalc(settings: AppSettings) {
         serviceFactor = if (highSf) 1.15 else 1.0,
         tempRiseC = if (highSf) 40.0 else 90.0,
     )
-    val r = remember(request) { MotorCircuit.size(request) }
+    val r = remember(request, codeProfile) { withOptionalCodeProfile(codeProfile) { MotorCircuit.size(request) } }
     fun a(x: Double) = "${Decimals.trim(x, 1)} A"
     val results = r?.let {
         listOfNotNull(
@@ -292,8 +310,10 @@ private fun MotorCalc(settings: AppSettings) {
 }
 
 @Composable
-private fun SupportCalc(settings: AppSettings) {
-    val types = ConduitType.entries.filter { RacewayInstall.supportRule(it) != null }
+private fun SupportCalc(settings: AppSettings, codeProfile: CodeProfile?) {
+    val types = remember(codeProfile) {
+        withOptionalCodeProfile(codeProfile) { ConduitType.entries.filter { RacewayInstall.supportRule(it) != null } }
+    }
     var type by rememberSaveable { mutableStateOf(ConduitType.EMT) }
     var size by rememberSaveable { mutableStateOf(TradeSize.S_3_4) }
     var threaded by rememberSaveable { mutableStateOf(false) }
@@ -302,8 +322,11 @@ private fun SupportCalc(settings: AppSettings) {
     ChoiceField("Trade size", TradeSize.entries.filter { it >= TradeSize.S_1_2 }, size, { size = it }, optionLabel = { settings.tradeSizeLabel(it) })
     val metal = chosen == ConduitType.RMC || chosen == ConduitType.IMC
     if (metal) ToggleRow("Straight run with threaded couplings", threaded, { threaded = it })
-    val rule = RacewayInstall.supportRule(chosen)
-    val spacing = RacewayInstall.maxSupportSpacingFt(chosen, size, threaded && metal)
+    val (rule, spacing) = remember(chosen, size, threaded, metal, codeProfile) {
+        withOptionalCodeProfile(codeProfile) {
+            RacewayInstall.supportRule(chosen) to RacewayInstall.maxSupportSpacingFt(chosen, size, threaded && metal)
+        }
+    }
     ResultCard(
         listOfNotNull(
             rule?.let { ResultValue.text("support_box", "Secure within", settings.show(Measure.RUN_LENGTH, it.withinBoxFt)) },
@@ -314,7 +337,7 @@ private fun SupportCalc(settings: AppSettings) {
 }
 
 @Composable
-private fun PvcCalc(settings: AppSettings) {
+private fun PvcCalc(settings: AppSettings, codeProfile: CodeProfile?) {
     var length by rememberSaveable { mutableStateOf("100") }
     var low by rememberSaveable { mutableStateOf("-18") }
     var high by rememberSaveable { mutableStateOf("49") }
@@ -326,7 +349,14 @@ private fun PvcCalc(settings: AppSettings) {
     val ft = Decimals.parse(length)
     val lo = Decimals.parse(low)
     val hi = Decimals.parse(high)
-    val r = if (ft != null && lo != null && hi != null) RacewayInstall.pvcExpansionCelsius(ft, kotlin.math.abs(hi - lo)) else null
+    val r = remember(ft, lo, hi, codeProfile) {
+        if (ft != null && lo != null && hi != null) {
+            withOptionalCodeProfile(codeProfile) { RacewayInstall.pvcExpansionCelsius(ft, kotlin.math.abs(hi - lo)) }
+        } else {
+            null
+        }
+    }
+    val pvcCite = remember(codeProfile) { withOptionalCodeProfile(codeProfile) { CodeRule.PVC_EXPANSION.cite } }
     ResultCard(
         r?.let {
             listOf(
@@ -334,7 +364,7 @@ private fun PvcCalc(settings: AppSettings) {
                 ResultValue.text("pvc_fitting", "Expansion fitting", if (it.expansionFittingRequired) "Needed" else "Not needed"),
             )
         }.orEmpty(),
-        notices = listOf(Notice("Use the full range the conduit will see, including sun on exposed runs (${CodeRule.PVC_EXPANSION.cite}).")),
+        notices = listOf(Notice("Use the full range the conduit will see, including sun on exposed runs ($pvcCite).")),
         emptyText = "Enter the run length and the temperature range.",
     )
 }

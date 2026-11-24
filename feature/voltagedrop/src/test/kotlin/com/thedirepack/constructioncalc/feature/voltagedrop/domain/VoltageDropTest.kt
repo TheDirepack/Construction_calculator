@@ -152,4 +152,21 @@ class VoltageDropTest {
         assertEquals(ConductorSize.AWG_14, VoltageDrop.supportedSizes(ConductorMaterial.COPPER, Method.AC_TABLE_9).first())
         assertEquals(ConductorSize.KCMIL_1000, VoltageDrop.supportedSizes(ConductorMaterial.ALUMINUM, Method.AC_TABLE_9).last())
     }
+
+    @Test fun nec310_10_gParallelEligibilityAndEnforcement() {
+        assertFalse(VoltageDrop.allowsParallel(ConductorSize.AWG_1))
+        assertTrue(VoltageDrop.allowsParallel(ConductorSize.AWG_1_0))
+        assertTrue(VoltageDrop.allowsParallel(ConductorSize.KCMIL_500))
+
+        assertFalse(VoltageDrop.violatesParallelMinimum(ConductorSize.AWG_4, 1))
+        assertTrue(VoltageDrop.violatesParallelMinimum(ConductorSize.AWG_4, 2))
+        assertFalse(VoltageDrop.violatesParallelMinimum(ConductorSize.AWG_1_0, 2))
+
+        // With 2 parallel sets, NEC 310.10(G) enforces at least 1/0 AWG unless explicitly disabled.
+        assertEquals(ConductorSize.AWG_1_0, VoltageDrop.smallestSize(dc12.copy(parallelSets = 2)))
+        assertEquals(
+            ConductorSize.AWG_12,
+            VoltageDrop.smallestSize(dc12.copy(parallelSets = 2), enforceParallelMinimum = false),
+        )
+    }
 }

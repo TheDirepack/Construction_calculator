@@ -22,8 +22,23 @@ class SettingsBackupTest {
     }
 
     @Test fun currentSettingsAndUnknownAppKeysPassValidation() {
-        val settings = Json.parseToJsonElement("""{"theme":"DARK","animations":false,"future":{}}""").jsonObject
+        val settings = Json.parseToJsonElement(
+            """{"theme":"DARK","animations":false,"fraction_rounding":"UP","code_edition":"NEC_2023","code_region":"us-ca","future":{}}""",
+        ).jsonObject
         val tool = Json.parseToJsonElement("""{"hint":{"type":"string","value":"example"}}""").jsonObject
         SettingsRepository.validateBackup(settings, mapOf("foot-inch" to tool))
+    }
+
+    @Test fun malformedWave1BSettingsKeysAreRejected() {
+        listOf(
+            """{"fraction_rounding":{}}""",
+            """{"code_edition":[]}""",
+            """{"code_region":{}}""",
+        ).forEach { raw ->
+            val settings = Json.parseToJsonElement(raw).jsonObject
+            assertThrows(ProjectFormatException::class.java) {
+                SettingsRepository.validateBackup(settings, emptyMap())
+            }
+        }
     }
 }

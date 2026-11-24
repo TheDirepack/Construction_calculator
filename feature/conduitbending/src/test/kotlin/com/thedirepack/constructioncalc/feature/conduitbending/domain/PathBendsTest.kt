@@ -40,4 +40,42 @@ class PathBendsTest {
         val request = inputs.toRequest(BenderTable.DEFAULT)
         assertEquals(BendPlanner.plan(request).totalDegrees!!, PathBends.of(request, BendPlanner.plan(request), "x").sumOf(PathSegment.Bend::angleDegrees), 1e-9)
     }
+
+    @Test fun multiBendStickExportsAllBendsToProjectRuns() {
+        val inputs = ConduitBendingInputs().withBends(
+            listOf(
+                StickBendItem(
+                    id = "s1",
+                    type = BendType.STUB_UP,
+                    stubHeight = Quantity.inches(Rational.of(12)).stored(),
+                ),
+                StickBendItem(
+                    id = "o2",
+                    type = BendType.OFFSET,
+                    angle = "30",
+                    offsetDepth = Quantity.inches(Rational.of(4)).stored(),
+                    distance = Quantity.inches(Rational.of(20)).stored(),
+                    distanceAnchor = DistanceAnchor.FROM_PREVIOUS,
+                    axialRotationDeg = 90.0,
+                ),
+                StickBendItem(
+                    id = "k3",
+                    type = BendType.KICK,
+                    angle = "22.5",
+                    kickHeight = Quantity.inches(Rational.of(3)).stored(),
+                    distance = Quantity.inches(Rational.of(24)).stored(),
+                    distanceAnchor = DistanceAnchor.FROM_PREVIOUS,
+                ),
+            ),
+        )
+        val item = ProjectItem(toolId = ConduitBendingTool.ID, title = "Stick", createdAt = 0, inputs = ToolInputs.encode(inputs))
+        val exported = ConduitBendingTool.pathBends(item)
+        assertEquals(listOf(90.0, 30.0, 30.0, 22.5), exported.map { it.angleDegrees })
+        assertTrue(exported.all { it.radius == null })
+
+        val stickPlan = StickPlanner.plan(inputs.toStick(BenderTable.DEFAULT))
+        val tagged = PathBends.of(stickPlan, "stick-item-1")
+        assertEquals(stickPlan.totalDegrees, tagged.sumOf { it.angleDegrees }, 1e-9)
+        assertTrue(tagged.all { it.sourceItemId == "stick-item-1" })
+    }
 }

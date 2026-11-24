@@ -32,6 +32,8 @@ data class Project(
     val groups: List<CircuitGroup> = emptyList(),
     val design: DesignDefaults = DesignDefaults(),
     val drawings: List<PlanDrawing> = emptyList(),
+    val codeEdition: String? = null,
+    val codeRegion: String? = null,
 ) {
     init {
         require(isValidId(id)) { "Invalid project id." }
@@ -147,7 +149,25 @@ data class Project(
         // Run, panel and circuit ids are kept: they're only referenced inside this project.
     )
 
+    /**
+     * A non-destructive new revision copy with fresh IDs and an incremented `(Rev N)` name suffix
+     * that does not collide with [existingNames].
+     */
+    fun asNewRevision(existingNames: Set<String>, now: Long): Project {
+        val match = REV_SUFFIX.find(name.trim())
+        val base = match?.groupValues?.get(1)?.trimEnd()?.ifBlank { null } ?: name.trim().ifEmpty { "Project" }
+        var rev = (match?.groupValues?.get(2)?.toIntOrNull()?.coerceAtLeast(1) ?: 1) + 1
+        var candidate = "$base (Rev $rev)"
+        while (existingNames.any { it.equals(candidate, ignoreCase = true) }) {
+            rev++
+            candidate = "$base (Rev $rev)"
+        }
+        return duplicated(name = candidate, now = now)
+    }
+
     companion object {
+        private val REV_SUFFIX = Regex("""^(.*?)\s*\(Rev\s+(\d+)\)$""", RegexOption.IGNORE_CASE)
+
         /** A new project with one empty run, so there's always somewhere to save to. */
         fun create(name: String, now: Long, firstRunName: String = "General") =
             Project(name = name, createdAt = now, runs = listOf(Run(name = firstRunName)))

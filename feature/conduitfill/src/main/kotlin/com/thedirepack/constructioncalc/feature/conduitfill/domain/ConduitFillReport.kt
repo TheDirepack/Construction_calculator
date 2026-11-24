@@ -172,7 +172,7 @@ data class ConduitFillReport(
                 )
                 add(
                     ReportNotice(
-                        "With an ambient temperature entered, derating covers the insulated building-wire groups: ambient correction and more than 3 current-carrying " +
+                        "With an ambient temperature entered, thermal correction covers the insulated building-wire groups: ambient correction (>30 °C derating and <30 °C rating increase) and more than 3 current-carrying " +
                             "conductors (${CodeRule.AMPACITY.cite}). Named cables aren't derated here. Pull length, bends and box fill are in their own tools.",
                     ),
                 )

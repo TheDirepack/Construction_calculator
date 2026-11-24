@@ -23,6 +23,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -308,6 +309,8 @@ internal fun CalibrationDialog(
     pageSize: PageSize?,
     pageZones: List<PlanZone>,
     editable: Boolean,
+    scaleLocked: Boolean = false,
+    onToggleScaleLock: () -> Unit = {},
     onCalibrationChange: (PlanCalibrationLayer) -> Unit,
     onZoneChange: (PlanZone) -> Unit,
     onZoneDelete: (String) -> Unit,
@@ -319,6 +322,7 @@ internal fun CalibrationDialog(
     val summary = remember(calibration, page) { CalibrationDiagnostics.evaluate(calibration, page) }
     val activePageMode = calibration.modeFor(page)
     val hasPageOverride = calibration.pageModes.containsKey(page)
+    val canEditScale = editable && !scaleLocked
     var renamingZone by remember { mutableStateOf<PlanZone?>(null) }
     var deletingZone by remember { mutableStateOf<PlanZone?>(null) }
     var editingDocIndex by remember { mutableStateOf<Int?>(null) }
@@ -344,6 +348,39 @@ internal fun CalibrationDialog(
                         color = statusColor(summary.status),
                     )
                 }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FilterChip(
+                        selected = scaleLocked,
+                        onClick = onToggleScaleLock,
+                        enabled = editable,
+                        leadingIcon = {
+                            Icon(
+                                painterResource(if (scaleLocked) R.drawable.ic_plan_lock else R.drawable.ic_plan_lock_open),
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
+                        label = { Text(if (scaleLocked) "Scale locked" else "Lock scale") },
+                    )
+                }
+                if (scaleLocked) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f),
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            EditorActions.SCALE_LOCKED_MESSAGE,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        )
+                    }
+                }
                 Text(
                     summary.message,
                     style = MaterialTheme.typography.bodySmall,
@@ -351,12 +388,12 @@ internal fun CalibrationDialog(
                 )
                 if (editable) {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FilledTonalButton(onClick = onCalibrateFromLine) {
+                        FilledTonalButton(onClick = onCalibrateFromLine, enabled = canEditScale) {
                             Icon(painterResource(R.drawable.ic_plan_tool_calibrate), contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Measure known dimensions")
                         }
-                        OutlinedButton(onClick = onDrawScaleZone) {
+                        OutlinedButton(onClick = onDrawScaleZone, enabled = canEditScale) {
                             Icon(painterResource(R.drawable.ic_plan_tool_zone), contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Add scale zone")
@@ -371,7 +408,7 @@ internal fun CalibrationDialog(
                 Text("Document preset", style = MaterialTheme.typography.labelLarge)
                 PresetPicker(
                     selected = calibration.preset?.toQuantity()?.value,
-                    enabled = editable,
+                    enabled = canEditScale,
                     noneLabel = "None",
                     onSelect = { onCalibrationChange(calibration.copy(preset = it?.stored())) },
                 )
@@ -390,7 +427,7 @@ internal fun CalibrationDialog(
                         FilterChip(
                             selected = calibration.mode == mode,
                             onClick = { onCalibrationChange(calibration.copy(mode = mode)) },
-                            enabled = editable,
+                            enabled = canEditScale,
                             label = { Text(if (supported) label else "$label ·") },
                         )
                     }
@@ -403,14 +440,14 @@ internal fun CalibrationDialog(
                     FilterChip(
                         selected = !hasPageOverride,
                         onClick = { onCalibrationChange(calibration.copy(pageModes = calibration.pageModes - page)) },
-                        enabled = editable,
+                        enabled = canEditScale,
                         label = { Text("Follow document") },
                     )
                     for ((mode, label) in scaleModeLabels) {
                         FilterChip(
                             selected = hasPageOverride && activePageMode == mode,
                             onClick = { onCalibrationChange(calibration.copy(pageModes = calibration.pageModes + (page to mode))) },
-                            enabled = editable,
+                            enabled = canEditScale,
                             label = { Text(label) },
                         )
                     }
@@ -419,7 +456,7 @@ internal fun CalibrationDialog(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Document dimensions (${calibration.references.size})", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     if (editable) {
-                        TextButton(onClick = onCalibrateFromLine) { Text("+ Measure") }
+                        TextButton(onClick = onCalibrateFromLine, enabled = canEditScale) { Text("+ Measure") }
                     }
                 }
                 if (calibration.references.isEmpty()) {
@@ -437,9 +474,9 @@ internal fun CalibrationDialog(
                         title = "P${ref.page + 1} · ${if (ref.check) "Check" else "Fit"} · ${settings.format(ref.length.toQuantity())}",
                         detail = detail,
                         detailIsError = entry.exceedsTolerance,
-                        actionLabel = if (editable) "Edit" else null,
-                        onAction = if (editable) ({ editingDocIndex = entry.index }) else null,
-                        onDelete = if (editable) ({
+                        actionLabel = if (canEditScale) "Edit" else null,
+                        onAction = if (canEditScale) ({ editingDocIndex = entry.index }) else null,
+                        onDelete = if (canEditScale) ({
                             onCalibrationChange(calibration.copy(references = calibration.references.filterIndexed { i, _ -> i != entry.index }))
                         }) else null,
                     )
@@ -461,7 +498,7 @@ internal fun CalibrationDialog(
                                     color = statusColor(zoneSummary.status),
                                 )
                             }
-                            if (editable) {
+                            if (canEditScale) {
                                 TextButton(onClick = { renamingZone = zone }) { Text("Rename") }
                                 TextButton(onClick = { deletingZone = zone }) { Text("Delete") }
                             }
@@ -475,7 +512,7 @@ internal fun CalibrationDialog(
                                 FilterChip(
                                     selected = zone.mode == mode,
                                     onClick = { onZoneChange(zone.copy(mode = mode)) },
-                                    enabled = editable,
+                                    enabled = canEditScale,
                                     label = { Text(if (supported) label else "$label ·") },
                                 )
                             }
@@ -491,9 +528,9 @@ internal fun CalibrationDialog(
                                 title = "${if (ref.check) "Check" else "Fit"} · ${settings.format(ref.length.toQuantity())}",
                                 detail = detail,
                                 detailIsError = entry.exceedsTolerance,
-                                actionLabel = if (editable) "Edit" else null,
-                                onAction = if (editable) ({ editingZoneRef = zone to entry.index }) else null,
-                                onDelete = if (editable) ({
+                                actionLabel = if (canEditScale) "Edit" else null,
+                                onAction = if (canEditScale) ({ editingZoneRef = zone to entry.index }) else null,
+                                onDelete = if (canEditScale) ({
                                     onZoneChange(zone.copy(references = zone.references.filterIndexed { i, _ -> i != entry.index }))
                                 }) else null,
                             )
@@ -724,6 +761,7 @@ internal fun PageItemsDialog(
     paths: List<CanvasPath> = emptyList(),
     marks: List<PlanMark>,
     editable: Boolean,
+    scaleLocked: Boolean = false,
     publish: (PlanMeasurement, Quantity) -> Unit,
     onZoneChange: (PlanZone) -> Unit,
     onZoneDelete: (String) -> Unit,
@@ -735,6 +773,7 @@ internal fun PageItemsDialog(
     onDismiss: () -> Unit,
 ) {
     val settings = rememberAppSettings()
+    val canEditScale = editable && !scaleLocked
     var renamingZone by remember { mutableStateOf<PlanZone?>(null) }
     var deletingZone by remember { mutableStateOf<PlanZone?>(null) }
 
@@ -745,6 +784,14 @@ internal fun PageItemsDialog(
             Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                 if (zone != null) {
                     val zoneSummary = remember(zone) { CalibrationDiagnostics.evaluateZone(zone) }
+                    if (scaleLocked) {
+                        Text(
+                            EditorActions.SCALE_LOCKED_MESSAGE,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        )
+                    }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(zone.name, style = MaterialTheme.typography.titleMedium)
@@ -754,7 +801,7 @@ internal fun PageItemsDialog(
                                 color = statusColor(zoneSummary.status),
                             )
                         }
-                        if (editable) {
+                        if (canEditScale) {
                             TextButton(onClick = { renamingZone = zone }) { Text("Rename") }
                             TextButton(onClick = { deletingZone = zone }) { Text("Delete") }
                         }
@@ -768,7 +815,7 @@ internal fun PageItemsDialog(
                             FilterChip(
                                 selected = zone.mode == mode,
                                 onClick = { onZoneChange(zone.copy(mode = mode)) },
-                                enabled = editable,
+                                enabled = canEditScale,
                                 label = { Text(if (supported) label else "$label ·") },
                             )
                         }
@@ -784,7 +831,7 @@ internal fun PageItemsDialog(
                             title = "${if (ref.check) "Check" else "Fit"} · ${settings.format(ref.length.toQuantity())}",
                             detail = detail,
                             detailIsError = entry.exceedsTolerance,
-                            onDelete = if (editable) ({
+                            onDelete = if (canEditScale) ({
                                 onZoneChange(zone.copy(references = zone.references.filterIndexed { i, _ -> i != entry.index }))
                             }) else null,
                         )

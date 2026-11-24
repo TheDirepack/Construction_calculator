@@ -16,6 +16,16 @@ enum class FeetInchStyle(val label: String) {
 
     /** `10'-4 3/16"`, as on drawings. */
     HYPHEN("10'-4 3/16\""),
+
+    /** `10-04-03`, architectural feet-inches-sixteenths notation. */
+    ARCHITECTURAL("10-04-03"),
+}
+
+/** How fractional inches are rounded to a [Precision] step. */
+enum class FractionRounding {
+    NEAREST,
+    UP,
+    DOWN,
 }
 
 /** A metric length unit, in whole millimeters. */
@@ -55,6 +65,7 @@ data class LengthFormat(
     val metricDisplay: MetricDisplay = MetricDisplay.AUTO,
     val metricResolution: MetricResolution = MetricResolution.MILLIMETER,
     val feetInchStyle: FeetInchStyle = FeetInchStyle.SPACE,
+    val rounding: FractionRounding = FractionRounding.NEAREST,
 ) {
     val isMetric: Boolean get() = system == UnitSystem.METRIC
 

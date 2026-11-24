@@ -21,10 +21,15 @@ internal object FootInchFormat {
 
     /** -1/0/1 for a rounded fraction; metric lengths are shown at the chosen resolution, so no hint. */
     fun roundingDirection(q: Quantity, settings: AppSettings): Int =
-        if (settings.isMetric) 0 else MeasureFormat.roundingDirection(q, settings.precision)
+        if (settings.isMetric) 0 else MeasureFormat.roundingDirection(q, settings.lengthFormat())
 
-    fun hint(settings: AppSettings, showFractionKeys: Boolean): String = when {
+    fun hint(
+        settings: AppSettings,
+        showFractionKeys: Boolean,
+        keypadLayout: KeypadLayout = KeypadLayout.CLASSIC,
+    ): String = when {
         settings.isMetric -> "Try  1 m 20 cm  for  1.2 m"
+        keypadLayout == KeypadLayout.DUAL_SPLIT -> "Tap Feet, Inches, and Fractions to enter a length"
         showFractionKeys -> "Try  5  '  3  1/2  for  5' 3 1/2\""
         else -> "Try  5 ' 3 \" 1 / 2  for  5' 3 1/2\""
     }

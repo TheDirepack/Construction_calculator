@@ -119,20 +119,24 @@ private fun DrawingsScreen(host: ToolHost) {
     var importing by remember { mutableStateOf(false) }
     var pendingJsonImport by remember { mutableStateOf<PlanDrawing?>(null) }
 
-    fun attachImportedDrawing(source: PlanDrawing, projectId: String, chosenName: String? = null) {
-        val resolvedName = (chosenName ?: source.name).trim().ifBlank { "Drawing" }.take(240)
-        var savedId = source.id
+    fun attachImportedDrawing(source: PlanDrawing, projectId: String, chosenName: String? = null, asJson: Boolean = false) {
+        var attached: PlanDrawing? = null
         val result = services.projects.edit(projectId) { current, now ->
-            val needsNewId = current.drawings.any { it.id == source.id }
-            val attached = source.copy(
-                id = if (needsNewId) newId() else source.id,
-                name = resolvedName,
+            val resolved = resolveImportedDrawing(
+                source = source,
+                existing = current.drawings,
+                asJson = asJson,
+                chosenName = chosenName,
             )
-            savedId = attached.id
-            current.copy(drawings = current.drawings + attached, updatedAt = now)
+            attached = resolved
+            current.copy(drawings = current.drawings + resolved, updatedAt = now)
         }
-        if (result != null && !result.archived && result.drawings.any { it.id == savedId }) {
-            activeDrawingId = savedId
+        val saved = attached
+        if (saved != null && result != null && !result.archived && result.drawings.any { it.id == saved.id }) {
+            activeDrawingId = saved.id
+            if (asJson && chosenName == null && saved.name != source.name) {
+                host.showMessage("Imported as “${saved.name}”.")
+            }
         } else {
             host.showMessage("The project is unavailable for editing.")
         }
@@ -157,7 +161,7 @@ private fun DrawingsScreen(host: ToolHost) {
                         pendingJsonImport = source
                         return@launch
                     }
-                    attachImportedDrawing(source, projectId)
+                    attachImportedDrawing(source, projectId, asJson = asJson)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
@@ -345,16 +349,18 @@ private fun DrawingsScreen(host: ToolHost) {
                 onDismiss = { pendingJsonImport = null },
                 onConfirm = { chosenName ->
                     pendingJsonImport = null
-                    attachImportedDrawing(source, project.id, chosenName)
+                    attachImportedDrawing(source, project.id, chosenName, asJson = true)
                 },
             )
         }
     }
 }
 
+private const val MAX_DRAWING_NAME_LENGTH = 240
+
 internal fun uniqueImportedDrawingName(requested: String, existingNames: Collection<String>): String {
     val normalizedExisting = existingNames.mapTo(HashSet()) { it.trim().lowercase(Locale.ROOT) }
-    val base = requested.trim().ifBlank { "Drawing" }.take(240)
+    val base = requested.trim().ifBlank { "Drawing" }.take(MAX_DRAWING_NAME_LENGTH)
     if (base.lowercase(Locale.ROOT) !in normalizedExisting) return base
     val hasPdfExt = base.endsWith(".pdf", ignoreCase = true) && base.length > 4
     val ext = if (hasPdfExt) base.takeLast(4) else ""
@@ -362,10 +368,34 @@ internal fun uniqueImportedDrawingName(requested: String, existingNames: Collect
     var copyIndex = 1
     while (true) {
         val suffix = if (copyIndex == 1) " (copy)" else " (copy $copyIndex)"
-        val maxStem = (240 - suffix.length - ext.length).coerceAtLeast(1)
+        val maxStem = (MAX_DRAWING_NAME_LENGTH - suffix.length - ext.length).coerceAtLeast(1)
         val candidate = "${stem.take(maxStem)}$suffix$ext"
         if (candidate.lowercase(Locale.ROOT) !in normalizedExisting) return candidate
         copyIndex++
+    }
+}
+
+internal fun disambiguateDrawingName(name: String, existingNames: Collection<String>): String =
+    uniqueImportedDrawingName(name, existingNames)
+
+internal fun resolveImportedDrawing(
+    source: PlanDrawing,
+    existing: List<PlanDrawing>,
+    asJson: Boolean,
+    idGenerator: () -> String = ::newId,
+    chosenName: String? = null,
+): PlanDrawing {
+    val resolvedId = if (existing.any { it.id == source.id }) idGenerator() else source.id
+    val cleanChosen = chosenName?.trim()?.ifBlank { "Drawing" }?.take(MAX_DRAWING_NAME_LENGTH)
+    val resolvedName = when {
+        cleanChosen != null -> cleanChosen
+        asJson -> uniqueImportedDrawingName(source.name, existing.map { it.name })
+        else -> source.name.trim().ifBlank { "Drawing" }.take(MAX_DRAWING_NAME_LENGTH)
+    }
+    return if (resolvedId == source.id && resolvedName == source.name) {
+        source
+    } else {
+        source.copy(id = resolvedId, name = resolvedName)
     }
 }
 

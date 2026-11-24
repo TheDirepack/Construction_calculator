@@ -19,13 +19,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,6 +40,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,14 +54,17 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.thedirepack.constructioncalc.core.data.PlanExportCrop
 import com.thedirepack.constructioncalc.core.data.PlanFiles
 import com.thedirepack.constructioncalc.core.model.IssuedSheet
+import com.thedirepack.constructioncalc.core.model.PlanSheetSource
 import com.thedirepack.constructioncalc.core.model.SheetRevision
 import com.thedirepack.constructioncalc.core.model.SheetRevisionStatus
 import java.io.File
@@ -305,6 +313,84 @@ internal fun RevisionOverlayDialog(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+internal fun SheetExportDialog(
+    source: PlanSheetSource,
+    crop: PlanExportCrop?,
+    onExport: (region: PlanExportCrop?, vector: Boolean, share: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var vector by rememberSaveable { mutableStateOf(true) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(source.label) },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("PDF format", style = MaterialTheme.typography.labelLarge)
+                Column(Modifier.selectableGroup()) {
+                    ExportFormatRow(
+                        title = "Vector PDF (preserves text & crisp lines)",
+                        subtitle = "Default — keeps native CAD vectors and searchable text.",
+                        selected = vector,
+                        onSelect = { vector = true },
+                    )
+                    ExportFormatRow(
+                        title = "Flattened raster snapshot (PDF)",
+                        subtitle = "Renders the sheet and markups into a flattened image.",
+                        selected = !vector,
+                        onSelect = { vector = false },
+                    )
+                }
+                HorizontalDivider()
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    TextButton(onClick = { onExport(null, vector, false) }) {
+                        Text("Save annotated sheet")
+                    }
+                    TextButton(onClick = { onExport(null, vector, true) }) {
+                        Text("Share annotated sheet")
+                    }
+                    if (crop != null) {
+                        TextButton(onClick = { onExport(crop, vector, false) }) {
+                            Text("Save current crop")
+                        }
+                        TextButton(onClick = { onExport(crop, vector, true) }) {
+                            Text("Share current crop")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+@Composable
+private fun ExportFormatRow(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

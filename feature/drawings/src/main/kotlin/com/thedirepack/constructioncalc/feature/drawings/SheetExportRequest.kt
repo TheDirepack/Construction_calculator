@@ -10,6 +10,19 @@ internal data class SheetExportRequest(
     val crop: PlanExportCrop?,
     val mode: PlanSheetExportMode = PlanSheetExportMode.VECTOR,
 ) {
+    constructor(
+        source: PlanSheetSource,
+        crop: PlanExportCrop?,
+        vector: Boolean,
+    ) : this(
+        source = source,
+        crop = crop,
+        mode = if (vector) PlanSheetExportMode.VECTOR else PlanSheetExportMode.RASTER,
+    )
+
+    val vector: Boolean
+        get() = mode == PlanSheetExportMode.VECTOR
+
     val fileName: String
         get() {
             fun safe(text: String) = text.replace(Regex("""[\\/:*?"<>|\p{Cntrl}]"""), "_").trim()
@@ -34,7 +47,7 @@ internal val SheetExportSaver = listSaver<SheetExportRequest?, Any>(
         }
     },
     restore = { saved ->
-        if (saved.isEmpty()) return@listSaver null
+        if (saved.size < 5) return@listSaver null
         val source = PlanSheetSource(
             saved[0] as String,
             saved[1] as String,
@@ -42,13 +55,18 @@ internal val SheetExportSaver = listSaver<SheetExportRequest?, Any>(
             saved[3] as String,
             (saved[4] as String).ifEmpty { null },
         )
-        val hasMode = saved.getOrNull(5) is String
-        val mode = if (hasMode) {
-            PlanSheetExportMode.entries.firstOrNull { it.name == saved[5] } ?: PlanSheetExportMode.VECTOR
-        } else {
-            PlanSheetExportMode.VECTOR
+        val flagOrMode = saved.getOrNull(5)
+        val (mode, cropOffset) = when (flagOrMode) {
+            is String -> {
+                val parsed = PlanSheetExportMode.entries.firstOrNull { it.name == flagOrMode } ?: PlanSheetExportMode.VECTOR
+                parsed to 6
+            }
+            is Boolean -> {
+                val parsed = if (flagOrMode) PlanSheetExportMode.VECTOR else PlanSheetExportMode.RASTER
+                parsed to 6
+            }
+            else -> PlanSheetExportMode.VECTOR to 5
         }
-        val cropOffset = if (hasMode) 6 else 5
         val crop = if (saved.size >= cropOffset + 4) {
             PlanExportCrop(
                 saved[cropOffset] as Float,

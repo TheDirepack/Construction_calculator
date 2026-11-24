@@ -116,4 +116,32 @@ class UnitSystemTest {
         assertEquals("10' 4 3/16\"", MeasureFormat.primary(Quantity.inches(Rational.of(124) + Rational.of(3, 16)), LengthFormat()))
         assertEquals("1'-0\"", MeasureFormat.conversions(inches(12), drawing.copy(style = LengthStyle.INCHES)).first { it.label == "Feet-inches" }.value)
     }
+
+    @Test
+    fun architecturalAndRoundingLengthFormat() {
+        val arch = LengthFormat(
+            feetInchStyle = FeetInchStyle.ARCHITECTURAL,
+            rounding = FractionRounding.UP,
+        )
+        val valInches = Quantity.inches(Rational.of(63) + Rational.of(15, 32)) // 5' 3 15/32" -> rounds UP to 5' 3 1/2"
+        assertEquals("5-03-08", MeasureFormat.primary(valInches, arch))
+        assertEquals(1, MeasureFormat.roundingDirection(valInches, arch))
+        assertEquals(0, MeasureFormat.roundingDirection(valInches, metric))
+
+        // Positional 6-argument constructor remains backward-compatible
+        val legacySixArg = LengthFormat(
+            UnitSystem.IMPERIAL,
+            Precision.SIXTEENTH,
+            LengthStyle.FEET_INCHES,
+            MetricDisplay.AUTO,
+            MetricResolution.MILLIMETER,
+            FeetInchStyle.ARCHITECTURAL,
+        )
+        assertEquals(FractionRounding.NEAREST, legacySixArg.rounding)
+        assertEquals(
+            "1-00-00",
+            MeasureFormat.conversions(inches(12), legacySixArg.copy(style = LengthStyle.INCHES))
+                .first { it.label == "Feet-inches" }.value,
+        )
+    }
 }

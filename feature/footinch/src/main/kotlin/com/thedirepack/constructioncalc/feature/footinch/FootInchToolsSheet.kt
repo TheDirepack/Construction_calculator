@@ -34,11 +34,13 @@ import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.data.AppSettings
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Decimals
+import com.thedirepack.constructioncalc.core.measure.Dimension
 import com.thedirepack.constructioncalc.core.measure.Geometry
+import com.thedirepack.constructioncalc.core.measure.MeasureFormat
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.measure.Spacing
-import com.thedirepack.constructioncalc.core.measure.StairTopMount
-import com.thedirepack.constructioncalc.core.measure.Stairs
+import com.thedirepack.constructioncalc.core.measure.StairCalculator
+import com.thedirepack.constructioncalc.core.measure.Units
 import com.thedirepack.constructioncalc.core.ui.components.FormSection
 import com.thedirepack.constructioncalc.core.ui.components.MeasureField
 import com.thedirepack.constructioncalc.core.ui.components.NumberField
@@ -49,8 +51,8 @@ import com.thedirepack.constructioncalc.core.ui.isMetric
 
 private enum class HelperTab(val label: String) {
     TRIANGLE("Right Triangle"),
-    SPACING("Layout Marks"),
     STAIRS("Stairs"),
+    SPACING("Layout Marks"),
 }
 
 private enum class SpacingMode(val label: String) {
@@ -58,10 +60,71 @@ private enum class SpacingMode(val label: String) {
     EQUAL_SPACES("Equal spaces"),
 }
 
+internal data class StairHelperInput(
+    val totalRise: Quantity? = null,
+    val targetRiser: Quantity? = StairCalculator.DEFAULT_TARGET_RISER,
+    val treadRun: Quantity? = StairCalculator.DEFAULT_TREAD_RUN,
+    val riserCountOverrideText: String = "",
+)
+
+internal sealed interface StairHelperEval {
+    data object Empty : StairHelperEval
+    data class Invalid(val message: String) : StairHelperEval
+    data class Solved(val layout: StairCalculator.StairLayout) : StairHelperEval
+}
+
+internal object StairHelperState {
+    fun evaluate(input: StairHelperInput): StairHelperEval {
+        val rise = input.totalRise ?: return StairHelperEval.Empty
+        if (rise.dimension != Dimension.LENGTH || rise.value.signum <= 0) {
+            return StairHelperEval.Invalid("Total rise must be a positive length.")
+        }
+        val target = input.targetRiser ?: StairCalculator.DEFAULT_TARGET_RISER
+        if (target.dimension != Dimension.LENGTH || target.value.signum <= 0) {
+            return StairHelperEval.Invalid("Target riser height must be a positive length.")
+        }
+        val tread = input.treadRun ?: StairCalculator.DEFAULT_TREAD_RUN
+        if (tread.dimension != Dimension.LENGTH || tread.value.signum <= 0) {
+            return StairHelperEval.Invalid("Tread run must be a positive length.")
+        }
+        val overrideRaw = input.riserCountOverrideText.trim()
+        val overrideCount = if (overrideRaw.isEmpty()) {
+            null
+        } else {
+            val parsed = overrideRaw.toIntOrNull()
+                ?: return StairHelperEval.Invalid("Riser count override must be a whole number.")
+            if (parsed !in 1..StairCalculator.MAX_RISERS) {
+                return StairHelperEval.Invalid("Riser count override must be between 1 and ${StairCalculator.MAX_RISERS}.")
+            }
+            parsed
+        }
+        val layout = StairCalculator.calculate(
+            totalRise = rise,
+            targetRiserHeight = target,
+            treadRun = tread,
+            riserCountOverride = overrideCount,
+        ) ?: return StairHelperEval.Invalid("Could not calculate stair layout for these inputs.")
+        return StairHelperEval.Solved(layout)
+    }
+
+    fun formatSummary(layout: StairCalculator.StairLayout, settings: AppSettings): String = buildString {
+        appendLine("Stair Layout")
+        appendLine("Total rise: ${settings.format(layout.totalRise)}")
+        appendLine("Riser count: ${layout.riserCount}")
+        appendLine("Exact riser height: ${settings.format(layout.riserHeight)}")
+        appendLine("Treads: ${layout.treadCount} @ ${settings.format(layout.treadRun)}")
+        appendLine("Total run: ${settings.format(layout.totalRun)}")
+        appendLine("Stringer diagonal: ${settings.format(layout.stringerLength)}")
+        appendLine("Step diagonal: ${settings.format(layout.stepDiagonal)}")
+        appendLine("Angle: ${Decimals.trim(layout.angleDegrees, 2)}°")
+        layout.ircNotes.forEach { appendLine(it) }
+    }.trimEnd()
+}
+
 /**
- * Compact Helpers sheet for Foot-Inch: Right-Triangle solver, Repeating Spacing / Layout Marks,
- * and Stair Stringer layout. Lets the user drop any result straight into the calculator or copy
- * the full mark list.
+ * Compact Helpers sheet for Foot-Inch: Right-Triangle solver, Stair stringer layout, and
+ * Repeating Spacing / Layout Marks. Lets the user drop any result straight into the calculator
+ * or copy summaries and mark lists.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,12 +161,12 @@ internal fun FootInchToolsSheet(
                     onUseQuantity = onUseQuantity,
                     onCopy = onCopy,
                 )
-                HelperTab.SPACING -> SpacingHelper(
+                HelperTab.STAIRS -> StairsHelper(
                     settings = settings,
                     onUseQuantity = onUseQuantity,
                     onCopy = onCopy,
                 )
-                HelperTab.STAIRS -> StairsHelper(
+                HelperTab.SPACING -> SpacingHelper(
                     settings = settings,
                     onUseQuantity = onUseQuantity,
                     onCopy = onCopy,
@@ -191,6 +254,205 @@ private fun RightTriangleHelper(
 }
 
 @Composable
+private fun StairsHelper(
+    settings: AppSettings,
+    onUseQuantity: (Quantity) -> Unit,
+    onCopy: (String) -> Unit,
+) {
+    var input by remember { mutableStateOf(StairHelperInput()) }
+    val eval = remember(input) { StairHelperState.evaluate(input) }
+    val hasCustomValues = input != StairHelperInput()
+
+    val defaultRiserText = settings.format(StairCalculator.DEFAULT_TARGET_RISER)
+    val defaultTreadText = settings.format(StairCalculator.DEFAULT_TREAD_RUN)
+    val maxRiserNote = if (settings.isMetric) {
+        "Default $defaultRiserText (IRC max ${settings.format(StairCalculator.IRC_MAX_RISER)})"
+    } else {
+        "Default 7-1/2\" (IRC residential max 7-3/4\")"
+    }
+    val minTreadNote = if (settings.isMetric) {
+        "Default $defaultTreadText (IRC min ${settings.format(StairCalculator.IRC_MIN_TREAD)})"
+    } else {
+        "Default 10\" (IRC residential min 10\")"
+    }
+
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            fractionText("Enter total rise; defaults to $defaultRiserText riser and $defaultTreadText tread."),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        if (hasCustomValues) {
+            TextButton(onClick = { input = StairHelperInput() }) { Text("Reset") }
+        }
+    }
+
+    FormSection("Inputs") {
+        MeasureField(
+            label = "Total rise",
+            value = input.totalRise,
+            onValueChange = { input = input.copy(totalRise = it) },
+        )
+        MeasureField(
+            label = "Target riser height",
+            value = input.targetRiser,
+            onValueChange = { input = input.copy(targetRiser = it) },
+            supportingText = maxRiserNote,
+        )
+        MeasureField(
+            label = "Tread run",
+            value = input.treadRun,
+            onValueChange = { input = input.copy(treadRun = it) },
+            supportingText = minTreadNote,
+        )
+        NumberField(
+            label = "Riser count override (optional)",
+            value = input.riserCountOverrideText,
+            onValueChange = { text -> input = input.copy(riserCountOverrideText = text.filter(Char::isDigit)) },
+            unit = "risers",
+            supportingText = "Leave blank to solve automatically from target riser height",
+        )
+    }
+
+    when (eval) {
+        StairHelperEval.Empty -> Unit
+        is StairHelperEval.Invalid -> {
+            Text(eval.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+        }
+        is StairHelperEval.Solved -> {
+            val layout = eval.layout
+            val summaryText = remember(layout, settings) { StairHelperState.formatSummary(layout, settings) }
+            val risePerFoot = remember(layout) {
+                (layout.riserHeight.value / layout.treadRun.value).toDouble() * 12.0
+            }
+            val twoRPlusT = remember(layout) {
+                layout.riserHeight.value * Rational.of(2) + layout.treadRun.value
+            }
+            val twoRPlusTValue = remember(twoRPlusT, settings) {
+                if (settings.isMetric) {
+                    "${Decimals.trim((twoRPlusT * Units.MM_PER_INCH).toDouble(), 0)} mm (ideal 610–635 mm)"
+                } else {
+                    "${Decimals.trim(twoRPlusT.toDouble(), 2)}\" (ideal 24\"–25\")"
+                }
+            }
+            val displayMarkCount = minOf(layout.treadCount, Spacing.MAX_MARKS)
+            val stringerMarks = remember(layout, displayMarkCount) {
+                List(displayMarkCount) { idx ->
+                    Quantity.inches(layout.stepDiagonal.value * Rational.of((idx + 1).toLong()))
+                }
+            }
+            val formattedMarks = remember(stringerMarks, settings) {
+                stringerMarks.mapIndexed { idx, q -> idx + 1 to settings.format(q) }
+            }
+            val copyMarksText = remember(formattedMarks, layout, settings) {
+                buildString {
+                    appendLine("Stringer marks (${settings.format(layout.stepDiagonal)} step)")
+                    formattedMarks.forEach { (num, text) -> appendLine("$num. $text") }
+                }.trimEnd()
+            }
+
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (layout.riserCount > 1) {
+                    AssistChip(
+                        onClick = { input = input.copy(riserCountOverrideText = (layout.riserCount - 1).toString()) },
+                        label = { Text("${layout.riserCount - 1} risers (−1)") },
+                    )
+                }
+                if (layout.riserCount < StairCalculator.MAX_RISERS) {
+                    AssistChip(
+                        onClick = { input = input.copy(riserCountOverrideText = (layout.riserCount + 1).toString()) },
+                        label = { Text("${layout.riserCount + 1} risers (+1)") },
+                    )
+                }
+                if (input.riserCountOverrideText.isNotBlank()) {
+                    AssistChip(
+                        onClick = { input = input.copy(riserCountOverrideText = "") },
+                        label = { Text("Auto risers") },
+                    )
+                }
+            }
+
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Stair Layout",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { onCopy(summaryText) }) { Text("Copy all") }
+                    }
+                    PlainResultRow("Riser count", "${layout.riserCount}", onCopy)
+                    LengthResultRow("Exact riser height", layout.riserHeight, settings, onUseQuantity, onCopy)
+                    if (!settings.isMetric && MeasureFormat.isRounded(layout.riserHeight, settings.precision, settings.fractionRounding)) {
+                        Text(
+                            "Exact riser: ${MeasureFormat.decimal(layout.riserHeightInches, 4)}\" (${layout.riserHeightInches})",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    PlainResultRow("Treads", "${layout.treadCount}", onCopy)
+                    LengthResultRow("Total run", layout.totalRun, settings, onUseQuantity, onCopy)
+                    LengthResultRow("Stringer diagonal", layout.stringerLength, settings, onUseQuantity, onCopy)
+                    LengthResultRow("Step diagonal", layout.stepDiagonal, settings, onUseQuantity, onCopy)
+                    PlainResultRow("Angle", "${Decimals.trim(layout.angleDegrees, 2)}°", onCopy)
+                    PlainResultRow("Pitch", "${Decimals.trim(risePerFoot, 2)} : 12", onCopy)
+                    PlainResultRow("2R + T check", twoRPlusTValue, onCopy)
+                    HorizontalDivider()
+                    layout.ircNotes.forEach { note ->
+                        val color = if (layout.isIrcCompliant) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.tertiary
+                        }
+                        val prefix = if (layout.isIrcCompliant) "✓ " else "⚠ "
+                        Text(
+                            fractionText(prefix + note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = color,
+                        )
+                    }
+                    if (formattedMarks.isNotEmpty()) {
+                        HorizontalDivider()
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "Stringer layout marks (${formattedMarks.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { onCopy(copyMarksText) }) { Text("Copy marks") }
+                        }
+                        if (layout.treadCount > Spacing.MAX_MARKS) {
+                            Text(
+                                "Showing first ${Spacing.MAX_MARKS} marks.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                            )
+                        }
+                        formattedMarks.forEachIndexed { idx, (num, text) ->
+                            val markQty = stringerMarks[idx]
+                            LayoutMarkRow(num, text, onUse = { onUseQuantity(markQty) })
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun metricSpacing(mm: Long): Quantity =
+    Quantity.inches(Rational.of(mm) / Units.MM_PER_INCH)
+
+@Composable
 private fun SpacingHelper(
     settings: AppSettings,
     onUseQuantity: (Quantity) -> Unit,
@@ -198,7 +460,11 @@ private fun SpacingHelper(
 ) {
     var mode by remember { mutableStateOf(SpacingMode.ON_CENTER) }
     var totalSpan by remember { mutableStateOf<Quantity?>(null) }
-    var onCenter by remember { mutableStateOf<Quantity?>(Quantity.inches(Rational.of(16))) }
+    var onCenter by remember {
+        mutableStateOf<Quantity?>(
+            if (settings.isMetric) metricSpacing(400) else Quantity.inches(Rational.of(16)),
+        )
+    }
     var spacesText by remember { mutableStateOf("4") }
     var startOffset by remember { mutableStateOf<Quantity?>(null) }
     var endOffset by remember { mutableStateOf<Quantity?>(null) }
@@ -235,14 +501,25 @@ private fun SpacingHelper(
                     Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    val presets = listOf(
-                        "12\"" to Quantity.inches(Rational.of(12)),
-                        "16\"" to Quantity.inches(Rational.of(16)),
-                        "24\"" to Quantity.inches(Rational.of(24)),
-                        "4'" to Quantity.feet(Rational.of(4)),
-                        "8'" to Quantity.feet(Rational.of(8)),
-                        "10'" to Quantity.feet(Rational.of(10)),
-                    )
+                    val presets = if (settings.isMetric) {
+                        listOf(
+                            "300 mm" to metricSpacing(300),
+                            "400 mm" to metricSpacing(400),
+                            "600 mm" to metricSpacing(600),
+                            "1.2 m" to metricSpacing(1200),
+                            "2.4 m" to metricSpacing(2400),
+                            "3 m" to metricSpacing(3000),
+                        )
+                    } else {
+                        listOf(
+                            "12\"" to Quantity.inches(Rational.of(12)),
+                            "16\"" to Quantity.inches(Rational.of(16)),
+                            "24\"" to Quantity.inches(Rational.of(24)),
+                            "4'" to Quantity.feet(Rational.of(4)),
+                            "8'" to Quantity.feet(Rational.of(8)),
+                            "10'" to Quantity.feet(Rational.of(10)),
+                        )
+                    }
                     presets.forEach { (label, qty) ->
                         AssistChip(
                             onClick = { onCenter = qty },
@@ -303,170 +580,6 @@ private fun SpacingHelper(
                 formattedMarks.forEachIndexed { idx, (num, text) ->
                     val markQty = layout.marks[idx]
                     LayoutMarkRow(num, text, onUse = { onUseQuantity(markQty) })
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StairsHelper(
-    settings: AppSettings,
-    onUseQuantity: (Quantity) -> Unit,
-    onCopy: (String) -> Unit,
-) {
-    var totalRise by remember { mutableStateOf<Quantity?>(null) }
-    var targetRiser by remember { mutableStateOf<Quantity?>(Quantity.inches(Rational.of(15, 2))) }
-    var treadDepth by remember { mutableStateOf<Quantity?>(Quantity.inches(Rational.of(10))) }
-    var riserOverrideText by remember { mutableStateOf("") }
-    var mount by remember { mutableStateOf(StairTopMount.FLUSH) }
-
-    val overrideTrimmed = riserOverrideText.trim()
-    val parsedOverride = overrideTrimmed.toIntOrNull()
-    val overrideInvalid = overrideTrimmed.isNotEmpty() && (parsedOverride == null || parsedOverride !in 1..Stairs.MAX_RISERS)
-
-    val result = remember(totalRise, targetRiser, treadDepth, parsedOverride, overrideInvalid, mount) {
-        if (overrideInvalid) return@remember null
-        val rise = totalRise ?: return@remember null
-        val target = targetRiser ?: return@remember null
-        val tread = treadDepth ?: return@remember null
-        Stairs.calculate(
-            totalRise = rise,
-            targetRiser = target,
-            treadDepth = tread,
-            riserCountOverride = parsedOverride,
-            mount = mount,
-        )
-    }
-
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            "Enter total rise to lay out risers, treads, and stringer marks.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-        if (totalRise != null || riserOverrideText.isNotEmpty()) {
-            TextButton(onClick = {
-                totalRise = null
-                riserOverrideText = ""
-            }) { Text("Clear") }
-        }
-    }
-
-    FormSection("Stair inputs") {
-        MeasureField("Total rise", totalRise, { totalRise = it })
-        MeasureField("Target riser height", targetRiser, { targetRiser = it })
-        MeasureField("Tread depth", treadDepth, { treadDepth = it })
-        NumberField(
-            label = "Riser count override (optional)",
-            value = riserOverrideText,
-            onValueChange = { riserOverrideText = it },
-            isError = overrideInvalid,
-            supportingText = if (overrideInvalid) {
-                "Enter a whole number 1–${Stairs.MAX_RISERS}."
-            } else {
-                "Leave blank to compute from target riser."
-            },
-        )
-        SegmentedChoice(
-            options = StairTopMount.entries,
-            selected = mount,
-            onSelect = { mount = it },
-            label = "Top step mount",
-            optionLabel = { it.label },
-        )
-    }
-
-    if (result == null && totalRise != null && !overrideInvalid) {
-        Text(
-            "Total rise, target riser, and tread depth must be greater than zero (1–${Stairs.MAX_RISERS} risers).",
-            color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodyMedium,
-        )
-    }
-
-    if (result != null) {
-        val formattedMarks = remember(result, settings) {
-            result.layoutMarks.mapIndexed { idx, q -> idx + 1 to settings.format(q) }
-        }
-        val twoRPlusTValue = if (settings.isMetric) {
-            "${Decimals.trim(result.twoRPlusTInches * 25.4, 0)} mm (ideal 610–635 mm)"
-        } else {
-            "${Decimals.trim(result.twoRPlusTInches, 2)}\" (ideal 24\"–25\")"
-        }
-        val copyMarksText = remember(formattedMarks, result, settings) {
-            buildString {
-                appendLine("Stringer marks (${settings.format(result.stepHypotenuse)} step)")
-                formattedMarks.forEach { (num, text) -> appendLine("$num. $text") }
-            }.trimEnd()
-        }
-        val copyAllText = remember(result, formattedMarks, settings, twoRPlusTValue, mount) {
-            buildString {
-                appendLine("Stair Stringer (${mount.label})")
-                appendLine("Total rise: ${settings.format(result.totalRise)}")
-                appendLine("Risers: ${result.riserCount} @ ${settings.format(result.riserHeight)}")
-                appendLine("Treads: ${result.treadCount} @ ${settings.format(result.treadDepth)}")
-                appendLine("Total run: ${settings.format(result.totalRun)}")
-                appendLine("Stringer length: ${settings.format(result.stringerLength)}")
-                appendLine("Step hypotenuse: ${settings.format(result.stepHypotenuse)}")
-                appendLine("Angle: ${Decimals.trim(result.angleDegrees, 2)}° (${Decimals.trim(result.risePerFoot, 2)} : 12)")
-                appendLine("2R + T: $twoRPlusTValue")
-                if (formattedMarks.isNotEmpty()) {
-                    appendLine("Layout marks:")
-                    formattedMarks.forEach { (num, text) -> appendLine("$num. $text") }
-                }
-            }.trimEnd()
-        }
-
-        Card(
-            Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-        ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "${result.riserCount} risers · ${result.treadCount} treads",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(onClick = { onCopy(copyAllText) }) { Text("Copy all") }
-                }
-                LengthResultRow("Riser height", result.riserHeight, settings, onUseQuantity, onCopy)
-                LengthResultRow("Total run", result.totalRun, settings, onUseQuantity, onCopy)
-                LengthResultRow("Stringer length", result.stringerLength, settings, onUseQuantity, onCopy)
-                LengthResultRow("Step hypotenuse", result.stepHypotenuse, settings, onUseQuantity, onCopy)
-                HorizontalDivider()
-                PlainResultRow("Tread count", "${result.treadCount}", onCopy)
-                PlainResultRow("Angle", "${Decimals.trim(result.angleDegrees, 2)}°", onCopy)
-                PlainResultRow("Pitch", "${Decimals.trim(result.risePerFoot, 2)} : 12", onCopy)
-                PlainResultRow("2R + T check", twoRPlusTValue, onCopy)
-                if (result.notices.isNotEmpty()) {
-                    HorizontalDivider()
-                    result.notices.forEach { notice ->
-                        Text(
-                            fractionText("⚠ $notice"),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.tertiary,
-                        )
-                    }
-                }
-                if (formattedMarks.isNotEmpty()) {
-                    HorizontalDivider()
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "Stringer layout marks (${formattedMarks.size})",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = { onCopy(copyMarksText) }) { Text("Copy marks") }
-                    }
-                    formattedMarks.forEachIndexed { idx, (num, text) ->
-                        val markQty = result.layoutMarks[idx]
-                        LayoutMarkRow(num, text, onUse = { onUseQuantity(markQty) })
-                    }
                 }
             }
         }
