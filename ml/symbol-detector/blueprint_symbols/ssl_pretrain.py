@@ -53,11 +53,27 @@ def load_bgr_white_bg(path: str | Path) -> np.ndarray | None:
         bgr = raw[:, :, :3]
 
     # Dark-background CAD sheet (e.g. AutoCAD modelspace black background with colored lines)
-    max_ch = bgr.max(axis=2)
+    # cv2.max is ~5x faster than ndarray.max(axis=2) on 30 MP pages; same result.
+    b, g, r = cv2.split(bgr)
+    max_ch = cv2.max(cv2.max(b, g), r)
     if float((max_ch < 40).mean()) > 0.65:
         bw = 255 - max_ch
         return cv2.cvtColor(bw, cv2.COLOR_GRAY2BGR)
     return bgr
+
+
+
+def _paper_median(image: np.ndarray) -> np.ndarray:
+    """Per-channel median paper colour. A 1/16 pixel subsample of a 512 px crop
+    gives the same colour within a level or two at ~1/10 of the cost."""
+    step = 4 if min(image.shape[:2]) >= 64 else 1
+    return np.median(image[::step, ::step].reshape(-1, 3), axis=0)
+
+
+def _normal_f32(rng: np.random.Generator, sigma: float, shape) -> np.ndarray:
+    """Gaussian noise drawn directly in float32 (same distribution, ~2x faster
+    and half the memory of float64 ``rng.normal`` on full crops)."""
+    return rng.standard_normal(shape, dtype=np.float32) * np.float32(sigma)
 
 
 def sample_random_crop(image: np.ndarray, size: int, rng: np.random.Generator) -> np.ndarray:
@@ -94,7 +110,7 @@ def sample_random_crop(image: np.ndarray, size: int, rng: np.random.Generator) -
         ph, pw = patch.shape[:2]
         if ph != span or pw != span:
             # Pad to square with median border color (paper tone)
-            border_val = tuple(int(v) for v in np.median(patch.reshape(-1, 3), axis=0))
+            border_val = tuple(int(v) for v in _paper_median(patch))
             pad_b = max(0, span - ph)
             pad_r = max(0, span - pw)
             patch = cv2.copyMakeBorder(patch, 0, pad_b, 0, pad_r, cv2.BORDER_CONSTANT, value=border_val)
@@ -156,7 +172,7 @@ def sample_label_guided_crop(
     patch = image[cy0:min(h, cy0 + span), cx0:min(w, cx0 + span)]
     ph, pw = patch.shape[:2]
     if ph != span or pw != span:
-        paper = tuple(int(v) for v in np.median(patch.reshape(-1, 3), axis=0))
+        paper = tuple(int(v) for v in _paper_median(patch))
         patch = cv2.copyMakeBorder(patch, 0, span - ph, 0, span - pw,
                                    cv2.BORDER_CONSTANT, value=paper)
     return cv2.resize(patch, (size, size),
@@ -176,7 +192,7 @@ def apply_geometric_variability(clean: np.ndarray, rng: np.random.Generator) -> 
     if rng.random() < 0.25:
         h, w = out.shape[:2]
         angle = float(rng.uniform(-6.0, 6.0))
-        border_val = tuple(int(v) for v in np.median(out.reshape(-1, 3), axis=0))
+        border_val = tuple(int(v) for v in _paper_median(out))
         mat = cv2.getRotationMatrix2D((w * 0.5, h * 0.5), angle, 1.0)
         out = cv2.warpAffine(out, mat, (w, h), flags=cv2.INTER_LINEAR,
                              borderMode=cv2.BORDER_CONSTANT, borderValue=border_val)
@@ -188,7 +204,7 @@ def apply_geometric_variability(clean: np.ndarray, rng: np.random.Generator) -> 
         move = min(h, w) * float(rng.uniform(0.006, 0.035))
         dst = src + rng.uniform(-move, move, src.shape).astype(np.float32)
         mat = cv2.getPerspectiveTransform(src, dst)
-        paper = tuple(int(v) for v in np.median(out.reshape(-1, 3), axis=0))
+        paper = tuple(int(v) for v in _paper_median(out))
         out = cv2.warpPerspective(out, mat, (w, h), flags=cv2.INTER_LINEAR,
                                   borderMode=cv2.BORDER_CONSTANT, borderValue=paper)
     return out
@@ -343,7 +359,7 @@ def apply_runtime_corruptions(
     if chance(0.55):
         operations.append("sensor_noise")
         sigma = float(rng.uniform(0.6, 9.0) * strength)
-        x = np.clip(x.astype(np.float32) + rng.normal(0, sigma, x.shape), 0, 255).astype(np.uint8)
+        x = np.clip(x.astype(np.float32) + _normal_f32(rng, sigma, x.shape), 0, 255).astype(np.uint8)
     if chance(0.12):
         operations.append("bit_depth")
         # Quantization/banding in low-bit-depth scans.
@@ -442,20 +458,38 @@ def apply_runtime_corruptions(
                 protected_reduced += 1
         if protected_reduced:
             operations.append("masked_symbol_visibility_guard")
-        paper = np.median(x.reshape(-1, 3), axis=0).astype(np.float32)
-        fill = np.clip(paper[None, None, :] + rng.normal(0, 4, x.shape), 0, 255).astype(np.uint8)
+        paper = _paper_median(x).astype(np.float32)
+        fill = np.clip(paper[None, None, :] + _normal_f32(rng, 4.0, x.shape), 0, 255).astype(np.uint8)
         x = np.where(mask[:, :, None] > .5, fill, x)
 
     # Independent Bernoulli choices can all miss on a light sample. Keep
     # the explicit clean_fraction as the only intentionally unchanged path.
     if not operations:
         sigma = max(0.8, 1.8 * strength)
-        x = np.clip(x.astype(np.float32) + rng.normal(0, sigma, x.shape),
+        x = np.clip(x.astype(np.float32) + _normal_f32(rng, sigma, x.shape),
                     0, 255).astype(np.uint8)
         operations.append("sensor_noise")
 
     meta = {"severity": severity, "operations": operations}
     return (x, mask, meta) if return_metadata else (x, mask)
+
+
+def batch_to_device(deg, clean, mask, device, *, non_blocking: bool = True):
+    """Move a dataset batch to ``device`` as float32 in [0, 1].
+
+    Accepts both the float32 and the ``uint8_output`` form of
+    ``BlueprintSSLDataset``; the uint8 form is converted after the copy, so
+    the host->device transfer and the DataLoader shared memory are 4x smaller.
+    """
+    out = []
+    for tensor, scale in ((deg, 255.0), (clean, 255.0), (mask, 1.0)):
+        tensor = tensor.to(device, non_blocking=non_blocking)
+        if tensor.dtype == torch.uint8:
+            tensor = tensor.float()
+            if scale != 1.0:
+                tensor = tensor.div_(scale)
+        out.append(tensor)
+    return tuple(out)
 
 
 class BlueprintSSLDataset(Dataset):
@@ -491,9 +525,16 @@ class BlueprintSSLDataset(Dataset):
         page_chaos_strength: float = 1.0,
         return_metadata: bool = False,
         include_pre_page_preview: bool = False,
+        uint8_output: bool = False,
+        pdf_thumbnail_cache_dir: str | Path | None = None,
     ) -> None:
         super().__init__()
         self.size = int(size)
+        # uint8 CHW tensors cut worker->trainer shared memory 4x; convert with
+        # ``batch_to_device`` (exact same values as the float32 path).
+        self.uint8_output = bool(uint8_output)
+        self.pdf_thumbnail_cache_dir = (str(pdf_thumbnail_cache_dir)
+                                        if pdf_thumbnail_cache_dir else None)
         self.items_per_epoch = int(items_per_epoch)
         self.seed = int(seed)
         self.epoch = 0
@@ -692,7 +733,8 @@ class BlueprintSSLDataset(Dataset):
                 # full-page raster merely to discard nearly all of it.
                 if self._pdf_sampler is None:
                     from .pdf_crop import PdfCropSampler
-                    self._pdf_sampler = PdfCropSampler()
+                    self._pdf_sampler = PdfCropSampler(
+                        thumbnail_cache_dir=self.pdf_thumbnail_cache_dir)
                 try:
                     clean, pdf_crop_meta = self._pdf_sampler.sample(
                         entry, self.size, crop_rng, crop_seed=crop_seed,
@@ -816,9 +858,15 @@ class BlueprintSSLDataset(Dataset):
         clean_rgb = np.ascontiguousarray(clean[:, :, ::-1]).transpose(2, 0, 1)
         deg_rgb = np.ascontiguousarray(degraded[:, :, ::-1]).transpose(2, 0, 1)
 
-        clean_t = torch.from_numpy(clean_rgb).float().div_(255.0)
-        deg_t = torch.from_numpy(deg_rgb).float().div_(255.0)
-        mask_t = torch.from_numpy(mask).unsqueeze(0)
+        if self.uint8_output:
+            clean_t = torch.from_numpy(np.ascontiguousarray(clean_rgb))
+            deg_t = torch.from_numpy(np.ascontiguousarray(deg_rgb))
+            # The MIM mask is strictly 0/1 (see apply_runtime_corruptions).
+            mask_t = torch.from_numpy(mask.astype(np.uint8)).unsqueeze(0)
+        else:
+            clean_t = torch.from_numpy(clean_rgb).float().div_(255.0)
+            deg_t = torch.from_numpy(deg_rgb).float().div_(255.0)
+            mask_t = torch.from_numpy(mask).unsqueeze(0)
         if self.return_metadata:
             details = {
                 "source": str(path), "bucket": self.bucket_names[b_idx],

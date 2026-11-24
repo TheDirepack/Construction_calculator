@@ -32,6 +32,10 @@ def wall_rotation_degrees(nx: float, ny: float) -> float:
     return math.degrees(math.atan2(-nx, -ny)) % 360.0
 
 
+_PROBE_STEP = np.array([7.0, 7.0, 7.0, 13.0, 13.0, 13.0, 21.0, 21.0, 21.0])
+_PROBE_ALONG = np.array([-9.0, 0.0, 9.0] * 3)
+
+
 def detect_wall_sites(
     gray: np.ndarray,
     rng: np.random.Generator,
@@ -79,14 +83,14 @@ def detect_wall_sites(
 
     def density(px: float, py: float, tx: float, ty: float,
                 nx: float, ny: float) -> float:
-        votes = []
-        for step in (7.0, 13.0, 21.0):
-            for along in (-9.0, 0.0, 9.0):
-                x = int(round(px + nx * step + tx * along))
-                y = int(round(py + ny * step + ty * along))
-                if 0 <= x < sw and 0 <= y < sh:
-                    votes.append(int(ink[y, x]))
-        return float(np.mean(votes)) if votes else 1.0
+        # Vectorised 3x3 probe (steps 7/13/21 px out, -9/0/+9 px along).
+        # np.rint rounds half-to-even like round(), so votes are identical
+        # to the original per-point loop; this runs ~50k times per batch.
+        xs = np.rint(px + nx * _PROBE_STEP + tx * _PROBE_ALONG).astype(np.intp)
+        ys = np.rint(py + ny * _PROBE_STEP + ty * _PROBE_ALONG).astype(np.intp)
+        ok = (xs >= 0) & (xs < sw) & (ys >= 0) & (ys < sh)
+        count = int(ok.sum())
+        return float(ink[ys[ok], xs[ok]].sum()) / count if count else 1.0
 
     for x1, y1, x2, y2 in segments:
         dx, dy = x2 - x1, y2 - y1

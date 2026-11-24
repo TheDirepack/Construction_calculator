@@ -433,6 +433,7 @@ def composite_neca_page(
     match_local_ink: bool = False,
     ink_reference: np.ndarray | None = None,
     tag: str = 'neca',
+    precomputed_walls: tuple | None = None,
 ) -> tuple[np.ndarray, list[dict]]:
     """Composite NECA 100-2013 SVG devices onto a clean blueprint page with zero wall clipping."""
     if not 0 <= placement_chaos <= 1:
@@ -451,13 +452,18 @@ def composite_neca_page(
     h, w = page.shape[:2]
     gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
     ink_mask = (gray < 175).astype(np.uint8)
-    wall_sites, fitted_wall_mask = detect_wall_sites(gray, rng)
+    # Callers that also run the procedural compositor detect walls once on the
+    # source crop (same RNG position as here) and share them.
+    wall_sites, fitted_wall_mask = (precomputed_walls if precomputed_walls is not None
+                                    else detect_wall_sites(gray, rng))
     wall_mask = np.maximum(extract_wall_mask(gray), fitted_wall_mask)
     ink_int = cv2.integral(ink_mask)
     wall_int = cv2.integral(wall_mask)
     has_walls = bool(wall_sites)
 
-    ink_bgr = np.percentile(page[ink_mask.astype(bool)], 10, axis=0) if ink_mask.any() else np.zeros(3)
+    # Only the non-local ink path uses a page-wide ink colour (no RNG involved).
+    ink_bgr = (None if match_local_ink else
+               np.percentile(page[ink_mask.astype(bool)], 10, axis=0) if ink_mask.any() else np.zeros(3))
     occupied: list[list[float]] = [list(map(float, i['bbox_xyxy'])) for i in doc.get('instances', [])]
 
     # Scale symbol range mildly with page resolution so 5000px sheets get appropriately sized symbols

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+import cv2
 import numpy as np
 
 from .neca_svg_compositor import NecaSymbolBank, composite_neca_page
@@ -84,6 +85,12 @@ def compose_ssl_symbols(
     proc_count = requested - neca_count
     page = clean.copy()
     instances = []
+    # Detect walls once, on the undecorated crop, and share them with both
+    # compositors. Computed exactly where the first compositor used to (same
+    # RNG position), so NECA placement is unchanged; the procedural pass no
+    # longer re-detects walls on a page that already carries NECA strokes.
+    from .wall_alignment import detect_wall_sites
+    shared_walls = detect_wall_sites(cv2.cvtColor(page, cv2.COLOR_BGR2GRAY), rng)
 
     if neca_count:
         page, instances = composite_neca_page(
@@ -97,6 +104,7 @@ def compose_ssl_symbols(
             symbol_chaos_probability=symbol_chaos_probability,
             symbol_chaos_strength=symbol_chaos_strength,
             placement_chaos=placement_chaos,
+            precomputed_walls=shared_walls,
         )
         metadata["neca"] = len(instances)
 
@@ -124,6 +132,7 @@ def compose_ssl_symbols(
             symbol_chaos_probability=symbol_chaos_probability,
             symbol_chaos_strength=symbol_chaos_strength,
             placement_chaos=placement_chaos,
+            precomputed_walls=shared_walls,
         )
         metadata["procedural"] = len(procedural)
 

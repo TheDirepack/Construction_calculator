@@ -41,6 +41,7 @@ def _worker_init(_worker_id: int) -> None:
 from blueprint_symbols.ssl_pretrain import (
     BlueprintSSLDataset,
     BlueprintSSLLoss,
+    batch_to_device,
     Yolo26P2SSLModel,
     group_is_holdout,
 )
@@ -651,9 +652,8 @@ def accumulated_training_update(
         n = int(deg.shape[0])
         if n < 1 or total + n > effective_batch:
             raise ValueError("microbatches exceed configured effective batch")
-        deg = deg.to(device, non_blocking=device.type == "cuda")
-        clean = clean.to(device, non_blocking=device.type == "cuda")
-        mask = mask.to(device, non_blocking=device.type == "cuda")
+        deg, clean, mask = batch_to_device(deg, clean, mask, device,
+                                           non_blocking=device.type == "cuda")
         context = (torch.amp.autocast("cuda", dtype=torch.float16)
                    if device.type == "cuda" else nullcontext())
         with context:
@@ -790,11 +790,13 @@ def train(args: argparse.Namespace) -> None:
     }
     train_ds = BlueprintSSLDataset(
         train_manifest, size=args.imgsz, items_per_epoch=args.items_per_epoch,
-        seed=args.seed, **data_opts,
+        seed=args.seed, uint8_output=True,
+        pdf_thumbnail_cache_dir=Path(args.work_root) / 'pdf_thumbnail_cache', **data_opts,
     )
     val_ds = BlueprintSSLDataset(
         val_manifest, size=args.imgsz, items_per_epoch=args.val_items,
-        seed=args.seed + 9999, deterministic_eval=True, **data_opts,
+        seed=args.seed + 9999, deterministic_eval=True, uint8_output=True,
+        pdf_thumbnail_cache_dir=Path(args.work_root) / 'pdf_thumbnail_cache', **data_opts,
     ) if val_manifest['buckets'] else None
 
     microbatch, accumulate = resolve_batch_plan(
@@ -933,9 +935,7 @@ def train(args: argparse.Namespace) -> None:
             vitems = 0
             with torch.inference_mode():
                 for deg, clean, mask in val_loader:
-                    deg = deg.to(device, non_blocking=True)
-                    clean = clean.to(device, non_blocking=True)
-                    mask = mask.to(device, non_blocking=True)
+                    deg, clean, mask = batch_to_device(deg, clean, mask, device)
                     with torch.amp.autocast('cuda', dtype=torch.float16):
                         pred = model(deg)
                         _, vstats = criterion(pred, clean, mask)

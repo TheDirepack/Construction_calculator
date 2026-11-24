@@ -89,7 +89,8 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
                    placement_chaos: float = 0.0,
                    drawing_dpi: float | None = None,
                    match_local_ink: bool = False,
-                   ink_reference: np.ndarray | None = None) -> tuple[np.ndarray, list[dict]]:
+                   ink_reference: np.ndarray | None = None,
+                   precomputed_walls: tuple | None = None) -> tuple[np.ndarray, list[dict]]:
     from blueprint_symbols.symbol_chaos import distort_symbol_alpha, sample_free_origin
     from blueprint_symbols.ink_style import local_drawing_ink_bgr
 
@@ -106,11 +107,14 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
     gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
     dark = (gray < 160).astype(np.uint8)
     integral = cv2.integral(dark)
-    wall_sites, wall_mask = (
-        detect_wall_sites(gray, rng)
-        if wall_fraction > 0 and per_page > 0
-        else ([], np.zeros((h, w), np.uint8))
-    )
+    if precomputed_walls is not None:
+        wall_sites, wall_mask = precomputed_walls
+    else:
+        wall_sites, wall_mask = (
+            detect_wall_sites(gray, rng)
+            if wall_fraction > 0 and per_page > 0
+            else ([], np.zeros((h, w), np.uint8))
+        )
     wall_cursor = 0
     # Match glyph line weight to the page so symbols sit at a plausible drawing scale.
     reference_scale = (drawing_dpi / 200.0) if drawing_dpi is not None else 1.0
@@ -119,7 +123,8 @@ def composite_page(doc: dict, image: np.ndarray, rng: np.random.Generator, *, pe
     base = float(np.clip(base, .65, 1.55)) if drawing_dpi is not None else float(
         np.clip(base, .4, 6.0)
     )
-    ink_bgr = np.percentile(page[dark.astype(bool)], 10, axis=0) if dark.any() else np.zeros(3)
+    ink_bgr = (None if match_local_ink else
+               np.percentile(page[dark.astype(bool)], 10, axis=0) if dark.any() else np.zeros(3))
     occupied = [list(map(float, i['bbox_xyxy'])) for i in doc['instances']]
     placed = []
     attempts = 0
