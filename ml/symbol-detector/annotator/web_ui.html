@@ -93,6 +93,11 @@
 <header>
   <strong>Symbol labels</strong>
   <div class="toolbar-group">
+    <select id="docSelect" style="max-width:240px;font-size:12.5px;padding:4px 6px;" title="Switch Blueprint Document" aria-label="Select blueprint document">
+      <option value="">Loading documents...</option>
+    </select>
+  </div>
+  <div class="toolbar-group">
     <button id="prevPage" title="Previous page or JSON ([)">&lt;</button>
     <span id="pageIndicator" class="page-number">Page -</span>
     <button id="nextPage" title="Next page or JSON (])">&gt;</button>
@@ -110,9 +115,11 @@
   <div class="toolbar-group">
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" title="Redo (Ctrl+Y)">Redo</button>
-    <button id="importJsonBtn" class="ghost" title="Import boxes from an existing annotation JSON file">Import JSON</button>
+    <button id="serverImportBtn" class="ghost" title="Import proposals or annotations from server disk">Import (Server)</button>
+    <button id="serverExportBtn" class="ghost" title="Export document annotations to server disk file">Export (Server)</button>
+    <button id="importJsonBtn" class="ghost" hidden title="Import boxes from an existing annotation JSON file">Import JSON</button>
     <input id="importJsonFile" type="file" accept=".json,application/json" hidden>
-    <button id="downloadJsonBtn" class="ghost" title="Download current annotation JSON backup">Export JSON</button>
+    <button id="downloadJsonBtn" class="ghost" hidden title="Download current annotation JSON backup">Export JSON</button>
     <button id="save" class="primary" title="Save this page (Ctrl+S)">Save</button>
   </div>
 </header>
@@ -307,6 +314,18 @@
   <span id="message" role="status">Loading editor...</span>
   <span id="dirty" class="warning">No changes</span>
 </footer>
+<dialog id="serverImportDialog" style="background:#17222c;color:#e8f0f4;border:1px solid #324351;border-radius:8px;padding:16px;max-width:550px;width:90%;">
+  <h3 style="margin-top:0;">Import from Server</h3>
+  <p class="small" style="color:#9fb4c0;">Select a candidate proposal/annotation file on the server machine, or enter a custom path:</p>
+  <div id="serverSourceList" style="max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:5px;margin:10px 0;"></div>
+  <label class="field" style="margin-top:10px;">Custom Server Path:
+    <input id="customServerPath" type="text" placeholder="/path/to/proposals_or_annotations.json" autocomplete="off">
+  </label>
+  <div class="row" style="justify-content:flex-end;margin-top:14px;gap:8px;">
+    <button id="closeServerImportBtn" type="button" class="ghost">Cancel</button>
+    <button id="confirmServerImportBtn" type="button" class="primary">Import File</button>
+  </div>
+</dialog>
 <script type="module" src="/web_ui.js"></script>
 </body>
 </html>

@@ -115,6 +115,9 @@ const state = {
   jsonFilename: "",
   jsonPath: "",
   siblingFiles: [],
+  documents: [],
+  currentDocPath: "",
+  currentDocName: "",
 };
 
 const elements = typeof document === "undefined" ? null : {
@@ -2319,6 +2322,9 @@ async function loadPage(page, force = false) {
     state.modeKind = result.mode || "pdf";
     state.jsonFilename = result.json_filename || "";
     state.jsonPath = result.json_path || "";
+    state.currentDocName = result.current_doc_name || state.currentDocName;
+    state.currentDocPath = result.current_doc_path || state.currentDocPath;
+    if ($("docSelect") && state.currentDocPath) $("docSelect").value = state.currentDocPath;
     state.siblingFiles = result.sibling_files || [];
     state.walls = Array.isArray(result.walls) ? result.walls : [];
     if (Array.isArray(result.families)) populateFamilyDatalist(result.families);
@@ -2337,6 +2343,148 @@ async function loadPage(page, force = false) {
     notify(String(error.message || error), "error");
   } finally {
     state.busy = false;
+    refreshControls();
+  }
+}
+
+async function loadDocumentsList() {
+  const select = $("docSelect");
+  if (!select) return;
+  try {
+    const res = await api("/api/documents");
+    const docs = res.documents || [];
+    state.documents = docs;
+    select.replaceChildren();
+    if (!docs.length) {
+      const opt = document.createElement("option");
+      opt.textContent = "No blueprints found";
+      select.appendChild(opt);
+      return;
+    }
+    for (const doc of docs) {
+      const opt = document.createElement("option");
+      opt.value = doc.path;
+      let badge = "• ";
+      if (doc.has_annotations) badge = "★ [Annotated] ";
+      else if (doc.has_proposals) badge = "◆ [Proposals] ";
+      opt.textContent = `${badge}${doc.name} (${doc.rel_path})`;
+      if (doc.is_current || doc.path === state.currentDocPath) {
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    }
+  } catch (err) {
+    notify("Could not list documents: " + (err.message || err), "error");
+  }
+}
+
+async function switchDocument(path) {
+  if (!path || path === state.currentDocPath) return;
+  if (state.dirty && !window.confirm("Discard unsaved annotations before switching documents?")) {
+    if ($("docSelect")) $("docSelect").value = state.currentDocPath;
+    return;
+  }
+  state.busy = true;
+  refreshControls();
+  notify("Switching document...", "");
+  try {
+    await api("/api/document", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+      body: JSON.stringify({ path }),
+    });
+    state.currentDocPath = path;
+    state.page = 0;
+    state.busy = false;
+    await loadDocumentsList();
+    await loadPage(0, true);
+  } catch (err) {
+    state.busy = false;
+    notify("Could not switch document: " + (err.message || err), "error");
+    refreshControls();
+  }
+}
+
+async function exportServer() {
+  state.busy = true;
+  refreshControls();
+  notify("Exporting annotations to server...", "");
+  try {
+    const res = await api("/api/server_export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+      body: JSON.stringify({}),
+    });
+    notify(`Exported to server: ${res.filename} (${res.total_instances} symbols, ${res.pages_count} pages)`, "saved");
+    alert(`Export complete on server!\n\nPath: ${res.path}\nTotal symbols: ${res.total_instances} (${res.verified_instances} verified)\nPages exported: ${res.pages_count}`);
+  } catch (err) {
+    notify("Server export failed: " + (err.message || err), "error");
+  } finally {
+    state.busy = false;
+    refreshControls();
+  }
+}
+
+async function openServerImportDialog() {
+  const dialog = $("serverImportDialog");
+  const list = $("serverSourceList");
+  if (!dialog || !list) return;
+  list.replaceChildren();
+  $("customServerPath").value = "";
+  dialog.showModal();
+  try {
+    const res = await api("/api/server_sources?page=" + state.page);
+    const sources = res.sources || [];
+    if (!sources.length) {
+      list.textContent = "No standard candidate proposal files found on server. Enter a custom server path below.";
+      return;
+    }
+    for (const src of sources) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 6px;background:#121c24;border-radius:4px;";
+      const label = document.createElement("span");
+      label.style.cssText = "font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;";
+      label.textContent = (src.is_recommended ? "★ " : "") + src.name;
+      label.title = src.path;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ghost";
+      btn.textContent = "Select";
+      btn.addEventListener("click", () => {
+        $("customServerPath").value = src.path;
+      });
+      row.appendChild(label);
+      row.appendChild(btn);
+      list.appendChild(row);
+    }
+  } catch (err) {
+    list.textContent = "Could not list server sources: " + (err.message || err);
+  }
+}
+
+async function confirmServerImport() {
+  const path = $("customServerPath").value.trim();
+  if (!path) {
+    notify("Select or enter a server file path first.", "warning");
+    return;
+  }
+  const dialog = $("serverImportDialog");
+  if (dialog) dialog.close();
+  state.busy = true;
+  refreshControls();
+  notify("Importing from server file...", "");
+  try {
+    const res = await api("/api/server_import?page=" + state.page, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+      body: JSON.stringify({ path }),
+    });
+    notify(`Imported ${res.imported_count} symbols from server file: ${res.filename}`, "saved");
+    state.busy = false;
+    await loadPage(state.page, true);
+  } catch (err) {
+    state.busy = false;
+    notify("Server import failed: " + (err.message || err), "error");
     refreshControls();
   }
 }
@@ -2415,6 +2563,12 @@ async function savePage() {
 }
 
 function wireEvents() {
+  if ($("docSelect")) $("docSelect").addEventListener("change", (e) => switchDocument(e.target.value));
+  if ($("serverExportBtn")) $("serverExportBtn").addEventListener("click", exportServer);
+  if ($("serverImportBtn")) $("serverImportBtn").addEventListener("click", openServerImportDialog);
+  if ($("closeServerImportBtn")) $("closeServerImportBtn").addEventListener("click", () => $("serverImportDialog")?.close());
+  if ($("confirmServerImportBtn")) $("confirmServerImportBtn").addEventListener("click", confirmServerImport);
+
   $("prevPage").addEventListener("click", () => loadPage(state.page - 1));
   $("nextPage").addEventListener("click", () => loadPage(state.page + 1));
   $("fileSwitcher").addEventListener("change", (e) => switchSiblingFile(e.target.value));
@@ -2668,6 +2822,9 @@ async function init() {
   try {
     const response = await api("/api/session");
     state.token = response.token;
+    state.currentDocName = response.current_doc_name || "";
+    state.currentDocPath = response.current_doc_path || "";
+    await loadDocumentsList();
     await loadPage(response.initial_page, true);
   } catch (error) {
     notify("Could not start editor: " + (error.message || error), "error");

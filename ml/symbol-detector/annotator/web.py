@@ -22,9 +22,11 @@ import math
 import os
 import re
 import secrets
+import socket
 import struct
 import tempfile
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -104,6 +106,9 @@ MAX_PDF_PIXELS = 30_000_000
 ID_PATTERN = re.compile(r"^[a-zA-Z0-9_.:-]{1,120}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 MODULE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = MODULE_DIR.parents[2] if len(MODULE_DIR.parents) > 2 and (MODULE_DIR.parents[2] / "blueprints_and_libraries").is_dir() else Path.cwd()
+DEFAULT_BLUEPRINTS_DIR = PROJECT_ROOT / "blueprints_and_libraries" / "1_blueprints"
+DEFAULT_WORK_DIR = MODULE_DIR.parent / "work"
 
 FAMILY_TO_ATTRIBUTE_SCHEMA = {
     "switch": "switch",
@@ -125,6 +130,55 @@ class LabelingError(ValueError):
 
 class RevisionConflict(LabelingError):
     pass
+
+
+def get_lan_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def _is_private_ip(host_part: str) -> bool:
+    try:
+        ip = socket.gethostbyname(host_part)
+        parts = [int(p) for p in ip.split(".")]
+        if len(parts) == 4:
+            if parts[0] in (127, 10, 0):
+                return True
+            if parts[0] == 172 and 16 <= parts[1] <= 31:
+                return True
+            if parts[0] == 192 and parts[1] == 168:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _find_proposals_for_pdf(pdf: Path, work_dir: Path | None = None) -> Path | None:
+    work = work_dir or DEFAULT_WORK_DIR
+    stem = pdf.stem
+    cleaned = sorted((work / "sam3_cleaned").glob(f"{stem}*_CLEANED.json"))
+    if cleaned:
+        return cleaned[0]
+    circuitnet = sorted((work / "circuitnet_proposals").glob(f"{stem}*.json"))
+    if circuitnet:
+        return circuitnet[0]
+    sam3 = sorted((work / "sam3_proposals").glob(f"{stem}*.json"))
+    if sam3:
+        return sam3[0]
+    if (pdf.parent / "devices").is_dir():
+        devs = sorted((pdf.parent / "devices").glob(f"{stem}*.json"))
+        if devs:
+            return devs[0]
+    devs2 = sorted(pdf.parent.glob(f"{stem}_devices.json"))
+    if devs2:
+        return devs2[0]
+    return None
 
 
 def _import_fitz():
@@ -569,6 +623,7 @@ def _load_neca_subtypes(catalog_root: Path | None) -> dict[str, list[str]]:
 class LabelingSession:
     def __init__(
         self, *, pdf: Path | None = None, edit: Path | None = None,
+        blueprints_dir: Path | None = None,
         out_dir: Path | None = None, page: int = 0, dpi: int = 150,
         proposals: Path | None = None, walls: Path | None = None, neca_catalog: Path | None = None,
         page_presence: Path | None = None,
@@ -579,6 +634,10 @@ class LabelingSession:
             raise LabelingError("DPI must be between 30 and 600")
         self.pdf = Path(pdf).resolve() if pdf else None
         self.edit = Path(edit).resolve() if edit else None
+        self.blueprints_dir = Path(blueprints_dir).resolve() if blueprints_dir else (
+            self.pdf.parent if self.pdf else DEFAULT_BLUEPRINTS_DIR
+        )
+        self._initial_out_dir = Path(out_dir).resolve() if out_dir else None
         self.edit_files: list[Path] = []
         if self.pdf and not self.pdf.is_file():
             raise FileNotFoundError(self.pdf)
@@ -613,7 +672,7 @@ class LabelingSession:
         if page < 0 or page >= self.page_count:
             raise LabelingError("initial page outside source document")
         name = re.sub(r"[^a-zA-Z0-9_-]+", "_", self.pdf.stem)[:48] if self.pdf else ""
-        self.out_dir = (Path(out_dir).resolve() if out_dir else
+        self.out_dir = (self._initial_out_dir if self._initial_out_dir else
                         Path.cwd() / "annotations" / f"{name}_{self.source_hash[:12]}" if self.pdf else
                         self.edit.parent)
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -660,6 +719,16 @@ class LabelingSession:
             if (not self.proposals.get("source_pdf_sha256") and
                     self.proposals.get("source_file") != self.pdf.name):
                 raise LabelingError("unhashed proposals must match the PDF filename")
+        elif self.pdf:
+            auto_prop = _find_proposals_for_pdf(self.pdf)
+            if auto_prop and auto_prop.is_file():
+                try:
+                    loaded = json.loads(auto_prop.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict) and isinstance(loaded.get("devices"), list):
+                        if not loaded.get("source_pdf_sha256") or loaded["source_pdf_sha256"] == self.source_hash:
+                            self.proposals = loaded
+                except Exception:
+                    pass
 
     def _assert_pdf_unchanged(self) -> None:
         if self.pdf:
@@ -725,28 +794,39 @@ class LabelingSession:
             page = doc[index]
             pw, ph = float(page.rect.width), float(page.rect.height)
         found = []
-        for number, proposal in enumerate(self.proposals["devices"]):
+        for number, proposal in enumerate(self.proposals.get("devices", [])):
             if proposal.get("pdf_page") != index + 1:
                 continue
-            pts = proposal.get("symbol_bbox")
+            pts = proposal.get("symbol_bbox") or proposal.get("box_px_tl")
             if not isinstance(pts, list) or len(pts) != 4:
                 continue
             try:
                 x0, y0, x1, y1 = map(float, pts)
-                box = [
-                    max(0., min(float(width), x0 * width / pw)),
-                    max(0., min(float(height), (ph - y1) * height / ph)),
-                    max(0., min(float(width), x1 * width / pw)),
-                    max(0., min(float(height), (ph - y0) * height / ph)),
-                ]
+                if proposal.get("box_px_tl") and pts == proposal.get("box_px_tl"):
+                    render_dpi = float(self.proposals.get("render_dpi") or 150)
+                    factor = (self.dpi / render_dpi) if render_dpi > 0 else 1.0
+                    box = [
+                        max(0., min(float(width), x0 * factor)),
+                        max(0., min(float(height), y0 * factor)),
+                        max(0., min(float(width), x1 * factor)),
+                        max(0., min(float(height), y1 * factor)),
+                    ]
+                else:
+                    box = [
+                        max(0., min(float(width), x0 * width / pw)),
+                        max(0., min(float(height), (ph - y1) * height / ph)),
+                        max(0., min(float(width), x1 * width / pw)),
+                        max(0., min(float(height), (ph - y0) * height / ph)),
+                    ]
                 _valid_box(box, width, height)
             except (ValueError, TypeError, ZeroDivisionError):
                 continue
-            family = str(proposal.get("device_type") or "unknown_symbol")
+            family = str(proposal.get("device_type") or proposal.get("broad_family") or "unknown_symbol")
+            variant = str(proposal.get("subtype") or proposal.get("neca_name") or "unspecified")
             found.append({
                 "instance_id": f"proposal_p{index + 1}_{number}",
                 "symbol_family": family,
-                "symbol_variant": str(proposal.get("subtype") or "unspecified"),
+                "symbol_variant": variant,
                 "discipline": discipline_for(family),
                 "device_type": family,
                 "bbox_xyxy": [round(v, 3) for v in box],
@@ -756,7 +836,7 @@ class LabelingSession:
                 "is_occluded": False,
                 "uncertain": True,
                 "review_status": "unreviewed",
-                "review_source": "sam3",
+                "review_source": proposal.get("status") or "sam3",
                 "verified_ground_truth": False,
                 "proposal_score": proposal.get("score"),
                 "proposal_visual_group": proposal.get("visual_group"),
@@ -875,6 +955,8 @@ class LabelingSession:
         with self.lock:
             data, revision, _ = self._load(index)
             json_path = self._json_path(index)
+            doc_name = self.pdf.name if self.pdf else (self.edit.name if self.edit else "")
+            doc_path = str(self.pdf.resolve()) if self.pdf else (str(self.edit.resolve()) if self.edit else "")
             return {
                 "page_index": index,
                 "page_count": self.page_count,
@@ -890,8 +972,295 @@ class LabelingSession:
                 "mode": "edit" if self.edit else "pdf",
                 "json_filename": json_path.name,
                 "json_path": str(json_path),
+                "current_doc_name": doc_name,
+                "current_doc_path": doc_path,
                 "sibling_files": self.list_sibling_jsons() if self.edit else [],
                 "walls": self.walls,
+            }
+
+    def list_documents(self) -> list[dict]:
+        bp_dir = self.blueprints_dir if (self.blueprints_dir and self.blueprints_dir.is_dir()) else DEFAULT_BLUEPRINTS_DIR
+        if not bp_dir.is_dir():
+            if self.pdf:
+                return [{
+                    "name": self.pdf.name, "stem": self.pdf.stem, "path": str(self.pdf),
+                    "rel_path": self.pdf.name, "has_proposals": self.proposals is not None,
+                    "has_annotations": True, "is_current": True,
+                }]
+            return []
+
+        pdf_paths = sorted(bp_dir.rglob("*.pdf"))
+        docs = []
+        current_resolved = self.pdf.resolve() if self.pdf else None
+
+        for p in pdf_paths:
+            resolved = p.resolve()
+            stem = p.stem
+            is_current = (resolved == current_resolved)
+            prop_file = _find_proposals_for_pdf(p)
+            has_prop = (prop_file is not None)
+
+            annotated = False
+            if self.out_dir and self.out_dir.is_dir():
+                if list(self.out_dir.glob(f"{stem[:48]}_p*.json")):
+                    annotated = True
+            if not annotated and (DEFAULT_WORK_DIR / "annotator_labels").is_dir():
+                if list((DEFAULT_WORK_DIR / "annotator_labels").glob(f"{stem[:48]}_p*.json")):
+                    annotated = True
+
+            try:
+                rel = str(p.relative_to(bp_dir))
+            except ValueError:
+                rel = p.name
+
+            docs.append({
+                "name": p.name,
+                "stem": stem,
+                "path": str(resolved),
+                "rel_path": rel,
+                "has_proposals": has_prop,
+                "proposal_file": prop_file.name if prop_file else None,
+                "has_annotations": annotated,
+                "is_current": is_current,
+            })
+
+        def sort_key(d):
+            prio = 3
+            if d["is_current"]:
+                prio = 0
+            elif d["has_annotations"]:
+                prio = 1
+            elif d["has_proposals"]:
+                prio = 2
+            return (prio, d["rel_path"].lower())
+
+        docs.sort(key=sort_key)
+        return docs
+
+    def switch_document(self, path_or_name: str) -> dict:
+        target = Path(path_or_name).resolve()
+        if not target.is_file():
+            candidate = (self.blueprints_dir / path_or_name).resolve()
+            if candidate.is_file():
+                target = candidate
+            else:
+                matches = list(self.blueprints_dir.rglob(path_or_name))
+                if matches and matches[0].is_file():
+                    target = matches[0].resolve()
+                else:
+                    raise FileNotFoundError(f"blueprint PDF not found: {path_or_name}")
+
+        with self.lock:
+            self.pdf = target
+            self.edit = None
+            self.edit_files = []
+            self._render_cache.clear()
+            self.source_hash = sha256_file(self.pdf)
+            self.source_stat = self.pdf.stat()
+            fitz = _import_fitz()
+            with fitz.open(self.pdf) as doc:
+                self.page_count = len(doc)
+            if self.page_count < 1:
+                raise LabelingError("PDF has no pages")
+            self.start_page = 0
+
+            if not self._initial_out_dir:
+                name = re.sub(r"[^a-zA-Z0-9_-]+", "_", self.pdf.stem)[:48]
+                self.out_dir = Path.cwd() / "annotations" / f"{name}_{self.source_hash[:12]}"
+                self.out_dir.mkdir(parents=True, exist_ok=True)
+
+            prop_file = _find_proposals_for_pdf(self.pdf)
+            if prop_file and prop_file.is_file():
+                try:
+                    loaded = json.loads(prop_file.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict) and isinstance(loaded.get("devices"), list):
+                        self.proposals = loaded
+                    else:
+                        self.proposals = None
+                except Exception:
+                    self.proposals = None
+            else:
+                self.proposals = None
+
+            return self.page_state(0)
+
+    def export_server(self, target_path: str | None = None) -> dict:
+        with self.lock:
+            if not self.pdf and not self.edit:
+                raise LabelingError("no active document to export")
+
+            stem = self.pdf.stem if self.pdf else self.edit.stem
+            doc_name = self.pdf.name if self.pdf else self.edit.name
+
+            if target_path:
+                export_file = Path(target_path).resolve()
+            else:
+                export_dir = self.out_dir / "exports"
+                export_dir.mkdir(parents=True, exist_ok=True)
+                export_file = export_dir / f"{stem}_full_export.json"
+
+            export_file.parent.mkdir(parents=True, exist_ok=True)
+
+            annotated_pages = []
+            total_instances = 0
+            verified_instances = 0
+            instances_by_family: dict[str, int] = {}
+
+            for page_idx in range(self.page_count):
+                page_json = self._json_path(page_idx)
+                if page_json.is_file():
+                    try:
+                        p_data = json.loads(page_json.read_text(encoding="utf-8"))
+                        insts = p_data.get("instances", [])
+                        total_instances += len(insts)
+                        for inst in insts:
+                            fam = str(inst.get("symbol_family") or "unknown")
+                            instances_by_family[fam] = instances_by_family.get(fam, 0) + 1
+                            if inst.get("verified_ground_truth") is True:
+                                verified_instances += 1
+                        annotated_pages.append({
+                            "page_index": page_idx,
+                            "page_number": page_idx + 1,
+                            "json_path": str(page_json),
+                            "verified_no_symbols": p_data.get("verified_no_symbols", False),
+                            "annotation_completeness": p_data.get("annotation_completeness", "partial"),
+                            "instance_count": len(insts),
+                            "instances": insts,
+                            "rejected_proposals": p_data.get("rejected_proposals", []),
+                        })
+                    except Exception:
+                        pass
+
+            export_payload = {
+                "format_version": 1,
+                "export_type": "full_document_annotations",
+                "document_name": doc_name,
+                "source_pdf_sha256": self.source_hash,
+                "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "total_pdf_pages": self.page_count,
+                "annotated_pages_count": len(annotated_pages),
+                "total_instances": total_instances,
+                "verified_instances": verified_instances,
+                "instances_by_family": instances_by_family,
+                "pages": annotated_pages,
+            }
+
+            encoded = (json.dumps(export_payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            _atomic_bytes(export_file, encoded)
+
+            return {
+                "success": True,
+                "path": str(export_file),
+                "filename": export_file.name,
+                "pages_count": len(annotated_pages),
+                "total_instances": total_instances,
+                "verified_instances": verified_instances,
+            }
+
+    def list_server_sources(self, page_index: int) -> list[dict]:
+        with self.lock:
+            sources = []
+            stem = self.pdf.stem if self.pdf else ""
+
+            cleaned_dir = DEFAULT_WORK_DIR / "sam3_cleaned"
+            if cleaned_dir.is_dir():
+                for f in sorted(cleaned_dir.glob("*.json")):
+                    sources.append({
+                        "name": f.name,
+                        "path": str(f.resolve()),
+                        "type": "sam3_cleaned",
+                        "is_recommended": bool(stem and stem in f.name),
+                    })
+
+            cn_dir = DEFAULT_WORK_DIR / "circuitnet_proposals"
+            if cn_dir.is_dir():
+                for f in sorted(cn_dir.glob("*.json")):
+                    sources.append({
+                        "name": f.name,
+                        "path": str(f.resolve()),
+                        "type": "circuitnet",
+                        "is_recommended": bool(stem and stem in f.name),
+                    })
+
+            if self.pdf and (self.pdf.parent / "devices").is_dir():
+                for f in sorted((self.pdf.parent / "devices").glob("*.json")):
+                    sources.append({
+                        "name": f.name,
+                        "path": str(f.resolve()),
+                        "type": "blueprint_devices",
+                        "is_recommended": True,
+                    })
+
+            if self.out_dir and (self.out_dir / "exports").is_dir():
+                for f in sorted((self.out_dir / "exports").glob("*.json")):
+                    sources.append({
+                        "name": f.name,
+                        "path": str(f.resolve()),
+                        "type": "server_export",
+                        "is_recommended": bool(stem and stem in f.name),
+                    })
+
+            sources.sort(key=lambda s: (0 if s["is_recommended"] else 1, s["name"].lower()))
+            return sources
+
+    def import_server(self, page_index: int, source_path: str) -> dict:
+        target = Path(source_path).resolve()
+        if not target.is_file():
+            raise FileNotFoundError(f"server file not found: {source_path}")
+
+        with self.lock:
+            raw = json.loads(target.read_text(encoding="utf-8"))
+            imported_count = 0
+
+            baseline, revision, _ = self._load(page_index)
+            width, height = int(baseline["image_width"]), int(baseline["image_height"])
+
+            current_instances = list(baseline.get("instances", []))
+            existing_ids = {inst["instance_id"] for inst in current_instances}
+
+            if isinstance(raw, dict) and isinstance(raw.get("devices"), list):
+                self.proposals = raw
+                new_proposals = self._proposal_instances(page_index, width, height)
+                for prop in new_proposals:
+                    if prop["instance_id"] not in existing_ids:
+                        current_instances.append(prop)
+                        existing_ids.add(prop["instance_id"])
+                        imported_count += 1
+            elif isinstance(raw, dict) and isinstance(raw.get("pages"), list):
+                for p in raw["pages"]:
+                    if p.get("page_index") == page_index:
+                        for inst in p.get("instances", []):
+                            if inst.get("instance_id") not in existing_ids:
+                                current_instances.append(inst)
+                                existing_ids.add(inst["instance_id"])
+                                imported_count += 1
+            elif isinstance(raw, dict) and isinstance(raw.get("instances"), list):
+                for inst in raw["instances"]:
+                    if isinstance(inst, dict):
+                        inst_id = inst.get("instance_id")
+                        if not inst_id or inst_id in existing_ids:
+                            inst_id = f"imported_p{page_index + 1}_{len(current_instances) + 1}"
+                            inst = dict(inst, instance_id=inst_id)
+                        current_instances.append(inst)
+                        existing_ids.add(inst_id)
+                        imported_count += 1
+            else:
+                raise LabelingError(f"unrecognized annotation or proposal format in {target.name}")
+
+            baseline["instances"] = [_normalize_instance_for_save(inst) for inst in current_instances]
+            self.save(
+                page_index,
+                revision=revision,
+                instances=baseline["instances"],
+                rejected=baseline.get("rejected_proposals", []),
+                metadata={"verified_no_symbols": False},
+            )
+
+            return {
+                "success": True,
+                "imported_count": imported_count,
+                "filename": target.name,
+                "page_state": self.page_state(page_index),
             }
 
     def image_bytes(self, index: int) -> bytes:
@@ -995,9 +1364,18 @@ def make_handler(session: LabelingSession):
             self._reply(code, json.dumps(data, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
         def _trusted_host(self) -> bool:
-            host = self.headers.get("Host", "").lower()
+            host_header = self.headers.get("Host", "").lower()
             port = self.server.server_port
-            return host in (f"127.0.0.1:{port}", f"localhost:{port}")
+            if ":" in host_header:
+                host_name, h_port = host_header.split(":", 1)
+                if h_port != str(port):
+                    return False
+            else:
+                host_name = host_header
+
+            if host_name in ("127.0.0.1", "localhost", "0.0.0.0") or host_name.endswith(".local"):
+                return True
+            return _is_private_ip(host_name)
 
         def _page(self, query: str) -> int:
             q = parse_qs(query, keep_blank_values=True)
@@ -1024,6 +1402,8 @@ def make_handler(session: LabelingSession):
                         "token": session.token,
                         "initial_page": session.start_page,
                         "mode": "edit" if session.edit else "pdf",
+                        "current_doc_name": session.pdf.name if session.pdf else (session.edit.name if session.edit else ""),
+                        "current_doc_path": str(session.pdf.resolve()) if session.pdf else (str(session.edit.resolve()) if session.edit else ""),
                     })
                 elif url.path == "/api/page":
                     self._json(200, session.page_state(self._page(url.query)))
@@ -1032,6 +1412,10 @@ def make_handler(session: LabelingSession):
                     self._reply(200, data, mime)
                 elif url.path == "/api/files":
                     self._json(200, {"files": session.list_sibling_jsons()})
+                elif url.path == "/api/documents":
+                    self._json(200, {"documents": session.list_documents()})
+                elif url.path == "/api/server_sources":
+                    self._json(200, {"sources": session.list_server_sources(self._page(url.query))})
                 else:
                     self._json(404, {"error": "unknown endpoint"})
             except (LabelingError, ValueError, FileNotFoundError) as exc:
@@ -1042,12 +1426,24 @@ def make_handler(session: LabelingSession):
                 self._json(403, {"error": "local session authorization required"})
                 return
             origin = self.headers.get("Origin")
-            if origin not in (None, f"http://127.0.0.1:{self.server.server_port}",
-                              f"http://localhost:{self.server.server_port}"):
-                self._json(403, {"error": "foreign origin rejected"})
-                return
+            host_header = self.headers.get("Host", "").lower()
+            if origin is not None:
+                origin_clean = origin.rstrip("/").lower()
+                allowed = {
+                    f"http://{host_header}",
+                    f"https://{host_header}",
+                    f"http://127.0.0.1:{self.server.server_port}",
+                    f"http://localhost:{self.server.server_port}",
+                }
+                if origin_clean not in allowed:
+                    self._json(403, {"error": "foreign origin rejected"})
+                    return
             url = urlsplit(self.path)
-            if url.path not in ("/api/save", "/api/validate", "/api/open", "/api/snap"):
+            valid_endpoints = (
+                "/api/save", "/api/validate", "/api/open", "/api/snap",
+                "/api/document", "/api/server_export", "/api/server_import",
+            )
+            if url.path not in valid_endpoints:
                 self._json(404, {"error": "unknown endpoint"})
                 return
             length_header = self.headers.get("Content-Length", "")
@@ -1059,6 +1455,25 @@ def make_handler(session: LabelingSession):
                 data = json.loads(raw)
                 if not isinstance(data, dict):
                     raise LabelingError("request body must be an object")
+                if url.path == "/api/document":
+                    target_path = data.get("path") or data.get("name")
+                    if not target_path:
+                        raise LabelingError("document path or name required")
+                    new_state = session.switch_document(str(target_path))
+                    self._json(200, {"switched": True, "page_state": new_state})
+                    return
+                if url.path == "/api/server_export":
+                    result = session.export_server(data.get("path"))
+                    self._json(200, result)
+                    return
+                if url.path == "/api/server_import":
+                    src_path = data.get("path")
+                    if not src_path:
+                        raise LabelingError("server source path required")
+                    page_idx = self._page(url.query)
+                    result = session.import_server(page_idx, str(src_path))
+                    self._json(200, result)
+                    return
                 if url.path == "/api/open":
                     filename = str(data.get("filename", ""))
                     page_idx = session.open_existing_json(filename)
@@ -1108,9 +1523,11 @@ def make_handler(session: LabelingSession):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    mode = parser.add_mutually_exclusive_group(required=True)
+    mode = parser.add_mutually_exclusive_group(required=False)
     mode.add_argument("--pdf", type=Path)
     mode.add_argument("--edit", type=Path, help="Existing annotation JSON file or directory of JSON files")
+    parser.add_argument("--blueprints-dir", type=Path, default=DEFAULT_BLUEPRINTS_DIR,
+                        help="Root directory containing blueprint PDFs")
     parser.add_argument("--out-dir", type=Path)
     parser.add_argument("--proposals", type=Path)
     parser.add_argument("--page-presence", type=Path,
@@ -1119,20 +1536,44 @@ def main() -> None:
     parser.add_argument("--neca-catalog", type=Path, help="Optional NECA symbol library directory to populate live subtypes")
     parser.add_argument("--page", type=int, default=0, help="Initial 0-based page/file index")
     parser.add_argument("--dpi", type=int, default=150)
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Listen host (default 0.0.0.0 for LAN access)")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--open-browser", action="store_true")
     args = parser.parse_args()
+
+    chosen_pdf = args.pdf
+    chosen_edit = args.edit
+    if chosen_pdf is None and chosen_edit is None:
+        bp_dir = Path(args.blueprints_dir).resolve()
+        if bp_dir.is_dir():
+            pdfs = sorted(bp_dir.rglob("*.pdf"))
+            if pdfs:
+                best = pdfs[0]
+                for p in pdfs:
+                    if _find_proposals_for_pdf(p):
+                        best = p
+                        break
+                chosen_pdf = best
+            else:
+                raise SystemExit(f"No PDF files found in blueprints directory {bp_dir}")
+        else:
+            raise SystemExit("Specify --pdf or --edit, or ensure blueprints directory exists")
+
     session = LabelingSession(
-        pdf=args.pdf, edit=args.edit, out_dir=args.out_dir, page=args.page,
+        pdf=chosen_pdf, edit=chosen_edit, blueprints_dir=args.blueprints_dir,
+        out_dir=args.out_dir, page=args.page,
         dpi=args.dpi, proposals=args.proposals, walls=args.walls,
         neca_catalog=args.neca_catalog, page_presence=args.page_presence,
     )
-    with ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(session)) as server:
-        link = f"http://127.0.0.1:{server.server_port}/"
-        print(f"Manual labeler: {link}")
+    lan_ip = get_lan_ip()
+    with ThreadingHTTPServer((args.host, args.port), make_handler(session)) as server:
+        port = server.server_port
+        print(f"Manual labeler running!")
+        print(f"  Local URL:   http://127.0.0.1:{port}/")
+        print(f"  Network URL: http://{lan_ip}:{port}/")
         print(f"Annotations: {session.out_dir} (positive-only; no exhaustive labels inferred)")
         if args.open_browser:
-            webbrowser.open(link)
+            webbrowser.open(f"http://127.0.0.1:{port}/")
         try:
             server.serve_forever()
         except KeyboardInterrupt:

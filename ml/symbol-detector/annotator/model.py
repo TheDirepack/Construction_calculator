@@ -64,19 +64,21 @@ FAMILY_DISCIPLINES: dict[str, str] = {
 FAMILY_VARIANT_SUGGESTIONS: dict[str, list[str]] = {
     # Electrical
     "receptacle": [
-        "duplex", "quad", "single", "gfci", "weatherproof", "duplex_receptacle_floor",
+        "duplex", "quad", "gfci", "weatherproof", "single", "duplex_gfci", "quad_gfci",
+        "weatherproof_gfci", "afci", "dedicated", "duplex_receptacle_floor",
         "duplex_receptacle_ceiling", "duplex_receptacle_emergency", "combination_floor_box",
-        "multioutlet_assembly", "special_purpose", "dedicated", "afci", "unspecified",
+        "multioutlet_assembly", "special_purpose", "usb_receptacle", "unspecified",
     ],
     "switch": [
-        "single_pole", "three_way", "four_way", "double_pole", "dimmer", "occupancy_sensor",
+        "single_pole", "three_way", "dimmer", "three_way_dimmer", "four_way",
+        "four_way_dimmer", "double_pole", "dimmer_switch", "occupancy_sensor",
         "vacancy_sensor", "timer", "low_voltage", "key_operated", "pilot_light",
         "weatherproof", "motor_control", "double_throw", "unspecified",
     ],
     "luminaire": [
         "downlight", "troffer_2x4", "troffer_2x2", "linear", "strip_luminaire", "exit_sign",
         "emergency_battery_light", "wall_sconce", "wallpack", "pendant", "track_light",
-        "spotlight", "pole_luminaire", "unspecified",
+        "high_bay", "low_bay", "spotlight", "pole_luminaire", "chandelier", "unspecified",
     ],
     "fire_alarm_device": [
         "smoke_detector", "heat_detector", "duct_smoke_detector", "horn_and_strobe",

@@ -325,3 +325,105 @@ def test_legacy_cli_uses_portable_raster_reference_and_revokes_old_coverage(tmp_
     assert result["exhaustive_families"] == []
     assert (copied.parent / result["image_path"]).resolve() == image
     assert not list(copied.parent.glob("*.tmp"))
+
+
+def test_document_browser_switching_and_server_export_import(tmp_path):
+    from annotator.web import _is_private_ip
+
+    assert _is_private_ip("127.0.0.1")
+    assert _is_private_ip("192.168.1.93")
+    assert _is_private_ip("10.0.0.5")
+    assert _is_private_ip("172.16.0.1")
+    assert not _is_private_ip("8.8.8.8")
+
+    bp_dir = tmp_path / "blueprints"
+    bp_dir.mkdir()
+    pdf1 = _pdf(bp_dir / "plan_A.pdf", pages=2)
+    pdf2 = _pdf(bp_dir / "plan_B.pdf", pages=1)
+
+    labels_dir = tmp_path / "labels"
+    session = LabelingSession(pdf=pdf1, blueprints_dir=bp_dir, out_dir=labels_dir)
+
+    docs = session.list_documents()
+    assert len(docs) == 2
+    assert docs[0]["name"] == "plan_A.pdf"
+    assert docs[0]["is_current"] is True
+
+    # Save a box on plan_A page 0
+    session.save(0, revision=None, instances=[_box()], rejected=[])
+
+    # Server export
+    export_res = session.export_server()
+    assert export_res["success"] is True
+    assert Path(export_res["path"]).is_file()
+    assert export_res["total_instances"] == 1
+    assert export_res["pages_count"] == 1
+
+    # Switch to plan_B
+    new_state = session.switch_document("plan_B.pdf")
+    assert session.pdf == pdf2
+    assert new_state["page_count"] == 1
+    assert new_state["current_doc_name"] == "plan_B.pdf"
+
+    # Server import candidate list
+    sources = session.list_server_sources(0)
+    assert any(s["type"] == "server_export" for s in sources)
+
+    # Server import into plan_B
+    import_res = session.import_server(0, export_res["path"])
+    assert import_res["success"] is True
+    assert import_res["imported_count"] == 1
+    assert len(session.page_state(0)["document"]["instances"]) == 1
+
+
+def test_http_lan_routes_and_document_selection(tmp_path):
+    bp_dir = tmp_path / "blueprints"
+    bp_dir.mkdir()
+    pdf1 = _pdf(bp_dir / "first.pdf", pages=1)
+    pdf2 = _pdf(bp_dir / "second.pdf", pages=1)
+
+    session = LabelingSession(pdf=pdf1, blueprints_dir=bp_dir, out_dir=tmp_path / "labels")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+
+    def call(method, path, payload=None, headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+        body = json.dumps(payload) if payload is not None else None
+        conn.request(method, path, body=body, headers=headers or {})
+        resp = conn.getresponse()
+        data = resp.read()
+        hdrs = dict(resp.getheaders())
+        conn.close()
+        return resp.status, data, hdrs
+
+    try:
+        # GET /api/documents
+        code, data, _ = call("GET", "/api/documents")
+        assert code == 200
+        docs = json.loads(data)["documents"]
+        assert len(docs) == 2
+
+        # POST /api/document (switching document)
+        headers = {"X-Labeler-Token": session.token, "Content-Type": "application/json"}
+        code, data, _ = call("POST", "/api/document", {"path": str(pdf2)}, headers)
+        assert code == 200
+        res = json.loads(data)
+        assert res["switched"] is True
+        assert res["page_state"]["current_doc_name"] == "second.pdf"
+
+        # POST with LAN Origin header (e.g. 192.168.1.93)
+        lan_headers = {
+            "X-Labeler-Token": session.token,
+            "Content-Type": "application/json",
+            "Host": f"127.0.0.1:{server.server_port}",
+            "Origin": f"http://127.0.0.1:{server.server_port}",
+        }
+        code, data, _ = call("POST", "/api/server_export", {}, lan_headers)
+        assert code == 200
+        assert json.loads(data)["success"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
+
