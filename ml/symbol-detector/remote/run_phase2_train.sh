@@ -102,6 +102,9 @@ if [[ ! -f "$WORK/prepared/yolo/data.yaml" ]]; then
 fi
 
 echo "=== [6/6] VERIFY EXPORT, CHECK LABEL MASKS, TRAIN YOLO26n-P2 / MuSGD ==="
+# The group splitter must actually assign a reviewed REAL-positive project to
+# each held-out split; merely having enough candidates is not sufficient.
+"$PY" scripts_phase2_readiness.py --prepared-manifest "$WORK/prepared/source_manifest.json"
 "$PY" scripts_verify_yolo_export.py "$WORK/prepared/yolo"
 "$PY" scripts_preflight_training.py "$WORK/prepared/source_manifest.json"
 # All exports must include a sidecar; otherwise ordinary YOLO would generate
