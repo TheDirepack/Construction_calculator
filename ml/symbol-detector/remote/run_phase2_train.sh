@@ -120,11 +120,18 @@ if mask is None or not mask["has_partial"]:
 print(json.dumps({"partial_training": mask["has_partial"], "class_ids": mask["class_ids"]}, indent=2))
 PY
 
-exec "$PY" scripts_train_ultralytics.py "$WORK/prepared/yolo/data.yaml" \
-  --weights "$PRETRAIN_WEIGHTS" \
-  --imgsz 512 --batch "$PHASE2_BATCH" --epochs "$PHASE2_EPOCHS" \
-  --optimizer MuSGD --lr0 0.005 \
-  --fliplr 0.5 --flipud 0.5 --scale 0.2 --translate 0.05 \
-  --workers 2 --project "$WORK/runs" \
-  --name "${PHASE2_RUN_NAME:-phase2_mixed_ssl_v4}" \
-  --run
+TRAIN_ARGS=(
+  "$WORK/prepared/yolo/data.yaml"
+  --weights "$PRETRAIN_WEIGHTS"
+  --imgsz 512 --batch "$PHASE2_BATCH" --epochs "$PHASE2_EPOCHS"
+  --optimizer MuSGD --lr0 0.005
+  --fliplr 0.5 --flipud 0.5 --scale 0.2 --translate 0.05
+  --workers 2 --project "$WORK/runs"
+  --name "${PHASE2_RUN_NAME:-phase2_mixed_ssl_v4}"
+)
+if [[ "${PHASE2_DRY_RUN:-0}" == "1" ]]; then
+  "$PY" scripts_train_ultralytics.py "${TRAIN_ARGS[@]}"
+  echo "Preflight passed; PHASE2_DRY_RUN=1 did not train."
+  exit 0
+fi
+exec "$PY" scripts_train_ultralytics.py "${TRAIN_ARGS[@]}" --run
