@@ -1,8 +1,10 @@
 """Download Hugging Face dataset snapshots used as public floor-plan corpora.
 
 Uses the public dataset tree API so no huggingface_hub install is required.
+Supports optional HF_TOKEN env var for gated datasets and `--only <repo>`.
 Resumable: files already on disk with the expected size are skipped.
 """
+import argparse
 import os
 import json
 import ssl
@@ -17,6 +19,8 @@ BLUEPRINTS_ROOT = Path(
 )
 ROOT = str(BLUEPRINTS_ROOT)
 H = {'User-Agent': 'Mozilla/5.0'}
+if os.environ.get('HF_TOKEN'):
+    H['Authorization'] = f"Bearer {os.environ['HF_TOKEN'].strip()}"
 
 DATASETS = [
     ('jackluoluo/ArchCAD', '5_datasets/archcad_400k'),
@@ -68,26 +72,44 @@ def download(repo, rel, size, dest):
 
 
 def main():
-    for repo, rel_dir in DATASETS:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--only', action='append', help='Restrict download to specific repo(s), e.g. jackluoluo/ArchCAD')
+    args = parser.parse_args()
+    targets = DATASETS
+    if args.only:
+        only_set = set(args.only)
+        targets = [d for d in DATASETS if d[0] in only_set]
+        if not targets:
+            raise SystemExit(f'Unknown repo(s): {args.only}')
+
+    for repo, rel_dir in targets:
         dest = os.path.join(ROOT, rel_dir)
         os.makedirs(dest, exist_ok=True)
         files = list_files(repo)
         total = sum(s for _, s in files)
         print(f'{repo}: {len(files)} files, {total/1024/1024:.1f} MB -> {dest}', flush=True)
         done = 0
+        failures = []
         with ThreadPoolExecutor(max_workers=6) as pool:
             futures = [pool.submit(download, repo, p, s, dest) for p, s in files]
             for fut in as_completed(futures):
                 rel, status, n = fut.result()
                 done += 1
                 if status.startswith('fail'):
+                    failures.append((rel, status))
                     print(f'  FAIL {rel}: {status}', flush=True)
                 elif done % 100 == 0:
                     print(f'  {done}/{len(files)}', flush=True)
         with open(os.path.join(dest, 'SOURCE.json'), 'w') as f:
-            json.dump({'dataset': repo, 'files': len(files), 'bytes': total,
-                       'source_url': f'https://huggingface.co/datasets/{repo}'}, f, indent=2)
-        print(f'DONE {repo}', flush=True)
+            json.dump({
+                'dataset': repo,
+                'files': len(files),
+                'bytes': total,
+                'source_url': f'https://huggingface.co/datasets/{repo}',
+                'file_manifest': [{'path': p, 'size': s} for p, s in files],
+                'failures': failures,
+            }, f, indent=2)
+        print(f'DONE {repo} (failures={len(failures)})', flush=True)
 
 
 if __name__ == '__main__':
