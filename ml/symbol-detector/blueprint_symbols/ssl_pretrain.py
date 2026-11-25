@@ -492,6 +492,29 @@ def batch_to_device(deg, clean, mask, device, *, non_blocking: bool = True):
     return tuple(out)
 
 
+def _mutation(ds: "BlueprintSSLDataset", heavy: bool) -> dict:
+    """Mutation settings for one sample. Walls-only (symbol-free) sources get
+    the strongest: always warped, twice the added symbols, always-distorted
+    symbols and 1.5x chaos strength (capped at the allowed 2.0)."""
+    if not heavy:
+        return {
+            "level": "normal",
+            "max_symbols": ds.max_symbols,
+            "symbol_chaos_probability": ds.symbol_chaos_probability,
+            "symbol_chaos_strength": ds.symbol_chaos_strength,
+            "page_chaos_probability": ds.page_chaos_probability,
+            "page_chaos_strength": ds.page_chaos_strength,
+        }
+    return {
+        "level": "heavy",
+        "max_symbols": max(ds.max_symbols, min(48, 2 * ds.max_symbols)),
+        "symbol_chaos_probability": 1.0,
+        "symbol_chaos_strength": min(2.0, 1.5 * ds.symbol_chaos_strength),
+        "page_chaos_probability": 1.0,
+        "page_chaos_strength": min(2.0, 1.5 * ds.page_chaos_strength),
+    }
+
+
 class BlueprintSSLDataset(Dataset):
     """Source-balanced, group-balanced, runtime-augmented blueprint SSL dataset.
 
@@ -591,12 +614,18 @@ class BlueprintSSLDataset(Dataset):
         self.bucket_weights: list[float] = []
         self.bucket_groups: dict[str, list[list[str | dict]]] = {}
         self.bucket_group_probs: dict[str, np.ndarray] = {}
+        # Buckets proven to hold no symbols at all (walls-only drawings): the
+        # only symbols in a sample are the ones added here, so they get the
+        # heaviest mutation (see _mutation).
+        self.symbol_free_buckets: set[str] = set()
 
         for name, info in sorted(manifest['buckets'].items()):
             groups = [paths for paths in info['groups'].values() if paths]
             if not groups:
                 continue
             self.bucket_names.append(name)
+            if info.get('symbol_free') is True:
+                self.symbol_free_buckets.add(name)
             self.bucket_weights.append(float(info.get('weight', 1.0)))
             self.bucket_groups[name] = groups
             # Mix per-project uniform coverage with square-root page-count
@@ -782,6 +811,19 @@ class BlueprintSSLDataset(Dataset):
                 except (OSError, ValueError, IndexError, RuntimeError):
                     continue
                 break
+            if isinstance(entry, dict) and "vector_walls" in entry:
+                # Walls-only CAD lines, drawn fresh with a random style every
+                # time (never cached: the style is part of the mutation).
+                from .vector_walls import render_vector_walls
+                try:
+                    img = render_vector_walls(entry, crop_rng)
+                except (OSError, ValueError, KeyError):
+                    img = None
+                if img is None:
+                    continue            # nearly blank slice: pick another
+                clean = sample_label_guided_crop(img, self.size, crop_rng, None,
+                                                 focus_probability=0.0)
+                break
             boxes = entry.get("boxes") if isinstance(entry, dict) else None
             # Raster scans and verified-label crops also replay a stable
             # physical region. Cache the *base* crop, never its augmented
@@ -838,24 +880,33 @@ class BlueprintSSLDataset(Dataset):
         # Decide on a genuinely clean crop before any rotation/skew/page
         # deformation. Truly clean examples retain the crop's source geometry,
         # whereas the other examples receive all independent chaos stages.
-        full_clean_view = bool(rng.random() < self.clean_fraction)
+        # Walls-only pages hold no symbols of their own, so nothing real can
+        # be damaged: every sample is restyled, warped and filled with symbols
+        # at the strongest settings, never shown clean.
+        heavy = self.bucket_names[b_idx] in self.symbol_free_buckets
+        mutation = _mutation(self, heavy)
+        full_clean_view = False if heavy else bool(rng.random() < self.clean_fraction)
+        linework_meta = None
+        if heavy:
+            from .ssl_augmentation import mutate_linework
+            clean, linework_meta = mutate_linework(clean, rng)
         if not full_clean_view:
             clean = apply_geometric_variability(clean, rng)
         symbol_stats = {"requested": 0, "placed": 0, "shortfall": 0,
                         "neca": 0, "procedural": 0}
         if (not suppress_synthetic and self.max_symbols > 0 and
-                rng.random() < self.symbol_augment_probability):
+                (heavy or rng.random() < self.symbol_augment_probability)):
             from .ssl_augmentation import compose_ssl_symbols
             clean, symbol_stats = compose_ssl_symbols(
                 clean, rng, neca_bank=self.neca_bank,
-                max_symbols=self.max_symbols,
+                max_symbols=mutation["max_symbols"],
                 min_size_px=self.symbol_min_px,
                 max_size_px=self.symbol_max_px,
                 procedural_fraction=self.procedural_fraction,
                 symbol_chaos_probability=(
-                    0.0 if full_clean_view else self.symbol_chaos_probability
+                    0.0 if full_clean_view else mutation["symbol_chaos_probability"]
                 ),
-                symbol_chaos_strength=self.symbol_chaos_strength,
+                symbol_chaos_strength=mutation["symbol_chaos_strength"],
                 placement_chaos=self.placement_chaos,
                 drawing_dpi=(pdf_crop_meta["effective_dpi"]
                              if pdf_crop_meta is not None else None),
@@ -871,8 +922,8 @@ class BlueprintSSLDataset(Dataset):
         clean, warped_boxes, page_chaos_meta = warp_whole_page(
             clean, rng,
             boxes=[item["bbox_xyxy"] for item in placements],
-            probability=(0.0 if full_clean_view else self.page_chaos_probability),
-            strength=self.page_chaos_strength,
+            probability=(0.0 if full_clean_view else mutation["page_chaos_probability"]),
+            strength=mutation["page_chaos_strength"],
         )
         for item, warped_box in zip(placements, warped_boxes):
             item["bbox_xyxy"] = warped_box
@@ -919,6 +970,9 @@ class BlueprintSSLDataset(Dataset):
                     ),
                 },
                 "full_clean_view": full_clean_view,
+                "symbol_free_source": heavy,
+                "mutation": mutation,
+                "linework": linework_meta,
                 "negative_control_kind": control_kind,
                 "synthetic_suppressed": suppress_synthetic,
                 # Negative ground truth requires independent exhaustive

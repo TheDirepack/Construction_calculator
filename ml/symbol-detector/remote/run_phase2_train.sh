@@ -44,7 +44,12 @@ print(f"{len(pages['train'])} training pages (1_blueprints/*.pdf); "
       f"{len(complete)} fully labelled -> validation/test")
 PY
 
-echo "=== [2/5] COMPOSITE DEVICES: NECA 100-2013 GLYPHS + LEGEND-SHEET AND CAD-LIBRARY CROPS + CROPS OF VERIFIED LABELS ON 350 PAGES OF THE TRAINING PDFS ==="
+# Backgrounds: real training-PDF pages stay dominant (~62%). Walls-only pages
+# (walls drawn from ArchCAD/FloorPlanCAD line labels, rendered wall layouts)
+# are proven symbol-free, so their composites are completely labelled. Other
+# dataset images may hold symbols: positive-only unless listed in
+# $DATA/symbol_free_images.txt.
+echo "=== [2/5] COMPOSITE DEVICES: NECA 100-2013 GLYPHS + LEGEND-SHEET AND CAD-LIBRARY CROPS + CROPS OF VERIFIED LABELS ON TRAINING-PDF, WALLS-ONLY AND DATASET PAGES ==="
 if [[ ! -d "$WORK/composited_neca" ]]; then
   $PY scripts_composite_neca_svg.py \
     --neca-dir "$DATA/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library" \
@@ -52,6 +57,9 @@ if [[ ! -d "$WORK/composited_neca" ]]; then
     --symbol-library "$DATA/2_component_libraries/legend_symbol_crops" \
     --symbol-library "$DATA/2_component_libraries/harvested_symbols" \
     --background-pages "${PHASE2_BACKGROUND_PAGES:-350}" \
+    --walls-only-pages "${PHASE2_WALLS_ONLY_PAGES:-150}" \
+    --layouts-dir "$BASE/work/pool/background_layouts" \
+    --dataset-pages "${PHASE2_DATASET_PAGES:-60}" \
     --page-hash-cache "$BASE/work/pdf_page_hashes.sqlite" \
     --output "$WORK/composited_neca" \
     --copies 1 \

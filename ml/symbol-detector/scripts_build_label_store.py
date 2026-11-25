@@ -194,7 +194,7 @@ def scan_pdfs(store: Path, sets, *, dry_run: bool) -> dict:
     """Triage PDFs not yet in the store. PDFs already checked and found without
     electrical pages are remembered (by size and mtime) so daily runs stay cheap."""
     stats: dict[str, int] = defaultdict(int)
-    known = {Path(d.source).resolve() for d in label_store.iter_documents(store)} if store.is_dir() else set()
+    known = {Path(d.source).resolve() for d in label_store.iter_documents(store, skip_missing=True)} if store.is_dir() else set()
     scanned_path = store / SCANNED_FILE
     scanned = json.loads(scanned_path.read_text()) if scanned_path.is_file() else {}
     for pdf in _drawings(sets):

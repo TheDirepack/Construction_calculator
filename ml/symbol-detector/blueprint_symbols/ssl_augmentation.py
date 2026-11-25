@@ -168,3 +168,63 @@ def compose_ssl_symbols(
         bool(inst.get("symbol_chaos", {}).get("operations")) for inst, _ in combined
     )
     return page, metadata
+
+
+def mutate_linework(image: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, dict]:
+    """Restyle the drawn lines of a symbol-free (walls-only) crop.
+
+    Only for pages proven to hold no symbols: thickening, thinning or breaking
+    lines could otherwise alter a real symbol. Each change is independent, so
+    one wall slice yields many different-looking drawings. Returns the image
+    and a record of the changes made.
+    """
+    out = image.copy()
+    done: list[str] = []
+    gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    paper = float(np.percentile(gray, 90))
+    ink = gray < paper - 40
+    if not ink.any():
+        return out, {"changes": done}
+
+    r = rng.random()
+    if r < .30:                                   # heavier pen / bolder cut walls
+        k = int(rng.integers(2, 4))
+        out = cv2.erode(out, np.ones((k, k), np.uint8))
+        done.append(f"thicker_{k}")
+    elif r < .45:                                 # finer pen, only where lines survive it
+        thin = cv2.dilate(out, np.ones((2, 2), np.uint8))
+        kept = (cv2.cvtColor(thin, cv2.COLOR_BGR2GRAY) < paper - 40).sum() / max(1, ink.sum())
+        if kept > .45:
+            out = thin
+            done.append("thinner")
+
+    gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    ink = gray < paper - 40
+    if rng.random() < .30:                        # scan dropouts: lines broken in places
+        h, w = ink.shape
+        holes = np.zeros((h, w), np.uint8)
+        for _ in range(int(rng.integers(20, 160))):
+            x, y = int(rng.integers(w)), int(rng.integers(h))
+            s = int(rng.integers(2, 7))
+            holes[y:y + s, x:x + s] = 1
+        broken = (holes.astype(bool) & ink)
+        out[broken] = int(paper)
+        done.append("broken_lines")
+    if rng.random() < .30:                        # pen colour
+        color = rng.integers(0, 170, 3)
+        out[ink] = (out[ink].astype(np.float32) * .3 + color * .7).astype(np.uint8)
+        done.append("ink_colour")
+    if rng.random() < .20:                        # misregistered / ghosted print
+        dx, dy = (int(v) for v in rng.integers(-4, 5, 2))
+        ghost = np.roll(out, (dy, dx), axis=(0, 1))
+        out = np.minimum(out, (ghost.astype(np.float32) * .35 + 255 * .65).astype(np.uint8))
+        done.append("ghost")
+    if rng.random() < .40:                        # paper tint and uneven lighting
+        h, w = out.shape[:2]
+        tint = rng.integers(-28, 6, 3).astype(np.float32)
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        angle = rng.uniform(0, 2 * np.pi)
+        ramp = (np.cos(angle) * xx / w + np.sin(angle) * yy / h) * float(rng.uniform(0, 30))
+        out = np.clip(out.astype(np.float32) + tint - ramp[..., None], 0, 255).astype(np.uint8)
+        done.append("paper")
+    return out, {"changes": done}

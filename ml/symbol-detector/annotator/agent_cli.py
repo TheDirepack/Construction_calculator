@@ -461,7 +461,7 @@ def cmd_batches(args) -> None:
                 bins[number] = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()
                                 if line.strip() and not line.startswith("#")]
     assigned = {name for lines in bins for name in lines}
-    docs = list(label_store.iter_documents(store))
+    docs = list(label_store.iter_documents(store, skip_missing=True))
     sizes_by_name = {d.folder.name: max(1, len(d.pages_to_label())) for d in docs}
     sizes = [sum(sizes_by_name.get(name, 1) for name in lines) for lines in bins]
     fresh = [d for d in docs if d.folder.name not in assigned]
