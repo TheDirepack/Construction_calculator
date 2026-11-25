@@ -45,3 +45,36 @@ PY
 sort -u -o "$LIST" "$LIST"
 rsync -a --files-from="$LIST" --backup --suffix=.remote_backup "$STORE/" "$REMOTE:$REMOTE_STORE/"
 echo "labels -> $REMOTE:$REMOTE_STORE"
+
+# A drawing the remote store never added (no document.json there) gets its
+# document entry from the remote's own copy of the PDF: the same file name in
+# 1_blueprints or 1_blueprints/evaluation, and the same bytes (folder hash).
+ssh -o BatchMode=yes "$REMOTE" "bash -lc 'cd \$HOME/Projects/blueprint-symbols && PYTHONPATH=code PYTHONWARNINGS=ignore .venv/bin/python - $REMOTE_STORE data/blueprints_and_libraries'" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from annotator import label_store
+from blueprint_symbols.blueprint_sets import blueprint_sets
+
+store, data = Path(sys.argv[1]), Path(sys.argv[2])
+sets = blueprint_sets(data)
+added, missing = 0, []
+for folder in sorted(p for p in store.iterdir() if p.is_dir()):
+    if (folder / label_store.DOCUMENT_FILE).exists():
+        continue
+    pages = sorted(folder.glob("*_p[0-9]*.json"))
+    if not pages:
+        continue
+    name = json.loads(pages[0].read_text()).get("document_id", "")
+    pdf = sets.evaluation.get(name.casefold()) or sets.train.get(name.casefold())
+    sha = (json.loads(pages[0].read_text()).get("source_pdf_sha256") or "")
+    if pdf is None or not sha or label_store.doc_folder_name(pdf, sha) != folder.name:
+        missing.append(folder.name)
+        continue
+    label_store.create_document(store, pdf, sha256=sha, meta={"origin": "pushed_labels"})
+    added += 1
+print(f"remote documents added for pushed labels: {added}")
+if missing:
+    print(f"no matching PDF on the remote for: {', '.join(missing[:10])}", file=sys.stderr)
+PY

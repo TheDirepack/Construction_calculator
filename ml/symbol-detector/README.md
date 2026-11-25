@@ -98,15 +98,32 @@ that device: class `switch.three_way`. There are no category classes. A box
 without a specific catalog device (variant `unspecified`, an old coarse name)
 becomes an ignore region in training. Every page carries its verified project
 group (`class_maps/page_roles.json`), so train/val/test never split a project.
-Labeling covers every drawing, the evaluation set included: the store scan,
-the annotator, the agents and model pre-labeling all work from the blueprint
-folders and take proposals from the `*_DEVICES.json` file extracted from each
-PDF (in a `devices/` folder or next to the PDF). Only training separates the
-sets: `scripts_prepare_training_data.py --label-store work/labels --data-root
-<blueprints_and_libraries> --heldout <heldout_real_pdfs.json>` adds every store
-page with a verified box or a verified attestation, except drawings under
-`evaluation/` or in the held-out manifest (`label_store.labeled_pages` lists
-those separately for scoring). Verified symbol-free pages
+**Training and evaluation drawings are whatever is in the folders when a run
+starts** (`blueprint_symbols/blueprint_sets.py`; no index, cache or held-out
+manifest):
+
+| Folder | Role |
+|---|---|
+| `1_blueprints/*.pdf` | training drawings |
+| `1_blueprints/devices/*_DEVICES.json` | their extracted device boxes |
+| `1_blueprints/evaluation/*.pdf` | evaluation drawings, never trained on |
+| `1_blueprints/evaluation/devices/*_DEVICES.json` | their extracted device boxes |
+| any other subfolder of `1_blueprints` | neither set |
+
+* A file name in both folders counts as evaluation.
+* Moving a PDF between the folders moves it, and its labelled pages, at the
+  next run; label-store documents follow a moved PDF by name and hash.
+* Labeling covers both sets: the store scan, the annotator, the agents and model
+  pre-labeling all propose from the DEVICES file in the `devices/` folder
+  beside each PDF.
+* Post-training (`scripts_prepare_training_data.py --label-store work/labels
+  --data-root <blueprints_and_libraries>`) trains on labelled pages of training
+  drawings.
+* Validation and test are the **fully labelled** pages of evaluation drawings:
+  pages marked "every symbol on this page is labeled" or "verified no target
+  symbols". Their projects alternate between validation and test, and one
+  project serves as both.
+* Prep fails until at least one such page exists. Verified symbol-free pages
 that repeat an earlier one (same image fingerprint, e.g. a DOT standard sheet
 bound into many sets) are kept once. Phase-2 compositing places NECA glyphs,
 symbols cut from published legend sheets (`--symbol-library`) and crops of your
@@ -464,9 +481,9 @@ uses real construction drawings, CAD-derived layouts, optionally verified
 device-box annotations for crop targeting, NECA 100 vector SVG glyphs, and
 procedural electrical glyphs. None requires COCO or ImageNet weights.
 
-**Data sampling:** Real construction PDFs are indexed by source PDF and
-individual page with `scripts_index_real_pdfs.py`—including documents with
-hundreds of pages. The SSL loader opens each source PDF lazily, caches at most
+**Data sampling:** The training PDFs (`1_blueprints/*.pdf`) are listed page by
+page when pretraining starts, about a minute for ~900 PDFs; nothing is indexed,
+and older pool renders of `1_blueprints` files are ignored. The SSL loader opens each source PDF lazily, caches at most
 three document handles and 96 tiny density thumbnails per worker, and renders
 only randomized crop rectangles at the selected training scale. It does **not**
 first rasterize each sheet at 150 DPI and downsample a 24 MP page to 512px.
@@ -541,19 +558,10 @@ Detect-head phase must merge independently verified real annotations and
 synthetic positives while enforcing completeness rules appropriate to
 detection; these SSL crop metadata are not exhaustive ground truth.
 
-Keep the approximately 100 reserved source PDFs outside the indexed input
-tree or list them in `../work/heldout_real_pdfs.json`:
-```json
-{"source_pdfs": ["1_blueprints/path/to/reserved.pdf"],
- "project_family_ids": []}
-```
-Both the indexer and SSL manifest exclude these, plus already locked
-detector-evaluation project IDs. The separate 10% group-hashed SSL validation
-monitor is **not** the final reserved evaluation set. The remote launcher
-**fails closed** unless this manifest exists or
-`SSL_RESERVED_PDFS_OUTSIDE_DATA=1` explicitly confirms the reserved PDFs are
-physically outside the input root. Do not fold the final held-out set into
-SSL checkpoint selection.
+Evaluation drawings (`1_blueprints/evaluation`) never enter pretraining, nor do
+pool renders or labelled crops of them. The separate 10% group-hashed SSL
+validation monitor is drawn from training drawings and is **not** the
+evaluation set.
 
 **Symbol augmentation:** When enabled, each selected crop receives a uniformly
 sampled *requested* count of 0–16 new symbols (actual placements may be lower
