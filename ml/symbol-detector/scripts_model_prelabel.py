@@ -174,7 +174,7 @@ def list_pages(store: Path | None, batches: list[Path]):
     for batch in batches:
         folders.extend(label_store.batch_documents(batch))
     if store is not None:
-        folders.extend(d.folder for d in label_store.iter_documents(store))
+        folders.extend(d.folder for d in label_store.iter_documents(store, skip_missing=True))
     seen, out = set(), []
     for folder in folders:
         key = str(Path(folder).resolve())

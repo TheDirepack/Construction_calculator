@@ -362,6 +362,28 @@ def build_pretrain_manifests(
             train_buckets['archcad_train'] = {'weight': 0.12, 'groups': ac_groups}
             audit['included_counts']['archcad_train'] = len(ac_groups)
 
+    # 3c. Walls only, proven: ArchCAD and FloorPlanCAD label every line, so
+    # their walls / columns / windows / grid lines are drawn at load time with
+    # everything else left out (blueprint_symbols/vector_walls.py). Symbol-free
+    # buckets get the heaviest mutation (see BlueprintSSLDataset).
+    walls_groups: dict[str, list[dict[str, Any]]] = {}
+    vector_sources = (
+        ('archcad', data_root / '5_datasets' / 'archcad_400k' / 'extracted' / 'json', '*.json'),
+        ('floorplancad', data_root / '5_datasets' / 'floorplancad_full' / 'extracted', '*.svg'),
+    )
+    for fmt, folder, pattern in vector_sources:
+        if not folder.is_dir():
+            continue
+        files = sorted(folder.rglob(pattern) if fmt == 'archcad' else folder.glob(pattern))
+        for f in files:
+            path = str(f.resolve())
+            walls_groups[f'walls_{fmt}_{f.stem}'] = [
+                {'image_path': path, 'vector_walls': path, 'format': fmt}]
+        audit['included_counts'][f'walls_only_{fmt}'] = len(files)
+    if walls_groups:
+        train_buckets['walls_only_cad'] = {'weight': 0.10, 'symbol_free': True,
+                                           'groups': walls_groups}
+
     # 4. Rendered vector layouts: exclude ALL cubicasa5k_hf / resplan val & test IDs
     bl_dir = pool_dir / 'background_layouts'
     if bl_dir.is_dir():
@@ -388,7 +410,9 @@ def build_pretrain_manifests(
             bl_groups[gid] = [str(img_path)]
             audit['included_counts']['rendered_layouts_train'] += 1
         if bl_groups:
-            train_buckets['rendered_layouts_train'] = {'weight': 0.04, 'groups': bl_groups}
+            # Walls and openings only, drawn by adapters/render_layouts.py.
+            train_buckets['rendered_layouts_train'] = {'weight': 0.06, 'symbol_free': True,
+                                                       'groups': bl_groups}
 
     # 5. Real, verified positive device boxes guide SSL crop selection. This
     # does NOT assert that all symbols have been labeled, and it never turns

@@ -116,6 +116,15 @@ def main() -> None:
     p.add_argument('--background-pages', type=int, default=0,
                    help='also render this many random pages of the TRAINING drawings (1_blueprints/*.pdf '
                         'under --data-root, read at runtime) as backgrounds')
+    p.add_argument('--walls-only-pages', type=int, default=0,
+                   help='also make this many proven symbol-free backgrounds (walls drawn from ArchCAD / '
+                        'FloorPlanCAD line labels under --data-root, plus --layouts-dir); their '
+                        'composites are completely labelled')
+    p.add_argument('--layouts-dir', type=Path,
+                   help='rendered wall layouts (work/pool/background_layouts) to include as walls-only')
+    p.add_argument('--dataset-pages', type=int, default=0,
+                   help='also use this many ArchCAD / FloorPlanCAD / CubiCasa images as backgrounds '
+                        '(positive-only unless listed in <data root>/symbol_free_images.txt)')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--per-page', type=int, default=24)
     p.add_argument('--copies', type=int, default=1)
@@ -170,6 +179,18 @@ def main() -> None:
         paths += render_training_backgrounds(a.data_root, a.output / '_backgrounds',
                                              a.background_pages, seed=a.seed,
                                              page_hash_cache=a.page_hash_cache)
+    if a.walls_only_pages or a.dataset_pages:
+        if a.data_root is None:
+            raise SystemExit('--walls-only-pages / --dataset-pages need --data-root')
+        from blueprint_symbols.dataset_backgrounds import (
+            other_dataset_backgrounds, read_symbol_free_list, walls_only_backgrounds)
+        if a.walls_only_pages:
+            paths += walls_only_backgrounds(a.data_root, a.output / '_backgrounds_walls_only',
+                                            a.walls_only_pages, seed=a.seed, layouts_dir=a.layouts_dir)
+        if a.dataset_pages:
+            paths += other_dataset_backgrounds(a.data_root, a.output / '_backgrounds_datasets',
+                                               a.dataset_pages, seed=a.seed,
+                                               symbol_free=read_symbol_free_list(a.data_root))
     if not paths:
         raise SystemExit('no background pages: give --backgrounds and/or --background-pages')
     prev_dir = a.output / '_previews'

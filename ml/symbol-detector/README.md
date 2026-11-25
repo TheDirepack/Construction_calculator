@@ -492,7 +492,33 @@ folders at start: every clean PNG in `5_datasets/floorplancad_full/extracted`
 every floor (`F*_scaled.png`) of the CubiCasa5K train plans. Neither
 FloorPlanCAD's nor ArchCAD's own splits matter here, since the detector is
 evaluated on `1_blueprints/evaluation` only. A run stopped to add data can be
-restarted warm with `SSL_INIT_WEIGHTS=<old run>/last_pretrain.pt`. The SSL loader opens each source PDF lazily, caches at most
+restarted warm with `SSL_INIT_WEIGHTS=<old run>/last_pretrain.pt`.
+
+**What each dataset holds, and its flag** (reviewed 2026-11-25; none has
+electrical labels, so none adds detector labels of its own):
+
+| Source | Content | Flag |
+|---|---|---|
+| ResPlan, CubiCasa-HF, HouseExpo layouts (`work/pool/background_layouts`) | walls and openings only, drawn by `adapters/render_layouts.py` | **walls only, proven** |
+| ArchCAD / FloorPlanCAD drawn from their line labels (`blueprint_symbols/vector_walls.py`) | only wall, column, beam, grid and window lines kept; ArchCAD piles and FloorPlanCAD IDs 3-6, 11, 12, 19, 35 left out | **walls only, proven** |
+| ArchCAD, FloorPlanCAD, CubiCasa5K rasters | doors, fixtures, furniture, text and 40% unlabelled linework; ArchCAD parking bays carry EV-charger symbols | may contain symbols |
+| Training PDFs and pool pages | real sheets, many electrical | may contain symbols |
+
+FloorPlanCAD's class IDs in this release do not follow the published order
+(1 = wall, 2 = curtain wall, 9 = window, 35 = parked cars); they were
+identified by drawing each one. Walls-only buckets carry `"symbol_free": true`
+in the manifest and get the heaviest mutation: never a clean view, a page warp
+on every sample at 1.5x strength, twice the added symbols with
+always-distorted shapes, a new drawing style per draw (scale, pen weight, ink,
+paper) and `mutate_linework` (thicker or thinner lines, scan dropouts, pen
+colour, ghosting, paper tint).
+
+In post-training (`run_phase2_train.sh`) real training-PDF pages stay the
+dominant composite background (350 pages). 150 walls-only pages give
+completely labelled composites: every symbol on them is one that was placed,
+so the rest is a true negative. 60 other dataset images stay positive-only
+unless listed in `<data root>/symbol_free_images.txt` (one path per line,
+relative to the data root), the hand-flag list. The SSL loader opens each source PDF lazily, caches at most
 three document handles and 96 tiny density thumbnails per worker, and renders
 only randomized crop rectangles at the selected training scale. It does **not**
 first rasterize each sheet at 150 DPI and downsample a 24 MP page to 512px.
