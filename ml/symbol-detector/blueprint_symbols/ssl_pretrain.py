@@ -529,6 +529,7 @@ class BlueprintSSLDataset(Dataset):
         pdf_thumbnail_cache_dir: str | Path | None = None,
         extra_glyphs: list | None = None,
         library_symbol_share: float = 0.5,
+        page_hash_cache: str | Path | None = None,
     ) -> None:
         super().__init__()
         self.size = int(size)
@@ -570,6 +571,11 @@ class BlueprintSSLDataset(Dataset):
         self.include_pre_page_preview = bool(include_pre_page_preview)
         if self.include_pre_page_preview and not self.return_metadata:
             raise ValueError("include_pre_page_preview requires return_metadata")
+        # Exact duplicate PDF pages train once (page_hash_cache.PageHashCache).
+        self._page_hashes = None
+        if page_hash_cache is not None:
+            from .page_hash_cache import PageHashCache
+            self._page_hashes = PageHashCache(page_hash_cache)
         self.neca_bank = None
         if neca_dir is not None:
             from .neca_svg_compositor import NecaSymbolBank
@@ -703,6 +709,21 @@ class BlueprintSSLDataset(Dataset):
             self._raster_cache_bytes += img.nbytes
         return img
 
+    def _first_unique_page(self, group: list, start: int) -> tuple[dict | None, int]:
+        """This page, or the next page of its PDF group (wrapping) whose
+        content no other page owns. Returns (entry or None, pages skipped)."""
+        for skipped in range(len(group)):
+            entry = group[(start + skipped) % len(group)]
+            if not (isinstance(entry, dict) and "pdf_page_index" in entry):
+                return entry, skipped
+            try:
+                duplicate = self._page_hashes.is_duplicate(entry["source_pdf"], entry["pdf_page_index"])
+            except Exception:           # unreadable page or busy cache: never block training
+                duplicate = False
+            if not duplicate:
+                return entry, skipped
+        return None, len(group)
+
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         ep = 0 if self.deterministic_eval else self.epoch
         rng = np.random.default_rng(np.random.SeedSequence([self.seed, ep, index]))
@@ -713,6 +734,7 @@ class BlueprintSSLDataset(Dataset):
         path = ""
         b_idx = 0
         crop_slot = -1 - index
+        duplicates_skipped = 0
         for attempt in range(8):
             if attempt == 0 and self._source_plan is not None:
                 b_idx, group_idx, entry_idx, crop_slot = map(
@@ -729,6 +751,11 @@ class BlueprintSSLDataset(Dataset):
             groups = self.bucket_groups[name]
             group = groups[group_idx]
             entry = group[entry_idx]
+            if isinstance(entry, dict) and "pdf_page_index" in entry and self._page_hashes is not None:
+                entry, skipped = self._first_unique_page(group, entry_idx)
+                duplicates_skipped += skipped
+                if entry is None:
+                    continue            # every page of this PDF repeats another: pick elsewhere
             path = entry["image_path"] if isinstance(entry, dict) else entry
             crop_page = int(entry.get("pdf_page_index", -1)) if isinstance(entry, dict) else -1
             crop_seed = self._base_crop_seed(
@@ -879,6 +906,7 @@ class BlueprintSSLDataset(Dataset):
             details = {
                 "source": str(path), "bucket": self.bucket_names[b_idx],
                 "pdf_crop": pdf_crop_meta,
+                "duplicate_pages_skipped": duplicates_skipped,
                 "base_crop": {
                     "seed": crop_seed,
                     "bank_slot": crop_slot if crop_slot >= 0 else None,

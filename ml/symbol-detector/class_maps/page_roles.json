@@ -35,6 +35,32 @@
   ],
   "rules": [
     {
+      "glob": "field_panels_album_2/**",
+      "role": "skip",
+      "why": "photos of panelboards, not plan symbols"
+    },
+    {
+      "glob": "field_plans_album_1/**",
+      "role": "label_queue",
+      "group": "set:field_album_1",
+      "why": "RCP, lighting layouts and electrical redlines (moved out of 1_blueprints)"
+    },
+    {
+      "glob": "_recovered_from_pool/**",
+      "role": "skip",
+      "why": "copies of images already in the page pool"
+    },
+    {
+      "glob": "_device_audit_crops/**",
+      "role": "skip",
+      "why": "audit crops, not pages"
+    },
+    {
+      "glob": "_snap_reference/**",
+      "role": "skip",
+      "why": "reference images for the app's line snapping"
+    },
+    {
       "glob": "1_blueprints/field_panels_album_2/**",
       "role": "skip",
       "why": "photos of panelboards, not plan symbols"

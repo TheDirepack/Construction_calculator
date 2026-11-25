@@ -482,8 +482,17 @@ device-box annotations for crop targeting, NECA 100 vector SVG glyphs, and
 procedural electrical glyphs. None requires COCO or ImageNet weights.
 
 **Data sampling:** The training PDFs (`1_blueprints/*.pdf`) are listed page by
-page when pretraining starts, about a minute for ~900 PDFs; nothing is indexed,
-and older pool renders of `1_blueprints` files are ignored. The SSL loader opens each source PDF lazily, caches at most
+page when pretraining starts, about a minute for ~900 PDFs; nothing is indexed.
+All other sources still train as before (pool images, scans, datasets, CAD
+layouts); only pool renders of a training PDF (already read directly) or of an
+evaluation drawing are skipped. The image datasets are also listed from their
+folders at start: every clean PNG in `5_datasets/floorplancad_full/extracted`
+(train and test archives; `coco_vis` never), every slice in
+`5_datasets/archcad_400k/extracted/png` (ArchCAD, ~41k CAD plan slices), and
+every floor (`F*_scaled.png`) of the CubiCasa5K train plans. Neither
+FloorPlanCAD's nor ArchCAD's own splits matter here, since the detector is
+evaluated on `1_blueprints/evaluation` only. A run stopped to add data can be
+restarted warm with `SSL_INIT_WEIGHTS=<old run>/last_pretrain.pt`. The SSL loader opens each source PDF lazily, caches at most
 three document handles and 96 tiny density thumbnails per worker, and renders
 only randomized crop rectangles at the selected training scale. It does **not**
 first rasterize each sheet at 150 DPI and downsample a 24 MP page to 512px.

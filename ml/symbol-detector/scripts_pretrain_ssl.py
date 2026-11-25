@@ -1,8 +1,10 @@
 """Build a split-safe blueprint-only SSL pretraining manifest and train YOLO26n-P2.
 
 Strictly excludes all validation and test plans:
-  - CubiCasa5K official: train.txt ONLY (val.txt and test.txt excluded)
-  - FloorPlanCAD full: train-00 / train-01 clean PNGs ONLY (test-00 and coco_vis excluded)
+  - CubiCasa5K official: train.txt ONLY (val.txt and test.txt excluded), every floor
+  - FloorPlanCAD: every clean PNG in 5_datasets/floorplancad_full/extracted (coco_vis
+    excluded; its test archive is not an evaluation set for this detector)
+  - ArchCAD: every PNG in 5_datasets/archcad_400k/extracted/png (training only)
   - Rendered vector layouts: excludes any layout ID in cubicasa5k_hf/{val,test}.jsonl
     or resplan/{val,test}.jsonl
   - Curated page pool (background, reserve, label_queue): excludes quarantined/junk
@@ -238,10 +240,14 @@ def build_pretrain_manifests(
             gid = str(doc.get('project_family_id') or jpath.stem)
             src_path = str((doc.get('pool') or {}).get('source_path') or jpath.name)
             source_file = str((data_root / src_path).resolve())
-            if Path(src_path).parts[:1] == ('1_blueprints',):
-                # Blueprint PDFs come straight from the folders above; old pool
-                # renders of them (or of other 1_blueprints subfolders) don't train.
-                audit['excluded_counts']['pool_render_of_blueprints'] += 1
+            src_name = Path(src_path).name.casefold()
+            if src_name in sets.evaluation:
+                audit['excluded_counts']['pool_render_of_evaluation_drawing'] += 1
+                continue
+            if src_name in sets.train:
+                # The training PDFs are read page by page above; an old render
+                # of the same PDF (at any former path) would count it twice.
+                audit['excluded_counts']['replaced_by_direct_pdf'] += 1
                 continue
             if source_file in indexed_pdf_paths:
                 # Prefer fresh PDF-native crops, avoid doubling the same page
@@ -307,10 +313,11 @@ def build_pretrain_manifests(
             if rel_id in cc_val_ids or rel_id in cc_test_ids:
                 audit['excluded_counts']['cubicasa_overlap'] += 1
                 continue
-            img = (cc_root / rel_id / 'F1_scaled.png').resolve()
-            if img.is_file():
-                cc_tr_groups[f'cubicasa_{rel_id.replace("/", "_")}'] = [str(img)]
-                audit['included_counts']['cubicasa5k_train'] += 1
+            # Every floor of the plan (F1..F4), one group per plan.
+            floors = sorted(str(p.resolve()) for p in (cc_root / rel_id).glob('F*_scaled.png'))
+            if floors:
+                cc_tr_groups[f'cubicasa_{rel_id.replace("/", "_")}'] = floors
+                audit['included_counts']['cubicasa5k_train'] += len(floors)
         for rel_id in sorted(cc_val_ids):
             img = (cc_root / rel_id / 'F1_scaled.png').resolve()
             if img.is_file():
@@ -323,19 +330,37 @@ def build_pretrain_manifests(
         if cc_va_groups:
             val_buckets['cubicasa5k_val_readonly'] = {'weight': 0.30, 'groups': cc_va_groups}
 
-    # 3. FloorPlanCAD full train PNGs ONLY (never test-00.tar.xz, never coco_vis)
-    if fpcad_train_dir and fpcad_train_dir.is_dir():
+    # 3. FloorPlanCAD: every clean PNG found at runtime in the dataset folder
+    # (train and test archives alike: neither is an evaluation set for this
+    # detector, which is evaluated on 1_blueprints/evaluation only), plus an
+    # older extracted folder if given. Never coco_vis (drawn-on annotations).
+    fp_pngs: dict[str, Path] = {}
+    for folder in (fpcad_train_dir, data_root / '5_datasets' / 'floorplancad_full' / 'extracted'):
+        if folder and folder.is_dir():
+            for png in sorted(folder.glob('*.png')):
+                fp_pngs.setdefault(png.name, png.resolve())
+    if fp_pngs:
         fp_groups: dict[str, list[str]] = defaultdict(list)
-        for png in sorted(fpcad_train_dir.glob('*.png')):
-            drawing = png.stem.split('-')[0]
-            gid = f'floorplancad_{drawing}'
+        for name, png in sorted(fp_pngs.items()):
+            gid = f'floorplancad_{png.stem.split("-")[0]}'
             if gid in locked_eval_groups:
                 audit['excluded_counts']['floorplancad_locked_eval'] += 1
                 continue
-            fp_groups[gid].append(str(png.resolve()))
+            fp_groups[gid].append(str(png))
             audit['included_counts']['floorplancad_train'] += 1
         if fp_groups:
             train_buckets['floorplancad_train'] = {'weight': 0.18, 'groups': dict(fp_groups)}
+
+    # 3b. ArchCAD: 14 m x 14 m slices of architectural CAD plans, read from
+    # the dataset folder at runtime. Training only; one group per slice (the
+    # release gives no drawing ID to group slices by).
+    archcad_dir = data_root / '5_datasets' / 'archcad_400k' / 'extracted' / 'png'
+    if archcad_dir.is_dir():
+        ac_groups = {f'archcad_{png.stem}': [str(png.resolve())]
+                     for png in sorted(archcad_dir.rglob('*.png'))}
+        if ac_groups:
+            train_buckets['archcad_train'] = {'weight': 0.12, 'groups': ac_groups}
+            audit['included_counts']['archcad_train'] = len(ac_groups)
 
     # 4. Rendered vector layouts: exclude ALL cubicasa5k_hf / resplan val & test IDs
     bl_dir = pool_dir / 'background_layouts'
@@ -782,6 +807,19 @@ def train(args: argparse.Namespace) -> None:
     (out_dir / "run_fingerprint.txt").write_text(identity + "\n")
     print(f'Pretrain run fingerprint: {identity}', flush=True)
 
+    # Exact duplicate PDF pages train once: one shared fingerprint cache,
+    # filled as pages are picked. Evaluation pages claim their fingerprints
+    # first (hashed once, cached), so identical training pages never train.
+    from blueprint_symbols.blueprint_sets import blueprint_sets
+    from blueprint_symbols.page_hash_cache import PageHashCache
+    page_hash_cache = Path(args.work_root) / 'pdf_page_hashes.sqlite'
+    try:
+        claimed = PageHashCache(page_hash_cache).register_evaluation(
+            blueprint_sets(args.data_root).pdfs('evaluation'))
+        print(f'Evaluation page fingerprints claimed: {claimed}', flush=True)
+    except FileNotFoundError:
+        pass
+
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     device = torch.device('cuda:0')
@@ -805,6 +843,7 @@ def train(args: argparse.Namespace) -> None:
         'page_chaos_strength': args.page_chaos_strength,
         'extra_glyphs': extra_glyphs,
         'library_symbol_share': getattr(args, 'library_symbol_share', 0.5),
+        'page_hash_cache': page_hash_cache,
     }
     train_ds = BlueprintSSLDataset(
         train_manifest, size=args.imgsz, items_per_epoch=args.items_per_epoch,

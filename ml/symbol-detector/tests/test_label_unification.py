@@ -268,3 +268,21 @@ def test_everything_is_labeled_and_only_training_skips_the_evaluation_set(tmp_pa
     side_pdf.rename(blue / "evaluation" / "side_set.pdf")
     moved = label_store.labeled_pages(store, data_root=blue.parent)
     assert moved["train"] == [] and len(moved["evaluation"]) == 2
+
+
+def test_training_split_skips_documents_whose_pdf_is_gone(tmp_path):
+    blue = tmp_path / "blueprints_and_libraries" / "1_blueprints"
+    kept = _pdf(blue / "kept.pdf", "E1 LIGHTING")
+    gone = _pdf(blue / "gone.pdf", "E2 LIGHTING")
+    store = label_store.default_store()
+    for pdf, family in ((kept, "receptacle"), (gone, "receptacle")):
+        label_store.create_document(store, pdf, targets={1: "test"})
+        web = LabelingSession(pdf=pdf)
+        page, revision, _ = web.page_document(0)
+        box = {**_verified(family, "duplex"), "bbox_xyxy": [10, 10, 30, 30]}
+        web.save(0, revision=revision, instances=[box], rejected=[])
+    (blue / "_set_aside").mkdir()
+    gone.rename(blue / "_set_aside" / "gone.pdf")          # neither training nor evaluation now
+    split = label_store.labeled_pages(store, data_root=blue.parent)
+    assert [p.parent.name.startswith("kept") for p in split["train"]] == [True]
+    assert split["evaluation"] == []

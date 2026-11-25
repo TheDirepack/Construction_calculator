@@ -44,7 +44,8 @@ def draw_preview(image: np.ndarray, placed: list[dict], out_path: Path) -> None:
 
 
 def render_training_backgrounds(data_root: Path, out_dir: Path, count: int, *, seed: int,
-                                dpi: int = 150, max_pixels: int = 24_000_000) -> list[Path]:
+                                dpi: int = 150, max_pixels: int = 24_000_000,
+                                page_hash_cache: Path | None = None) -> list[Path]:
     """Render ``count`` random pages of the training drawings (``1_blueprints/*.pdf``,
     found at runtime) to page JSONs; positive-only, since their own devices
     are unlabelled."""
@@ -57,6 +58,10 @@ def render_training_backgrounds(data_root: Path, out_dir: Path, count: int, *, s
         raise SystemExit(f'no training PDFs in {data_root}/1_blueprints')
     rng = np.random.default_rng(seed)
     out_dir.mkdir(parents=True, exist_ok=True)
+    hashes = None
+    if page_hash_cache is not None:      # exact duplicate pages (and evaluation copies) once
+        from blueprint_symbols.page_hash_cache import PageHashCache
+        hashes = PageHashCache(page_hash_cache)
     written: list[Path] = []
     tries = 0
     seen = set()
@@ -74,6 +79,12 @@ def render_training_backgrounds(data_root: Path, out_dir: Path, count: int, *, s
         if key in seen:
             continue
         seen.add(key)
+        if hashes is not None:
+            try:
+                if hashes.is_duplicate(pdf, entry['pdf_page_index']):
+                    continue
+            except Exception:
+                pass
         with pymupdf.open(pdf) as doc:
             page = doc[entry['pdf_page_index']]
             zoom = dpi / 72
@@ -99,6 +110,9 @@ def main() -> None:
     p.add_argument('--neca-dir', type=Path, required=True, help='Path to NECA_100_Vector_Library folder')
     p.add_argument('--backgrounds', nargs='+', default=[],
                    help='Globs for source page JSONs; unverified backgrounds remain positive-only')
+    p.add_argument('--page-hash-cache', type=Path,
+                   help='shared PDF page fingerprint cache (work/pdf_page_hashes.sqlite): '
+                        'background pages skip exact duplicates and copies of evaluation pages')
     p.add_argument('--background-pages', type=int, default=0,
                    help='also render this many random pages of the TRAINING drawings (1_blueprints/*.pdf '
                         'under --data-root, read at runtime) as backgrounds')
@@ -154,7 +168,8 @@ def main() -> None:
         if a.data_root is None:
             raise SystemExit('--background-pages needs --data-root')
         paths += render_training_backgrounds(a.data_root, a.output / '_backgrounds',
-                                             a.background_pages, seed=a.seed)
+                                             a.background_pages, seed=a.seed,
+                                             page_hash_cache=a.page_hash_cache)
     if not paths:
         raise SystemExit('no background pages: give --backgrounds and/or --background-pages')
     prev_dir = a.output / '_previews'

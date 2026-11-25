@@ -173,22 +173,29 @@ def test_native_pdf_accepts_uppercase_extension(tmp_path):
     assert len(entries) == 2 and entries[0]["source_pdf"] == str(upper.resolve())
 
 
-def test_pool_renders_of_blueprints_are_not_trained(tmp_path):
+def test_pool_renders_of_direct_pdfs_and_evaluation_are_skipped_other_datasets_kept(tmp_path):
     root, work = tmp_path / "data", tmp_path / "work"
-    pdf = root / "1_blueprints" / "site.pdf"
-    make_pdf(pdf, 4)
+    make_pdf(root / "1_blueprints" / "site.pdf", 4)
+    make_pdf(root / "1_blueprints" / "evaluation" / "held.pdf", 2)
     background = work / "pool" / "background"
     background.mkdir(parents=True)
     img = np.full((256, 256, 3), 250, np.uint8)
-    assert cv2.imwrite(str(background / "old_page.png"), img)
-    record = {
-        "image_path": "old_page.png", "project_family_id": "old_raster_group",
-        "image_width": 256, "image_height": 256,
-        "pool": {"source_path": "1_blueprints/old_subfolder/gone.pdf"},
-    }
-    (background / "old_page.json").write_text(json.dumps(record))
+    sources = {"dup": "1_blueprints/old_subfolder/site.pdf",          # same PDF, read directly
+               "eval": "1_blueprints/new_downloads/held.pdf",          # an evaluation drawing
+               "scan": "1_blueprints/user_scans/only_copy.pdf"}       # another dataset: keep
+    for n, (stem, src) in enumerate(sources.items()):
+        page = img.copy()
+        page[n * 10:n * 10 + 5] = 0                                   # distinct image bytes
+        assert cv2.imwrite(str(background / f"{stem}.png"), page)
+        (background / f"{stem}.json").write_text(json.dumps({
+            "image_path": f"{stem}.png", "project_family_id": f"group_{stem}",
+            "image_width": 256, "image_height": 256, "pool": {"source_path": src}}))
     train, val, audit = build_pretrain_manifests(root, work)
-    assert audit["excluded_counts"].get("pool_render_of_blueprints") == 1
+    assert audit["excluded_counts"].get("replaced_by_direct_pdf") == 1
+    assert audit["excluded_counts"].get("pool_render_of_evaluation_drawing") == 1
+    pooled = [p for b in (train, val) for name, bucket in b.get("buckets", {}).items()
+              if name != "real_pdf_pages" for paths in bucket["groups"].values() for p in paths]
+    assert [Path(p).stem for p in pooled] == ["scan"]
     assert len(_direct_pages(train, val)) == 4
 
 
@@ -568,3 +575,48 @@ def test_multi_dpi_views_keep_physical_anchor_and_cover_range(tmp_path):
             )
     finally:
         sampler.close()
+
+
+def test_image_datasets_are_read_from_their_folders(tmp_path):
+    """ArchCAD, every FloorPlanCAD PNG and every CubiCasa floor are found at runtime."""
+    root, work = tmp_path / "data", tmp_path / "work"
+    work.mkdir(parents=True)
+    png = cv2.imencode(".png", np.full((32, 32), 255, np.uint8))[1].tobytes()
+
+    archcad = root / "5_datasets/archcad_400k/extracted/png/png"
+    archcad.mkdir(parents=True)
+    for name in ("a1", "a2", "a3"):
+        (archcad / f"{name}.png").write_bytes(png)
+
+    fpcad = root / "5_datasets/floorplancad_full/extracted"
+    (fpcad / "coco_vis").mkdir(parents=True)
+    for name in ("0001-0001", "0001-0002", "0002-0001"):
+        (fpcad / f"{name}.png").write_bytes(png)
+    (fpcad / "coco_vis/0001-0001.png").write_bytes(png)      # drawn-on annotations: never
+    old_fpcad = tmp_path / "old_fpcad"
+    old_fpcad.mkdir()
+    (old_fpcad / "0001-0001.png").write_bytes(png)            # same file under the old folder
+    (old_fpcad / "0003-0001.png").write_bytes(png)
+
+    cc = root / "5_datasets/cubicasa5k_official/cubicasa5k"
+    for plan, floors in (("high/1", 2), ("high/2", 1), ("high/3", 1)):
+        for f in range(1, floors + 1):
+            (cc / plan).mkdir(parents=True, exist_ok=True)
+            (cc / plan / f"F{f}_scaled.png").write_bytes(png)
+            (cc / plan / f"F{f}_original.png").write_bytes(png)
+    (cc / "train.txt").write_text("/high/1/\n/high/2/\n")
+    (cc / "val.txt").write_text("/high/3/\n")
+    (cc / "test.txt").write_text("")
+
+    train, val, audit = build_pretrain_manifests(root, work, fpcad_train_dir=old_fpcad)
+    buckets = train["buckets"]
+    assert len(buckets["archcad_train"]["groups"]) == 3
+    assert audit["included_counts"]["archcad_train"] == 3
+    fp_paths = [p for g in buckets["floorplancad_train"]["groups"].values() for p in g]
+    assert sorted(Path(p).name for p in fp_paths) == [
+        "0001-0001.png", "0001-0002.png", "0002-0001.png", "0003-0001.png"]
+    assert not any("coco_vis" in p for p in fp_paths)
+    assert len(buckets["cubicasa5k_train"]["groups"]["cubicasa_high_1"]) == 2   # both floors
+    assert audit["included_counts"]["cubicasa5k_train"] == 3
+    assert "cubicasa_high_3" not in buckets["cubicasa5k_train"]["groups"]
+    assert "archcad_train" not in val["buckets"]

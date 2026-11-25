@@ -3,8 +3,15 @@
 # training machine. Safe to re-run: rsync only sends what changed, and it never
 # deletes anything on the remote data side.
 #
-#   ml/symbol-detector/remote/sync.sh            # code only
-#   ml/symbol-detector/remote/sync.sh --data     # code + blueprints_and_libraries/
+#   ml/symbol-detector/remote/sync.sh               # code only
+#   ml/symbol-detector/remote/sync.sh --blueprints  # code + mirror the training/evaluation PDFs
+#   ml/symbol-detector/remote/sync.sh --data        # code + all of blueprints_and_libraries/
+#
+# The drawing sets are curated on this machine, so they are MIRRORED: a PDF
+# removed here (1_blueprints/*.pdf, 1_blueprints/evaluation/, the devices/
+# folders) is removed on the remote too. Everything else in the data tree is
+# only ever added to, never deleted: the remote holds datasets downloaded or
+# recovered there that this machine never had.
 #
 # Override the target with REMOTE=user@host and REMOTE_DIR=path.
 set -euo pipefail
@@ -20,6 +27,15 @@ rsync -a --delete \
   --exclude '__pycache__' --exclude '.pytest_cache' --exclude 'work/' \
   "$HERE/" "$REMOTE:$REMOTE_DIR/code/"
 echo "code -> $REMOTE:$REMOTE_DIR/code"
+
+if [[ "${1:-}" == "--data" || "${1:-}" == "--blueprints" ]]; then
+  # Root PDFs, evaluation/ and devices/ folders only; other subfolders untouched.
+  rsync -a --delete --info=stats1 \
+    --include='/*.pdf' --include='/*.PDF' --include='/devices/***' --include='/evaluation/***' \
+    --exclude='*' \
+    "$REPO/blueprints_and_libraries/1_blueprints/" "$REMOTE:$REMOTE_DIR/data/blueprints_and_libraries/1_blueprints/"
+  echo "training/evaluation drawings mirrored -> $REMOTE:$REMOTE_DIR/data/blueprints_and_libraries/1_blueprints"
+fi
 
 if [[ "${1:-}" == "--data" ]]; then
   # Raw sources only. Zips that were already extracted next to themselves are

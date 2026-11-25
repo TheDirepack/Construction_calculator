@@ -81,3 +81,31 @@ def test_evaluation_pages_must_be_fully_labelled(tmp_path):
     held = _pages(tmp_path, 1, "eval", complete=False)
     with pytest.raises(ValueError, match="not fully labelled"):
         build_manifest(train + held, allow_partial_training=True, evaluation_files=held)
+
+
+def test_duplicate_pages_are_skipped_lazily_through_one_shared_cache(tmp_path):
+    fitz = pytest.importorskip("pymupdf")
+    from blueprint_symbols.page_hash_cache import PageHashCache
+
+    def pdf(path, texts):
+        doc = fitz.open()
+        for text in texts:
+            page = doc.new_page(width=400, height=300)
+            page.insert_text((20, 40), text)
+            page.draw_circle((100, 100), 8)
+        doc.save(path)
+        return path
+
+    a = pdf(tmp_path / "a.pdf", ["SHEET E1", "STANDARD DETAIL"])
+    b = pdf(tmp_path / "b.pdf", ["STANDARD DETAIL", "SHEET E2"])       # page 0 repeats a's page 1
+    e = pdf(tmp_path / "eval.pdf", ["SHEET E2"])                        # b's page 1 is an evaluation page
+    cache = PageHashCache(tmp_path / "hashes.sqlite")
+    assert cache.register_evaluation([e]) == 1
+    assert not cache.is_duplicate(a, 0) and not cache.is_duplicate(a, 1)
+    assert cache.is_duplicate(b, 0)                     # same content as a's page 1, which came first
+    assert cache.is_duplicate(b, 1)                     # identical to an evaluation page
+    assert not cache.is_duplicate(a, 1)                 # the owner stays the owner
+    again = PageHashCache(tmp_path / "hashes.sqlite")   # another worker / run shares the cache
+    assert again.is_duplicate(b, 0)
+    import pickle
+    assert pickle.loads(pickle.dumps(again)).is_duplicate(b, 0)

@@ -254,9 +254,15 @@ def page_status(doc: Document, page: int) -> dict:
     return row
 
 
-def iter_documents(store: Path):
+def iter_documents(store: Path, *, skip_missing: bool = False):
+    """Documents of a store. ``skip_missing`` leaves out documents whose PDF
+    is in neither blueprint folder any more (deleted or moved elsewhere)."""
     for meta in sorted(Path(store).glob(f"*/{DOCUMENT_FILE}")):
-        yield load_document(meta.parent)
+        try:
+            yield load_document(meta.parent)
+        except FileNotFoundError:
+            if not skip_missing:
+                raise
 
 
 def batch_documents(batch: Path) -> list[Path]:
@@ -304,7 +310,7 @@ def _usable_pages(store: Path) -> list[Path]:
     """
     from blueprint_symbols.label_schema import training_usable
     out = []
-    for doc in iter_documents(store):
+    for doc in iter_documents(store, skip_missing=True):
         for path in sorted(doc.folder.glob(f"{doc.json_prefix}_p[0-9]*.json")):
             data = json.loads(path.read_text(encoding="utf-8"))
             if not training_usable(data):

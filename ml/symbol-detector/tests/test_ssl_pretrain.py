@@ -162,7 +162,8 @@ def test_cached_evaluation_pages_and_their_project_are_excluded(tmp_path):
               for bucket in manifest['buckets'].values() for group in bucket['groups']}
     assert 'project_a' not in groups
     assert 'project_b' in groups
-    assert audit['excluded_counts']['locked_detector_eval'] == 2
+    assert audit['excluded_counts']['pool_render_of_evaluation_drawing'] == 1    # the drawing itself
+    assert audit['excluded_counts']['locked_detector_eval'] == 1                 # its project's other sheet
 
 
 def test_device_crops_share_the_pool_source_group(tmp_path):

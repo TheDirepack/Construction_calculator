@@ -52,6 +52,7 @@ if [[ ! -d "$WORK/composited_neca" ]]; then
     --symbol-library "$DATA/2_component_libraries/legend_symbol_crops" \
     --symbol-library "$DATA/2_component_libraries/harvested_symbols" \
     --background-pages "${PHASE2_BACKGROUND_PAGES:-350}" \
+    --page-hash-cache "$BASE/work/pdf_page_hashes.sqlite" \
     --output "$WORK/composited_neca" \
     --copies 1 \
     --per-page 24 \

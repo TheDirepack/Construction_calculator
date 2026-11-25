@@ -113,8 +113,39 @@ def devices_for(pdf: str | Path) -> Path | None:
 
 # --------------------------------------------------------------------------- PDF pages
 
+def page_hash(doc, page, stream_digests: dict[int, bytes] | None = None) -> str:
+    """Fingerprint of a PDF page's own content: page size and rotation, its
+    drawing instructions, and the bytes of every image and form XObject it
+    uses. The same sheet bound into several PDFs (re-issued sets, the same
+    download twice, standard detail sheets) hashes the same; any change in
+    content does not. Nothing is rendered."""
+    import hashlib
+
+    stream_digests = {} if stream_digests is None else stream_digests
+
+    def stream(xref: int) -> bytes:
+        if xref not in stream_digests:
+            try:
+                raw = doc.xref_stream_raw(xref) or b""
+            except Exception:
+                raw = b""
+            stream_digests[xref] = hashlib.sha256(raw).digest()
+        return stream_digests[xref]
+
+    h = hashlib.sha256()
+    box = page.rect
+    h.update(f"{box.width:.1f}x{box.height:.1f}r{page.rotation}|".encode())
+    h.update(page.read_contents() or b"")
+    for item in sorted(page.get_xobjects(), key=lambda x: x[0]):
+        h.update(b"X" + stream(item[0]))
+    for item in sorted(page.get_images(full=True), key=lambda x: x[0]):
+        h.update(b"I" + stream(item[0]))
+    return h.hexdigest()[:32]
+
+
 def pdf_page_entries(pdf: Path, *, group: str | None = None) -> list[dict]:
-    """Drawable pages of a PDF, for rendering crops on demand (no rasters kept)."""
+    """Drawable pages of a PDF, for rendering crops on demand (no rasters kept).
+    Duplicate pages are skipped lazily when sampled (page_hash_cache)."""
     import pymupdf
 
     from .label_schema import source_group

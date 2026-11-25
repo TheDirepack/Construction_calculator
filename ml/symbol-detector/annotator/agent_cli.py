@@ -239,8 +239,17 @@ def cmd_act(args) -> None:
 # documents and batches
 # --------------------------------------------------------------------------
 
-def _batch_docs(batch: Path) -> list[label_store.Document]:
-    return [label_store.load_document(folder) for folder in label_store.batch_documents(batch)]
+def _batch_docs(batch: Path) -> list[tuple[int, label_store.Document]]:
+    """(number, document) for each document of a batch. Documents whose PDF is
+    gone (a superseded revision removed from the blueprint folders) are left
+    out, and the others keep their numbers so ``--doc N`` stays stable."""
+    out = []
+    for number, folder in enumerate(label_store.batch_documents(batch), start=1):
+        try:
+            out.append((number, label_store.load_document(folder)))
+        except FileNotFoundError:
+            continue
+    return out
 
 
 def _pick(batch: Path, number: int) -> label_store.Document:
@@ -273,7 +282,7 @@ def cmd_next(args) -> None:
     documents = _batch_docs(args.batch)
     total = done = 0
     current = None
-    for number, doc in enumerate(documents, start=1):
+    for number, doc in documents:
         statuses = [label_store.page_status(doc, p) for p in doc.pages_to_label()]
         doc_done = sum(s["assessed"] for s in statuses)
         total += len(statuses)
@@ -309,7 +318,7 @@ def cmd_next(args) -> None:
 def cmd_doc(args) -> None:
     if args.doc is None:
         rows = []
-        for number, doc in enumerate(_batch_docs(args.batch), start=1):
+        for number, doc in _batch_docs(args.batch):
             pages = doc.pages_to_label()
             rows.append({"document": number, "name": doc.name, "kind": doc.kind,
                          "page_count": doc.page_count, "pages_to_label": len(pages),
@@ -412,7 +421,8 @@ def _status_rows(docs) -> list[dict]:
 
 def cmd_status(args) -> None:
     target = Path(args.target)
-    docs = list(label_store.iter_documents(target)) if target.is_dir() else _batch_docs(target)
+    docs = (list(label_store.iter_documents(target, skip_missing=True)) if target.is_dir()
+            else [doc for _, doc in _batch_docs(target)])
     rows = _status_rows(docs)
     by_presence: dict[str, int] = defaultdict(int)
     by_kind: dict[str, int] = defaultdict(int)

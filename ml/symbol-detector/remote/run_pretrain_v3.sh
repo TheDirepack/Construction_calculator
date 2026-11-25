@@ -25,6 +25,11 @@ RESUME_ARGS=()
 if [[ "${SSL_RESUME:-0}" == "1" ]]; then
   RESUME_ARGS=(--resume)
 fi
+# Warm start from an earlier run's weights (e.g. a run stopped to add data):
+#   SSL_INIT_WEIGHTS=$WORK/pretrain_v6/last_pretrain.pt
+if [[ -n "${SSL_INIT_WEIGHTS:-}" ]]; then
+  RESUME_ARGS+=(--init-weights "$SSL_INIT_WEIGHTS")
+fi
 PY="$BASE/.venv/bin/python"
 NECA="$DATA/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library"
 LEGEND_CROPS="$DATA/2_component_libraries/legend_symbol_crops"

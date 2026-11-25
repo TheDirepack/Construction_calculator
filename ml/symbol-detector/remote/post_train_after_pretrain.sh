@@ -29,7 +29,7 @@ if [[ "$result" != "success" ]]; then
   exit 1
 fi
 
-"$HERE/sync.sh"            # code first: push_labels uses it on the remote
+"$HERE/sync.sh" --blueprints   # code (push_labels uses it) + drawings mirrored, deletions included
 "$HERE/push_labels.sh"
 
 ssh -o BatchMode=yes "$REMOTE" "bash -lc '
