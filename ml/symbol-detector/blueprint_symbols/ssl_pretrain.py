@@ -527,6 +527,8 @@ class BlueprintSSLDataset(Dataset):
         include_pre_page_preview: bool = False,
         uint8_output: bool = False,
         pdf_thumbnail_cache_dir: str | Path | None = None,
+        extra_glyphs: list | None = None,
+        library_symbol_share: float = 0.5,
     ) -> None:
         super().__init__()
         self.size = int(size)
@@ -572,6 +574,12 @@ class BlueprintSSLDataset(Dataset):
         if neca_dir is not None:
             from .neca_svg_compositor import NecaSymbolBank
             self.neca_bank = NecaSymbolBank(Path(neca_dir), include_modifiers=False)
+        if extra_glyphs:
+            # Symbol libraries (legend sheets, CAD blocks, verified labels):
+            # drawn instead of a NECA glyph with probability library_symbol_share.
+            if self.neca_bank is None:
+                raise ValueError("extra_glyphs need the NECA bank (neca_dir)")
+            self.neca_bank.add_glyphs(list(extra_glyphs), library_share=library_symbol_share)
 
         self.bucket_names: list[str] = []
         self.bucket_weights: list[float] = []

@@ -35,7 +35,7 @@ Optional: specialist YOLO teacher → untrusted candidate labels for REVIEW ONLY
 
 - **Group before augmentation.** All clean/downscaled/filtered re-renders of one original plan remain in a single train/validation/test partition. Validate source families manually; an arbitrary per-file ID is not proof of independence.
 - **Protect rare classes and locked evaluations.** Reserve enough source groups for training to contain every mapped class. If impossible while retaining val/test groups, fail rather than producing unlearnable classes. For later training expansion pass `--locked-manifest` to preserve prior held-out groups, existing class IDs and unchanged source snapshots; newly added groups go to training. Warnings report missing class coverage in evaluation groups.
-- **Verify image labels.** Validate image dimensions, finite in-bounds boxes, optional unique instance IDs, class IDs, split provenance, exported tile geometry, and files not listed in the manifest. Source **annotation and image SHA256** hashes are rechecked before export and full-page evaluation, so edited labels cannot silently change after splitting. Exact duplicate image bytes across different project IDs are rejected; duplicated annotations of identical rasters inside one group also fail until merged. Perceptual near-duplicates from differently encoded/rendered versions are **not** guaranteed to be caught; group them by original source.
+- **Verify image labels.** Validate image dimensions, finite in-bounds boxes, optional unique instance IDs, class IDs, split provenance, exported tile geometry, and files not listed in the manifest. Source **annotation and image SHA256** hashes are rechecked before export and full-page evaluation, so edited labels cannot silently change after splitting. Exact duplicate image bytes across different project IDs are rejected; duplicated annotations of identical rasters inside one group also fail until merged. Verified symbol-free pages are also deduplicated by image fingerprint (the same standard sheet rendered from different sets trains once); for labeled pages, perceptual near-duplicates from differently encoded/rendered versions are **not** guaranteed to be caught, so group them by original source.
 - **No silent background labels.** A dataset can label valves thoroughly while not labeling receptacles. Standard YOLO detection loss has no per-image class-exhaustiveness mask: treating those missing receptacles as negatives is a defect. Consequently the normal exporter requires `exhaustive_families` covering **all active model classes** on each source. Unmapped, uncertain, or clipped symbol regions cause crops to be skipped. `--allow-unverified-completeness` is **exploratory only** and can create false negatives.
 - **Held-out coverage gate.** A validation/test export fails if its usable tiles omit an otherwise labeled source instance. Overlapping tiles still duplicate some objects; for proper recall and localization evaluation, use fused **full-page** predictions and `scripts_score_full_pages.py`.
 - **No pseudo-label promotion.** Teacher output remains `uncertain`, with `review_required: true`, until quality checks/verified completion are established. Teacher agreement or confidence alone is not verified truth.
@@ -69,14 +69,11 @@ never calls an external annotation service:
 cd ml/symbol-detector
 python -m pip install -r requirements-test.txt
 
-# Label PDF pages directly; a separate JSON + source raster is saved per page.
-python -m annotator.web --pdf /path/to/electrical_plan.pdf \
-  --out-dir annotated/electrical_plan --open-browser
-
-# Or inspect and correct untrusted SAM3 proposals against the source PDF:
-python -m annotator.web --pdf /path/to/electrical_plan.pdf \
-  --proposals /path/to/scanned_SAM3.json \
-  --out-dir annotated/electrical_plan --open-browser
+# Label PDF pages directly. Pages go to the label store (work/labels, or
+# $BPS_LABELS_DIR / --store): one folder per PDF, shared with the labeling
+# agents and model pre-labeling. Extracted devices/*_DEVICES.json boxes and
+# SAM proposals for the PDF appear as pending boxes when a page is first opened.
+python -m annotator.web --pdf /path/to/electrical_plan.pdf --open-browser
 
 # Open a single existing annotation JSON and its paired image:
 python -m annotator.web --edit annotated/electrical_plan/electrical_plan_p0001.json \
@@ -90,30 +87,87 @@ Keyboard: `B` box, `V` select, hold Space to pan, `A` verify, `X` reject,
 `N` next pending, Ctrl+Z/Y undo/redo, Ctrl+S save, `[`/`]` pages, `0` fit.
 Leaving a page with unsaved edits requires explicit confirmation.
 
-**Review and safety:** Imported model proposals start `uncertain=true`,
-`verified_ground_truth=false`, and `review_status=unreviewed`. Only an
-explicit human Verify action promotes a box to a verified positive; Rejected
-proposals are moved to `rejected_proposals` and are **not** active labels.
-Manually drawn boxes also begin as drafts and require explicit
-verification of the class before becoming trusted positives; Box mode remains
-active for rapid consecutive drawings. **No page is automatically
-complete/exhaustive**, even when every proposal was reviewed or a page
-contains no devices. After visually inspecting the entire page, use the
-**Verified no target symbols** checkbox to explicitly save
-`"verified_no_symbols": true` (requires no active boxes). This attests a
-whole-page negative for all currently trained detector classes; removing the
-check revokes the attestation. Unchecked/legacy pages remain unknown, never
-implicit negatives. The page can still serve as a real-PDF background for
-synthetic symbol insertion in pretraining. For positive pages, the usual
-independent exhaustive-family review requirement remains.
+**One label format, one source of truth.** `annotator/electrical_device_catalog.json`
+defines every device and what other sources call it (NECA 100 glyph names,
+extracted `*_DEVICES.json` types, names that are not devices). The browser
+annotator, the vision-model agents, model pre-labeling, the DEVICES.json
+importer and the compositors all go through `blueprint_symbols/label_schema.py`,
+which reads that file. A box names its exact device (`symbol_family` /
+`symbol_variant`, e.g. `switch` / `three_way`) and the detector learns exactly
+that device: class `switch.three_way`. There are no category classes. A box
+without a specific catalog device (variant `unspecified`, an old coarse name)
+becomes an ignore region in training. Every page carries its verified project
+group (`class_maps/page_roles.json`), so train/val/test never split a project.
+Labeling covers every drawing, the evaluation set included: the store scan,
+the annotator, the agents and model pre-labeling all work from the blueprint
+folders and take proposals from the `*_DEVICES.json` file extracted from each
+PDF (in a `devices/` folder or next to the PDF). Only training separates the
+sets: `scripts_prepare_training_data.py --label-store work/labels --data-root
+<blueprints_and_libraries> --heldout <heldout_real_pdfs.json>` adds every store
+page with a verified box or a verified attestation, except drawings under
+`evaluation/` or in the held-out manifest (`label_store.labeled_pages` lists
+those separately for scoring). Verified symbol-free pages
+that repeat an earlier one (same image fingerprint, e.g. a DOT standard sheet
+bound into many sets) are kept once. Phase-2 compositing places NECA glyphs,
+symbols cut from published legend sheets (`--symbol-library`) and crops of your
+verified labels (`--label-store`), sampling devices evenly.
+
+**Legend-sheet symbols:** `scripts_extract_legend_symbols.py` builds
+`2_component_libraries/legend_symbol_crops` from the downloaded legends in
+`web_symbol_sources` (see its `manifest.json` for each file's licence; most
+bid-set legends are internal training data only).
+* `auto` cuts the drawing left of each legend line whose text names a catalog
+  device. Matching uses the catalog's `aliases.legend` phrases and
+  `naming.legend_synonyms`.
+* Pass `--tessdata` to OCR scans and stroke-text sheets.
+* Every crop needs an `accepted` entry in `review.json` before it is composited.
+  `sheets` and `sheets --audit` draw crops in context for review. For charts
+  that text matching can't read, `render`, `add` and `claim` let a reviewer
+  (or vision agent) box symbols by hand.
+
+**CAD library symbols:** `scripts_harvest_symbols.py harvest` builds
+`2_component_libraries/harvested_symbols` (same crops/review format) from every
+CAD file (DWG via libredwg `dwg2dxf`), single-symbol image and symbol sheet in
+`2_component_libraries`:
+* each named block definition is one symbol;
+* a symbol sheet is split into separate drawings;
+* dimension, centre-mark and annotation layers are dropped;
+* identical shapes are kept once.
+
+A device is proposed when the block name or caption names one, and `sheets`
+plus `review` accept or reject it.
+
+**Where the symbol libraries are used:**
+* **Detector training** composites only crops that review accepted as a catalog
+  device (`--symbol-library`).
+* **SSL pretraining** (`remote/run_pretrain_v3.sh`, `--symbol-library`,
+  `--label-store`) overlays every crop not rejected, labelled or not, plus
+  crops of verified labels.
+* Each inserted symbol comes from these libraries with probability
+  `--library-symbol-share` (default 0.5), each library equally often;
+  otherwise it comes from NECA as before.
+* The library contents are part of the pretraining run fingerprint.
+
+**Review and safety:** Machine proposals start `uncertain=true`,
+`verified_ground_truth=false`, `review_status=unreviewed`. Only an explicit
+human Verify promotes a box to a trusted positive, and Verify needs the exact
+device (a variant other than `unspecified`). Rejected proposals move to
+`rejected_proposals`. A page has three training states:
+
+* default: **positives only**; unlabeled symbols are unknown, never negatives;
+* **Every symbol on this page is labeled** (no pending boxes allowed): the page
+  is exhaustive for every detector class and can serve validation/test;
+* **Verified no target symbols** (no active boxes): a whole-page negative.
 
 Images remain at the original rendered-page pixel coordinates; SAM PDF-point
 boxes are converted from PDF bottom-left to image top-left coordinates.
-The service binds only to `127.0.0.1`, requires a session token for edits,
+The service listens on the LAN by default (`--host 127.0.0.1` for this machine
+only), accepts only local/private Host headers, requires a session token for edits,
 writes JSON atomically, and refuses stale revisions, mismatched PDF/image
-identities, invalid boxes or duplicate IDs. Cached rasters and JSON outputs
-are stored in `--out-dir`. For an unattended remote machine, use an SSH local
-port forward rather than binding the server to a public interface.
+identities, invalid boxes or duplicate IDs. Rendered pages and JSON live in
+the PDF's label-store folder (or `--out-dir`, which puts every PDF's pages in
+one folder). Never expose it on a public interface; use an SSH local port
+forward to reach a remote machine from outside the LAN.
 
 ### Conservative PDF page-presence scanner
 

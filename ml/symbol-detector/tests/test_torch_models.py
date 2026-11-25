@@ -138,8 +138,10 @@ def test_coco_import_ignores_unmapped_categories_in_training_tiles(tmp_path):
                          {'id':12,'image_id':1,'category_id':5,'bbox':[50,15,5,7]}]}
     ann=tmp_path/'coco.json'
     ann.write_text(json.dumps(coco))
-    convert_coco(ann,tmp_path,tmp_path/'converted',{'switch':'switch'},project_groups={'page.png':'family1'})
+    # Class maps name catalog devices (label_schema): the class is the device.
+    convert_coco(ann,tmp_path,tmp_path/'converted',{'switch':'switch.three_way'},project_groups={'page.png':'family1'})
     recs=read_records([tmp_path/'converted/image_00000001.json'])
-    data=RasterTileDataset(recs,{'switch':0},size=128,source_scales=(1.,1.),seed=2)
+    assert recs[0].instances[0]['symbol_family']=='switch.three_way'
+    data=RasterTileDataset(recs,{'switch.three_way':0},size=128,source_scales=(1.,1.),seed=2)
     _,target,info=data[0]
     assert target and info['ignore_boxes']

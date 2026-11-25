@@ -22,6 +22,11 @@ import numpy as np
 from blueprint_symbols.ssl_pretrain import BlueprintSSLDataset
 
 
+def _library_glyphs(roots):
+    from blueprint_symbols.symbol_library import library_glyphs
+    return [g for root in roots or [] for g in library_glyphs(root, labeled_only=False)[0]]
+
+
 def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
             samples: int = 32, seed: int = 2026, size: int = 512,
             max_symbols: int = 16,
@@ -30,7 +35,9 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
             placement_chaos: float = .85,
             page_chaos_probability: float = .70,
             page_chaos_strength: float = 1.0,
-            clean_fraction: float = .20) -> dict:
+            clean_fraction: float = .20,
+            symbol_libraries: list[Path] | None = None,
+            library_symbol_share: float = .5) -> dict:
     if samples < 1 or samples > 10000:
         raise ValueError("samples must be 1..10000")
     manifest = json.loads(manifest_path.read_text())
@@ -44,6 +51,8 @@ def preview(manifest_path: Path, output: Path, *, neca_dir: Path | None = None,
         page_chaos_probability=page_chaos_probability,
         page_chaos_strength=page_chaos_strength,
         clean_fraction=clean_fraction,
+        extra_glyphs=_library_glyphs(symbol_libraries),
+        library_symbol_share=library_symbol_share,
     )
     output.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -261,6 +270,8 @@ def main():
     parser.add_argument("--page-chaos-probability", type=float, default=.70)
     parser.add_argument("--page-chaos-strength", type=float, default=1.0)
     parser.add_argument("--clean-fraction", type=float, default=.20)
+    parser.add_argument("--symbol-library", type=Path, action="append", default=[])
+    parser.add_argument("--library-symbol-share", type=float, default=.5)
     args = parser.parse_args()
     result = preview(args.manifest, args.out, neca_dir=args.neca_dir,
                      samples=args.samples, seed=args.seed, size=args.size,
@@ -270,7 +281,9 @@ def main():
                      placement_chaos=args.placement_chaos,
                      page_chaos_probability=args.page_chaos_probability,
                      page_chaos_strength=args.page_chaos_strength,
-                     clean_fraction=args.clean_fraction)
+                     clean_fraction=args.clean_fraction,
+                     symbol_libraries=args.symbol_library,
+                     library_symbol_share=args.library_symbol_share)
     print(json.dumps({k: v for k, v in result.items() if k != "rows"}, indent=2))
 
 

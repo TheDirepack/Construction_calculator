@@ -27,7 +27,7 @@ def mixed_source_manifest(tmp_path: Path):
         image_path=tmp_path/f'drawing_{i}.png'
         assert cv2.imwrite(str(image_path),image)
         instances=[] if i==3 else [
-            {'instance_id':f'{i}:0','symbol_family':'receptacle',
+            {'instance_id':f'{i}:0','symbol_family':'receptacle','symbol_variant':'duplex',
              'bbox_xyxy':[225,225,255,255],'uncertain':False}
         ]
         # i=0 has a genuine, UNANNOTATED second symbol. It must produce
@@ -56,10 +56,10 @@ def mixed_source_manifest(tmp_path: Path):
 def test_verified_negative_attestation_is_class_complete(tmp_path):
     _, manifest = mixed_source_manifest(tmp_path)
     negative = next(row for row in manifest["source_images"] if row["verified_no_symbols"])
-    assert negative["exhaustive_families"] == ["receptacle"]
+    assert negative["exhaustive_families"] == ["receptacle.duplex"]
     record = read_records([negative["annotation"]], classes=manifest["class_ids"])[0]
     assert record.verified_no_symbols is True
-    assert record.exhaustive_families == frozenset({"receptacle"})
+    assert record.exhaustive_families == frozenset({"receptacle.duplex"})
     # Partial real symbols remain unknown background, despite being present in the JSON.
     partial = next(row for row in manifest["source_images"] if row["project_group"] == "building-0")
     assert partial["verified_no_symbols"] is False
@@ -105,7 +105,7 @@ def test_partial_real_group_always_training_and_heldout_complete(tmp_path):
     assert not (all_groups['train'] & all_groups['val'])
     assert not (all_groups['train'] & all_groups['test'])
     assert not (all_groups['val'] & all_groups['test'])
-    assert all(set(r['exhaustive_families'])=={'receptacle'}
+    assert all('receptacle.duplex' in set(r['exhaustive_families'])
                for r in data['source_images']
                if r['project_group'] in all_groups['val']|all_groups['test'])
 
@@ -227,7 +227,7 @@ def test_actual_ultralytics_criterion_masks_unknown_background(tmp_path):
                            'cutmix':0.0,'copy_paste':0.0,'fraction':1.0})
     trainer.args=cfg
     trainer.model=model
-    trainer.data={'nc':1,'channels':3,'names':['receptacle']}
+    trainer.data={'nc':1,'channels':3,'names':['receptacle.duplex']}
     dataset=trainer.build_dataset(str(tmp_path/'out'/'images'/'train'),mode='train',batch=2)
     assert len(dataset)>0
     items=[dataset[i] for i in range(len(dataset))]

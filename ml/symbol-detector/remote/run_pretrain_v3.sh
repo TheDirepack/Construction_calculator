@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Fresh, blueprint-only SSL pretraining (random initialization, no generic weights).
-# Samples raw/real drawings, verified device-centered crops, NECA vector symbols
-# and procedural CAD-style symbols. Runtime overlay count: uniform 0..16.
+# Samples raw/real drawings, verified device-centered crops, and overlays NECA
+# vector symbols, symbols cut from legend sheets and CAD block libraries,
+# crops of verified labels, and procedural CAD-style symbols. Runtime overlay count: uniform 0..16.
 set -euo pipefail
 
 BASE="$HOME/Projects/blueprint-symbols"
 CODE="$BASE/code"
 DATA="$BASE/data/blueprints_and_libraries"
 WORK="$BASE/work"
-OUT="${SSL_OUT:-$WORK/pretrain_v3}"
+OUT="${SSL_OUT:-$WORK/pretrain_v5}"
 # Effective optimizer batch. By default the whole batch is held on the GPU
 # (no gradient accumulation): a physical batch of 14 at 512px measured
 # ~4.6GB allocated / 4.9GB reserved on the 6GB RTX 2060 (2026-11-24).
@@ -26,6 +27,9 @@ if [[ "${SSL_RESUME:-0}" == "1" ]]; then
 fi
 PY="$BASE/.venv/bin/python"
 NECA="$DATA/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library"
+LEGEND_CROPS="$DATA/2_component_libraries/legend_symbol_crops"
+HARVESTED="$DATA/2_component_libraries/harvested_symbols"
+LABEL_STORE="${BPS_LABELS_DIR:-$WORK/labels}"
 LABELS="$WORK/ssl_real_device_labels"
 
 export PYTHONPATH="$CODE"
@@ -37,20 +41,13 @@ if [[ ! -f "$NECA/symbols.json" ]]; then
   exit 1
 fi
 
-echo "=== INDEX ALL REAL PDF PAGES WITHOUT FULL-PAGE RASTERIZATION ==="
-RESERVED_ARGS=()
-if [[ -f "$WORK/heldout_real_pdfs.json" ]]; then
-  RESERVED_ARGS=(--reserved-manifest "$WORK/heldout_real_pdfs.json")
-elif [[ "${SSL_RESERVED_PDFS_OUTSIDE_DATA:-0}" == "1" ]]; then
-  echo "Reserved evaluation PDFs confirmed outside $DATA by operator." >&2
-else
-  echo "Refusing to index training PDFs without proof of the ~100 reserved evaluation PDFs' exclusion." >&2
-  echo "Create $WORK/heldout_real_pdfs.json with source_pdfs/project_family_ids," >&2
-  echo "or set SSL_RESERVED_PDFS_OUTSIDE_DATA=1 if they physically live outside $DATA." >&2
-  exit 2
-fi
-"$PY" scripts_index_real_pdfs.py "$DATA" "$WORK/pdf_page_index/index.json" \
-  --roles class_maps/page_roles.json "${RESERVED_ARGS[@]}"
+# Training drawings = the PDFs directly in $DATA/1_blueprints, evaluation
+# drawings = $DATA/1_blueprints/evaluation. The pretraining script lists them
+# from the folders when it starts (no index, no held-out manifest); evaluation
+# drawings never enter pretraining.
+TRAIN_PDFS=$(find "$DATA/1_blueprints" -maxdepth 1 -type f -iname '*.pdf' | wc -l)
+EVAL_PDFS=$(find "$DATA/1_blueprints/evaluation" -maxdepth 1 -type f -iname '*.pdf' 2>/dev/null | wc -l)
+echo "training PDFs: $TRAIN_PDFS   evaluation PDFs (never used here): $EVAL_PDFS"
 
 echo "=== INCREMENTAL NON-PDF BLUEPRINT SOURCE INGEST ==="
 "$PY" scripts_build_page_pool.py "$DATA" "$WORK/pool" \
@@ -81,7 +78,21 @@ echo "=== BUILD DEVICE-POSITIVE CROP REFERENCES (NOT EXHAUSTIVE LABELS) ==="
 # Refresh on every new run. The previous .complete marker could silently
 # freeze the positive-crop pool even after more devices had been annotated.
 # Existing import output is regenerated; source PDFs/DEVICES.json are unchanged.
+# Rebuilt from scratch: a PDF moved to evaluation/ must not leave crops behind.
+rm -rf "$LABELS"
 "$PY" adapters/import_standardized_devices.py "$DATA" "$LABELS" --dpi 200
+
+echo "=== SYMBOL DRAWINGS FROM CAD BLOCK LIBRARIES (INCREMENTAL) ==="
+# Every block / single-symbol file / symbol sheet in 2_component_libraries;
+# sources harvested before are skipped, so this is quick after the first run.
+"$PY" scripts_harvest_symbols.py --sources "$DATA/2_component_libraries" --out "$HARVESTED" \
+  harvest --workers "${SSL_HARVEST_WORKERS:-8}"
+
+LIBRARY_ARGS=()
+for lib in "$LEGEND_CROPS" "$HARVESTED"; do
+  if [[ -f "$lib/crops.json" ]]; then LIBRARY_ARGS+=(--symbol-library "$lib"); fi
+done
+if [[ -d "$LABEL_STORE" ]]; then LIBRARY_ARGS+=(--label-store "$LABEL_STORE"); fi
 
 echo "=== FRESH BLUEPRINT-ONLY SSL TRAINING ==="
 mkdir -p "$OUT"
@@ -91,6 +102,8 @@ exec "$PY" scripts_pretrain_ssl.py \
   "${FPCAD_ARGS[@]}" \
   --labeled-annotations "$LABELS/*.json" \
   --neca-dir "$NECA" \
+  "${LIBRARY_ARGS[@]}" \
+  --library-symbol-share "${SSL_LIBRARY_SYMBOL_SHARE:-0.5}" \
   --out "$OUT" \
   --imgsz 512 \
   --batch "$SSL_BATCH" \

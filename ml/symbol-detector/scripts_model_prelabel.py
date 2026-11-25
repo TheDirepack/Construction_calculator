@@ -17,9 +17,8 @@ Rules this script follows:
   ``--model-tag`` replaces only that model's still-unreviewed proposals.
 * A detection is dropped when it overlaps an existing box or a box a human
   already **rejected** on that page, so rejected mistakes are not re-proposed.
-* Pages from the locked evaluation set (``1_blueprints/evaluation``, or the
-  ``--heldout`` manifest) are skipped by default so model boxes cannot bias
-  evaluation labels. ``--include-heldout`` overrides.
+* Every drawing is labeled, the evaluation set included: the split between
+  training and evaluation only matters when training (``label_store.labeled_pages``).
 * Pages attested as verified symbol-free are skipped.
 
 Outputs (under ``--out``): ``summary.json`` with per-page counts, and
@@ -48,21 +47,14 @@ import cv2
 import numpy as np
 
 from blueprint_symbols.multiscale import plan_pyramid_tiles, sample_tile
+from annotator import label_store
+from blueprint_symbols.label_schema import CLASS_DEVICE, device_for_class, iou as _iou, pending_instance
 from blueprint_symbols.pseudolabel import consolidate_predictions
 
-# Phase-2 detector classes (adapters/import_standardized_devices.canonical_family)
-# -> annotator (family, variant). Override or extend with --class-map.
-DEFAULT_CLASS_MAP: dict[str, tuple[str, str]] = {
-    "receptacle": ("receptacle", "unspecified"),
-    "luminaire": ("luminaire", "unspecified"),
-    "fire_alarm": ("fire_alarm_device", "unspecified"),
-    "junction_box": ("junction_box", "unspecified"),
-    "switch_sensor": ("switch", "unspecified"),
-    "switch": ("switch", "unspecified"),
-    "sensor": ("sensor", "unspecified"),
-    "panelboard": ("panelboard", "unspecified"),
-    "data_outlet": ("data_outlet", "unspecified"),
-}
+# Detector classes are catalog devices (``switch.three_way``), mapped back by
+# label_schema.device_for_class. Former coarse classes start as the family with
+# variant unspecified. Override or extend with --class-map.
+DEFAULT_CLASS_MAP: dict[str, tuple[str, str]] = dict(CLASS_DEVICE)
 SAFE_TAG = re.compile(r"[^A-Za-z0-9_.-]+")
 MID_CONFIDENCE = (0.25, 0.60)
 
@@ -112,14 +104,6 @@ def predict_page(model, image: np.ndarray, *, scales: tuple[float, ...], confide
 # merging into a page
 # --------------------------------------------------------------------------
 
-def _iou(a, b) -> float:
-    x0, y0 = max(a[0], b[0]), max(a[1], b[1])
-    x1, y1 = min(a[2], b[2]), min(a[3], b[3])
-    inter = max(0.0, x1 - x0) * max(0.0, y1 - y0)
-    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
-    return inter / union if union > 0 else 0.0
-
-
 def is_model_proposal(item: dict, tag: str) -> bool:
     return (item.get("review_source") == "model" and item.get("model_tag") == tag
             and item.get("review_status") == "unreviewed")
@@ -145,7 +129,7 @@ def merge_into_page(doc: dict, detections: list[dict], *, tag: str, model_info: 
     new_items = []
     counter = 1
     for det in sorted(detections, key=lambda d: -d["confidence"]):
-        mapped = class_map.get(det["symbol_family"])
+        mapped = class_map.get(det["symbol_family"]) or device_for_class(det["symbol_family"])
         if mapped is None:
             stats["unmapped_class"] += 1
             continue
@@ -170,25 +154,11 @@ def merge_into_page(doc: dict, detections: list[dict], *, tag: str, model_info: 
         conf = round(float(det["confidence"]), 4)
         if MID_CONFIDENCE[0] <= conf < MID_CONFIDENCE[1]:
             stats["mid_confidence"] += 1
-        new_items.append({
-            "instance_id": ident,
-            "symbol_family": family,
-            "symbol_variant": variant,
-            "bbox_xyxy": [round(v, 2) for v in box],
-            "attributes_from_text": [],
-            "uncertain": True,
-            "review_status": "unreviewed",
-            "review_source": "model",
-            "verified_ground_truth": False,
-            "is_truncated": False,
-            "is_occluded": False,
-            "model_tag": tag,
-            "model_confidence": conf,
-            "model_class": det["symbol_family"],
-            "model_supporting_detections": int(det.get("supporting_detections", 1)),
-            "model_scales": det.get("independent_scales", []),
-            "model_info": model_info,
-        })
+        new_items.append(pending_instance(
+            ident, family, variant, [round(v, 2) for v in box], review_source="model",
+            model_tag=tag, model_confidence=conf, model_class=det["symbol_family"],
+            model_supporting_detections=int(det.get("supporting_detections", 1)),
+            model_scales=det.get("independent_scales", []), model_info=model_info))
     stats["added"] = len(new_items)
     return kept + new_items, stats
 
@@ -196,24 +166,6 @@ def merge_into_page(doc: dict, detections: list[dict], *, tag: str, model_info: 
 # --------------------------------------------------------------------------
 # page selection
 # --------------------------------------------------------------------------
-
-def _norm(name: str) -> str:
-    stem = Path(name).name
-    stem = stem[:-4] if stem.lower().endswith(".pdf") else stem
-    return re.sub(r"[^a-z0-9]+", "_", stem.lower()).strip("_")
-
-
-def heldout_names(data_root: Path | None, heldout_manifest: Path | None) -> set[str]:
-    names: set[str] = set()
-    if data_root is not None:
-        eval_dir = data_root / "1_blueprints" / "evaluation"
-        if eval_dir.is_dir():
-            names.update(_norm(p.name) for p in eval_dir.rglob("*") if p.is_file())
-    if heldout_manifest is not None and heldout_manifest.is_file():
-        data = json.loads(heldout_manifest.read_text())
-        names.update(_norm(str(x)) for x in data.get("source_pdfs", []))
-    return names
-
 
 def list_pages(store: Path | None, batches: list[Path]):
     """(document, 1-based page) pairs to predict: each document's pages to label."""
@@ -286,7 +238,6 @@ def run(args, model=None) -> dict:
     if not pages:
         raise SystemExit("no pages to label in the selected documents")
     class_map = load_class_map(args.class_map)
-    blocked = set() if args.include_heldout else heldout_names(args.data_root, args.heldout)
 
     weights = Path(args.weights).resolve()
     if not weights.is_file():
@@ -320,10 +271,6 @@ def run(args, model=None) -> dict:
         if key in done and not args.force:
             totals["resumed"] += 1
             continue
-        source = document.name
-        if _norm(source) in blocked or _norm(document.source.name) in blocked:
-            totals["skipped_heldout"] += 1
-            continue
         session, index, _ = label_store.open_page(page)
         doc, revision, image_path = session.page_document(index)
         if doc.get("verified_no_symbols"):
@@ -347,7 +294,7 @@ def run(args, model=None) -> dict:
                 totals["revision_conflict"] += 1       # someone edited it meanwhile; retry later
                 continue
         row = {"page": key, "document": document.folder.name, "pdf_page": page_number,
-               "source_path": source, **pstats, **mstats}
+               "source_path": document.name, **pstats, **mstats}
         rows = [r for r in rows if r["page"] != key] + [row]
         previous.setdefault("pages", {})[key] = row
         for name in ("added", "replaced", "dup_existing", "dup_rejected", "unmapped_class"):
@@ -382,9 +329,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tile-batch", type=int, default=16)
     p.add_argument("--class-map", type=Path,
                    help="JSON {model_class: family | [family, variant] | null}, merged over the defaults")
-    p.add_argument("--data-root", type=Path, help="blueprints_and_libraries root (finds 1_blueprints/evaluation)")
-    p.add_argument("--heldout", type=Path, help="heldout_real_pdfs.json")
-    p.add_argument("--include-heldout", action="store_true")
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--force", action="store_true", help="redo pages already in this tag's summary")
     p.add_argument("--dry-run", action="store_true", help="predict and report, write nothing to pages")

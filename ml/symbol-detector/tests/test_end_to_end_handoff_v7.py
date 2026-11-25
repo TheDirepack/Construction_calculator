@@ -21,7 +21,7 @@ def _source_data(base: Path):
             'image_path':ip.name,'image_width':268,'image_height':216,
             'source_group_verified':True,'project_family_id':f'plan_family_{i}',
             'source_type':'CAD-derived','exhaustive_families':['receptacle'],
-            'instances':[{'symbol_family':'receptacle','bbox_xyxy':[58,53,82,77],
+            'instances':[{'symbol_family':'receptacle','symbol_variant':'duplex','bbox_xyxy':[58,53,82,77],
                           'source':{'kind':'cad_svg'}}],
         }))
         paths.append(ann)

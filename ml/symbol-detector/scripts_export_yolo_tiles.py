@@ -21,6 +21,7 @@ from blueprint_symbols.raster_training import read_records, RasterTileDataset
 from blueprint_symbols.dataset_manifest import validate_manifest_sources, trusted_training_instance
 from blueprint_symbols.variants import make_variant, EVAL_VARIANTS, TRAIN_VARIANTS
 from blueprint_symbols.multiscale import plan_pyramid_tiles, sample_tile
+from blueprint_symbols.label_schema import load_training_page
 
 # Target refers to MAX(width, height) of a symbol as seen by detector.
 PIXEL_BANDS = ((10,16,.08),(16,24,.34),(24,40,.32),(40,72,.20),(72,128,.06))
@@ -111,7 +112,7 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
     incomplete_eval=[]
     for s in per_split:
         for path in splits[s]:
-            data=json.loads(Path(path).read_text())
+            data=load_training_page(path)
             negative=data.get('verified_no_symbols',False)
             if type(negative) is not bool or (negative and data['instances']):
                 raise ValueError(f'invalid verified_no_symbols negative attestation: {path}')

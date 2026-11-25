@@ -65,98 +65,9 @@ FAMILY_DISCIPLINES: dict[str, str] = {
 # Curated subtypes aligned with blueprint_symbols/neca_prompt_catalog.py and
 # blueprint_symbols/electrical_device_attributes.py. Users can still enter any
 # project-specific custom subtype in the UI.
+# Electrical device families are NOT listed here: their variants come only from
+# electrical_device_catalog.json (the single source of truth for devices).
 FAMILY_VARIANT_SUGGESTIONS: dict[str, list[str]] = {
-    # Electrical
-    "receptacle": [
-        "duplex", "quad", "single", "special_purpose", "duplex_above_counter",
-        "duplex_gfci", "floor_mounted", "usb_charger_duplex", "isolated_ground",
-        "weatherproof_gfci_duplex", "ceiling_mounted", "tamper_resistant",
-        "gfci", "weatherproof", "quad_gfci", "afci", "dedicated",
-        "duplex_receptacle_floor", "duplex_receptacle_ceiling",
-        "duplex_receptacle_emergency", "combination_floor_box",
-        "multioutlet_assembly", "usb_receptacle", "unspecified",
-    ],
-    "switch": [
-        "single_pole", "dimmer", "three_way", "four_way", "time_switch",
-        "momentary", "key_operated", "emergency_power_off_pushbutton",
-        "three_way_dimmer", "four_way_dimmer", "double_pole", "dimmer_switch",
-        "occupancy_sensor", "vacancy_sensor", "timer", "low_voltage",
-        "pilot_light", "weatherproof", "motor_control", "double_throw", "unspecified",
-    ],
-    "luminaire": [
-        "exit_sign", "emergency_battery_light", "recessed_downlight",
-        "exit_sign_wall", "pole_floodlight", "wall_mounted", "exit_sign_ceiling",
-        "linear_strip", "downlight", "troffer_2x4", "troffer_2x2", "linear",
-        "strip_luminaire", "wall_sconce", "wallpack", "pendant", "track_light",
-        "high_bay", "low_bay", "spotlight", "pole_luminaire", "chandelier", "unspecified",
-    ],
-    "fire_alarm_device": [
-        "smoke_detector", "fire_alarm_control_panel", "fire_alarm_strobe",
-        "annunciator_panel", "duct_smoke_detector", "manual_pull_station",
-        "heat_detector", "tamper_switch", "horn_and_strobe",
-        "smoke_detector_ceiling", "waterflow_switch", "speaker_and_strobe",
-        "horn_strobe_wall", "strobe_wall", "speaker_strobe_ceiling",
-        "strobe_ceiling", "voice_evacuation_panel", "horn_strobe_ceiling",
-        "speaker_strobe_wall", "heat_detector_rate_of_rise",
-        "smoke_detector_sounder_base", "strobe_unit", "horn_unit",
-        "bell_and_strobe", "beam_smoke_detector", "carbon_monoxide_detector",
-        "door_holder", "unspecified",
-    ],
-    "data_outlet": [
-        "data_wall", "wap", "catv_outlet", "data_floor", "telephone_outlet",
-        "voice_data_combo", "data_ceiling", "fiber_optic_outlet",
-        "telephone_data_wall", "telephone_wall", "telephone_data_floor",
-        "fiber", "coax", "audio_visual", "unspecified",
-    ],
-    "security_device": [
-        "card_reader", "glass_break_detector", "panic_duress_button",
-        "door_release_button", "request_to_exit", "gate_operator",
-        "gate_release_button", "card_reader_long_range", "door_contact_switch",
-        "electric_door_strike", "security_keypad", "card_reader_proximity",
-        "magnetic_door_lock", "security_alarm_strobe", "unspecified",
-    ],
-    "cctv_device": [
-        "dvr_nvr", "camera_mini_dome", "security_camera", "camera_ptz", "unspecified",
-    ],
-    "audio_visual_device": [
-        "speaker_ceiling", "intercom_weatherproof", "intercom_substation",
-        "clock_outlet", "speaker_wall", "intercom_master_station", "unspecified",
-    ],
-    "telecom_device": [
-        "equipment_rack", "equipment_cabinet", "terminal_cabinet", "intercom",
-        "speaker", "camera", "card_reader", "nurse_call", "unspecified",
-    ],
-    "junction_box": [
-        "junction_box", "pull_box", "wall", "ceiling", "floor",
-        "combination_floor_box", "power_pole", "telecom_pole", "unspecified",
-    ],
-    "panelboard": [
-        "panelboard", "lighting_control_panel", "automatic_transfer_switch",
-        "switchboard_switchgear", "lighting_or_power_panel", "distribution_panel",
-        "subpanel", "switchboard", "mcc", "transfer_switch", "unspecified",
-    ],
-    "disconnect": [
-        "disconnect_switch", "fused", "non_fused", "motor_rated",
-        "weatherproof", "magnetic_motor_starter", "vfd_asd", "unspecified",
-    ],
-    "motor_control": [
-        "vfd", "motor_starter", "magnetic_motor_starter", "vfd_asd", "unspecified",
-    ],
-    "circuit_breaker": ["single_pole", "two_pole", "three_pole", "gfci", "afci", "unspecified"],
-    "transformer": ["transformer", "dry_type", "pad_mounted", "step_down", "step_up", "unspecified"],
-    "motor": ["single_phase", "three_phase", "fractional_hp", "motor_connection", "unspecified"],
-    "generator": ["standby", "emergency", "transfer_switch", "unspecified"],
-    "sensor": [
-        "thermostat", "humidistat", "occupancy_sensor", "co2_sensor",
-        "daylight_photosensor", "co_sensor", "vacancy_sensor",
-        "occupancy_sensor_ceiling", "differential_pressure_sensor",
-        "occupancy_sensor_wall", "daylight_sensor", "photocell",
-        "motion_detector", "flow_switch", "pressure_switch", "unspecified",
-    ],
-    "control_relay": ["lighting_relay", "contactor", "shunt_trip", "time_clock", "unspecified"],
-    "electrical_meter": ["kwh_meter", "submeter", "ct_cabinet", "unspecified"],
-    "grounding_symbol": ["ground_rod", "ground_bus", "bonding_jumper", "unspecified"],
-    "conduit_fitting": ["stub_up", "stub_down", "homerun", "flexible_connection", "unspecified"],
     # Mechanical / HVAC / Plumbing / Fire Protection / Architectural
     "diffuser": ["supply", "return", "exhaust", "linear_slot", "transfer", "unspecified"],
     "grille": ["return", "exhaust", "supply", "transfer", "louver", "unspecified"],
@@ -164,11 +75,9 @@ FAMILY_VARIANT_SUGGESTIONS: dict[str, list[str]] = {
     "damper": ["volume", "motorized", "backdraft", "fire_smoke", "unspecified"],
     "fire_damper": ["fire", "smoke", "combination_fire_smoke", "unspecified"],
     "fan": ["exhaust", "supply", "ceiling_fan", "wall_fan", "inline", "unspecified"],
-    "thermostat": ["wall_thermostat", "programmable", "humidistat", "unspecified"],
     "valve": ["gate", "ball", "butterfly", "check", "balancing", "control", "prv", "unspecified"],
     "pump": ["centrifugal", "circulator", "sump", "booster", "condensate", "unspecified"],
     "sprinkler_head": ["pendent", "upright", "sidewall", "concealed", "dry_pendent", "unspecified"],
-    "alarm_device": ["horn_strobe", "bell", "waterflow", "tamper", "pull_station", "unspecified"],
     "fire_protection_device": ["fire_extinguisher", "hose_cabinet", "fdc", "standpipe", "unspecified"],
     "plumbing_fixture": ["water_closet", "lavatory", "sink", "urinal", "shower", "drinking_fountain", "unspecified"],
     "drain": ["floor_drain", "roof_drain", "trench_drain", "cleanout", "unspecified"],

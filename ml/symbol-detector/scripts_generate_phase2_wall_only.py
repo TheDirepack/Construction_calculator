@@ -1,5 +1,11 @@
 """Build phase-two supervised crops from *verified symbol-free* wall-only drawings.
 
+LEGACY: labels placed symbols with the six sampling groups of the NECA
+compositor (``SAMPLING_GROUPS``), and its procedural symbols are not devices
+at all. Detector training now learns exact catalog devices
+(``blueprint_symbols.label_schema``), so these crops train nothing until the
+generator is rebuilt on device-labeled glyphs; run_phase2_train.sh does not use it.
+
 Only generated symbols are positive detection labels. Unaugmented device-free
 views have zero instances. An SSL negative_control_kind label is NOT sufficient:
 each source entry must explicitly attest the absence of every active target
@@ -38,7 +44,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from blueprint_symbols.neca_svg_compositor import CANONICAL_CLASSES, NecaSymbolBank
+from blueprint_symbols.neca_svg_compositor import SAMPLING_GROUPS as CANONICAL_CLASSES, NecaSymbolBank
 from blueprint_symbols.pdf_crop import PdfCropSampler
 from blueprint_symbols.ssl_augmentation import compose_ssl_symbols
 from blueprint_symbols.variants import make_variant

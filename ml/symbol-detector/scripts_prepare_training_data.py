@@ -39,6 +39,29 @@ def discover(patterns: list[str]) -> list[Path]:
     return sorted(set(results))
 
 
+def label_store_pages(stores: list[Path], *, data_root: Path | None = None) -> dict[str, list[str]]:
+    """Usable pages of label stores (annotator, agents, model review), split by
+    where each drawing's PDF is now: ``1_blueprints/*.pdf`` -> ``train``,
+    ``1_blueprints/evaluation/*.pdf`` -> ``evaluation`` (blueprint_sets).
+    Evaluation pages only ever become validation/test."""
+    from annotator import label_store
+    out: dict[str, list[str]] = {"train": [], "evaluation": []}
+    for store in stores:
+        for role, pages in label_store.labeled_pages(store, data_root=data_root).items():
+            out[role] += [str(p) for p in pages]
+    return out
+
+
+def complete_pages(paths: list[str]) -> list[str]:
+    """Pages fully labelled (every symbol, or verified empty): only these can evaluate."""
+    out = []
+    for path in paths:
+        data = json.loads(Path(path).read_text())
+        if data.get('annotation_completeness_verified') is True or data.get('verified_no_symbols') is True:
+            out.append(path)
+    return out
+
+
 def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int = 32,
             train_variants: int = 3, seed: int = 2026, val_fraction: float = .15,
             test_fraction: float = .15, stress_val: bool = True,
@@ -47,15 +70,17 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
             locked_manifest: Path | None = None,
             verified_wall_negative_fraction: float = .65,
             verified_wall_blank_fraction: float = .12,
-            eval_scales: tuple[float, ...] = (1.0,), eval_overlap: int = 128) -> dict:
+            eval_scales: tuple[float, ...] = (1.0,), eval_overlap: int = 128,
+            evaluation_files: list[str] | None = None) -> dict:
     if destination.exists() and any(destination.iterdir()):
         raise FileExistsError(f'refusing to overwrite existing directory: {destination}')
-    paths = discover(patterns)
+    paths = discover(list(patterns) + list(evaluation_files or []))
     if not paths:
         raise ValueError('no valid normalized blueprint annotation JSON files found')
     lock=json.loads(locked_manifest.read_text()) if locked_manifest is not None else None
     manifest = build_manifest(paths, val_fraction=val_fraction, test_fraction=test_fraction,
-                              locked_manifest=lock, allow_partial_training=allow_partial_training)
+                              locked_manifest=lock, allow_partial_training=allow_partial_training,
+                              evaluation_files=evaluation_files)
     destination.mkdir(parents=True, exist_ok=True)
     mpath = destination / 'source_manifest.json'
     mpath.write_text(json.dumps(manifest, indent=2))
@@ -86,8 +111,14 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--annotations', nargs='+', required=True,
+    p.add_argument('--annotations', nargs='+', default=[],
                    help='Glob(s) for normalized CAD/SVG/COCO-derived page annotations')
+    p.add_argument('--label-store', type=Path, action='append', default=[],
+                   help='label store (work/labels): adds its pages that have verified boxes '
+                        'or a verified completeness attestation, minus the evaluation set')
+    p.add_argument('--data-root', type=Path,
+                   help='blueprints_and_libraries root: label-store drawings in 1_blueprints/ train, '
+                        'those in 1_blueprints/evaluation/ validate and test (default: found from each PDF)')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--train-tiles-per-page', type=int, default=32)
     p.add_argument('--train-variants', type=int, default=3)
@@ -110,7 +141,19 @@ def main():
                         'leave symbols clipped in every native-scale tile)')
     p.add_argument('--eval-overlap', type=int, default=128)
     a = p.parse_args()
-    result = prepare(a.annotations, a.output, train_tiles_per_page=a.train_tiles_per_page,
+    store_pages = label_store_pages(a.label_store, data_root=a.data_root)
+    evaluation = complete_pages(store_pages['evaluation'])
+    if store_pages['evaluation']:
+        print(json.dumps({'evaluation_pages': len(store_pages['evaluation']),
+                          'fully_labelled_evaluation_pages': len(evaluation)}), flush=True)
+    if a.label_store and not evaluation:
+        p.error('no fully labelled evaluation pages: validation and test come from the drawings in '
+                '1_blueprints/evaluation; label some of their pages completely ("every symbol on this '
+                'page is labeled", or "verified no target symbols")')
+    patterns = list(a.annotations) + store_pages['train']
+    if not patterns:
+        p.error('give --annotations and/or --label-store')
+    result = prepare(patterns, a.output, train_tiles_per_page=a.train_tiles_per_page,
                      train_variants=a.train_variants, val_fraction=a.val_fraction,
                      test_fraction=a.test_fraction, seed=a.seed,
                      stress_val=a.stress_val, stress_test=a.stress_test,
@@ -120,7 +163,8 @@ def main():
                      verified_wall_blank_fraction=a.verified_wall_blank_fraction,
                      locked_manifest=a.locked_manifest,
                      eval_scales=tuple(float(v) for v in a.eval_scales.split(',')),
-                     eval_overlap=a.eval_overlap)
+                     eval_overlap=a.eval_overlap,
+                     evaluation_files=evaluation)
     print(json.dumps(result, indent=2))
 
 

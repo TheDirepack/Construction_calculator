@@ -629,7 +629,7 @@ def test_build_store_migrates_pool_labels_and_photos(tmp_path):
     assert len(list(label_store.iter_documents(store))) == 2
 
 
-def test_scan_triages_new_pdfs_and_skips_evaluation(tmp_path):
+def test_scan_triages_new_pdfs_including_evaluation(tmp_path):
     import scripts_build_label_store as builder
     from annotator import label_store
     data_root = tmp_path / "data"
@@ -640,8 +640,10 @@ def test_scan_triages_new_pdfs_and_skips_evaluation(tmp_path):
     _store_pdf(blue / "evaluation" / "held.pdf", 1, text={0: "ELECTRICAL"})
     store = tmp_path / "labels"
     assert builder.main(["--store", str(store), "--data-root", str(data_root), "--scan", str(blue)]) == 0
-    docs = list(label_store.iter_documents(store))
-    assert [d.source.name for d in docs] == ["new_set.pdf"] and docs[0].pages_to_label() == [2]
+    docs = {d.source.name: d for d in label_store.iter_documents(store)}
+    assert sorted(docs) == ["held.pdf", "new_set.pdf"]               # evaluation is labeled too
+    assert docs["new_set.pdf"].pages_to_label() == [2] and docs["new_set.pdf"].meta["evaluation"] is False
+    assert docs["held.pdf"].pages_to_label() == [1] and docs["held.pdf"].meta["evaluation"] is True
 
 
 def test_scan_remembers_pdfs_without_electrical_pages(tmp_path, monkeypatch):

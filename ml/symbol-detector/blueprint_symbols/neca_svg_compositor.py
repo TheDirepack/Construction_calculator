@@ -23,8 +23,11 @@ import cv2
 import numpy as np
 
 
-# Map NECA 100-2013 floor-plan device sections -> 6 canonical Phase 2 classes.
-# Non-device sections (Raceways, Schematic/One-Line, Switchboard Meters) are excluded.
+# Map NECA 100-2013 floor-plan device sections -> sampling groups. The groups
+# only balance which kinds of glyph get placed; every placed symbol is labeled
+# with its exact catalog device (label_schema.NECA_DEVICE), which is what the
+# detector learns. Non-device sections (Raceways, Schematic/One-Line,
+# Switchboard Meters) are excluded.
 NECA_SECTION_TO_CLASS: dict[str, str] = {
     'Outlets and Receptacles': 'receptacle',
     'Switches and Sensors': 'switch_sensor',
@@ -47,7 +50,9 @@ NECA_SECTION_TO_CLASS: dict[str, str] = {
     'Motorized and HVAC Equipment': 'other_device',
 }
 
-CANONICAL_CLASSES = (
+from .label_schema import NECA_DEVICE  # noqa: E402
+
+SAMPLING_GROUPS = (
     'fire_alarm',
     'junction_box',
     'luminaire',
@@ -72,10 +77,12 @@ class NecaGlyph:
     code: str
     name: str
     section: str
-    canonical_class: str
+    canonical_class: str   # sampling group (SAMPLING_GROUPS), not a training label
     device_type: str  # v7 taxonomy device_type (e.g. receptacle, switch, light_fixture, fire_alarm, data_outlet, ...)
     subtype: str      # v7 taxonomy subtype (e.g. duplex, quad, gfci_duplex, three_way, dimmer, three_way_dimmer, ...)
     alpha: np.ndarray  # uint8 (H, W) cropped tight ink alpha mask
+    family: str = ''  # catalog device = the training label (label_schema.NECA_DEVICE)
+    variant: str = ''
 
 
 def map_neca_to_v7(section: str, name: str) -> tuple[str, str]:
@@ -286,16 +293,22 @@ def _rasterize_svg_alpha(svg_path: Path, render_height: int = 128) -> np.ndarray
 
 
 class NecaSymbolBank:
-    """Loads and caches NECA 100-2013 vector SVG device symbols grouped by canonical class."""
+    """Loads and caches NECA 100-2013 vector SVG device symbols, grouped for
+    sampling. Each glyph carries its catalog device when it names one.
+
+    ``devices_only`` loads only those glyphs: detector training data must label
+    every placed symbol with a device, while self-supervised pretraining wants
+    every shape.
+    """
 
     def __init__(self, library_root: Path, *, render_height: int = 128,
-                 include_modifiers: bool = True) -> None:
+                 include_modifiers: bool = True, devices_only: bool = False) -> None:
         self.library_root = Path(library_root)
         meta_path = self.library_root / 'symbols.json'
         if not meta_path.is_file():
             raise FileNotFoundError(f'NECA symbols.json not found at {meta_path}')
         meta = json.loads(meta_path.read_text())
-        self.by_class: dict[str, list[NecaGlyph]] = {c: [] for c in CANONICAL_CLASSES}
+        self.by_class: dict[str, list[NecaGlyph]] = {c: [] for c in SAMPLING_GROUPS}
 
         entries = meta.get('symbols', [])
         # Many NECA numbered-row SVGs contain two or more *alternatives*
@@ -329,13 +342,17 @@ class NecaSymbolBank:
                 low_name = entry.get('name', '').lower()
                 if not any(k in low_name for k in ('box', 'handhole')):
                     continue
+            dev_type, subtype = map_neca_to_v7(sec, entry.get('name', ''))
+            device = NECA_DEVICE.get((dev_type, subtype))
+            if device is None and devices_only:     # names no specific device
+                continue
+            device = device or ('', '')
             svg_path = self.library_root / entry['file']
             if not svg_path.is_file():
                 continue
             alpha = _rasterize_svg_alpha(svg_path, render_height=render_height)
             if alpha is None:
                 continue
-            dev_type, subtype = map_neca_to_v7(sec, entry.get('name', ''))
             self.by_class[cls].append(NecaGlyph(
                 symbol_id=entry['id'],
                 code=entry.get('code', ''),
@@ -345,21 +362,72 @@ class NecaSymbolBank:
                 device_type=dev_type,
                 subtype=subtype,
                 alpha=alpha,
+                family=device[0],
+                variant=device[1],
             ))
 
-        self.active_classes = [c for c in CANONICAL_CLASSES if self.by_class[c]]
+        self.active_classes = [c for c in SAMPLING_GROUPS if self.by_class[c]]
         if not self.active_classes:
             raise ValueError(f'No usable NECA device SVGs loaded from {library_root}')
         w = np.array([CLASS_SAMPLING_WEIGHTS[c] for c in self.active_classes], dtype=np.float64)
         self.class_probs = w / w.sum()
+        self.devices_only = devices_only
+        self.extra_by_source: dict[str, list[NecaGlyph]] = {}
+        self.library_share = 0.5
+        self.by_device: dict[str, list[NecaGlyph]] = {}
+        for pool in self.by_class.values():
+            for glyph in pool:
+                if glyph.family:
+                    self.by_device.setdefault(f'{glyph.family}.{glyph.variant}', []).append(glyph)
+
+    def add_glyphs(self, glyphs: list[NecaGlyph], *, library_share: float | None = None) -> None:
+        """Add other drawings: crops of verified labels, legend sheets, CAD blocks.
+
+        Detector training (``devices_only``) needs a catalog device on every
+        glyph; they join that device's pool. For pretraining, any drawing may
+        be added, labelled or not: ``sample`` then draws from these added
+        drawings with probability ``library_share`` (each source library
+        equally often), else from NECA as before.
+        """
+        for glyph in glyphs:
+            if not glyph.family and self.devices_only:
+                raise ValueError('added glyphs must name a catalog device')
+            if glyph.family:
+                self.by_device.setdefault(f'{glyph.family}.{glyph.variant}', []).append(glyph)
+            if not self.devices_only:
+                self.extra_by_source.setdefault(glyph.section.split(':', 1)[0], []).append(glyph)
+        if library_share is not None:
+            if not 0 <= library_share <= 1:
+                raise ValueError('library_share must be in [0,1]')
+            self.library_share = float(library_share)
 
     def sample(self, rng: np.random.Generator) -> NecaGlyph:
+        if self.devices_only:
+            # Detector training: every device equally often (then any of its
+            # drawings), so rare devices are not drowned out by receptacles.
+            keys = sorted(self.by_device)
+            pool = self.by_device[keys[int(rng.integers(len(keys)))]]
+            return pool[int(rng.integers(len(pool)))]
+        if self.extra_by_source and rng.random() < self.library_share:
+            sources = sorted(self.extra_by_source)
+            pool = self.extra_by_source[sources[int(rng.integers(len(sources)))]]
+            return pool[int(rng.integers(len(pool)))]
         cls = self.active_classes[int(rng.choice(len(self.active_classes), p=self.class_probs))]
         pool = self.by_class[cls]
         return pool[int(rng.integers(len(pool)))]
 
     def summary(self) -> dict[str, int]:
         return {c: len(self.by_class[c]) for c in self.active_classes}
+
+    @property
+    def families(self) -> list[str]:
+        """Catalog device families this bank places (for completeness claims)."""
+        return sorted({key.split('.', 1)[0] for key in self.by_device})
+
+    @property
+    def devices(self) -> list[str]:
+        """Training classes (``family.variant``) this bank can place."""
+        return sorted(self.by_device)
 
 
 def extract_wall_mask(gray: np.ndarray) -> np.ndarray:
@@ -590,10 +658,13 @@ def composite_neca_page(
 
         placed.append({
             'instance_id': f'neca_{tag}_{len(placed):03d}',
-            'symbol_family': glyph.canonical_class,
-            'device_type': glyph.device_type,
-            'subtype': glyph.subtype,
-            'symbol_variant': glyph.symbol_id,
+            # The catalog device is the label; a glyph naming no device keeps
+            # its sampling group (used only by self-supervised pretraining).
+            'symbol_family': glyph.family or glyph.canonical_class,
+            'symbol_variant': glyph.variant or 'unspecified',
+            'device_type': glyph.family or glyph.device_type,
+            'neca_symbol_id': glyph.symbol_id,
+            'neca_v7_device': [glyph.device_type, glyph.subtype],
             'neca_code': glyph.code,
             'neca_name': glyph.name,
             'bbox_xyxy': [round(v, 2) for v in box],

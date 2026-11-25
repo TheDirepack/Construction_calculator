@@ -3,9 +3,15 @@
     python adapters/import_standardized_devices.py \
         ../data/blueprints_and_libraries ../work/phase2_v1/normalized --dpi 200
 
+Reads the training drawings (``1_blueprints/*.pdf``) and their DEVICES files
+(``1_blueprints/devices``) from the folders at runtime; evaluation drawings
+(``1_blueprints/evaluation``) are never imported for training.
+
 Converts bottom-left PDF point bounding boxes into top-left raster pixel coordinates
-for each annotated PDF page. Strips all keypoints/anchors/wall-snaps so Phase 2 trains
-purely on device bounding boxes.
+for each annotated PDF page. Pages use the shared label format
+(``blueprint_symbols.label_schema``): exact catalog devices, unverified proposal
+boxes, the same project groups and completeness fields as the annotator, so
+training reads them through ``load_training_page`` like any labeled page.
 """
 from __future__ import annotations
 
@@ -22,76 +28,23 @@ import fitz
 import numpy as np
 
 
-CANONICAL_CLASSES = (
-    'receptacle',
-    'luminaire',
-    'fire_alarm',
-    'junction_box',
-    'switch_sensor',
-    'other_device',
+from blueprint_symbols.label_schema import (  # noqa: E402
+    completeness,
+    device_for_raw_type,
+    devices_bbox_points as extract_bbox_pts,
+    devices_rotated_coordinates,
+    devices_skip_reason,
+    group_fields,
+    pending_instance,
+    points_to_pixels,
+    device_class,
 )
 
 
 def canonical_family(raw_type: str) -> str:
-    t = str(raw_type or '').strip().lower().replace(' ', '_')
-    if 'receptacle' in t or 'outlet' in t:
-        return 'receptacle'
-    if any(k in t for k in ('light', 'luminaire', 'exit_sign')):
-        return 'luminaire'
-    if any(k in t for k in ('fire_alarm', 'fire_extinguisher', 'speaker', 'smoke', 'horn', 'strobe', 'pull_station')):
-        return 'fire_alarm'
-    if any(k in t for k in ('junction_box', 'pull_box', 'handhole')):
-        return 'junction_box'
-    if any(k in t for k in ('switch', 'occupancy_sensor', 'temperature_sensor', 'thermostat', 'motion_detector', 'key_pad')):
-        return 'switch_sensor'
-    return 'other_device'
-
-
-def extract_bbox_pts(dev: dict) -> list[float] | None:
-    """Extract [x0, y0, x1, y1] in bottom-left PDF points from any supported DEVICES.json schema."""
-    for key in ('symbol_bbox', 'symbol_bbox_pts', 'symbol_bbox_bl', 'symbol_graphic_bbox', 'bounding_box', 'bbox_pts', 'bbox'):
-        val = dev.get(key)
-        if isinstance(val, list) and len(val) == 4:
-            try:
-                x0, y0, x1, y1 = (float(v) for v in val)
-                if math.isfinite(x0) and math.isfinite(y0) and math.isfinite(x1) and math.isfinite(y1):
-                    return [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
-            except (TypeError, ValueError):
-                continue
-        elif isinstance(val, dict) and all(k in val for k in ('x1', 'y1', 'x2', 'y2')):
-            try:
-                x0, y0, x1, y1 = float(val['x1']), float(val['y1']), float(val['x2']), float(val['y2'])
-                return [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
-            except (TypeError, ValueError):
-                continue
-    return None
-
-
-def index_pdfs(data_root: Path) -> dict[str, Path]:
-    pdfs: dict[str, Path] = {}
-    for p in sorted(data_root.rglob('*.pdf')):
-        pdfs.setdefault(p.name, p)
-        pdfs.setdefault(p.name.lower(), p)
-    return pdfs
-
-
-def resolve_pdf(src_str: str, json_path: Path, pdf_index: dict[str, Path]) -> Path | None:
-    if not src_str:
-        return None
-    name = Path(src_str).name
-    for cand in (
-        json_path.parent / name,
-        pdf_index.get(name),
-        pdf_index.get(name.lower()),
-    ):
-        if cand and cand.is_file():
-            return cand
-    # Fallback: strip " (1)" / " (2)" duplicate suffix
-    cleaned = re.sub(r'\s*\(\d+\)(?=\.pdf$)', '', name, flags=re.IGNORECASE)
-    for cand in (json_path.parent / cleaned, pdf_index.get(cleaned), pdf_index.get(cleaned.lower())):
-        if cand and cand.is_file():
-            return cand
-    return None
+    """Catalog family of a DEVICES.json device type ('other_device' if none)."""
+    device = device_for_raw_type(raw_type)
+    return device[0] if device else 'other_device'
 
 
 def render_page_bgr(doc: fitz.Document, page_index_0: int, dpi: float, max_pixels: int) -> tuple[np.ndarray, fitz.Page]:
@@ -111,88 +64,38 @@ def render_page_bgr(doc: fitz.Document, page_index_0: int, dpi: float, max_pixel
     return bgr, page
 
 
-def pdf_box_to_pixels(
-    box_pts: list[float],
-    page: fitz.Page,
-    w: int,
-    h: int,
-    *,
-    already_rotated: bool,
-) -> tuple[float, float, float, float]:
-    """Convert bottom-left PDF point box [x0, y0, x1, y1] to top-left raster pixels."""
-    x0_pt, y0_pt, x1_pt, y1_pt = box_pts
-    pw, ph = float(page.rect.width), float(page.rect.height)
-    sx, sy = w / pw, h / ph
-    if page.rotation and not already_rotated:
-        # Pre-v3 extractors on rotated PDFs output unrotated mediabox coords (e.g. rotation=270)
-        r = fitz.Rect(x0_pt, y0_pt, x1_pt, y1_pt) * page.rotation_matrix
-        px0, px1 = sorted((r.x0 * sx, r.x1 * sx))
-        py0, py1 = sorted((r.y0 * sy, r.y1 * sy))
-    else:
-        px0, px1 = x0_pt * sx, x1_pt * sx
-        py0, py1 = (ph - y1_pt) * sy, (ph - y0_pt) * sy
-    return (
-        float(np.clip(px0, 0.0, w)),
-        float(np.clip(py0, 0.0, h)),
-        float(np.clip(px1, 0.0, w)),
-        float(np.clip(py1, 0.0, h)),
-    )
+def pdf_box_to_pixels(box_pts, page, w: int, h: int, *, already_rotated: bool):
+    return points_to_pixels(box_pts, page, w, h, already_rotated=already_rotated)
 
 
 def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels: int = 36_000_000) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
-    pdf_index = index_pdfs(data_root)
     counts: Counter = Counter()
     class_counts: Counter = Counter()
     project_pages: Counter = Counter()
 
-    rinker_dir = data_root / '1_blueprints' / 'rinker_hall'
-    rinker_sheets: dict[str, Path] = {}
-    if rinker_dir.is_dir():
-        for pdf in sorted(rinker_dir.rglob('*.pdf')):
-            code = pdf.stem.split('_')[0].split()[0].upper()
-            rinker_sheets[code] = pdf
-
-    for jpath in sorted(data_root.rglob('*DEVICES.json')):
-        if 'evaluation' in jpath.parts:
-            counts['evaluation_holdout_skipped'] += 1
+    # Training drawings only: 1_blueprints/*.pdf with their 1_blueprints/devices
+    # files, read from the folders now. Evaluation drawings never train.
+    from blueprint_symbols.blueprint_sets import blueprint_sets, devices_for
+    sets = blueprint_sets(data_root)
+    counts['evaluation_drawings_left_out'] = len(sets.evaluation)
+    for pdf in sets.training_pdfs():
+        jpath = devices_for(pdf)
+        if jpath is None:
             continue
         data = json.loads(jpath.read_text())
         devs = data.get('devices', [])
         if not devs:
             counts['empty_json_skipped'] += 1
             continue
-
-        src_str = str(data.get('source_file') or data.get('source_pdf') or '')
         project_id = re.sub(r'[^a-zA-Z0-9_-]+', '_', jpath.stem.replace('_DEVICES', '')).strip('_').lower()
-        if src_str.lower() == 'rinker_hall':
-            project_id = 'rinker_hall'
-
-        # Group devices by (pdf_path, 0-based page_index)
         by_page: dict[tuple[Path, int], list[dict]] = defaultdict(list)
-        if src_str.lower() == 'rinker_hall':
-            for dev in devs:
-                sheet = str(dev.get('sheet') or '').strip().upper()
-                pdf = rinker_sheets.get(sheet)
-                if pdf is None:
-                    counts['missing_rinker_sheet'] += 1
-                    continue
-                by_page[(pdf, 0)].append(dev)
-        else:
-            pdf = resolve_pdf(src_str, jpath, pdf_index)
-            if pdf is None:
-                counts['missing_pdf'] += 1
-                print(f'WARN: missing PDF for {jpath.name}: {src_str}', flush=True)
+        for dev in devs:
+            pg = dev.get('pdf_page') or dev.get('page')
+            if not isinstance(pg, int) or pg < 1:
+                counts['bad_page_num'] += 1
                 continue
-            if 'evaluation' in pdf.relative_to(data_root).parts:
-                counts['evaluation_holdout_skipped'] += 1
-                continue
-            for dev in devs:
-                pg = dev.get('pdf_page') or dev.get('page')
-                if not isinstance(pg, int) or pg < 1:
-                    counts['bad_page_num'] += 1
-                    continue
-                by_page[(pdf, pg - 1)].append(dev)
+            by_page[(pdf, pg - 1)].append(dev)
 
         # Render each unique annotated page and write bbox-only normalized JSON
         doc_cache: dict[Path, fitz.Document] = {}
@@ -207,18 +110,13 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
 
                 bgr, page = render_page_bgr(doc, page_idx, dpi=dpi, max_pixels=max_pixels)
                 h, w = bgr.shape[:2]
-                coord_sys = data.get('coordinate_system')
-                already_rotated = isinstance(coord_sys, dict) and 'rotation' in str(coord_sys.get('reference', '')).lower()
+                already_rotated = devices_rotated_coordinates(data)
 
                 instances = []
                 for k, dev in enumerate(page_devs):
-                    if dev.get('likely_title_block_artifact'):
-                        counts['skipped_title_block'] += 1
-                        continue
-                    if dev.get('placement') == 'text_label_proxy' or (
-                        dev.get('confidence') == 'low' and dev.get('symbol_bbox_pts') is None and dev.get('symbol_bbox') is None
-                    ):
-                        counts['skipped_text_proxy'] += 1
+                    skip = devices_skip_reason(dev)
+                    if skip:
+                        counts[f'skipped_{skip}'] += 1
                         continue
                     box_pts = extract_bbox_pts(dev)
                     if box_pts is None:
@@ -235,28 +133,23 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
                         counts['oversized_box'] += 1
                         continue
                     raw_type = str(dev.get('device_type') or dev.get('symbol_name') or 'unknown')
-                    fam = canonical_family(raw_type)
-                    # Model-refined proposals can be useful positives for a future
-                    # partial-label objective, but are not manually verified truth.
-                    trusted = dev.get('verified_ground_truth') is True
-                    instances.append({
-                        'instance_id': f'{project_id}_p{page_idx+1:03d}_{k:04d}',
-                        'symbol_family': fam,
-                        'symbol_variant': raw_type,
-                        'uncertain': not trusted,
-                        'bbox_xyxy': [round(px0, 2), round(py0, 2), round(px1, 2), round(py1, 2)],
-                        'anchors': {},
-                        'source': {
-                            'kind': 'standardized_devices_json',
-                            'json_file': jpath.name,
-                            'pdf_page': page_idx + 1,
-                            'label_method': 'bbox_only_device_extraction',
-                            'verified_ground_truth': trusted,
-                        },
-                    })
-                    class_counts[fam] += 1
+                    device = device_for_raw_type(raw_type)
+                    if device is None:
+                        counts['skipped_not_electrical'] += 1
+                        continue
+                    family, variant = device
+                    # Extracted boxes are proposals until a human verifies them
+                    # in the annotator; training ignores them until then.
+                    instances.append(pending_instance(
+                        f'{project_id}_p{page_idx+1:03d}_{k:04d}', family, variant,
+                        [round(px0, 2), round(py0, 2), round(px1, 2), round(py1, 2)],
+                        review_source='devices_json', anchors={}, raw_device_type=raw_type,
+                        source={'kind': 'standardized_devices_json', 'json_file': jpath.name,
+                                'pdf_page': page_idx + 1,
+                                'label_method': 'bbox_only_device_extraction'}))
+                    class_counts[device_class(family, variant) or f'{family} (no exact device)'] += 1
                     counts['instances'] += 1
-                    counts['trusted_positive' if trusted else 'unverified_provisional'] += 1
+                    counts['unverified_provisional'] += 1
 
                 if not instances:
                     counts['empty_page_after_filter'] += 1
@@ -271,8 +164,7 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
                 norm_doc = {
                     'format_version': 1,
                     'source_id': f'real_devices_{project_id}',
-                    'project_family_id': project_id,
-                    'source_group_verified': True,
+                    **group_fields(pdf_path),
                     'document_id': stem,
                     'page_index': page_idx,
                     'source_type': 'real_construction_pdf_devices',
@@ -284,10 +176,7 @@ def import_all(data_root: Path, out_dir: Path, *, dpi: float = 200.0, max_pixels
                     'coordinate_system': 'original_page_pixels_top_left_y_down',
                     # The presence of some correct boxes does NOT imply that
                     # the remaining devices on a construction page were labeled.
-                    'exhaustive_families': [],
-                    'annotation_completeness': 'partial',
-                    'annotation_completeness_verified': False,
-                    'annotation_scope': 'positive_only',
+                    **completeness(),
                     'instances': instances,
                 }
                 png.with_suffix('.json').write_text(json.dumps(norm_doc, indent=1))

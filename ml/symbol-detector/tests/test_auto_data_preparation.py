@@ -94,12 +94,12 @@ def test_manifest_requires_three_real_groups_and_duplicate_hash_rejection(tmp_pa
         image=tmp_path/f'im{i}.png';cv2.imwrite(str(image),img)
         doc={'image_path':image.name,'image_width':30,'image_height':20,
              'project_family_id':f'full_plan_{i}','source_group_verified':True,
-             'instances':[{'symbol_family':'receptacle','bbox_xyxy':[2,2,8,8]}]}
+             'instances':[{'symbol_family':'receptacle.duplex','bbox_xyxy':[2,2,8,8]}]}
         f=tmp_path/f'anno{i}.json';f.write_text(json.dumps(doc));files.append(f)
     manifest=build_manifest(files)
     assert set(manifest['splits'])=={'train','val','test'}
     assert all(manifest['splits'].values())
-    assert sorted(manifest['class_ids'])==['receptacle']
+    assert sorted(manifest['class_ids'])==['receptacle.duplex']
     assert {g for groups in manifest['split_groups'].values() for g in groups}=={'full_plan_0','full_plan_1','full_plan_2'}
     a=json.loads(files[1].read_text());a['image_path']='im0.png';files[1].write_text(json.dumps(a))
     with pytest.raises(ValueError,match='leakage'):

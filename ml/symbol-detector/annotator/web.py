@@ -33,6 +33,18 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from annotator import agent_api
+from blueprint_symbols.label_schema import (
+    completeness,
+    device_for_raw_type,
+    devices_bbox_points,
+    devices_rotated_coordinates,
+    devices_skip_reason,
+    group_fields,
+    incomplete_reason,
+    page_header,
+    pending_instance,
+    points_to_pixels,
+)
 from annotator.model import (
     FAMILY_DISCIPLINES,
     FAMILY_VARIANT_SUGGESTIONS,
@@ -167,39 +179,54 @@ def _is_private_ip(host_part: str) -> bool:
     return False
 
 
+def _devices_json_for(pdf: Path) -> Path | None:
+    """The *_DEVICES.json extracted from this PDF, anywhere under its
+    1_blueprints folder (shared lookup: label_store.devices_json_for)."""
+    from annotator import label_store
+    return label_store.devices_json_for(pdf)
+
+
 def _find_proposals_for_pdf(pdf: Path, work_dir: Path | None = None) -> Path | None:
     work = work_dir or DEFAULT_WORK_DIR
     stem = pdf.stem
-    cleaned = sorted((work / "sam3_cleaned").glob(f"{stem}*_CLEANED.json"))
-    if cleaned:
-        return cleaned[0]
-    circuitnet = sorted((work / "circuitnet_proposals").glob(f"{stem}*.json"))
-    if circuitnet:
-        return circuitnet[0]
-    sam3 = sorted((work / "sam3_proposals").glob(f"{stem}*.json"))
-    if sam3:
-        return sam3[0]
-    if (pdf.parent / "devices").is_dir():
-        devs = sorted((pdf.parent / "devices").glob(f"{stem}*.json"))
-        if devs:
-            return devs[0]
-    devs2 = sorted(pdf.parent.glob(f"{stem}_devices.json"))
-    if devs2:
-        return devs2[0]
-    return None
+    for folder, pattern in (("sam3_cleaned", f"{stem}*_CLEANED.json"),
+                            ("circuitnet_proposals", f"{stem}*.json"),
+                            ("sam3_proposals", f"{stem}*.json")):
+        found = sorted((work / folder).glob(pattern))
+        if found:
+            return found[0]
+    devices = _devices_json_for(pdf)
+    if devices is not None:
+        return devices
+    found = sorted(pdf.parent.glob(f"{stem}_devices.json")) + sorted(pdf.parent.glob(f"{stem}_DEVICES.json"))
+    return found[0] if found else None
+
+
+def _load_proposals(pdf: Path, source_hash: str | None) -> dict | None:
+    """Machine proposals for a PDF, if any match it (never on another revision)."""
+    path = _find_proposals_for_pdf(pdf)
+    if path is None or not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(loaded, dict) or not isinstance(loaded.get("devices"), list):
+        return None
+    if loaded.get("source_pdf_sha256") and loaded["source_pdf_sha256"] != source_hash:
+        return None
+    return loaded
 
 
 def default_out_dir(pdf: Path, source_hash: str) -> Path:
-    """Where a PDF's page labels live when no --out-dir is given.
+    """A PDF's folder in the label store: ``<store>/<stem>_<hash12>``.
 
-    With ``BPS_LABELS_DIR`` set (the shared label store used by labeling
-    agents and model pre-labeling), every PDF gets ``<store>/<stem>_<hash12>``,
-    so a human opening the same drawing sees and corrects the same pages.
+    The store (``$BPS_LABELS_DIR``, else ``work/labels``) is shared by the
+    browser annotator, the labeling agents and model pre-labeling, so every
+    path reads and writes the same page files.
     """
-    name = re.sub(r"[^a-zA-Z0-9_-]+", "_", Path(pdf).stem)[:48]
-    root = os.environ.get("BPS_LABELS_DIR")
-    base = Path(root).expanduser() if root else Path.cwd() / "annotations"
-    return base / f"{name}_{source_hash[:12]}"
+    from annotator import label_store
+    return label_store.default_store() / label_store.doc_folder_name(Path(pdf), source_hash)
 
 
 def _store_json_prefix(out_dir: Path) -> str | None:
@@ -231,6 +258,110 @@ def sha256_file(path: Path) -> str:
         for part in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(part)
     return digest.hexdigest()
+
+
+
+
+
+_SHA_CACHE: dict[tuple[str, int, int], str] = {}
+
+
+def cached_sha256(path: Path) -> str:
+    """SHA-256 of a source file, remembered by (path, size, mtime): drawing sets
+    run to hundreds of MB, and switching back to one must not re-read it."""
+    path = Path(path).resolve()
+    stat = path.stat()
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    if key not in _SHA_CACHE:
+        _SHA_CACHE[key] = sha256_file(path)
+    return _SHA_CACHE[key]
+
+
+def render_pdf_page(pdf: Path, index: int, dpi: int, images_dir: Path, source_hash: str) -> tuple[Path, int, int]:
+    """Render one PDF page to ``images_dir`` (the annotator's page-image cache).
+
+    Module level so a prefetch worker process can call it; the file name
+    carries the PDF hash, DPI and size, so a later session finds it by glob.
+    """
+    fitz = _import_fitz()
+    with fitz.open(pdf) as doc:
+        sheet = doc[index]
+        factor = dpi / 72.0
+        if sheet.rect.width * factor * sheet.rect.height * factor > MAX_PDF_PIXELS:
+            factor = math.sqrt(MAX_PDF_PIXELS / (sheet.rect.width * sheet.rect.height))
+        pix = sheet.get_pixmap(matrix=fitz.Matrix(factor, factor), alpha=False)
+        width, height = pix.width, pix.height
+        path = Path(images_dir) / f"page_{index + 1:04d}_{source_hash[:12]}_d{dpi}_{width}x{height}.png"
+        png = pix.tobytes("png")
+    if not path.is_file() or path.read_bytes() != png:
+        _atomic_bytes(path, png)
+    return path, width, height
+
+
+def _find_rendered(images_dir: Path, index: int, dpi: int, source_hash: str) -> tuple[Path, int, int] | None:
+    rendered = sorted(Path(images_dir).glob(f"page_{index + 1:04d}_{source_hash[:12]}_d{dpi}_*.png"))
+    if len(rendered) == 1:
+        match = re.search(r"_(\d+)x(\d+)\.png$", rendered[0].name)
+        if match:
+            return rendered[0], int(match.group(1)), int(match.group(2))
+    return None
+
+
+def _prefetch_job(pdf: str, pages: list[int], dpi: int, out_dir: str | None) -> tuple[str, str]:
+    """Worker-process side of prefetch: hash the PDF and pre-render pages."""
+    source = Path(pdf)
+    sha = sha256_file(source)
+    images = Path(out_dir) if out_dir else default_out_dir(source, sha)
+    images = images / "images"
+    fitz = _import_fitz()
+    with fitz.open(source) as doc:
+        count = len(doc)
+    for index in pages:
+        if 0 <= index < count and _find_rendered(images, index, dpi, sha) is None:
+            render_pdf_page(source, index, dpi, images, sha)
+    return str(source), sha
+
+
+class _Prefetcher:
+    """One background process that pre-renders pages the user is about to open.
+
+    A separate process, not a thread: MuPDF is not safe to drive from two
+    threads at once, and the render must not stall the page being viewed.
+    """
+
+    def __init__(self) -> None:
+        self._pool = None
+        self._seen: set[tuple] = set()
+        self._lock = threading.Lock()
+
+    def submit(self, pdf: Path, pages: list[int], dpi: int, out_dir: Path | None) -> bool:
+        key = (str(pdf), tuple(pages), dpi, str(out_dir))
+        with self._lock:
+            if key in self._seen:
+                return False
+            self._seen.add(key)
+            if self._pool is None:
+                import concurrent.futures
+                import multiprocessing
+                self._pool = concurrent.futures.ProcessPoolExecutor(
+                    max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+            future = self._pool.submit(_prefetch_job, str(pdf), list(pages), dpi,
+                                       str(out_dir) if out_dir else None)
+
+        def remember(done) -> None:
+            try:
+                path, sha = done.result()
+            except Exception:
+                with self._lock:
+                    self._seen.discard(key)        # let a later request retry
+                return
+            stat = Path(path).stat()
+            _SHA_CACHE[(str(Path(path).resolve()), stat.st_size, stat.st_mtime_ns)] = sha
+        future.add_done_callback(remember)
+        return True
+
+
+PREFETCHER = _Prefetcher()
 
 
 def _atomic_bytes(path: Path, data: bytes) -> None:
@@ -626,43 +757,16 @@ def _attribute_schema_payload() -> dict:
 
 
 
-def _load_neca_subtypes(catalog_root: Path | None) -> dict[str, list[str]]:
+def _load_neca_subtypes(catalog_root: Path | None = None) -> dict[str, list[str]]:
+    """Variants allowed per family. Electrical families come only from the
+    device catalog (the single source of truth: anything else would not be a
+    training class); other disciplines keep the suggestion lists."""
     merged: dict[str, list[str]] = {k: list(v) for k, v in FAMILY_VARIANT_SUGGESTIONS.items()}
+    catalog: dict[str, list[str]] = {}
     for dev in load_electrical_device_catalog().get("devices", []):
-        fam = dev.get("symbol_family")
-        var = dev.get("symbol_variant")
-        if fam and var:
-            bucket = merged.setdefault(fam, [])
-            if var not in bucket:
-                if "unspecified" in bucket:
-                    bucket.insert(bucket.index("unspecified"), var)
-                else:
-                    bucket.append(var)
-    if catalog_root is None:
-        return merged
-    try:
-        from blueprint_symbols.neca_prompt_catalog import list_neca_prompt_specs
-        specs, _ = list_neca_prompt_specs(Path(catalog_root))
-    except Exception:
-        return merged
-    neca_to_family = {
-        "light_fixture": "luminaire",
-        "fire_alarm_detector": "fire_alarm_device",
-        "fire_alarm_notification": "fire_alarm_device",
-        "fire_alarm_control": "fire_alarm_device",
-        "occupancy_sensor": "sensor",
-        "power_distribution_equipment": "panelboard",
-        "motor_control": "motor_control",
-        "audio_visual_device": "audio_visual_device",
-        "communications_equipment": "telecom_device",
-        "security_device": "security_device",
-        "nurse_call_device": "telecom_device",
-    }
-    for spec in specs:
-        fam = neca_to_family.get(spec.device_type, spec.device_type)
-        bucket = merged.setdefault(fam, [])
-        if spec.subtype and spec.subtype not in bucket:
-            bucket.append(spec.subtype)
+        catalog.setdefault(dev["symbol_family"], []).append(dev["symbol_variant"])
+    for family, variants in catalog.items():
+        merged[family] = variants + ["unspecified"]
     return merged
 
 
@@ -705,7 +809,7 @@ class LabelingSession:
         self._render_cache: dict[int, tuple[Path, int, int, str]] = {}
         # Callers that already know the PDF's hash (the label store records it
         # with size and mtime) skip re-reading a large drawing set per command.
-        self.source_hash = (source_sha256 or sha256_file(self.pdf)) if self.pdf else None
+        self.source_hash = (source_sha256 or cached_sha256(self.pdf)) if self.pdf else None
         self.source_stat = self.pdf.stat() if self.pdf else None
         self.walls = _load_walls(walls)
         self.variants_by_family = _load_neca_subtypes(neca_catalog)
@@ -770,15 +874,19 @@ class LabelingSession:
                     self.proposals.get("source_file") != self.pdf.name):
                 raise LabelingError("unhashed proposals must match the PDF filename")
         elif self.pdf and auto_proposals:
-            auto_prop = _find_proposals_for_pdf(self.pdf)
-            if auto_prop and auto_prop.is_file():
-                try:
-                    loaded = json.loads(auto_prop.read_text(encoding="utf-8"))
-                    if isinstance(loaded, dict) and isinstance(loaded.get("devices"), list):
-                        if not loaded.get("source_pdf_sha256") or loaded["source_pdf_sha256"] == self.source_hash:
-                            self.proposals = loaded
-                except Exception:
-                    pass
+            self.proposals = _load_proposals(self.pdf, self.source_hash)
+        self.auto_proposals = auto_proposals
+        if self.pdf and not self._initial_out_dir:
+            self._register_document()
+
+    def _register_document(self) -> None:
+        """Record the open PDF in the label store (document.json), so agents,
+        status reports and training see the pages labeled here."""
+        from annotator import label_store
+        if not (self.out_dir / label_store.DOCUMENT_FILE).is_file():
+            label_store.create_document(self.out_dir.parent, self.pdf, sha256=self.source_hash,
+                                        meta={"origin": "annotator"})
+        self.json_prefix = _store_json_prefix(self.out_dir) or self.json_prefix
 
     def _assert_pdf_unchanged(self) -> None:
         if self.pdf:
@@ -822,115 +930,76 @@ class LabelingSession:
             return result
         # A page rendered earlier for this PDF revision and DPI is reused: the
         # render is deterministic and the annotation pins its SHA-256 anyway.
-        rendered = sorted((self.out_dir / "images").glob(
-            f"page_{index + 1:04d}_{self.source_hash[:12]}_d{self.dpi}_*.png"))
-        if len(rendered) == 1:
-            match = re.search(r"_(\d+)x(\d+)\.png$", rendered[0].name)
-            if match:
-                result = rendered[0], int(match.group(1)), int(match.group(2)), sha256_file(rendered[0])
-                self._render_cache[index] = result
-                return result
-        fitz = _import_fitz()
-        with fitz.open(self.pdf) as doc:
-            sheet = doc[index]
-            factor = self.dpi / 72.0
-            if sheet.rect.width * factor * sheet.rect.height * factor > MAX_PDF_PIXELS:
-                factor = math.sqrt(MAX_PDF_PIXELS / (sheet.rect.width * sheet.rect.height))
-            pix = sheet.get_pixmap(matrix=fitz.Matrix(factor, factor), alpha=False)
-            width, height = pix.width, pix.height
-            path = (self.out_dir / "images" /
-                    f"page_{index + 1:04d}_{self.source_hash[:12]}_d{self.dpi}_{width}x{height}.png")
-            png = pix.tobytes("png")
-            if not path.is_file() or path.read_bytes() != png:
-                _atomic_bytes(path, png)
-            result = path, width, height, sha256_file(path)
-            self._render_cache[index] = result
-            return result
+        found = (_find_rendered(self.out_dir / "images", index, self.dpi, self.source_hash)
+                 or render_pdf_page(self.pdf, index, self.dpi, self.out_dir / "images", self.source_hash))
+        path, width, height = found
+        result = path, width, height, sha256_file(path)
+        self._render_cache[index] = result
+        return result
 
     def _proposal_instances(self, index: int, width: int, height: int) -> list[dict]:
+        """Pending boxes for a page opened for the first time: extracted
+        DEVICES.json devices or SAM/CircuitNet proposals for this PDF."""
         if self.proposals is None:
             return []
         fitz = _import_fitz()
+        found = []
+        rotated = devices_rotated_coordinates(self.proposals)
+        render_dpi = float(self.proposals.get("render_dpi") or 150)
+        # Extracted drawing-set devices carry the PDF name; SAM/CircuitNet runs do not.
+        default_source = "devices_json" if self.proposals.get("source_file") and not \
+            self.proposals.get("render_dpi") else "sam3"
         with fitz.open(self.pdf) as doc:
             page = doc[index]
-            pw, ph = float(page.rect.width), float(page.rect.height)
-        found = []
-        for number, proposal in enumerate(self.proposals.get("devices", [])):
-            if proposal.get("pdf_page") != index + 1:
-                continue
-            pts = proposal.get("symbol_bbox") or proposal.get("box_px_tl")
-            if not isinstance(pts, list) or len(pts) != 4:
-                continue
-            try:
-                x0, y0, x1, y1 = map(float, pts)
-                if proposal.get("box_px_tl") and pts == proposal.get("box_px_tl"):
-                    render_dpi = float(self.proposals.get("render_dpi") or 150)
-                    factor = (self.dpi / render_dpi) if render_dpi > 0 else 1.0
-                    box = [
-                        max(0., min(float(width), x0 * factor)),
-                        max(0., min(float(height), y0 * factor)),
-                        max(0., min(float(width), x1 * factor)),
-                        max(0., min(float(height), y1 * factor)),
-                    ]
-                else:
-                    box = [
-                        max(0., min(float(width), x0 * width / pw)),
-                        max(0., min(float(height), (ph - y1) * height / ph)),
-                        max(0., min(float(width), x1 * width / pw)),
-                        max(0., min(float(height), (ph - y0) * height / ph)),
-                    ]
-                _valid_box(box, width, height)
-            except (ValueError, TypeError, ZeroDivisionError):
-                continue
-            family = str(proposal.get("device_type") or proposal.get("broad_family") or "unknown_symbol")
-            variant = str(proposal.get("subtype") or proposal.get("neca_name") or "unspecified")
-            found.append({
-                "instance_id": f"proposal_p{index + 1}_{number}",
-                "symbol_family": family,
-                "symbol_variant": variant,
-                "discipline": discipline_for(family),
-                "device_type": family,
-                "bbox_xyxy": [round(v, 3) for v in box],
-                "attributes_from_text": [],
-                "rotation_degrees": 0.0,
-                "is_truncated": False,
-                "is_occluded": False,
-                "uncertain": True,
-                "review_status": "unreviewed",
-                "review_source": proposal.get("status") or "sam3",
-                "verified_ground_truth": False,
-                "proposal_score": proposal.get("score"),
-                "proposal_visual_group": proposal.get("visual_group"),
-                "proposal_neca_symbol_id": proposal.get("neca_symbol_id"),
-                "proposal_alternative_labels": proposal.get("alternative_labels", []),
-            })
+            for number, proposal in enumerate(self.proposals.get("devices", [])):
+                if not isinstance(proposal, dict):
+                    continue
+                if (proposal.get("pdf_page") or proposal.get("page")) != index + 1:
+                    continue
+                if devices_skip_reason(proposal):
+                    continue
+                try:
+                    pixels = proposal.get("box_px_tl")
+                    if isinstance(pixels, list) and len(pixels) == 4:
+                        factor = (self.dpi / render_dpi) if render_dpi > 0 else 1.0
+                        x0, y0, x1, y1 = (float(v) * factor for v in pixels)
+                        box = [max(0., min(float(width), x0)), max(0., min(float(height), y0)),
+                               max(0., min(float(width), x1)), max(0., min(float(height), y1))]
+                    else:
+                        pts = devices_bbox_points(proposal)
+                        if pts is None:
+                            continue
+                        box = list(points_to_pixels(pts, page, width, height, already_rotated=rotated))
+                    _valid_box(box, width, height)
+                except (ValueError, TypeError, ZeroDivisionError):
+                    continue
+                raw = proposal.get("device_type") or proposal.get("broad_family")
+                device = device_for_raw_type(raw)
+                if device is None:              # mechanical equipment: not an electrical label
+                    continue
+                family, variant = device
+                subtype = proposal.get("subtype") or proposal.get("neca_name")
+                if subtype and variant == "unspecified":
+                    variant = str(subtype)
+                found.append(pending_instance(
+                    f"proposal_p{index + 1}_{number}", family, variant, box,
+                    review_source=str(proposal.get("status") or default_source),
+                    discipline=discipline_for(family), device_type=family,
+                    raw_device_type=raw, proposal_score=proposal.get("score"),
+                    proposal_visual_group=proposal.get("visual_group"),
+                    proposal_neca_symbol_id=proposal.get("neca_symbol_id"),
+                    proposal_alternative_labels=proposal.get("alternative_labels", [])))
         return found
 
     def _new_sheet(self, index: int, image: Path, width: int, height: int, image_hash: str) -> dict:
         page_path = self._json_path(index)
         if self.pdf:
-            image_rel = str(image.relative_to(page_path.parent))
-            instances = self._proposal_instances(index, width, height)
-            result = {
-                "format_version": 1, "source_id": self.pdf.stem,
-                "source_license": "user-owned",
-                "project_family_id": self.pdf.stem,
-                "document_id": self.pdf.name,
-                "page_index": index,
-                "source_type": "real_construction_pdf_manual",
-                "source_pdf_sha256": self.source_hash,
-                "image_path": image_rel,
-                "image_sha256": image_hash,
-                "image_width": width, "image_height": height,
-                "coordinate_system": "original_page_pixels_top_left_y_down",
-                "exhaustive_families": [],
-                "verified_no_symbols": False,
-                "annotation_completeness": "partial",
-                "annotation_completeness_verified": False,
-                "annotation_scope": "positive_only",
-                "instances": instances,
-                "rejected_proposals": [],
-            }
+            result = page_header(
+                source=self.pdf, document_id=self.pdf.name, page_index=index,
+                source_type="real_construction_pdf_manual", source_sha256=self.source_hash,
+                image_path=str(image.relative_to(page_path.parent)), image_sha256=image_hash,
+                width=width, height=height)
+            result["instances"] = self._proposal_instances(index, width, height)
             return result
         return json.loads(page_path.read_text(encoding="utf-8"))
 
@@ -960,6 +1029,10 @@ class LabelingSession:
                     raise RevisionConflict("annotation image bytes changed")
             elif not stored_sha:
                 data["image_sha256"] = image_hash
+            if self.pdf and image.parent.parent == path.parent:
+                # Same bytes (hash checked above), possibly under a newer render
+                # name: training reads image_path, so it must name this file.
+                data["image_path"] = str(image.relative_to(path.parent))
             data = _normalize_loaded_document(data)
         else:
             data = self._new_sheet(index, image, width, height, image_hash)
@@ -1044,6 +1117,23 @@ class LabelingSession:
                 "walls": self.walls,
             }
 
+    def _labeled_stems(self) -> set[str]:
+        """Sanitized PDF stems that have saved pages in the label store."""
+        from annotator import label_store
+        roots = [label_store.default_store()]
+        if self._initial_out_dir:
+            roots.append(self._initial_out_dir)
+        stems: set[str] = set()
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for folder in root.iterdir():
+                if folder.is_dir() and next(folder.glob("*_p[0-9][0-9][0-9][0-9].json"), None):
+                    stems.add(folder.name.rsplit("_", 1)[0])
+            for page in root.glob("*_p[0-9][0-9][0-9][0-9].json"):      # flat --out-dir
+                stems.add(re.sub(r"[^a-zA-Z0-9_-]+", "_", page.name.rsplit("_p", 1)[0])[:48])
+        return stems
+
     def list_documents(self) -> list[dict]:
         bp_dir = self.blueprints_dir if (self.blueprints_dir and self.blueprints_dir.is_dir()) else DEFAULT_BLUEPRINTS_DIR
         if not bp_dir.is_dir():
@@ -1058,6 +1148,7 @@ class LabelingSession:
         pdf_paths = sorted(bp_dir.rglob("*.pdf"))
         docs = []
         current_resolved = self.pdf.resolve() if self.pdf else None
+        labeled = self._labeled_stems()
 
         for p in pdf_paths:
             resolved = p.resolve()
@@ -1065,14 +1156,7 @@ class LabelingSession:
             is_current = (resolved == current_resolved)
             prop_file = _find_proposals_for_pdf(p)
             has_prop = (prop_file is not None)
-
-            annotated = False
-            if self.out_dir and self.out_dir.is_dir():
-                if list(self.out_dir.glob(f"{stem[:48]}_p*.json")):
-                    annotated = True
-            if not annotated and (DEFAULT_WORK_DIR / "annotator_labels").is_dir():
-                if list((DEFAULT_WORK_DIR / "annotator_labels").glob(f"{stem[:48]}_p*.json")):
-                    annotated = True
+            annotated = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem)[:48] in labeled
 
             try:
                 rel = str(p.relative_to(bp_dir))
@@ -1090,18 +1174,37 @@ class LabelingSession:
                 "is_current": is_current,
             })
 
+        # The order must not depend on which document is open: "Next PDF" walks
+        # this list, and putting the current one first made it bounce between
+        # the first two entries.
         def sort_key(d):
-            prio = 3
-            if d["is_current"]:
+            prio = 2
+            if d["has_annotations"]:
                 prio = 0
-            elif d["has_annotations"]:
-                prio = 1
             elif d["has_proposals"]:
-                prio = 2
+                prio = 1
             return (prio, d["rel_path"].lower())
 
         docs.sort(key=sort_key)
         return docs
+
+    def prefetch(self, path: str | None, pages: list[int]) -> dict:
+        """Pre-render pages of this or another blueprint PDF in the background."""
+        if not isinstance(pages, list) or not all(type(p) is int and 0 <= p < 10000 for p in pages[:8]):
+            raise LabelingError("pages must be a list of page indexes")
+        pages = pages[:8]
+        if path:
+            target = Path(path).resolve()
+            if target.suffix.lower() != ".pdf" or not target.is_file():
+                raise LabelingError("prefetch path must be an existing PDF")
+            if self.blueprints_dir and self.blueprints_dir not in target.parents and target != self.pdf:
+                raise LabelingError("prefetch path must be inside the blueprints folder")
+        elif self.pdf:
+            target = self.pdf
+        else:
+            return {"queued": False}
+        queued = PREFETCHER.submit(target, pages, self.dpi, self._initial_out_dir)
+        return {"queued": queued}
 
     def switch_document(self, path_or_name: str) -> dict:
         target = Path(path_or_name).resolve()
@@ -1126,7 +1229,7 @@ class LabelingSession:
             # another drawing's geometry and page verdicts.
             self.walls = []
             self.page_presence = {}
-            self.source_hash = sha256_file(self.pdf)
+            self.source_hash = cached_sha256(self.pdf)
             self.source_stat = self.pdf.stat()
             fitz = _import_fitz()
             with fitz.open(self.pdf) as doc:
@@ -1135,23 +1238,13 @@ class LabelingSession:
                 raise LabelingError("PDF has no pages")
             self.start_page = 0
 
+            self.json_prefix = self.pdf.stem[:48]
             if not self._initial_out_dir:
                 self.out_dir = default_out_dir(self.pdf, self.source_hash)
                 self.out_dir.mkdir(parents=True, exist_ok=True)
-            self.json_prefix = _store_json_prefix(self.out_dir) or self.pdf.stem[:48]
-
-            prop_file = _find_proposals_for_pdf(self.pdf)
-            if prop_file and prop_file.is_file():
-                try:
-                    loaded = json.loads(prop_file.read_text(encoding="utf-8"))
-                    if isinstance(loaded, dict) and isinstance(loaded.get("devices"), list):
-                        self.proposals = loaded
-                    else:
-                        self.proposals = None
-                except Exception:
-                    self.proposals = None
-            else:
-                self.proposals = None
+                self._register_document()
+            self.json_prefix = _store_json_prefix(self.out_dir) or self.json_prefix
+            self.proposals = _load_proposals(self.pdf, self.source_hash) if self.auto_proposals else None
 
             return self.page_state(0)
 
@@ -1404,6 +1497,17 @@ class LabelingSession:
                 raise LabelingError("metadata.verified_no_symbols must be boolean")
             if negative and instances:
                 raise LabelingError("verified symbol-free pages cannot contain active boxes; reject or remove proposals first")
+            complete = (metadata.get("page_complete", baseline.get("page_complete", False))
+                        if metadata is not None else baseline.get("page_complete", False))
+            if type(complete) is not bool:
+                raise LabelingError("metadata.page_complete must be boolean")
+            for item in instances:
+                if item.get("verified_ground_truth") is True and incomplete_reason(item):
+                    raise LabelingError(f"box {item.get('instance_id')} is verified but "
+                                        f"{incomplete_reason(item)}; pick the exact device first")
+                if complete and not negative and item.get("verified_ground_truth") is not True:
+                    raise LabelingError("a page marked fully labeled cannot have pending boxes; "
+                                        "verify or remove them, or clear 'every symbol labeled'")
             if not isinstance(rejected, list) or len(rejected) > 150_000:
                 raise LabelingError("rejected_proposals must be a bounded list")
             rejected_ids: set[str] = set()
@@ -1446,13 +1550,17 @@ class LabelingSession:
                 baseline["vlm_assessment"] = agent_api.validate_assessment(metadata["vlm_assessment"])
             if metadata is not None and "verified_no_symbols" in metadata:
                 baseline["verified_no_symbols"] = metadata["verified_no_symbols"]
+            if metadata is not None and "page_complete" in metadata:
+                baseline["page_complete"] = metadata["page_complete"]
             baseline["instances"] = [_normalize_instance_for_save(item) for item in instances]
             baseline["rejected_proposals"] = cleaned_rejected
-            baseline["exhaustive_families"] = []
-            negative = baseline.get("verified_no_symbols", False)
-            baseline["annotation_completeness"] = "complete" if negative else "partial"
-            baseline["annotation_completeness_verified"] = negative
-            baseline["annotation_scope"] = "verified_no_symbols" if negative else "positive_only"
+            if self.pdf:
+                # Older saves lacked a verified project group, which the
+                # training split refuses; derive it from the PDF every time.
+                baseline.update(group_fields(self.pdf))
+            baseline.update(completeness(
+                verified_no_symbols=baseline.get("verified_no_symbols", False) is True,
+                page_complete=baseline.get("page_complete") is True))
             encoded = (json.dumps(baseline, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
             _atomic_bytes(self._json_path(index), encoded)
             return hashlib.sha256(encoded).hexdigest()
@@ -1569,7 +1677,7 @@ def make_handler(session: LabelingSession):
             valid_endpoints = (
                 "/api/save", "/api/validate", "/api/open", "/api/snap",
                 "/api/document", "/api/server_export", "/api/server_import",
-                "/api/agent/act",
+                "/api/agent/act", "/api/prefetch",
             )
             if url.path not in valid_endpoints:
                 self._json(404, {"error": "unknown endpoint"})
@@ -1595,6 +1703,9 @@ def make_handler(session: LabelingSession):
                         dry_run=dry_run,
                     )
                     self._json(200, result)
+                    return
+                if url.path == "/api/prefetch":
+                    self._json(200, session.prefetch(data.get("path"), data.get("pages", [0])))
                     return
                 if url.path == "/api/document":
                     target_path = data.get("path") or data.get("name")
@@ -1669,7 +1780,10 @@ def main() -> None:
     mode.add_argument("--edit", type=Path, help="Existing annotation JSON file or directory of JSON files")
     parser.add_argument("--blueprints-dir", type=Path, default=DEFAULT_BLUEPRINTS_DIR,
                         help="Root directory containing blueprint PDFs")
-    parser.add_argument("--out-dir", type=Path)
+    parser.add_argument("--out-dir", type=Path,
+                        help="Put every PDF's pages in this one folder instead of the label store")
+    parser.add_argument("--store", type=Path,
+                        help="Label store root (default $BPS_LABELS_DIR, else work/labels)")
     parser.add_argument("--proposals", type=Path)
     parser.add_argument("--page-presence", type=Path,
                         help="Read-only page candidates from scripts_triage_pdf_symbol_pages.py")
@@ -1681,6 +1795,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--open-browser", action="store_true")
     args = parser.parse_args()
+    if args.store:
+        os.environ["BPS_LABELS_DIR"] = str(args.store.expanduser().resolve())
 
     chosen_pdf = args.pdf
     chosen_edit = args.edit
@@ -1712,7 +1828,7 @@ def main() -> None:
         print(f"Manual labeler running!")
         print(f"  Local URL:   http://127.0.0.1:{port}/")
         print(f"  Network URL: http://{lan_ip}:{port}/")
-        print(f"Annotations: {session.out_dir} (positive-only; no exhaustive labels inferred)")
+        print(f"Labels: {session.out_dir}")
         if args.open_browser:
             webbrowser.open(f"http://127.0.0.1:{port}/")
         try:

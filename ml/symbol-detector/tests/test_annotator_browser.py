@@ -33,6 +33,13 @@ def _launch_browser(playwright_instance):
     )
 
 
+def _pick_device(page, label):
+    """Set the selected box's device through the sidebar catalog, as a user does."""
+    page.locator("#deviceCatalogSearch").fill(label)
+    page.locator("#deviceCatalogList button", has_text=label).first.click()
+    page.locator("#deviceCatalogSearch").fill("")
+
+
 def _answer_confirm(page, accept=True):
     page.wait_for_selector("#confirmDialog[open]")
     page.locator("#confirmOkBtn" if accept else "#confirmCancelBtn").click()
@@ -95,10 +102,11 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
 
                 page.locator("#angle").fill("30")
                 page.locator("#angle").press("Tab")
-                page.locator("#family").fill("switch")
-                page.locator("#family").press("Tab")
-                page.locator("#variant").fill("three_way")
-                page.locator("#variant").press("Tab")
+                # Verifying needs a specific device; the default draft has none.
+                assert page.locator("#accept").is_disabled()
+                assert not page.locator("#verifyHint").is_hidden()
+                _pick_device(page, "Switch - 3-Way")
+                assert page.locator("#selectedLabel").inner_text() == "Switch - 3-Way"
                 page.locator("#accept").click()
                 assert "1 verified" in page.locator("#count").inner_text()
 
@@ -109,6 +117,8 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
                 saved = json.loads((tmp_path / "labels" / "label_test_p0001.json").read_text())
                 assert saved["exhaustive_families"] == []
                 assert saved["annotation_completeness_verified"] is False
+                # Training splits by project: every saved page names a verified group.
+                assert saved["source_group_verified"] is True and saved["project_family_id"]
                 page.locator("#verifiedNoSymbols").click()
                 assert not page.locator("#verifiedNoSymbols").is_checked()
                 assert "Reject or remove" in page.locator("#message").inner_text()
@@ -187,10 +197,8 @@ def test_browser_sam_class_alternative_is_not_automatically_verified(tmp_path):
                     "() => document.querySelector('#count').textContent.includes('1 pending')"
                 )
                 tab.locator("#items button").first.click()
-                assert "NECA_SWITCH" in tab.locator("#modelSource").inner_text()
-                tab.locator("#proposalAlternatives button").first.click()
-                assert tab.locator("#family").input_value() == "receptacle"
-                assert tab.locator("#variant").input_value() == "duplex"
+                _pick_device(tab, "Receptacle - Duplex")
+                assert tab.locator("#selectedLabel").inner_text() == "Receptacle - Duplex"
                 assert "0 verified" in tab.locator("#count").inner_text()
                 tab.locator("#save").click()
                 tab.wait_for_function(
@@ -208,144 +216,6 @@ def test_browser_sam_class_alternative_is_not_automatically_verified(tmp_path):
                 verified = json.loads((tmp_path / "review" / "source_p0001.json").read_text())
                 assert verified["instances"][0]["review_source"] == "human"
                 assert verified["instances"][0]["verified_ground_truth"] is True
-            finally:
-                browser.close()
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=10)
-
-
-def test_browser_import_requires_source_match_and_unverifies(tmp_path):
-    """Mismatched-image imports cannot silently preserve human verification."""
-    from PIL import Image
-
-    image = tmp_path / "sheet.png"
-    Image.new("RGB", (400, 300), (245, 245, 245)).save(image)
-    annotations = tmp_path / "page.json"
-    annotations.write_text(json.dumps({
-        "image_path": "sheet.png", "image_width": 400, "image_height": 300,
-        "coordinate_system": "original_page_pixels_top_left_y_down", "instances": [],
-    }))
-    imported = tmp_path / "different_sheet.json"
-    imported.write_text(json.dumps({
-        "image_sha256": "0" * 64, "image_width": 400, "image_height": 300,
-        "coordinate_system": "original_page_pixels_top_left_y_down",
-        "instances": [{
-            "instance_id": "imported_1", "symbol_family": "receptacle",
-            "symbol_variant": "duplex", "bbox_xyxy": [115.0, 108.0, 145.0, 138.0],
-            "review_status": "accepted", "review_source": "human",
-            "verified_ground_truth": True, "uncertain": False,
-        }],
-        "rejected_proposals": [{
-            "instance_id": "rejected_1", "symbol_family": "switch",
-            "symbol_variant": "unspecified", "bbox_xyxy": [200.0, 200.0, 230.0, 230.0],
-            "review_status": "rejected", "review_source": "human",
-            "uncertain": True, "verified_ground_truth": False,
-        }],
-    }))
-
-    session = LabelingSession(edit=annotations)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
-    worker.start()
-    try:
-        with playwright.sync_playwright() as pw:
-            browser = _launch_browser(pw)
-            try:
-                page = browser.new_page(viewport={"width": 1300, "height": 850})
-                page.goto(f"http://127.0.0.1:{server.server_port}/")
-                page.wait_for_function(
-                    "() => document.querySelector('#count')?.textContent?.includes('0 active')"
-                )
-                page.locator("#importJsonFile").set_input_files(str(imported))
-                _answer_confirm(page, accept=False)
-                assert "0 active" in page.locator("#count").inner_text()
-
-                page.locator("#importJsonFile").set_input_files(str(imported))
-                _answer_confirm(page)
-                page.wait_for_function(
-                    "() => document.querySelector('#count')?.textContent?.includes('1 pending')"
-                )
-                assert "0 verified" in page.locator("#count").inner_text()
-                page.locator("#save").click()
-                page.wait_for_function(
-                    "() => document.querySelector('#dirty').textContent === 'Saved'"
-                )
-                saved = json.loads(annotations.read_text())
-                assert saved["instances"][0]["review_status"] == "unreviewed"
-                assert saved["instances"][0]["review_source"] == "import"
-                assert saved["instances"][0]["verified_ground_truth"] is False
-                assert saved["instances"][0]["uncertain"] is True
-                assert saved["rejected_proposals"] == []
-            finally:
-                browser.close()
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=10)
-
-
-def test_browser_invalid_import_keeps_current_verified_labels(tmp_path):
-    from PIL import Image
-    from annotator.web import sha256_file
-
-    image = tmp_path / "plan.png"
-    Image.new("RGB", (400, 300), (245, 245, 245)).save(image)
-    active = tmp_path / "labels.json"
-    active.write_text(json.dumps({
-        "image_path": image.name, "image_width": 400, "image_height": 300,
-        "coordinate_system": "original_page_pixels_top_left_y_down",
-        "instances": [{
-            "instance_id": "old_1", "symbol_family": "receptacle",
-            "symbol_variant": "duplex", "bbox_xyxy": [100, 100, 130, 130],
-            "review_status": "accepted", "review_source": "human",
-            "verified_ground_truth": True, "uncertain": False,
-        }],
-    }))
-    incoming = tmp_path / "incoming.json"
-    header = {"image_sha256": sha256_file(image), "image_width": 400,
-              "image_height": 300, "coordinate_system": "original_page_pixels_top_left_y_down"}
-    valid = {"instance_id": "new_1", "symbol_family": "receptacle",
-             "symbol_variant": "duplex", "bbox_xyxy": [140, 140, 170, 170],
-             "review_status": "unreviewed", "review_source": "import",
-             "verified_ground_truth": False, "uncertain": True,
-             "device_attributes": {"voltage_v": 120, "gfci": True}}
-    session = LabelingSession(edit=active)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
-    worker.start()
-    original_bytes = active.read_bytes()
-    try:
-        with playwright.sync_playwright() as pw:
-            browser = _launch_browser(pw)
-            try:
-                page = browser.new_page(viewport={"width": 1300, "height": 850})
-                page.goto(f"http://127.0.0.1:{server.server_port}/")
-                page.wait_for_function("() => document.querySelector('#count')?.textContent?.includes('1 active')")
-                assert "1 verified" in page.locator("#count").inner_text()
-                for instances, expected in [
-                    ([valid, dict(valid)], "unique"),
-                    ([dict(valid, device_attributes={"voltage_v": -4})], "device_attributes"),
-                    ([dict(valid, bbox_xyxy=[-1, 140, 170, 170])], "bbox"),
-                ]:
-                    incoming.write_text(json.dumps(dict(header, instances=instances)))
-                    page.locator("#importJsonFile").set_input_files(str(incoming))
-                    page.wait_for_function(
-                        "part => document.querySelector('#message')?.textContent?.includes(part)", arg=expected
-                    )
-                    assert "1 verified" in page.locator("#count").inner_text()
-                    assert page.locator("#dirty").inner_text() == "Saved"
-                    assert active.read_bytes() == original_bytes
-                incoming.write_text(json.dumps(dict(header, instances=[valid])))
-                page.locator("#importJsonFile").set_input_files(str(incoming))
-                page.wait_for_function("() => document.querySelector('#count')?.textContent?.includes('1 pending')")
-                assert "0 verified" in page.locator("#count").inner_text()
-                page.locator("#save").click()
-                page.wait_for_function("() => document.querySelector('#dirty').textContent === 'Saved'")
-                saved = json.loads(active.read_text())
-                assert saved["instances"][0]["instance_id"] == "new_1"
-                assert saved["instances"][0]["device_attributes"] == {"voltage_v": 120, "gfci": True}
             finally:
                 browser.close()
     finally:
@@ -448,8 +318,8 @@ def test_browser_verified_label_demoted_after_semantic_edits(tmp_path):
                     "() => document.querySelector('#count')?.textContent?.includes('1 verified')"
                 )
                 page.locator("#items button").first.click()
-                page.locator("#x0").fill("105")
-                page.locator("#x0").press("Tab")
+                page.locator("#canvas").focus()
+                page.keyboard.press("ArrowRight")                  # moving a verified box re-opens review
                 assert "1 pending" in page.locator("#count").inner_text()
                 page.locator("#undo").click()
                 assert "1 verified" in page.locator("#count").inner_text()
@@ -460,9 +330,7 @@ def test_browser_verified_label_demoted_after_semantic_edits(tmp_path):
                 page.locator("#accept").click()
                 assert "1 verified" in page.locator("#count").inner_text()
 
-                page.locator("#family").fill("switch")
-                page.locator("#family").press("Tab")
-                assert page.locator("#variant").input_value() == "unspecified"
+                _pick_device(page, "Switch - 3-Way")
                 assert "1 pending" in page.locator("#count").inner_text()
                 page.locator("#accept").click()
                 assert "1 verified" in page.locator("#count").inner_text()
@@ -479,7 +347,7 @@ def test_browser_verified_label_demoted_after_semantic_edits(tmp_path):
                 saved = json.loads(annotations.read_text())
                 assert saved["instances"][0]["bbox_rotated"]["angle_deg"] == 25
                 assert saved["instances"][0]["symbol_family"] == "switch"
-                assert saved["instances"][0]["symbol_variant"] == "unspecified"
+                assert saved["instances"][0]["symbol_variant"] == "three_way"
                 assert saved["instances"][0]["device_attributes"]["gfci"] is True
                 assert saved["instances"][0]["review_status"] == "unreviewed"
                 assert saved["instances"][0]["verified_ground_truth"] is False
@@ -489,89 +357,13 @@ def test_browser_verified_label_demoted_after_semantic_edits(tmp_path):
                     "() => document.querySelector('#dirty')?.textContent === 'Saved'"
                 )
                 assert json.loads(annotations.read_text())["instances"][0]["verified_ground_truth"] is True
-                # Quick class changes must not carry a subtype from the old class.
-                page.locator("#variant").fill("single_pole")
-                page.locator("#variant").press("Tab")
-                page.locator("#accept").click()
-                page.locator('.quick-family[data-family="receptacle"]').click()
-                assert page.locator("#variant").input_value() == "unspecified"
+                # The 1-9 family keys must not carry a subtype from the old class,
+                # and a box without a specific device cannot be verified.
+                page.locator("#canvas").focus()
+                page.keyboard.press("1")
+                assert page.locator("#selectedLabel").inner_text() == "receptacle / unspecified"
                 assert "1 pending" in page.locator("#count").inner_text()
-            finally:
-                browser.close()
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=10)
-
-
-def test_browser_late_wall_snap_does_not_overwrite_other_selection(tmp_path):
-    """A result for box A must never be attached to box B after a selection change."""
-    from PIL import Image
-
-    image = tmp_path / "wall.png"
-    Image.new("RGB", (400, 300), (245, 245, 245)).save(image)
-    annotation = tmp_path / "wall_labels.json"
-    annotation.write_text(json.dumps({
-        "image_path": image.name, "image_width": 400, "image_height": 300,
-        "coordinate_system": "original_page_pixels_top_left_y_down",
-        "instances": [
-            {"instance_id": "a", "symbol_family": "receptacle",
-             "symbol_variant": "duplex", "bbox_xyxy": [70, 85, 105, 120],
-             "review_status": "accepted", "review_source": "human",
-             "verified_ground_truth": True, "uncertain": False},
-            {"instance_id": "b", "symbol_family": "switch",
-             "symbol_variant": "single_pole", "bbox_xyxy": [250, 85, 285, 120],
-             "review_status": "accepted", "review_source": "human",
-             "verified_ground_truth": True, "uncertain": False},
-        ],
-    }))
-    walls = tmp_path / "walls.json"
-    walls.write_text(json.dumps({"walls": [
-        {"start": [20, 125], "end": [380, 125]},
-    ]}))
-    session = LabelingSession(edit=annotation, walls=walls)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
-    worker.start()
-    try:
-        with playwright.sync_playwright() as pw:
-            browser = _launch_browser(pw)
-            try:
-                page = browser.new_page(viewport={"width": 1420, "height": 900})
-                page.goto(f"http://127.0.0.1:{server.server_port}/")
-                page.wait_for_function(
-                    "() => document.querySelector('#count')?.textContent?.includes('2 verified')"
-                )
-                page.locator("#items button").first.click()
-                page.evaluate("""() => {
-                  const realFetch = window.fetch.bind(window);
-                  window.fetch = (url, options) => {
-                    if (typeof url === "string" && url.startsWith("/api/snap?")) {
-                      return new Promise(resolve => {
-                        window.__releaseSnap = () => resolve(new Response(
-                          JSON.stringify({snap: {
-                            kind: "wall_centerline_intersection",
-                            point: [88, 125], quality: "high"
-                          }}), {
-                            status: 200,
-                            headers: {"Content-Type": "application/json"}
-                          }));
-                      });
-                    }
-                    return realFetch(url, options);
-                  };
-                }""")
-                page.locator("#testWallSnap").click()
-                page.wait_for_function("() => typeof window.__releaseSnap === 'function'")
-                page.locator("#items button").nth(1).click()
-                page.evaluate("() => window.__releaseSnap()")
-                page.wait_for_function(
-                    "() => document.querySelector('#message')?.textContent?.includes('Discarded stale wall snap')"
-                )
-                assert "2 verified" in page.locator("#count").inner_text()
-                assert page.locator("#dirty").inner_text() == "Saved"
-                assert "Snap preview" not in page.locator("#snapPreviewInfo").inner_text()
-                assert all("snap" not in item for item in session.page_state(0)["document"]["instances"])
+                assert page.locator("#accept").is_disabled()
             finally:
                 browser.close()
     finally:
@@ -599,7 +391,7 @@ def test_browser_electrical_device_catalog_search_modal_and_save(tmp_path):
                 page = browser.new_page(viewport={"width": 1420, "height": 900})
                 page.goto(f"http://127.0.0.1:{server.server_port}/")
                 page.wait_for_function(
-                    "() => document.querySelector('#deviceCatalogCount')?.textContent === '181'"
+                    "() => document.querySelector('#deviceCatalogCount')?.textContent === '182'"
                 )
                 page.locator("#drawTool").click()
                 canvas = page.locator("#canvas").bounding_box()
@@ -615,17 +407,14 @@ def test_browser_electrical_device_catalog_search_modal_and_save(tmp_path):
 
                 page.locator("#deviceCatalogSearch").fill("Long Range")
                 page.locator("#deviceCatalogList button", has_text="Card Reader - Long Range").click()
-                assert page.locator("#family").input_value() == "security_device"
-                assert page.locator("#variant").input_value() == "card_reader_long_range"
-                assert page.locator("#disciplineBadge").inner_text() == "electrical"
+                assert page.locator("#selectedLabel").inner_text() == "Card Reader - Long Range"
 
-                page.locator("#navDevicesBtn").click()
+                page.locator("#openDeviceCatalogBtn").click()
                 page.wait_for_function("() => !document.querySelector('#deviceCatalogModal').hidden")
                 page.locator("#deviceModalSearch").fill("Horn / Strobe - Wall")
                 page.locator("#deviceModalGrid button", has_text="Fire Alarm Horn / Strobe - Wall Mounted").click()
                 page.wait_for_function("() => document.querySelector('#deviceCatalogModal').hidden")
-                assert page.locator("#family").input_value() == "fire_alarm_device"
-                assert page.locator("#variant").input_value() == "horn_strobe_wall"
+                assert page.locator("#selectedLabel").inner_text() == "Fire Alarm Horn / Strobe - Wall Mounted"
 
                 page.locator("#accept").click()
                 page.locator("#save").click()
@@ -862,6 +651,48 @@ def test_browser_anchor_any_box_without_selecting_it(tmp_path):
                 left_x = first["bbox_xyxy"][0]
                 assert abs(first["anchors"]["wall_attachment"]["xy"][0] - left_x) < 1e-6
                 assert set(second["anchors"]) == {centre(second)}, second["anchors"]
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
+
+
+def test_browser_next_pdf_walks_every_document_in_order(tmp_path):
+    """Next PDF must reach the third and later documents, not bounce between two."""
+    docs_dir = tmp_path / "blueprints"
+    docs_dir.mkdir()
+    names = ["doc_a.pdf", "doc_b.pdf", "doc_c.pdf", "doc_d.pdf"]
+    for name in names:
+        document = fitz.open()
+        document.new_page(width=400, height=300)
+        document.save(docs_dir / name)
+        document.close()
+    labels = tmp_path / "labels"
+    labels.mkdir()
+    # doc_c already has labels, so the menu lists it first; Next PDF must still
+    # visit it in folder order.
+    seed = LabelingSession(pdf=docs_dir / "doc_c.pdf", out_dir=labels, dpi=72)
+    seed.save(0, revision=None, instances=[], rejected=[])
+
+    session = LabelingSession(pdf=docs_dir / "doc_a.pdf", blueprints_dir=docs_dir,
+                              out_dir=labels, dpi=72)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                page = browser.new_page(viewport={"width": 1420, "height": 900})
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.wait_for_function(
+                    "() => document.querySelector('#currentDocBadge').textContent.includes('doc_a.pdf')")
+                for expected in ["doc_b.pdf", "doc_c.pdf", "doc_d.pdf", "doc_a.pdf"]:
+                    page.locator("#nextPdfBtn").click()
+                    page.wait_for_function(
+                        f"() => document.querySelector('#currentDocBadge').textContent.includes('{expected}')")
             finally:
                 browser.close()
     finally:

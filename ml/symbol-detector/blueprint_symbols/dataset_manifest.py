@@ -8,6 +8,7 @@ from pathlib import Path
 from collections import Counter,defaultdict
 import hashlib, json, math
 import cv2
+from .label_schema import PageFingerprints, load_training_page, page_fingerprint
 
 EXCLUDED={'__unmapped__','unmapped','ignore','unknown_symbol','__ignore__'}
 
@@ -55,8 +56,14 @@ def _sha(path:Path) -> str:
 def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:float=.15,
                    require_verified_groups:bool=True,
                    allow_partial_training:bool=False,
-                   locked_manifest: dict | None = None) -> dict:
+                   locked_manifest: dict | None = None,
+                   evaluation_files: list[Path] | None = None) -> dict:
     """Stable group-aware partitions; same image in different groups is an error.
+
+    ``evaluation_files``: pages of the evaluation drawings
+    (``1_blueprints/evaluation``). When given, they alone form validation and
+    test (their projects split between the two) and every other group trains;
+    no training project is held out. Evaluation pages must be fully labelled.
 
     Stratification cannot guarantee held-out coverage of all rare classes;
     distribution and coverage warnings are explicitly reported.
@@ -64,11 +71,13 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     if val_fraction<=0 or test_fraction<=0 or val_fraction+test_fraction>=1:
         raise ValueError('fractions must be positive, with train portion remaining')
     docs=[]; by_hash={}; by_group=defaultdict(list)
+    negative_pages=PageFingerprints(); negative_digests={}; duplicate_negatives=[]
     warnings=[]; counts=Counter(); group_counts=defaultdict(Counter)
     for path in sorted(set(Path(f).resolve() for f in files)):
-        data=json.loads(path.read_text())
-        if not isinstance(data,dict) or 'instances' not in data:
+        raw=json.loads(path.read_text())
+        if not isinstance(raw,dict) or 'instances' not in raw:
             continue
+        data=load_training_page(path)   # saved devices -> detector classes
         g=data.get('project_family_id')
         if not isinstance(g,str) or not g.strip():
             raise ValueError(f'missing project group {path}')
@@ -76,7 +85,7 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
             raise ValueError(f'unverified project grouping {path}; supply a mapping to original drawing/project')
         if 'calibration_verified' in data and data['calibration_verified'] is not True:
             raise ValueError(f'unverified CAD-to-raster alignment {path}; inspect overlay and re-export with --aligned-verified')
-        exhaustive = data.get('exhaustive_families', [])
+        exhaustive = raw.get('exhaustive_families', [])   # validate what was saved
         if (not isinstance(exhaustive, list) or
                 any(not isinstance(name, str) or not name.strip() for name in exhaustive) or
                 len(set(exhaustive)) != len(exhaustive)):
@@ -109,6 +118,16 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
                     raise ValueError(f'duplicate instance id {iid!r}: {path}')
                 instance_ids.add(iid)
         digest=_sha(img)
+        if verified_no_symbols:
+            # Symbol-free standard sheets recur across drawing sets (DOT details,
+            # general notes). Keep one copy: repeats add no information, and
+            # copies in different projects would leak across splits.
+            first=negative_digests.get(digest) or negative_pages.match(page_fingerprint(image))
+            if first is not None:
+                duplicate_negatives.append({'annotation':str(path),'duplicate_of':first})
+                continue
+            negative_pages.name_last(str(path))
+            negative_digests[digest]=str(path)
         if digest in by_hash:
             if by_hash[digest]!=g:
                 raise ValueError(f'leakage: same raster sha256 occurs across groups {by_hash[digest]} and {g}: {img}')
@@ -133,8 +152,16 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     for row in docs:
         if row['verified_no_symbols']:
             row['exhaustive_families']=sorted(counts)
+    if duplicate_negatives:
+        warnings.append(f'{len(duplicate_negatives)} verified symbol-free pages repeat an earlier '
+                        'page (same fingerprint) and were left out')
     if not docs: raise ValueError('no training annotation files found')
     groups=sorted(by_group,key=lambda g:hashlib.sha256(g.encode()).hexdigest())
+    if evaluation_files:
+        return _evaluation_folder_split(docs, by_group, groups, counts, group_counts, warnings,
+                                        duplicate_negatives, evaluation_files,
+                                        allow_partial_training=allow_partial_training,
+                                        require_verified_groups=require_verified_groups)
     if len(groups)<3:
         raise ValueError('at least 3 verified independent source groups are needed for train/val/test')
     if locked_manifest is not None:
@@ -237,6 +264,7 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     return {'format_version':1,'splits':splits, 'split_groups':split_groups,
             'class_ids':classes,'per_split_class_instances':coverage,
             'source_images':docs,'warnings':warnings,
+            'deduplicated_negative_pages':duplicate_negatives,
             'partial_training_enabled':allow_partial_training,
             'verification':{'source_group_verified':require_verified_groups,
                             'all_images_hash_checked':True,
@@ -273,3 +301,52 @@ def validate_manifest_sources(manifest: dict) -> None:
         image=Path(row['image'])
         if _sha(image) != row['image_sha256']:
             raise ValueError(f'source image changed after manifest creation: {image}')
+
+
+def _evaluation_folder_split(docs, by_group, groups, counts, group_counts, warnings,
+                             duplicate_negatives, evaluation_files, *,
+                             allow_partial_training, require_verified_groups) -> dict:
+    """Train on every non-evaluation group; validate and test on the
+    evaluation drawings' groups (alternating, in a stable hash order)."""
+    eval_set={str(Path(f).resolve()) for f in evaluation_files}
+    eval_groups=sorted({d['project_group'] for d in docs if d['annotation'] in eval_set}, key=groups.index)
+    mixed=[g for g in eval_groups if any(d['annotation'] not in eval_set for d in by_group[g])]
+    if mixed:
+        raise ValueError(f'project groups mix training and evaluation drawings: {mixed[:5]}; '
+                         'a project must sit in one folder')
+    if not eval_groups:
+        raise ValueError('no usable evaluation pages: label pages of drawings in 1_blueprints/evaluation '
+                         'completely ("every symbol on this page is labeled")')
+    active=set(counts)
+    incomplete=[d['annotation'] for g in eval_groups for d in by_group[g]
+                if not active.issubset(set(d['exhaustive_families']))]
+    if incomplete:
+        raise ValueError(f'{len(incomplete)} evaluation pages are not fully labelled '
+                         f'(e.g. {incomplete[0]}); evaluation only uses pages marked '
+                         '"every symbol on this page is labeled" or verified empty')
+    train=[g for g in groups if g not in eval_groups]
+    if not train:
+        raise ValueError('no training pages outside the evaluation folder')
+    if len(eval_groups)==1:
+        split_groups={'train':train,'val':list(eval_groups),'test':list(eval_groups)}
+        warnings.append('only one evaluation project: validation and test are the same drawings')
+    else:
+        split_groups={'train':train,'val':eval_groups[0::2],'test':eval_groups[1::2]}
+    splits={name:[d['annotation'] for g in gs for d in by_group[g]] for name,gs in split_groups.items()}
+    coverage={name:dict(sum((group_counts[g] for g in gs),Counter())) for name,gs in split_groups.items()}
+    for name in sorted(counts):
+        if not coverage['train'].get(name):
+            warnings.append(f'Class {name!r} occurs only in evaluation drawings, never trained')
+        elif not coverage['val'].get(name) and not coverage['test'].get(name):
+            warnings.append(f'Class {name!r} absent from the evaluation drawings')
+    classes={name:i for i,name in enumerate(sorted(k for k,v in coverage['train'].items() if v>0))}
+    if not classes:raise ValueError('train partition contains no mapped, trusted symbol classes')
+    return {'format_version':1,'splits':splits,'split_groups':split_groups,
+            'class_ids':classes,'per_split_class_instances':coverage,
+            'source_images':docs,'warnings':warnings,
+            'deduplicated_negative_pages':duplicate_negatives,
+            'partial_training_enabled':allow_partial_training,
+            'holdout':'evaluation_folder',
+            'verification':{'source_group_verified':require_verified_groups,
+                            'all_images_hash_checked':True,
+                            'training_performed':False}}

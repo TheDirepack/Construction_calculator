@@ -384,8 +384,9 @@ function computeQualityWarnings() {
     if (w < 6 || h < 6) {
       warnings.push({ id: a.instance_id, reason: `Tiny box (${w.toFixed(1)}×${h.toFixed(1)} px)` });
     }
-    if (a.symbol_family === "unknown_symbol" && a.review_status === "accepted") {
-      warnings.push({ id: a.instance_id, reason: "Verified box still marked unknown_symbol" });
+    if (a.review_status === "accepted" && incompleteReason(a)) {
+      // Saving refuses verified boxes that do not name a specific device.
+      warnings.push({ id: a.instance_id, reason: "Verified without a device type: pick it, or Unverify" });
     }
     for (let j = i + 1; j < list.length; j++) {
       const b = list[j];
@@ -1600,8 +1601,15 @@ function refreshControls() {
   $("redo").disabled = state.redo.length === 0;
   $("save").disabled = (!state.dirty && state.revision !== null) || state.busy;
   $("verifiedNoSymbols").checked = state.doc?.verified_no_symbols === true;
+  const pending = (state.doc?.instances || []).filter(x => x.review_status !== "accepted").length;
+  $("pageComplete").checked = state.doc?.page_complete === true;
+  $("pageComplete").disabled = !state.doc || state.doc.verified_no_symbols === true ||
+    (pending > 0 && state.doc.page_complete !== true);
+  $("pageComplete").parentElement.title = pending
+    ? `Verify or remove the ${pending} pending box${pending > 1 ? "es" : ""} first`
+    : "Every electrical symbol on the page has a verified box: usable for validation/testing and as verified background";
+  $("verifiedNoSymbols").disabled = !state.doc || state.doc.page_complete === true;
   $("toggleLabels").setAttribute("aria-pressed", String(state.showLabels));
-  $("toggleLoupe").setAttribute("aria-pressed", String(state.showLoupe));
   $("toggleWalls").hidden = !state.walls.length;
   $("toggleWalls").setAttribute("aria-pressed", String(state.showWalls));
   $("cycleViewFilter").textContent = "View: " + VIEW_FILTERS[state.viewFilterIdx].name;
@@ -1629,14 +1637,6 @@ function refreshControls() {
     banner.textContent = "Snap vector mode: drag from origin toward wall (Shift snaps 15° · Esc to exit)";
   } else {
     banner.hidden = true;
-  }
-
-  const badge = $("fileBadge");
-  if (state.jsonFilename) {
-    badge.hidden = false;
-    badge.textContent = state.jsonFilename;
-  } else {
-    badge.hidden = true;
   }
 
   const switcher = $("fileSwitcher");
@@ -1700,7 +1700,8 @@ function refreshList() {
       btn.className = "item-btn";
       const txt = document.createElement("span");
       txt.className = "item-label";
-      txt.textContent = item.symbol_family + " / " + item.symbol_variant;
+      txt.textContent = deviceLabel(item);
+      txt.title = item.symbol_family + " / " + item.symbol_variant;
       const tag = document.createElement("span");
       tag.className = "tag rejected";
       tag.textContent = "Rejected";
@@ -1729,7 +1730,8 @@ function refreshList() {
     btn.className = "item-btn" + (item.instance_id === state.selectedId ? " chosen" : "");
     const txt = document.createElement("span");
     txt.className = "item-label";
-    txt.textContent = item.symbol_family + " / " + item.symbol_variant;
+    txt.textContent = deviceLabel(item);
+    txt.title = item.symbol_family + " / " + item.symbol_variant;
     const tag = document.createElement("span");
     if (item.review_status === "accepted") {
       tag.className = "tag accepted";
@@ -1764,23 +1766,6 @@ function subtypesForFamily(family) {
   return merged;
 }
 
-function renderQuickSubtypes(item) {
-  const bar = $("quickSubtypeBar");
-  if (!bar) return;
-  bar.replaceChildren();
-  const subtypes = subtypesForFamily(item.symbol_family).slice(0, 40);
-  subtypes.forEach((sub, idx) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "chip";
-    btn.setAttribute("aria-pressed", String(item.symbol_variant === sub));
-    btn.textContent = (idx < 6 ? `⇧${idx + 1} ` : "") + sub.replace(/_/g, " ");
-    btn.title = idx < 6 ? `Hotkey Shift+${idx + 1}: set subtype to ${sub}` : `Set subtype to ${sub}`;
-    btn.addEventListener("click", () => applyQuickSubtype(sub));
-    bar.append(btn);
-  });
-}
-
 function applyQuickSubtype(subtype) {
   if (!subtype) return;
   const item = chosen();
@@ -1790,16 +1775,6 @@ function applyQuickSubtype(subtype) {
     x.symbol_variant = subtype;
   });
   notify(`Set subtype to ${subtype}.`, "saved");
-}
-
-function updateVariantDatalist(family) {
-  const list = $("variants");
-  list.replaceChildren();
-  for (const v of subtypesForFamily(family)) {
-    const opt = document.createElement("option");
-    opt.value = v;
-    list.append(opt);
-  }
 }
 
 function renderTextAttributes(item) {
@@ -2007,170 +1982,81 @@ function renderDeviceAttributes(item) {
   }
 }
 
-function renderAnchorsAndSnap(item) {
+function renderAnchors(item) {
   const list = $("anchorList");
   list.replaceChildren();
-  const anchors = item.anchors || {};
-  const entries = Object.entries(anchors);
+  const entries = Object.entries(item.anchors || {});
   if (!entries.length) {
-    const p = document.createElement("p");
-    p.className = "small";
-    p.textContent = "No anchors placed yet.";
-    list.append(p);
-  } else {
-    for (const [name, anchor] of entries) {
-      const row = document.createElement("div");
-      row.className = "anchor-row";
-      const label = document.createElement("span");
-      label.textContent = `${name} (${anchor.xy[0].toFixed(1)}, ${anchor.xy[1].toFixed(1)})`;
-      const controls = document.createElement("span");
-      controls.style.display = "flex";
-      controls.style.gap = "6px";
-      controls.style.alignItems = "center";
-
-      const visLabel = document.createElement("label");
-      visLabel.className = "checkbox";
-      const visCb = document.createElement("input");
-      visCb.type = "checkbox";
-      visCb.checked = anchor.visible !== false;
-      visCb.addEventListener("change", () => modifySelection(x => {
-        if (x.anchors?.[name]) x.anchors[name].visible = visCb.checked;
-      }));
-      visLabel.append(visCb, "vis");
-
-      const rm = document.createElement("button");
-      rm.type = "button";
-      rm.className = "ghost";
-      rm.textContent = "×";
-      rm.title = "Remove anchor";
-      rm.addEventListener("click", () => modifySelection(x => {
-        if (x.anchors) {
-          delete x.anchors[name];
-          if (!Object.keys(x.anchors).length) delete x.anchors;
-        }
-      }));
-      controls.append(visLabel, rm);
-      row.append(label, controls);
-      list.append(row);
-    }
+    const none = document.createElement("span");
+    none.className = "small";
+    none.textContent = "none";
+    list.append(none);
+    return;
   }
-
-  const svActions = $("snapVectorActions");
-  const svInfo = $("snapVectorInfo");
-  $("testWallSnap").hidden = !state.walls.length;
-  if (item.snap_vector) {
-    svActions.hidden = false;
-    const o = item.snap_vector.origin, d = item.snap_vector.direction;
-    const deg = Math.atan2(d[1], d[0]) * 180 / Math.PI;
-    svInfo.textContent = `Snap vector: origin (${o[0].toFixed(1)}, ${o[1].toFixed(1)}) · dir (${d[0].toFixed(3)}, ${d[1].toFixed(3)}) · ${deg.toFixed(1)}°`;
-  } else {
-    svActions.hidden = !state.walls.length;
-    svInfo.textContent = "No extra snap vector set.";
-  }
-
-  const sp = $("snapPreviewInfo");
-  if (state.snapPreview) {
-    sp.textContent = `Snap preview: ${state.snapPreview.kind} at (${state.snapPreview.point[0]}, ${state.snapPreview.point[1]}) [${state.snapPreview.quality}]`;
-  } else if (item.snap?.kind) {
-    sp.textContent = `Stored snap: ${item.snap.kind}`;
-  } else {
-    sp.textContent = "";
+  for (const [name] of entries) {
+    const tag = document.createElement("span");
+    tag.className = "attr-tag";
+    tag.textContent = name.replace(/_/g, " ");
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.textContent = "×";
+    rm.title = "Remove anchor";
+    rm.addEventListener("click", () => modifySelection(x => {
+      if (x.anchors) {
+        delete x.anchors[name];
+        if (!Object.keys(x.anchors).length) delete x.anchors;
+      }
+    }));
+    tag.append(rm);
+    list.append(tag);
   }
 }
 
-function fillSheetMetadata() {
-  if (!state.doc) return;
-  $("sheetInfo").textContent =
-    `${state.doc.image_width} × ${state.doc.image_height} px · ${state.doc.source_type || "manual"} · ${state.doc.image_path || ""}`;
-  $("metaSourceId").value = state.doc.source_id || "";
-  $("metaProjectFamilyId").value = state.doc.project_family_id || "";
-  $("metaDocumentId").value = state.doc.document_id || "";
-  $("metaNotes").value = state.doc.notes || "";
+// A box can be verified only once it names one specific device.
+function incompleteReason(item) {
+  const family = String(item?.symbol_family || "");
+  const variant = String(item?.symbol_variant || "");
+  if (!family || family === "unknown_symbol" || family === "unmapped") return "Pick the device in the list below.";
+  if (!variant || variant === "unspecified") return "Pick the exact device type below before verifying.";
+  return null;
+}
+
+function deviceLabel(item) {
+  const entry = catalogEntryFor(item.symbol_family, item.symbol_variant);
+  return entry ? entry.label : `${item.symbol_family} / ${item.symbol_variant}`;
 }
 
 function fillSelection() {
   const count = state.selectedIds?.size || (chosen() ? 1 : 0);
-  const multiCard = $("multiSelectionCard");
-  if (multiCard) {
-    if (count > 1) {
-      multiCard.hidden = false;
-      $("multiSelectionTitle").textContent = `${count} symbols selected`;
-    } else {
-      multiCard.hidden = true;
-    }
+  $("multiSelectionCard").hidden = count <= 1;
+  if (count > 1) {
+    const ready = chosenList().filter(x => !incompleteReason(x)).length;
+    $("multiSelectionTitle").textContent = `${count} symbols selected` +
+      (ready < count ? ` · ${count - ready} need a device before verifying` : "");
   }
-
   const item = chosen();
   $("emptySelection").hidden = count > 0;
-  $("selectionDetails").hidden = count === 0 || count > 1;
-  if (!item || count > 1) return;
-  $("selectedId").textContent = item.instance_id;
-  $("instanceIdInput").value = item.instance_id;
-  $("disciplineBadge").textContent = disciplineFor(item.symbol_family);
-  $("family").value = item.symbol_family;
-  for (const btn of document.querySelectorAll(".quick-family, .multi-quick-family")) {
-    btn.setAttribute("aria-pressed", String(btn.dataset.family === item.symbol_family));
-  }
-  updateVariantDatalist(item.symbol_family);
-  renderQuickSubtypes(item);
-  $("variant").value = item.symbol_variant;
-  ["x0", "y0", "x1", "y1"].forEach((id, i) => $(id).value = item.bbox_xyxy[i].toFixed(1));
+  $("selectionDetails").hidden = count !== 1 || !item;
+  if (!item || count !== 1) return;
+
+  $("selectedLabel").textContent = deviceLabel(item);
+  $("selectedLabel").title = `${item.symbol_family} / ${item.symbol_variant}`;
+  const status = $("selectedStatus");
+  const verified = item.review_status === "accepted";
+  status.textContent = verified ? "Verified" : "Pending";
+  status.className = "tag" + (verified ? " accepted" : "");
+  const missing = incompleteReason(item);
+  $("verifyHint").hidden = !missing || verified;
+  $("verifyHint").textContent = missing || "";
+  $("accept").disabled = Boolean(missing) || verified;
+  $("accept").title = missing ? missing : "Verify selected box (A)";
+  $("unverify").hidden = !verified;
   $("angle").value = item.bbox_rotated?.angle_deg ?? (item.rotation_degrees || 0);
-  if (item.bbox_rotated) {
-    $("orientedDims").hidden = false;
-    $("rotW").value = item.bbox_rotated.w.toFixed(1);
-    $("rotH").value = item.bbox_rotated.h.toFixed(1);
-  } else {
-    $("orientedDims").hidden = true;
-  }
   $("occluded").checked = Boolean(item.is_occluded);
   $("truncated").checked = Boolean(item.is_truncated);
-  $("unverify").hidden = item.review_status !== "accepted";
-
-  const score = typeof item.proposal_score === "number" ? "score " + item.proposal_score.toFixed(3) : "";
-  if (item.review_status === "accepted") {
-    $("proposalHint").textContent = "Human-verified positive. Page completeness remains unknown.";
-  } else if (item.review_status == null && !item.uncertain) {
-    $("proposalHint").textContent = "Loaded from existing JSON. Press A to mark human-verified or edit freely.";
-  } else {
-    $("proposalHint").textContent =
-      "Unverified " + (item.review_source || "candidate") + " proposal " + score + ". Inspect before verifying.";
-  }
-
   renderTextAttributes(item);
   renderDeviceAttributes(item);
-  renderAnchorsAndSnap(item);
-
-  const alternatives = Array.isArray(item.proposal_alternative_labels)
-    ? item.proposal_alternative_labels : [];
-  const evidence = Boolean(item.proposal_score != null || item.proposal_neca_symbol_id ||
-                           item.proposal_visual_group || alternatives.length);
-  $("modelEvidence").hidden = !evidence;
-  $("proposalAlternatives").replaceChildren();
-  if (evidence) {
-    const info = [];
-    if (item.proposal_neca_symbol_id) info.push("NECA " + item.proposal_neca_symbol_id);
-    if (item.proposal_visual_group) info.push("Group " + item.proposal_visual_group);
-    if (typeof item.proposal_score === "number") info.push("Score " + item.proposal_score.toFixed(3));
-    $("modelSource").textContent = info.join(" · ");
-    for (const alt of alternatives.slice(0, 12)) {
-      const family = String(alt?.device_type || "");
-      const variant = String(alt?.subtype || "unspecified");
-      if (!family) continue;
-      const button = document.createElement("button");
-      button.textContent = "Use " + family + " / " + variant +
-        (typeof alt.score === "number" ? " (" + alt.score.toFixed(2) + ")" : "");
-      button.title = "Apply this proposed class without marking the symbol verified";
-      button.addEventListener("click", () => modifySelection(x => {
-        x.symbol_family = family;
-        x.symbol_variant = variant;
-        x.discipline = disciplineFor(family);
-        x.device_type = family;
-        state.lastFamily = family;
-      }));
-      $("proposalAlternatives").append(button);
-    }
-  }
+  renderAnchors(item);
 }
 
 function refresh() {
@@ -2181,7 +2067,6 @@ function refresh() {
   fillSelection();
   updateActiveDevicePill();
   renderInlineDeviceCatalog();
-  fillSheetMetadata();
   draw();
 }
 
@@ -2369,15 +2254,20 @@ function flushPendingInputs() {
     updateSelectedFields();
     updateAngle();
   }
-  updateSheetMetadata();
 }
 
 function verifySelected() {
   flushPendingInputs();
   const list = chosenList();
   if (!list.length) return;
+  const ready = list.filter(item => !incompleteReason(item));
+  const skipped = list.length - ready.length;
+  if (!ready.length) {
+    notify(incompleteReason(list[0]), "warning");
+    return;
+  }
   remember();
-  for (const item of list) {
+  for (const item of ready) {
     item.review_status = "accepted";
     item.review_source = "human";
     item.verified_ground_truth = true;
@@ -2385,8 +2275,9 @@ function verifySelected() {
   }
   editState();
   refresh();
-  notify(`Verified ${list.length} symbol${list.length > 1 ? "s" : ""}.`, "saved");
-  nextPending(false);
+  notify(`Verified ${ready.length} symbol${ready.length > 1 ? "s" : ""}.` +
+         (skipped ? ` ${skipped} skipped: pick their device type first.` : ""), skipped ? "warning" : "saved");
+  if (!skipped) nextPending(false);
 }
 
 function unverifySelected() {
@@ -2557,6 +2448,7 @@ function nudgeSelected(dx, dy) {
     const tx = clamp(dx, -item.bbox_xyxy[0], state.doc.image_width - item.bbox_xyxy[2]);
     const ty = clamp(dy, -item.bbox_xyxy[1], state.doc.image_height - item.bbox_xyxy[3]);
     if (Math.abs(tx) < 1e-6 && Math.abs(ty) < 1e-6) continue;
+    const before = reviewEvidenceKey(item);
     item.bbox_xyxy = [
       Math.round((item.bbox_xyxy[0] + tx) * 1000) / 1000,
       Math.round((item.bbox_xyxy[1] + ty) * 1000) / 1000,
@@ -2567,6 +2459,7 @@ function nudgeSelected(dx, dy) {
       item.bbox_rotated.cx = Math.round((item.bbox_rotated.cx + tx) * 1000) / 1000;
       item.bbox_rotated.cy = Math.round((item.bbox_rotated.cy + ty) * 1000) / 1000;
     }
+    invalidateReviewOnChange(item, before);       // a moved box needs a fresh check
   }
   editState();
   refresh();
@@ -3161,95 +3054,11 @@ function updateSelectedFields() {
   if (state.busy) return;
   const item = chosen();
   if (!item) return;
-
-  const newId = $("instanceIdInput").value.trim();
-  if (!ID_REGEX.test(newId)) {
-    notify("Instance ID must be 1–120 alphanumeric/._:- characters.", "error");
-    fillSelection();
-    return;
-  }
-  if (newId !== item.instance_id) {
-    const allIds = new Set([
-      ...state.doc.instances.map(x => x.instance_id),
-      ...(state.doc.rejected_proposals || []).map(x => x.instance_id),
-    ]);
-    if (allIds.has(newId)) {
-      notify(`Instance ID "${newId}" is already used on this page.`, "error");
-      fillSelection();
-      return;
-    }
-  }
-
-  const box = ["x0", "y0", "x1", "y1"].map(id => Number($(id).value));
-  if (!checkBox(box) || box.some(x => !Number.isFinite(x))) {
-    notify("Invalid box dimensions; coordinates must stay on the page.", "error");
-    fillSelection();
-    return;
-  }
-  const family = $("family").value.trim(), enteredVariant = $("variant").value.trim();
-  const variant = family !== item.symbol_family && enteredVariant === item.symbol_variant
-    ? subtypeForChangedFamily(family, enteredVariant)
-    : enteredVariant;
-  if (!family || family.length > 100 || !variant || variant.length > 160) {
-    notify("Enter a valid family and variant.", "error");
-    fillSelection();
-    return;
-  }
-
-  const changed =
-    newId !== item.instance_id ||
-    family !== item.symbol_family ||
-    variant !== item.symbol_variant ||
-    box.some((v, i) => Math.abs(v - item.bbox_xyxy[i]) > 0.051) ||
-    $("occluded").checked !== Boolean(item.is_occluded) ||
-    $("truncated").checked !== Boolean(item.is_truncated);
-  if (!changed) return;
-
+  const occluded = $("occluded").checked, truncated = $("truncated").checked;
+  if (occluded === Boolean(item.is_occluded) && truncated === Boolean(item.is_truncated)) return;
   modifySelection(x => {
-    const changedBox = box.some((v, i) => Math.abs(v - x.bbox_xyxy[i]) > 0.051);
-    x.instance_id = newId;
-    state.selectedId = newId;
-    x.symbol_family = family;
-    x.symbol_variant = variant;
-    x.discipline = disciplineFor(family);
-    x.device_type = family;
-    if (changedBox) {
-      x.bbox_xyxy = box;
-      delete x.bbox_rotated;
-      x.rotation_degrees = 0;
-    }
-    x.is_occluded = $("occluded").checked;
-    x.is_truncated = $("truncated").checked;
-    state.lastFamily = family;
-    state.lastVariantByFamily[family] = variant;
-    if (variant !== "unspecified" && !(state.variantsByFamily[family] || []).includes(variant)) {
-      state.customVariantsByFamily[family] ||= [];
-      if (!state.customVariantsByFamily[family].includes(variant)) state.customVariantsByFamily[family].unshift(variant);
-    }
-  });
-}
-
-function updateOrientedDims() {
-  if (state.busy) return;
-  const item = chosen();
-  if (!item || !item.bbox_rotated) return;
-  const w = Number($("rotW").value), h = Number($("rotH").value);
-  if (!Number.isFinite(w) || !Number.isFinite(h) || w < 2 || h < 2) {
-    notify("Oriented width and height must be at least 2 px.", "error");
-    fillSelection();
-    return;
-  }
-  const { cx, cy, angle_deg } = item.bbox_rotated;
-  const aabb = rotatedAabb(cx, cy, w, h, angle_deg);
-  if (!checkBox(aabb)) {
-    notify("Oriented dimensions extend outside the image.", "error");
-    fillSelection();
-    return;
-  }
-  modifySelection(x => {
-    x.bbox_rotated.w = Math.round(w * 1000) / 1000;
-    x.bbox_rotated.h = Math.round(h * 1000) / 1000;
-    x.bbox_xyxy = aabb.map(v => Math.round(v * 1000) / 1000);
+    x.is_occluded = occluded;
+    x.is_truncated = truncated;
   });
 }
 
@@ -3287,24 +3096,6 @@ function updateAngle() {
   setSelectedAngle(Number($("angle").value));
 }
 
-function updateSheetMetadata() {
-  if (!state.doc || state.busy) return;
-  const next = {
-    source_id: $("metaSourceId").value.trim(),
-    project_family_id: $("metaProjectFamilyId").value.trim(),
-    document_id: $("metaDocumentId").value.trim(),
-    notes: $("metaNotes").value.trim(),
-  };
-  if (next.source_id === (state.doc.source_id || "") &&
-      next.project_family_id === (state.doc.project_family_id || "") &&
-      next.document_id === (state.doc.document_id || "") &&
-      next.notes === (state.doc.notes || "")) return;
-  remember();
-  Object.assign(state.doc, next);
-  editState();
-  refreshControls();
-}
-
 function addTextAttribute() {
   const inp = $("textAttrInput");
   const val = inp.value.trim();
@@ -3337,37 +3128,6 @@ function addCustomDeviceAttribute() {
   $("customAttrVal").value = "";
 }
 
-function placeBoxSnapAnchor(snapKey) {
-  const item = chosen();
-  if (!item) {
-    notify("Select a box first to place an anchor.", "warning");
-    return;
-  }
-  const pts = getBoxSnapPoints(item);
-  const found = pts.find(p => p.key === snapKey);
-  if (!found) return;
-  const [ax, ay] = found.xy;
-  let name = state.activeAnchorName;
-  if (!name || name === "circle_center" || name === "visual_center") {
-    if (snapKey === "center") {
-      const circular = ["receptacle", "luminaire", "junction_box", "fire_alarm_device", "sprinkler_head", "sensor"];
-      name = circular.includes(item.symbol_family) ? "circle_center" : "visual_center";
-    } else {
-      name = "wall_attachment";
-    }
-  }
-  modifySelection(x => {
-    x.anchors ||= {};
-    x.anchors[name] = {
-      xy: [Math.round(ax * 1000) / 1000, Math.round(ay * 1000) / 1000],
-      visible: true,
-      annotated: true,
-    };
-  });
-  notify(`Placed anchor "${name}" at ${found.name} (${ax.toFixed(1)}, ${ay.toFixed(1)}).`, "saved");
-  draw();
-}
-
 function anchorAllBoxes() {
   if (state.busy || !state.doc) return;
   const selected = chosenList();
@@ -3394,137 +3154,6 @@ function anchorAllBoxes() {
   refresh();
   notify(`Placed centre anchors on ${todo.length} box${todo.length === 1 ? "" : "es"}` +
          (selected.length > 1 ? " in the selection." : " on this page."), "saved");
-}
-
-function autoPlaceCenterAnchor() {
-  placeBoxSnapAnchor("center");
-}
-
-function snapAnchorToTip() {
-  const item = chosen();
-  if (!item) {
-    notify("Select a box first to snap anchor to a tip.", "warning");
-    return;
-  }
-  const ctr = itemCenter(item);
-  let probe = state.pointerImg;
-  const maxDim = Math.max(item.bbox_xyxy[2] - item.bbox_xyxy[0], item.bbox_xyxy[3] - item.bbox_xyxy[1]);
-  if (!probe || Math.hypot(probe[0] - ctr[0], probe[1] - ctr[1]) > maxDim * 1.5) {
-    const rad = ((item.bbox_rotated?.angle_deg ?? (item.rotation_degrees || 0)) * Math.PI) / 180;
-    const dist = Math.max(12, maxDim / 2 - 2);
-    probe = [ctr[0] + Math.cos(rad) * dist, ctr[1] + Math.sin(rad) * dist];
-  }
-  const tip = findFeatureTipInArea(probe, item, Math.max(24, 28 / state.scale)) ||
-              findFeatureTipInArea(null, item, maxDim);
-  if (!tip) {
-    notify("No distinct ink tip found in the probed area. In Anchor mode, click on or near a feature tip.", "warning");
-    state.activeAnchorName = state.activeAnchorName || "wall_attachment";
-    setMode("anchor");
-    return;
-  }
-  const name = state.activeAnchorName || "wall_attachment";
-  modifySelection(x => {
-    x.anchors ||= {};
-    x.anchors[name] = {
-      xy: [Math.round(tip[0] * 1000) / 1000, Math.round(tip[1] * 1000) / 1000],
-      visible: true,
-      annotated: true,
-    };
-  });
-  notify(`Snapped anchor "${name}" to feature tip at (${tip[0].toFixed(1)}, ${tip[1].toFixed(1)}).`, "saved");
-  draw();
-}
-
-function autoSnapFromBoxAngle() {
-  const item = chosen();
-  if (!item) return;
-  const origin = itemCenter(item);
-  const rad = ((item.bbox_rotated?.angle_deg ?? (item.rotation_degrees || 0)) * Math.PI) / 180;
-  modifySelection(x => {
-    x.snap_vector = {
-      origin: [Math.round(origin[0] * 1000) / 1000, Math.round(origin[1] * 1000) / 1000],
-      direction: [Math.round(Math.cos(rad) * 10000) / 10000, Math.round(Math.sin(rad) * 10000) / 10000],
-    };
-  });
-  notify("Created snap vector from box center & orientation angle.", "saved");
-}
-
-function autoSnapFromWallAnchor() {
-  const item = chosen();
-  if (!item) return;
-  const wall = item.anchors?.wall_attachment?.xy;
-  if (!wall) {
-    notify("Place a wall_attachment anchor first to auto-compute the vector.", "warning");
-    return;
-  }
-  const origin = itemCenter(item);
-  const dx = wall[0] - origin[0], dy = wall[1] - origin[1];
-  const len = Math.hypot(dx, dy);
-  if (len < 1e-4) {
-    notify("Center and wall_attachment coincide; drag a custom snap vector instead.", "warning");
-    return;
-  }
-  modifySelection(x => {
-    x.snap_vector = {
-      origin: [Math.round(origin[0] * 1000) / 1000, Math.round(origin[1] * 1000) / 1000],
-      direction: [Math.round((dx / len) * 10000) / 10000, Math.round((dy / len) * 10000) / 10000],
-    };
-  });
-  notify("Computed snap vector from center toward wall_attachment.", "saved");
-}
-
-function rotateSnapVector(deltaDeg) {
-  const item = chosen();
-  if (!item?.snap_vector) return;
-  const [dx, dy] = item.snap_vector.direction;
-  const ang = Math.atan2(dy, dx) + (deltaDeg * Math.PI) / 180;
-  modifySelection(x => {
-    x.snap_vector.direction = [
-      Math.round(Math.cos(ang) * 10000) / 10000,
-      Math.round(Math.sin(ang) * 10000) / 10000,
-    ];
-  });
-}
-
-function alignBoxToSnapVector() {
-  const item = chosen();
-  if (!item?.snap_vector) return;
-  const [dx, dy] = item.snap_vector.direction;
-  const deg = Math.round((Math.atan2(dy, dx) * 180 / Math.PI) * 10) / 10;
-  setSelectedAngle(deg);
-  notify(`Aligned box rotation to snap vector (${deg}°).`, "saved");
-}
-
-async function runWallSnapPreview() {
-  if (state.busy) return;
-  flushPendingInputs();
-  const item = chosen();
-  if (!item) return;
-  const request = {
-    page: state.page, revision: state.revision,
-    jsonPath: state.jsonPath, instanceId: item.instance_id,
-    evidence: reviewEvidenceKey(item),
-  };
-  try {
-    const res = await api("/api/snap?page=" + request.page, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-      body: JSON.stringify({ instance: JSON.parse(JSON.stringify(item)) }),
-    });
-    const current = chosen();
-    if (state.page !== request.page || state.revision !== request.revision ||
-        state.jsonPath !== request.jsonPath || !current ||
-        current.instance_id !== request.instanceId ||
-        reviewEvidenceKey(current) !== request.evidence) {
-      notify("Discarded stale wall snap: selection or geometry changed.", "warning");
-      return;
-    }
-    state.snapPreview = res.snap;
-    modifySelection(x => { x.snap = res.snap; });
-    notify(`Wall snap resolved: ${res.snap.kind}.`, "saved");
-  } catch (error) {
-    notify("Wall snap failed: " + (error.message || error), "error");
-  }
 }
 
 async function snapRefineSelected() {
@@ -3637,128 +3266,23 @@ async function snapRefineSelected() {
   }
 }
 
-async function importJsonFromFile(file) {
-  if (!file || !state.doc) return;
-  const source = {
-    page: state.page, revision: state.revision, jsonPath: state.jsonPath,
-    image_sha256: state.doc.image_sha256,
-  };
-  const sourceUnchanged = () => state.page === source.page &&
-    state.revision === source.revision && state.jsonPath === source.jsonPath &&
-    state.doc?.image_sha256 === source.image_sha256;
-  try {
-    const text = await file.text();
-    if (!sourceUnchanged()) throw new Error("Active page changed during import; import cancelled.");
-    const imported = JSON.parse(text);
-    if (!imported || typeof imported !== "object" || !Array.isArray(imported.instances)) {
-      throw new Error("JSON file must contain an instances array.");
-    }
-    if (imported.image_width && imported.image_height &&
-        (Number(imported.image_width) !== state.doc.image_width ||
-         Number(imported.image_height) !== state.doc.image_height)) {
-      throw new Error(
-        `Imported JSON dimensions (${imported.image_width}×${imported.image_height}) ` +
-        `do not match current page (${state.doc.image_width}×${state.doc.image_height}).`
-      );
-    }
-    if (imported.coordinate_system && imported.coordinate_system !== state.doc.coordinate_system) {
-      throw new Error("Imported coordinates use a different coordinate system.");
-    }
-    // Matching dimensions alone cannot establish label alignment or human review
-    // provenance. A backup of the exact raster is safe; a different or
-    // unidentified source requires confirmation and new human verification.
-    const sameImage = Boolean(imported.image_sha256 && state.doc.image_sha256 &&
-      imported.image_sha256 === state.doc.image_sha256);
-    if (!sameImage && !(await confirmAction(
-      "This JSON does not identify the exact current image. Import as UNVERIFIED " +
-      "proposals and discard previous rejected marks? Review every box before accepting.",
-      { title: "Import unverified JSON", confirmLabel: "Import as unverified" }
-    ))) return;
-    const preparedInstances = imported.instances.map((raw, idx) => {
-      const fam = String(raw.symbol_family || raw.device_type || "unknown_symbol");
-      return {
-        ...raw,
-        instance_id: String(raw.instance_id || `imported_${idx + 1}`),
-        symbol_family: fam,
-        symbol_variant: String(raw.symbol_variant || "unspecified"),
-        discipline: disciplineFor(fam),
-        device_type: fam,
-        attributes_from_text: Array.isArray(raw.attributes_from_text) ? raw.attributes_from_text : [],
-        is_occluded: Boolean(raw.is_occluded),
-        is_truncated: Boolean(raw.is_truncated),
-        ...(!sameImage ? {
-          review_status: "unreviewed", review_source: "import",
-          verified_ground_truth: false, uncertain: true,
-        } : {}),
-      };
-    });
-    const preparedRejected = sameImage && Array.isArray(imported.rejected_proposals)
-      ? imported.rejected_proposals : [];
-    // Check the same geometry, review, and attribute gates used by Save before
-    // mutating the current annotations. A failed import preserves editor state.
-    await api("/api/validate?page=" + source.page, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-      body: JSON.stringify({
-        revision: source.revision, instances: preparedInstances,
-        rejected_proposals: preparedRejected,
-        metadata: {verified_no_symbols: false},
-      }),
-    });
-    if (!sourceUnchanged()) throw new Error("Active page changed during import; import cancelled.");
-    remember();
-    state.doc.instances = preparedInstances;
-    state.doc.rejected_proposals = preparedRejected;
-    state.doc.verified_no_symbols = false;
-    state.selectedId = null;
-    editState();
-    refresh();
-    notify(`Imported ${state.doc.instances.length} labels from ${file.name}. Review and press Save.`, "saved");
-  } catch (error) {
-    notify("Import failed: " + (error.message || error), "error");
-  } finally {
-    $("importJsonFile").value = "";
-  }
-}
-
 function isAnyPageDirty() {
   return Boolean(state.dirty || Object.values(state.pageCache || {}).some(c => c.dirty));
 }
 
-async function downloadJsonBackup() {
-  if (!state.doc) return;
-  flushPendingInputs();
-  if (isAnyPageDirty()) {
-    const saved = await saveEntirePdf();
-    if (!saved) return;
-  }
-  notify("Preparing entire PDF export...", "");
-  try {
-    const res = await api("/api/server_export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-      body: JSON.stringify({}),
-    });
-    const payload = JSON.stringify(res.export_payload || res, null, 2) + "\n";
-    const blob = new Blob([payload], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = res.filename || `${(state.currentDocName || "document").replace(/\.pdf$/i, "")}_full_export.json`;
-    document.body.append(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    notify(`Exported entire PDF JSON (${res.pages_count} pages, ${res.total_instances} symbols).`, "saved");
-  } catch (err) {
-    notify("Export failed: " + (err.message || err), "error");
-  }
-}
+const SESSION_LOST = "local session authorization required";
 
-async function api(path, options = {}) {
+async function api(path, options = {}, retried = false) {
   const response = await fetch(path, { cache: "no-store", ...options });
   const data = await response.json();
   if (!response.ok) {
+    // The server was restarted (new session token) while this tab stayed
+    // open: re-attach to it and retry once instead of failing every save.
+    if (response.status === 403 && data.error === SESSION_LOST && !retried &&
+        options.headers && "X-Labeler-Token" in options.headers) {
+      await reattachSession();
+      return api(path, { ...options, headers: { ...options.headers, "X-Labeler-Token": state.token } }, true);
+    }
     const err = new Error(data.error || "Request failed: HTTP " + response.status);
     err.status = response.status;
     throw err;
@@ -3766,14 +3290,20 @@ async function api(path, options = {}) {
   return data;
 }
 
-function populateFamilyDatalist(families) {
-  const list = $("families");
-  list.replaceChildren();
-  for (const label of families) {
-    const option = document.createElement("option");
-    option.value = label;
-    list.append(option);
+async function reattachSession() {
+  const fresh = await (await fetch("/api/session", { cache: "no-store" })).json();
+  state.token = fresh.token;
+  // A restarted server opens its start-up PDF; point it back at the one this
+  // tab is editing before anything is saved, or pages would land in the wrong file.
+  if (state.currentDocPath && fresh.current_doc_path && fresh.current_doc_path !== state.currentDocPath) {
+    const response = await fetch("/api/document", {
+      method: "POST", cache: "no-store",
+      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+      body: JSON.stringify({ path: state.currentDocPath }),
+    });
+    if (!response.ok) throw new Error("The server restarted and could not reopen this PDF; reload the page.");
   }
+  notify("Reconnected to the restarted labeling server.", "");
 }
 
 async function loadPage(page, force = false) {
@@ -3822,24 +3352,6 @@ async function loadPage(page, force = false) {
     if ($("docSelect") && state.currentDocPath) $("docSelect").value = state.currentDocPath;
     state.siblingFiles = result.sibling_files || [];
     state.walls = Array.isArray(result.walls) ? result.walls : [];
-    if (Array.isArray(result.families)) populateFamilyDatalist(result.families);
-
-    const presence = result.page_presence_suggestion;
-    const presenceHint = $("pagePresenceHint");
-    if (presenceHint) {
-      presenceHint.hidden = !presence;
-      if (presence) {
-        const labels = {
-          possible_symbols: "Possible symbols; inspect and label all target devices.",
-          review_required: "Unable to exclude symbols; visually inspect the entire page.",
-          blank_candidate: "No PDF content stream detected; still requires explicit full-page review.",
-        };
-        const terms = Array.isArray(presence.risk_terms) && presence.risk_terms.length
-          ? " Signals: " + presence.risk_terms.join(", ") : "";
-        presenceHint.textContent = "Automated suggestion (unverified): " +
-          (labels[presence.suggestion] || labels.review_required) + terms;
-      }
-    }
 
     const cached = force ? null : state.pageCache[page];
     if (force) delete state.pageCache[page];
@@ -3871,6 +3383,7 @@ async function loadPage(page, force = false) {
     fit();
     refresh();
     notify(`Loaded ${state.jsonFilename || ("page " + (page + 1))}.`);
+    prefetchAhead();
   } catch (error) {
     notify(String(error.message || error), "error");
   } finally {
@@ -3885,6 +3398,7 @@ async function loadDocumentsList() {
     const res = await api("/api/documents");
     const docs = res.documents || [];
     state.documents = docs;
+    if (state.doc) prefetchAhead();
     if (select) {
       select.replaceChildren();
       if (!docs.length) {
@@ -3972,11 +3486,6 @@ function populateDeviceCategorySelect() {
 }
 
 function updateActiveDevicePill() {
-  const allDevs = catalogDevices();
-  const navBtn = $("navDevicesBtn");
-  if (navBtn) {
-    navBtn.textContent = allDevs.length ? `📚 Devices (${allDevs.length})` : "📚 Devices";
-  }
   const pill = $("activeDevicePill");
   if (!pill) return;
   const [fam, varName] = activeTargetPair();
@@ -4296,20 +3805,50 @@ function renderPdfGrid() {
   }
 }
 
+// "Next PDF" walks the blueprints in a fixed folder/name order. The menu list
+// is regrouped (annotated first) as you work, so stepping through it would
+// jump back to documents already visited.
+function documentsInFolderOrder() {
+  return [...(state.documents || [])].sort((a, b) =>
+    String(a.rel_path || a.name).localeCompare(String(b.rel_path || b.name), undefined,
+                                                { numeric: true, sensitivity: "base" }));
+}
+
+// Ask the server to render what is likely opened next (the following page of
+// this PDF and the first page of the next PDF) while the user works here.
+function prefetchAhead() {
+  if (state.modeKind !== "pdf" || !state.token) return;
+  const post = (body) => api("/api/prefetch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+    body: JSON.stringify(body),
+  }).catch(() => {});
+  // The worker renders in request order: the next PDF first (a whole-document
+  // switch is the slow one), then the next page of this PDF.
+  const ordered = documentsInFolderOrder();
+  const cur = ordered.findIndex(d => d.path === state.currentDocPath || d.is_current);
+  const next = ordered.length > 1 ? ordered[(cur + 1) % ordered.length] : null;
+  if (next && next.path !== state.currentDocPath) post({ path: next.path, pages: [0] });
+  if (state.page + 1 < state.pageCount) post({ pages: [state.page + 1] });
+}
+
 async function nextDocument() {
   if (!state.documents || !state.documents.length) {
     await loadDocumentsList();
   }
-  if (!state.documents.length) {
+  const ordered = documentsInFolderOrder();
+  if (!ordered.length) {
     notify("No blueprints found to cycle.", "warning");
     return;
   }
-  const curIdx = state.documents.findIndex(d => d.path === state.currentDocPath);
-  const nextIdx = (curIdx + 1) % state.documents.length;
-  const nextDoc = state.documents[nextIdx];
-  if (nextDoc) {
+  const curIdx = ordered.findIndex(d => d.path === state.currentDocPath || d.is_current);
+  const nextIdx = (curIdx + 1) % ordered.length;
+  const nextDoc = ordered[nextIdx];
+  if (nextDoc && nextDoc.path !== state.currentDocPath) {
     await switchDocument(nextDoc.path);
-    notify(`Switched to: ${nextDoc.name} (${nextIdx + 1} / ${state.documents.length})`, "saved");
+    if (state.currentDocPath === nextDoc.path) {
+      notify(`Switched to: ${nextDoc.name} (${nextIdx + 1} / ${ordered.length})`, "saved");
+    }
   }
 }
 
@@ -4351,99 +3890,11 @@ async function switchDocument(path) {
     state.selectedIds = new Set();
     state.selectedId = null;
     state.busy = false;
-    await loadDocumentsList();
     await loadPage(0, true);
+    loadDocumentsList();          // badges refresh in the background
   } catch (err) {
     state.busy = false;
     notify("Could not switch document: " + (err.message || err), "error");
-    refreshControls();
-  }
-}
-
-async function exportServer() {
-  if (isAnyPageDirty()) {
-    const saved = await saveEntirePdf();
-    if (!saved) return;
-  }
-  state.busy = true;
-  refreshControls();
-  notify("Exporting entire PDF annotations to server...", "");
-  try {
-    const res = await api("/api/server_export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-      body: JSON.stringify({}),
-    });
-    notify(`Exported entire PDF: ${res.filename} (${res.total_instances} symbols across all ${res.pages_count} pages)`, "saved");
-    alert(`Export complete for entire PDF!\n\nFile: ${res.filename}\nPath: ${res.path}\nTotal symbols: ${res.total_instances} (${res.verified_instances} verified)\nTotal pages: ${res.pages_count}`);
-  } catch (err) {
-    notify("Server export failed: " + (err.message || err), "error");
-  } finally {
-    state.busy = false;
-    refreshControls();
-  }
-}
-
-async function openServerImportDialog() {
-  const dialog = $("serverImportDialog");
-  const list = $("serverSourceList");
-  if (!dialog || !list) return;
-  list.replaceChildren();
-  $("customServerPath").value = "";
-  dialog.showModal();
-  try {
-    const res = await api("/api/server_sources?page=" + state.page);
-    const sources = res.sources || [];
-    if (!sources.length) {
-      list.textContent = "No standard candidate proposal files found on server. Enter a custom server path below.";
-      return;
-    }
-    for (const src of sources) {
-      const row = document.createElement("div");
-      row.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 6px;background:#121c24;border-radius:4px;";
-      const label = document.createElement("span");
-      label.style.cssText = "font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;";
-      label.textContent = (src.is_recommended ? "★ " : "") + src.name;
-      label.title = src.path;
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "ghost";
-      btn.textContent = "Select";
-      btn.addEventListener("click", () => {
-        $("customServerPath").value = src.path;
-      });
-      row.appendChild(label);
-      row.appendChild(btn);
-      list.appendChild(row);
-    }
-  } catch (err) {
-    list.textContent = "Could not list server sources: " + (err.message || err);
-  }
-}
-
-async function confirmServerImport() {
-  const path = $("customServerPath").value.trim();
-  if (!path) {
-    notify("Select or enter a server file path first.", "warning");
-    return;
-  }
-  const dialog = $("serverImportDialog");
-  if (dialog) dialog.close();
-  state.busy = true;
-  refreshControls();
-  notify("Importing from server file...", "");
-  try {
-    const res = await api("/api/server_import?page=" + state.page, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-      body: JSON.stringify({ path }),
-    });
-    notify(`Imported ${res.imported_count} symbols from server file: ${res.filename}`, "saved");
-    state.busy = false;
-    await loadPage(state.page, true);
-  } catch (err) {
-    state.busy = false;
-    notify("Server import failed: " + (err.message || err), "error");
     refreshControls();
   }
 }
@@ -4514,12 +3965,10 @@ async function saveEntirePdf() {
       const docToSave = (p === state.page) ? state.doc : (cached ? cached.doc : state.doc);
       const revToSave = (p === state.page) ? state.revision : (cached ? cached.revision : state.revision);
       const metadata = {
-        source_id: docToSave.source_id || "",
-        project_family_id: docToSave.project_family_id || "",
-        document_id: docToSave.document_id || "",
         verified_no_symbols: docToSave.verified_no_symbols === true,
+        page_complete: docToSave.page_complete === true &&
+          docToSave.instances.every(x => x.review_status === "accepted"),
       };
-      if (docToSave.notes) metadata.notes = docToSave.notes;
       let result;
       try {
         result = await api("/api/save?page=" + p, {
@@ -4589,7 +4038,6 @@ const savePage = saveEntirePdf;
 function wireEvents() {
   if ($("navPdfsBtn")) $("navPdfsBtn").addEventListener("click", openPdfMenu);
   if ($("nextPdfBtn")) $("nextPdfBtn").addEventListener("click", nextDocument);
-  if ($("navDevicesBtn")) $("navDevicesBtn").addEventListener("click", openDeviceCatalogModal);
   if ($("openDeviceCatalogBtn")) $("openDeviceCatalogBtn").addEventListener("click", openDeviceCatalogModal);
   if ($("closeDeviceCatalogBtn")) $("closeDeviceCatalogBtn").addEventListener("click", closeDeviceCatalogModal);
   if ($("deviceCatalogSearch")) {
@@ -4671,10 +4119,6 @@ function wireEvents() {
   if ($("snapSensitivity")) $("snapSensitivity").addEventListener("change", (e) => setSnapSensitivity(e.target.value));
 
   if ($("docSelect")) $("docSelect").addEventListener("change", (e) => switchDocument(e.target.value));
-  if ($("serverExportBtn")) $("serverExportBtn").addEventListener("click", exportServer);
-  if ($("serverImportBtn")) $("serverImportBtn").addEventListener("click", openServerImportDialog);
-  if ($("closeServerImportBtn")) $("closeServerImportBtn").addEventListener("click", () => $("serverImportDialog")?.close());
-  if ($("confirmServerImportBtn")) $("confirmServerImportBtn").addEventListener("click", confirmServerImport);
 
   $("prevPage").addEventListener("click", () => loadPage(state.page - 1));
   $("nextPage").addEventListener("click", () => loadPage(state.page + 1));
@@ -4689,7 +4133,6 @@ function wireEvents() {
   $("zoomIn").addEventListener("click", () => zoomAt(elements.canvas.clientWidth / 2, elements.canvas.clientHeight / 2, 1.3));
   $("zoomOut").addEventListener("click", () => zoomAt(elements.canvas.clientWidth / 2, elements.canvas.clientHeight / 2, 1 / 1.3));
   $("toggleLabels").addEventListener("click", () => { state.showLabels = !state.showLabels; refreshControls(); draw(); });
-  $("toggleLoupe").addEventListener("click", () => { state.showLoupe = !state.showLoupe; refreshControls(); draw(); });
   $("toggleWalls").addEventListener("click", () => { state.showWalls = !state.showWalls; refreshControls(); draw(); });
   $("cycleViewFilter").addEventListener("click", () => {
     state.viewFilterIdx = (state.viewFilterIdx + 1) % VIEW_FILTERS.length;
@@ -4767,9 +4210,6 @@ function wireEvents() {
     }
   });
   $("dismissDraftBtn").addEventListener("click", clearLocalDraft);
-  $("importJsonBtn").addEventListener("click", () => $("importJsonFile").click());
-  $("importJsonFile").addEventListener("change", (e) => importJsonFromFile(e.target.files?.[0]));
-  $("downloadJsonBtn").addEventListener("click", downloadJsonBackup);
 
   $("search").addEventListener("input", refreshList);
   $("filter").addEventListener("change", () => { refreshList(); draw(); });
@@ -4780,24 +4220,8 @@ function wireEvents() {
   $("duplicate").addEventListener("click", duplicateSelected);
   $("delete").addEventListener("click", deleteSelected);
 
-  for (const btn of document.querySelectorAll(".quick-family, .multi-quick-family")) {
-    btn.addEventListener("click", () => applyQuickFamily(btn.dataset.family));
-  }
-  for (const id of ["instanceIdInput", "family", "variant", "x0", "y0", "x1", "y1", "occluded", "truncated"]) {
-    $(id).addEventListener("change", updateSelectedFields);
-  }
-  $("family").addEventListener("input", () => {
-    const fam = $("family").value.trim();
-    $("disciplineBadge").textContent = disciplineFor(fam);
-    updateVariantDatalist(fam);
-    if (chosen() && fam !== chosen().symbol_family) editState();
-  });
-  for (const id of ["instanceIdInput", "variant", "x0", "y0", "x1", "y1", "angle", "rotW", "rotH"]) {
-    $(id).addEventListener("input", () => { if (chosen()) editState(); });
-  }
+  for (const id of ["occluded", "truncated"]) $(id).addEventListener("change", updateSelectedFields);
   $("angle").addEventListener("change", updateAngle);
-  $("rotW").addEventListener("change", updateOrientedDims);
-  $("rotH").addEventListener("change", updateOrientedDims);
   for (const btn of document.querySelectorAll(".rot-step")) {
     btn.addEventListener("click", () => {
       const item = chosen();
@@ -4821,42 +4245,31 @@ function wireEvents() {
     if (e.key === "Enter") { e.preventDefault(); addCustomDeviceAttribute(); }
   });
 
-  $("placeCircleCenter").addEventListener("click", () => { state.activeAnchorName = "circle_center"; setMode("anchor"); });
-  $("placeVisualCenter").addEventListener("click", () => { state.activeAnchorName = "visual_center"; setMode("anchor"); });
-  $("placeWallAttach").addEventListener("click", () => { state.activeAnchorName = "wall_attachment"; setMode("anchor"); });
-  $("autoCenterAnchor")?.addEventListener("click", autoPlaceCenterAnchor);
-  $("anchorAllBoxes")?.addEventListener("click", anchorAllBoxes);
-  $("placeAutoAnchor")?.addEventListener("click", () => { state.activeAnchorName = "auto"; setMode("anchor"); });
-  $("snapAnchorCenter")?.addEventListener("click", () => placeBoxSnapAnchor("center"));
-  $("snapAnchorTop")?.addEventListener("click", () => placeBoxSnapAnchor("top"));
-  $("snapAnchorBottom")?.addEventListener("click", () => placeBoxSnapAnchor("bottom"));
-  $("snapAnchorLeft")?.addEventListener("click", () => placeBoxSnapAnchor("left"));
-  $("snapAnchorRight")?.addEventListener("click", () => placeBoxSnapAnchor("right"));
-  $("snapAnchorTip")?.addEventListener("click", snapAnchorToTip);
-  $("placeCustomAnchor").addEventListener("click", () => {
-    const name = $("customAnchorName").value.trim();
-    if (!name) { notify("Enter a custom anchor name first.", "warning"); return; }
-    state.activeAnchorName = name;
-    $("customAnchorName").value = "";
-    setMode("anchor");
+  $("anchorAllBoxes").addEventListener("click", anchorAllBoxes);
+  $("placeAutoAnchor").addEventListener("click", () => { state.activeAnchorName = "auto"; setMode("anchor"); });
+  $("helpBtn").addEventListener("click", () => notify($("helpBtn").title, ""));
+  $("pageComplete").addEventListener("change", async (event) => {
+    if (!state.doc || state.busy) return;
+    const value = event.target.checked;
+    const pending = state.doc.instances.filter(x => x.review_status !== "accepted").length;
+    if (value && pending) {
+      event.target.checked = false;
+      notify(`Verify or remove the ${pending} pending box${pending > 1 ? "es" : ""} first.`, "warning");
+      return;
+    }
+    if (value && !(await confirmAction(
+      "Is EVERY electrical symbol on this page boxed and verified? The page will be used to test the model " +
+      "and anything unboxed will count as background.",
+      { title: "Page fully labeled", confirmLabel: "Yes, every symbol is labeled" }
+    ))) {
+      event.target.checked = false;
+      return;
+    }
+    remember();
+    state.doc.page_complete = value;
+    editState();
+    refresh();
   });
-  $("drawSnapVec").addEventListener("click", () => setMode("snap"));
-  $("autoSnapFromAngle").addEventListener("click", autoSnapFromBoxAngle);
-  $("autoSnapFromWallAnchor").addEventListener("click", autoSnapFromWallAnchor);
-  $("flipSnapVec").addEventListener("click", () => rotateSnapVector(180));
-  $("perpSnapVec").addEventListener("click", () => rotateSnapVector(90));
-  $("alignBoxToVec").addEventListener("click", alignBoxToSnapVector);
-  $("testWallSnap").addEventListener("click", runWallSnapPreview);
-  $("clearSnapVec").addEventListener("click", () => {
-    state.snapPreview = null;
-    modifySelection(x => { delete x.snap_vector; });
-  });
-
-  for (const id of ["metaSourceId", "metaProjectFamilyId", "metaDocumentId", "metaNotes"]) {
-    $(id).addEventListener("change", updateSheetMetadata);
-    $(id).addEventListener("input", () => { if (state.doc) editState(); });
-  }
-
   elements.canvas.addEventListener("pointerdown", pointerDown);
   elements.canvas.addEventListener("pointermove", pointerMove);
   elements.canvas.addEventListener("pointerup", pointerUp);

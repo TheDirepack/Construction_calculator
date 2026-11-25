@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
-# Phase 2 v2: Clean real *DEVICES.json (text proxies filtered) + wall-touching &
-# free-space composited electrical symbols onto real architectural sheets,
-# trained with YOLO26n-P2 MuSGD using our own freshly trained SSL v3 backbone.
+# Phase 2: real labeled pages from the label store (human-verified boxes and
+# verified page attestations, from the annotator and agent review) + wall-touching &
+# free-space composited NECA symbols on real architectural sheets, trained with
+# YOLO26n-P2 MuSGD on our own SSL backbone. The detector learns exact catalog
+# devices (switch.three_way, receptacle.duplex_gfci, ...), not categories. Extracted *DEVICES.json boxes enter
+# the label store as proposals (remote/update_label_store.sh) and train only
+# once a human verifies them.
 set -euo pipefail
 
 BASE="$HOME/Projects/blueprint-symbols"
 CODE="$BASE/code"
 DATA="$BASE/data/blueprints_and_libraries"
-POOL="$BASE/work/pool"
-WORK="$BASE/work/phase2_v3"
-PRETRAIN_WEIGHTS="${PRETRAIN_WEIGHTS:-$BASE/work/pretrain_v3/best_yolo26n_p2_backbone.pt}"
+LABELS="${BPS_LABELS_DIR:-$BASE/work/labels}"
+# Read from the folders when this runs (no index or manifest): labelled pages of
+# $DATA/1_blueprints/*.pdf train; fully labelled pages of
+# $DATA/1_blueprints/evaluation/*.pdf are validation and test.
+# A new PHASE2_WORK for every run: composites and the prepared dataset are
+# cached there and are not rebuilt when it already exists.
+WORK="${PHASE2_WORK:-$BASE/work/phase2_v3}"
+# The flagged pretrained backbone (remote/promote_pretrain.sh) is reused by
+# every post-training run; set PRETRAIN_WEIGHTS to try another one.
+PRETRAIN_WEIGHTS="${PRETRAIN_WEIGHTS:-$BASE/work/best_pretrain/backbone.pt}"
+RUN_NAME="${PHASE2_RUN_NAME:-phase2_mixed_ssl}"
 PY="$BASE/.venv/bin/python"
 
 export PYTHONPATH="$CODE"
@@ -17,36 +29,50 @@ export PYTHONUNBUFFERED=1
 cd "$CODE"
 mkdir -p "$WORK"
 
-echo "=== [1/5] IMPORT CLEAN REAL *DEVICES.json (TEXT PROXIES REMOVED) ==="
-if [[ ! -d "$WORK/normalized_real" ]]; then
-  $PY adapters/import_standardized_devices.py "$DATA" "$WORK/normalized_real" --dpi 200
-fi
+echo "=== [1/5] LABEL STORE: PAGES WITH VERIFIED LABELS ==="
+PYTHONPATH="$CODE" $PY - "$LABELS" "$DATA" <<'PY'
+import json
+import sys
+from pathlib import Path
+from annotator import label_store
+pages = label_store.labeled_pages(Path(sys.argv[1]), data_root=Path(sys.argv[2]))
+complete = [p for p in pages["evaluation"]
+            if json.loads(p.read_text()).get("annotation_completeness_verified") is True
+            or json.loads(p.read_text()).get("verified_no_symbols") is True]
+print(f"{len(pages['train'])} training pages (1_blueprints/*.pdf); "
+      f"{len(pages['evaluation'])} evaluation pages (1_blueprints/evaluation), "
+      f"{len(complete)} fully labelled -> validation/test")
+PY
 
-echo "=== [2/5] COMPOSITE NECA 100-2013 VECTOR SVG DEVICES (ZERO WALL CLIPPING, 350 ARCH SHEETS) ==="
+echo "=== [2/5] COMPOSITE DEVICES: NECA 100-2013 GLYPHS + LEGEND-SHEET AND CAD-LIBRARY CROPS + CROPS OF VERIFIED LABELS ON 350 PAGES OF THE TRAINING PDFS ==="
 if [[ ! -d "$WORK/composited_neca" ]]; then
   $PY scripts_composite_neca_svg.py \
     --neca-dir "$DATA/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library" \
-    --backgrounds \
-      "$POOL/background/*new_downloads_202611*.json" \
-      "$POOL/background/*rinker_hall*.json" \
-      "$POOL/background/*njatc*.json" \
-      "$POOL/background/*freefarmhouse*.json" \
+    --label-store "$LABELS" --data-root "$DATA" \
+    --symbol-library "$DATA/2_component_libraries/legend_symbol_crops" \
+    --symbol-library "$DATA/2_component_libraries/harvested_symbols" \
+    --background-pages "${PHASE2_BACKGROUND_PAGES:-350}" \
     --output "$WORK/composited_neca" \
     --copies 1 \
     --per-page 24 \
     --wall-fraction 0.60 \
     --min-px 20 \
     --max-px 64 \
-    --limit 350 \
     --preview 5 \
     --seed 2026
 fi
 
 echo "=== [3/5] PREPARE BUILDING-ISOLATED YOLO DATASET (REAL + NECA COMPOSITED) ==="
-# *DEVICES.json is POSITIVE-ONLY, not exhaustively annotated. A supervised
+# Pages not marked "every symbol labeled" are POSITIVE-ONLY. A supervised
 # detector can learn missed symbols as negatives. Fail closed by default;
 # allow incomplete annotations for an explicitly exploratory run only.
 COMPLETENESS_ARGS=()
+if [[ "${PHASE2_PARTIAL:-1}" == "1" && "${PHASE2_ALLOW_UNVERIFIED:-0}" != "1" ]]; then
+  # Positive-only pages train with the class-masked loss: an unlabelled symbol
+  # is never taught as background. Validation/test still need two projects
+  # whose pages are marked "every symbol on this page is labeled".
+  COMPLETENESS_ARGS=(--allow-partial-training)
+fi
 if [[ "${PHASE2_ALLOW_UNVERIFIED:-0}" == "1" ]]; then
   echo "WARNING: EXPLORATORY ONLY: missing real device labels may become false negatives" >&2
   COMPLETENESS_ARGS=(--allow-unverified-completeness)
@@ -54,7 +80,8 @@ fi
 if [[ ! -f "$WORK/prepared/yolo/data.yaml" ]]; then
   rm -rf "$WORK/prepared"
   $PY scripts_prepare_training_data.py \
-    --annotations "$WORK/normalized_real/*.json" "$WORK/composited_neca/*.json" \
+    --label-store "$LABELS" --data-root "$DATA" \
+    --annotations "$WORK/composited_neca/*.json" \
     --output "$WORK/prepared" \
     --train-tiles-per-page 18 \
     --train-variants 3 \
@@ -77,7 +104,10 @@ if [[ ! -f "$PRETRAIN_WEIGHTS" ]]; then
   echo "Missing fresh SSL checkpoint: $PRETRAIN_WEIGHTS" >&2
   exit 1
 fi
-$PY scripts_verify_ssl_transfer.py "$PRETRAIN_WEIGHTS" --classes 6
+# One class per catalog device that occurs in the training split.
+NCLASSES=$($PY -c "import json,sys; print(len(json.load(open(sys.argv[1]))['class_ids']))" "$WORK/prepared/source_manifest.json")
+echo "device classes: $NCLASSES"
+$PY scripts_verify_ssl_transfer.py "$PRETRAIN_WEIGHTS" --classes "$NCLASSES"
 exec $PY scripts_train_ultralytics.py "$WORK/prepared/yolo/data.yaml" \
   --weights "$PRETRAIN_WEIGHTS" \
   --imgsz 512 \
@@ -91,6 +121,6 @@ exec $PY scripts_train_ultralytics.py "$WORK/prepared/yolo/data.yaml" \
   --translate 0.05 \
   --workers 2 \
   --project "$WORK/runs" \
-  --name phase2_mixed_ssl_v3 \
+  --name "$RUN_NAME" \
   --exist-ok \
   --run

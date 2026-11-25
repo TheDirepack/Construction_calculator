@@ -23,6 +23,7 @@ from .multiscale import ScaleTile, sample_tile
 from .augmentation import photometric
 from .degradation import degrade, choose_profile
 from .dataset_manifest import trusted_training_instance
+from .label_schema import load_training_page
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ def read_records(annotation_paths: list[str | Path], *, classes: dict[str, int] 
     records=[]
     for annotation in annotation_paths:
         path = Path(annotation)
-        data = json.loads(path.read_text())
+        data = load_training_page(path)
         image = (path.parent / data['image_path']).resolve()
         if not image.is_file():
             raise FileNotFoundError(image)

@@ -266,6 +266,10 @@ def test_http_local_ui_routes_save_token_and_conflict(tmp_path):
         assert code == 403
         code, data, _ = call("GET", "/etc/passwd")
         assert code == 404
+        code, data, _ = call("POST", "/api/prefetch", {"pages": [0]}, headers)
+        assert code == 200 and "queued" in json.loads(data)       # routed, not 404
+        code, data, _ = call("POST", "/api/prefetch", {"pages": [0]})
+        assert code == 403
     finally:
         server.shutdown()
         server.server_close()
@@ -435,9 +439,9 @@ def test_electrical_device_catalog_completeness_and_http_endpoint(tmp_path):
 
     catalog = load_electrical_device_catalog()
     assert catalog["summary"]["categories_count"] == 13
-    assert catalog["summary"]["total_devices"] == 181
+    assert catalog["summary"]["total_devices"] == 182
     assert len(catalog["categories"]) == 13
-    assert len(catalog["devices"]) == 181
+    assert len(catalog["devices"]) == 182
 
     pdf = _pdf(tmp_path / "catalog_plan.pdf", pages=1)
     session = LabelingSession(pdf=pdf, out_dir=tmp_path / "labels")
@@ -469,13 +473,13 @@ def test_electrical_device_catalog_completeness_and_http_endpoint(tmp_path):
             r1 = conn.getresponse()
             session_body = json.loads(r1.read())
             assert r1.status == 200
-            assert len(session_body["device_catalog"]["devices"]) == 181
+            assert len(session_body["device_catalog"]["devices"]) == 182
 
             conn.request("GET", "/api/device_catalog")
             r2 = conn.getresponse()
             cat_body = json.loads(r2.read())
             assert r2.status == 200
-            assert len(cat_body["devices"]) == 181
+            assert len(cat_body["devices"]) == 182
             assert len(cat_body["categories"]) == 13
             labels = {d["label"]: d for d in cat_body["devices"]}
             assert labels["Card Reader - Long Range"]["symbol_family"] == "security_device"
@@ -529,3 +533,68 @@ def test_switch_document_drops_previous_walls_and_page_presence(tmp_path):
     assert session.pdf == pdf2
     assert state["walls"] == []
     assert state["page_presence_suggestion"] is None
+
+
+def test_prefetch_renders_the_next_pdf_in_the_background(tmp_path, monkeypatch):
+    import time
+    import annotator.web as web
+    docs = tmp_path / "blueprints"
+    docs.mkdir()
+    first = _pdf(docs / "a_first.pdf", pages=2)
+    second = _pdf(docs / "b_second.pdf", pages=2)
+    labels = tmp_path / "labels"
+    session = LabelingSession(pdf=first, blueprints_dir=docs, out_dir=labels)
+    assert session.prefetch(str(second), [0]) == {"queued": True}
+    assert session.prefetch(str(second), [0]) == {"queued": False}      # deduplicated
+    sha = web.sha256_file(second)
+    deadline = time.time() + 60
+    while web._find_rendered(labels / "images", 0, session.dpi, sha) is None:
+        assert time.time() < deadline, "prefetch never rendered the page"
+        time.sleep(0.2)
+    # Switching now reuses the prefetched render instead of rendering again.
+    monkeypatch.setattr(web, "render_pdf_page",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("rendered again")))
+    state = session.switch_document(str(second))
+    assert state["page_count"] == 2
+    with pytest.raises(LabelingError):
+        session.prefetch(str(tmp_path / "outside.pdf"), [0])
+
+
+def test_saved_pages_are_training_ready(tmp_path):
+    """Pages saved by the annotator load in the training split builder as-is."""
+    pytest.importorskip("cv2")
+    from blueprint_symbols.dataset_manifest import build_manifest
+    from blueprint_symbols.label_schema import EXHAUSTIVE_FAMILIES
+    blue = tmp_path / "blueprints_and_libraries" / "1_blueprints"
+    blue.mkdir(parents=True)
+    labels = tmp_path / "labels"
+    box = dict(_box(), symbol_family="receptacle", symbol_variant="duplex", review_status="accepted",
+               review_source="human", verified_ground_truth=True, uncertain=False)
+    for name in ("job_a", "job_b", "job_c", "job_d"):
+        pdf = _pdf(blue / f"{name}.pdf", pages=1)
+        doc = fitz.open(pdf)
+        doc[0].insert_text((20, 280), f"PROJECT {name.upper()}")      # distinct drawings
+        doc.saveIncr()
+        doc.close()
+        session = LabelingSession(pdf=pdf, out_dir=labels)
+        session.save(0, revision=None, instances=[box], rejected=[], metadata={"page_complete": True})
+    saved = json.loads((labels / "job_a_p0001.json").read_text())
+    assert saved["project_family_id"] == "file_1_blueprints_job_a" and saved["source_group_verified"] is True
+    assert saved["exhaustive_families"] == EXHAUSTIVE_FAMILIES
+    assert saved["annotation_completeness"] == "complete" and saved["annotation_scope"] == "exhaustive_electrical"
+    manifest = build_manifest(sorted(labels.glob("*.json")), val_fraction=.25, test_fraction=.25)
+    assert sum(len(v) for v in manifest["splits"].values()) == 4
+
+    session = LabelingSession(pdf=blue / "job_a.pdf", out_dir=labels)
+    _, revision, _ = session.page_document(0)
+    pending = dict(box, review_status="unreviewed", review_source="manual_draft",
+                   verified_ground_truth=False, uncertain=True)
+    with pytest.raises(LabelingError, match="pending"):
+        session.save(0, revision=revision, instances=[pending], rejected=[],
+                     metadata={"page_complete": True})
+    with pytest.raises(LabelingError, match="exact device"):
+        session.save(0, revision=revision, instances=[dict(box, symbol_variant="unspecified")],
+                     rejected=[], metadata={"page_complete": False})
+    session.save(0, revision=revision, instances=[pending], rejected=[], metadata={"page_complete": False})
+    partial = json.loads((labels / "job_a_p0001.json").read_text())
+    assert partial["exhaustive_families"] == [] and partial["annotation_scope"] == "positive_only"

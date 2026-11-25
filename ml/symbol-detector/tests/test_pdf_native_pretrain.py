@@ -13,7 +13,6 @@ fitz = pytest.importorskip("fitz")
 from blueprint_symbols.pdf_crop import PdfCropSampler
 from blueprint_symbols.ssl_pretrain import (BlueprintSSLDataset, group_is_holdout,
                                             sample_label_guided_crop)
-from scripts_index_real_pdfs import index_pdf_pages, reserved_sources
 from scripts_pretrain_ssl import build_pretrain_manifests
 
 
@@ -37,36 +36,24 @@ def make_pdf(path: Path, pages: int) -> None:
     doc.close()
 
 
-def test_index_all_pages_and_exclude_reserved_pdfs(tmp_path):
-    root = tmp_path / "data"
-    src = root / "1_blueprints" / "new_downloads_202611_site" / "drawing.pdf"
-    held = root / "1_blueprints" / "new_downloads_202611_site" / "reserved.pdf"
-    make_pdf(src, 83)
-    make_pdf(held, 7)
-    heldout = tmp_path / "work" / "heldout_real_pdfs.json"
-    heldout.parent.mkdir(parents=True)
-    heldout.write_text(json.dumps({
-        "source_pdfs": [str(held.relative_to(root))],
-        "project_family_ids": [],
-    }))
-    out = tmp_path / "work" / "pdf_page_index" / "index.json"
-    first = index_pdf_pages(root, out, roles=ROLES, reserved_manifest=heldout)
-    assert first["stats"]["indexed_pdfs"] == 1
-    assert first["stats"]["indexed_pages"] == 83
-    assert first["stats"]["max_pages_in_pdf"] == 83
-    assert first["stats"]["excluded_reserved_pdfs"] == 1
-    assert len(first["documents"]) == 1
-    doc = next(iter(first["documents"].values()))
-    assert {p["pdf_page_index"] for p in doc["pages"]} == set(range(83))
-    assert all(p["source_pdf"] == str(src.resolve()) for p in doc["pages"])
-    assert not list((tmp_path / "work").rglob("*.png"))  # no full-page rasters
+def _direct_pages(train, val):
+    groups = [b.get("buckets", {}).get("real_pdf_pages", {}).get("groups", {}) for b in (train, val)]
+    return [p for g in groups for pages in g.values() for p in pages]
 
-    second = index_pdf_pages(root, out, roles=ROLES, reserved_manifest=heldout)
-    assert second["stats"]["reused_pdfs"] == 1
-    assert out.is_file()
-    paths, groups = reserved_sources(heldout, root)
-    assert str(held.resolve()) in paths
-    assert not groups
+
+def test_training_pdfs_are_read_from_the_root_folder_at_runtime(tmp_path):
+    root, work = tmp_path / "data", tmp_path / "work"
+    src = root / "1_blueprints" / "drawing.pdf"
+    make_pdf(src, 83)
+    make_pdf(root / "1_blueprints" / "evaluation" / "held.pdf", 7)        # evaluation: never
+    make_pdf(root / "1_blueprints" / "some_subfolder" / "other.pdf", 5)   # neither set
+    work.mkdir()
+    train, val, audit = build_pretrain_manifests(root, work)
+    entries = _direct_pages(train, val)
+    assert {p["pdf_page_index"] for p in entries} == set(range(83))
+    assert all(p["source_pdf"] == str(src.resolve()) for p in entries)
+    assert audit["training_pdfs_in_folder"] == 1 and audit["evaluation_pdfs_in_folder"] == 1
+    assert not list(work.rglob("*.json")) and not list(work.rglob("*.png"))   # nothing indexed
 
 
 def test_pdf_native_crops_vary_scale_and_position_without_fullpage_rasters(tmp_path):
@@ -142,28 +129,22 @@ def test_native_pdf_dataset_spans_many_pages_and_keeps_clean_alignment(tmp_path)
     assert len(clip_rects) == 96  # 24 source regions × 4 independent PDF DPIs
 
 
-def test_pretraining_manifest_reads_native_pages_without_reserved_leakage(tmp_path):
-    root = tmp_path / "data"
-    work = tmp_path / "work"
-    src = root / "1_blueprints" / "new_downloads_202611_a" / "job.pdf"
-    reserved = root / "1_blueprints" / "new_downloads_202611_a" / "reserved.pdf"
+def test_moving_a_pdf_to_evaluation_takes_it_out_of_pretraining(tmp_path):
+    root, work = tmp_path / "data", tmp_path / "work"
+    src = root / "1_blueprints" / "job.pdf"
+    moved = root / "1_blueprints" / "reserved.pdf"
     make_pdf(src, 11)
-    make_pdf(reserved, 3)
+    make_pdf(moved, 3)
     work.mkdir()
-    (work / "heldout_real_pdfs.json").write_text(json.dumps({
-        "source_pdfs": [str(reserved.relative_to(root))],
-    }))
-    index_pdf_pages(root, work / "pdf_page_index" / "index.json",
-                    roles=ROLES, reserved_manifest=work/"heldout_real_pdfs.json")
+    assert len(_direct_pages(*build_pretrain_manifests(root, work)[:2])) == 14
+    (root / "1_blueprints" / "evaluation").mkdir()
+    moved.rename(root / "1_blueprints" / "evaluation" / "reserved.pdf")
     train, val, audit = build_pretrain_manifests(root, work)
-    included = (train.get("buckets", {}).get("real_pdf_pages", {}).get("groups", {}))
-    monitored = (val.get("buckets", {}).get("real_pdf_pages", {}).get("groups", {}))
-    entries = [p for g in (included, monitored) for pages in g.values() for p in pages]
+    entries = _direct_pages(train, val)
     assert len(entries) == 11
     assert all(p["source_pdf"] == str(src.resolve()) for p in entries)
     assert audit["direct_pdf_sources"] == 1
     assert audit["direct_pdf_pages_train"] + audit["direct_pdf_pages_val_monitor"] == 11
-    assert all("reserved" not in str(p) for p in entries)
 
 
 def test_page_balancing_gives_long_documents_more_views_without_monopoly():
@@ -183,22 +164,19 @@ def test_page_balancing_gives_long_documents_more_views_without_monopoly():
 
 
 
-def test_native_pdf_index_accepts_uppercase_extension(tmp_path):
-    root = tmp_path / "data"
-    upper = root / "1_blueprints" / "new_downloads_202611_upper" / "DRAWINGS.PDF"
-    make_pdf(upper, 2)
-    output = tmp_path / "work" / "pdf_page_index" / "index.json"
-    result = index_pdf_pages(root, output, roles=ROLES)
-    assert result["stats"]["indexed_pages"] == 2
-    assert str(upper.resolve()) == next(iter(result["documents"].values()))["pages"][0]["source_pdf"]
-
-
-def test_native_pdf_replaces_existing_raster_without_double_counting(tmp_path):
+def test_native_pdf_accepts_uppercase_extension(tmp_path):
     root, work = tmp_path / "data", tmp_path / "work"
-    pdf = root / "1_blueprints" / "new_downloads_202611_a" / "site.pdf"
-    make_pdf(pdf, 4)
-    index_pdf_pages(root, work / "pdf_page_index" / "index.json", roles=ROLES)
+    upper = root / "1_blueprints" / "DRAWINGS.PDF"
+    make_pdf(upper, 2)
+    work.mkdir()
+    entries = _direct_pages(*build_pretrain_manifests(root, work)[:2])
+    assert len(entries) == 2 and entries[0]["source_pdf"] == str(upper.resolve())
 
+
+def test_pool_renders_of_blueprints_are_not_trained(tmp_path):
+    root, work = tmp_path / "data", tmp_path / "work"
+    pdf = root / "1_blueprints" / "site.pdf"
+    make_pdf(pdf, 4)
     background = work / "pool" / "background"
     background.mkdir(parents=True)
     img = np.full((256, 256, 3), 250, np.uint8)
@@ -206,35 +184,25 @@ def test_native_pdf_replaces_existing_raster_without_double_counting(tmp_path):
     record = {
         "image_path": "old_page.png", "project_family_id": "old_raster_group",
         "image_width": 256, "image_height": 256,
-        "pool": {"source_path": pdf.relative_to(root).as_posix()},
+        "pool": {"source_path": "1_blueprints/old_subfolder/gone.pdf"},
     }
     (background / "old_page.json").write_text(json.dumps(record))
     train, val, audit = build_pretrain_manifests(root, work)
-    assert audit["excluded_counts"].get("replaced_by_direct_pdf") == 1
-    direct = (train.get("buckets", {}).get("real_pdf_pages")
-              or val.get("buckets", {}).get("real_pdf_pages"))
-    assert direct is not None
-    assert sum(len(v) for v in direct["groups"].values()) == 4
+    assert audit["excluded_counts"].get("pool_render_of_blueprints") == 1
+    assert len(_direct_pages(train, val)) == 4
 
 
 def test_pdf_file_revision_changes_training_manifest_fingerprint(tmp_path):
     import os
     root, work = tmp_path / "data", tmp_path / "work"
-    pdf = root / "1_blueprints" / "new_downloads_202611_a" / "site.pdf"
+    pdf = root / "1_blueprints" / "site.pdf"
     make_pdf(pdf, 4)
-    index_path = work / "pdf_page_index" / "index.json"
-    index_pdf_pages(root, index_path, roles=ROLES)
-    old = build_pretrain_manifests(root, work)
-    old_entries = old[0]["buckets"].get("real_pdf_pages") or old[1]["buckets"]["real_pdf_pages"]
-    old_signature = next(iter(old_entries["groups"].values()))[0]["pdf_source_signature"]
+    work.mkdir()
+    old_signature = _direct_pages(*build_pretrain_manifests(root, work)[:2])[0]["pdf_source_signature"]
     st = pdf.stat()
     os.utime(pdf, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
-    index_pdf_pages(root, index_path, roles=ROLES)
-    updated = build_pretrain_manifests(root, work)
-    new_entries = updated[0]["buckets"].get("real_pdf_pages") or updated[1]["buckets"]["real_pdf_pages"]
-    new_signature = next(iter(new_entries["groups"].values()))[0]["pdf_source_signature"]
+    new_signature = _direct_pages(*build_pretrain_manifests(root, work)[:2])[0]["pdf_source_signature"]
     assert old_signature != new_signature
-
 
 
 def test_native_pdf_dataset_passes_sampled_dpi_into_synthetic_symbols(tmp_path):

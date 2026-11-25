@@ -138,14 +138,16 @@ def build_pretrain_manifests(
         except Exception:
             pass
 
-    # The evaluation folder can be populated after a page has already been
-    # rendered into the persistent pool. Match its original source filename
-    # and exclude the entire cached project, including its labeled crops.
-    eval_dir = data_root / '1_blueprints' / 'evaluation'
-    eval_sources = {
-        path.name.casefold() for path in eval_dir.rglob('*')
-        if path.is_file() and path.suffix.lower() in {'.pdf', '.png', '.jpg', '.jpeg', '.tif', '.tiff', '.webp'}
-    } if eval_dir.is_dir() else set()
+    # Training drawings are the PDFs directly in 1_blueprints, evaluation
+    # drawings those in 1_blueprints/evaluation; both read from disk now
+    # (blueprint_sets), no index or held-out manifest. Every PDF page is
+    # rendered on demand at the chosen training scale.
+    from blueprint_symbols.blueprint_sets import BlueprintSets, blueprint_sets, pdf_page_entries
+    try:
+        sets = blueprint_sets(data_root)
+    except FileNotFoundError:            # a data root of other sources only
+        sets = BlueprintSets(root=data_root / '1_blueprints', train={}, evaluation={})
+    eval_sources = set(sets.evaluation)
     locked_eval_groups.update(
         re.sub(r'[^a-zA-Z0-9_-]+', '_', Path(name).stem).strip('_').lower()
         for name in eval_sources
@@ -164,46 +166,26 @@ def build_pretrain_manifests(
                 if Path(source).name.casefold() in eval_sources or '/evaluation/' in source.lower():
                     locked_eval_groups.add(gid)
 
-    from scripts_index_real_pdfs import reserved_sources
-    reserved_file = work_root / "heldout_real_pdfs.json"
-    reserved_paths, reserved_groups = reserved_sources(
-        reserved_file if reserved_file.is_file() else None, data_root.resolve()
-    )
-
-    # Direct PDF page catalog: all eligible pages, no 24 MP intermediates.
-    # Exclude reserved/locked groups *before* either SSL training or validation.
-    pdf_index_file = work_root / "pdf_page_index" / "index.json"
     indexed_pdf_paths: set[str] = set()
     pdf_train: dict[str, list[dict[str, Any]]] = defaultdict(list)
     pdf_val: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    if pdf_index_file.is_file():
-        index = json.loads(pdf_index_file.read_text())
-        if index.get("format_version") != 1:
-            raise ValueError("Unsupported direct PDF page index version")
-        if Path(index.get("data_root", "")).resolve() != data_root.resolve():
-            raise ValueError("PDF index was built against a different data_root")
-        for rel, info in sorted(index.get("documents", {}).items()):
-            gid = str(info.get("project_family_id", "")).strip()
-            source = str((data_root / rel).resolve())
-            if not gid or gid in reserved_groups or source in reserved_paths:
-                continue
-            if gid in locked_eval_groups:
-                continue
-            pages = info.get("pages", [])
-            if not pages:
-                continue
-            # Include the actual source size/mtime in the training fingerprint
-            # so a replaced PDF with unchanged page count cannot silently
-            # change the image distribution during checkpoint resume.
-            pages = [
-                {**item, "pdf_source_signature": info.get("signature")}
-                for item in pages
-            ]
-            # Source PDF is the unit of train/validation isolation. Never split
-            # different pages from the same original PDF across partitions.
-            target = pdf_val if group_is_holdout(gid, val_fraction=pool_val_fraction) else pdf_train
-            target[gid].extend(pages)
-            indexed_pdf_paths.add(source)
+    unreadable_pdfs = 0
+    for pdf in sets.training_pdfs():
+        try:
+            pages = pdf_page_entries(pdf)
+        except Exception:
+            unreadable_pdfs += 1
+            continue
+        if not pages:
+            continue
+        gid = pages[0]['project_family_id']
+        if gid in locked_eval_groups:
+            continue
+        # Source PDF is the unit of train/validation isolation. Never split
+        # different pages from the same original PDF across partitions.
+        target = pdf_val if group_is_holdout(gid, val_fraction=pool_val_fraction) else pdf_train
+        target[gid].extend(pages)
+        indexed_pdf_paths.add(str(pdf.resolve()))
 
     train_buckets: dict[str, dict[str, Any]] = {}
     val_buckets: dict[str, dict[str, Any]] = {}
@@ -212,8 +194,9 @@ def build_pretrain_manifests(
         'included_counts': defaultdict(int),
         'val_monitor_counts': defaultdict(int),
         'locked_eval_groups_count': len(locked_eval_groups),
-        'explicit_reserved_pdf_groups_count': len(reserved_groups),
-        'explicit_reserved_pdf_paths_count': len(reserved_paths),
+        'training_pdfs_in_folder': len(sets.train),
+        'evaluation_pdfs_in_folder': len(sets.evaluation),
+        'unreadable_training_pdfs': unreadable_pdfs,
         'direct_pdf_sources': len(indexed_pdf_paths),
         'direct_pdf_pages_train': sum(len(p) for p in pdf_train.values()),
         'direct_pdf_pages_val_monitor': sum(len(p) for p in pdf_val.values()),
@@ -255,8 +238,10 @@ def build_pretrain_manifests(
             gid = str(doc.get('project_family_id') or jpath.stem)
             src_path = str((doc.get('pool') or {}).get('source_path') or jpath.name)
             source_file = str((data_root / src_path).resolve())
-            if gid in reserved_groups or source_file in reserved_paths:
-                audit['excluded_counts']['explicit_reserved_raster_source'] += 1
+            if Path(src_path).parts[:1] == ('1_blueprints',):
+                # Blueprint PDFs come straight from the folders above; old pool
+                # renders of them (or of other 1_blueprints subfolders) don't train.
+                audit['excluded_counts']['pool_render_of_blueprints'] += 1
                 continue
             if source_file in indexed_pdf_paths:
                 # Prefer fresh PDF-native crops, avoid doubling the same page
@@ -406,7 +391,10 @@ def build_pretrain_manifests(
             continue
         if groups:
             gid = next(iter(groups))
-        if not gid or gid in locked_eval_groups or gid in reserved_groups:
+        if source and sets.role(source) != 'train':
+            audit['excluded_counts']['labeled_not_a_training_drawing'] += 1
+            continue
+        if not gid or gid in locked_eval_groups:
             audit['excluded_counts']['labeled_locked_or_missing_group'] += 1
             continue
         imgpath = (jpath.parent / str(doc.get('image_path', ''))).resolve()
@@ -485,6 +473,25 @@ def neca_source_fingerprint(symbol_dir: Path | None) -> str | None:
     return digest.hexdigest()
 
 
+def load_extra_glyphs(args: argparse.Namespace) -> tuple[list, dict]:
+    """Symbol drawings beyond NECA: crop libraries and verified-label crops."""
+    from blueprint_symbols.symbol_library import library_glyphs
+    glyphs, report = [], {}
+    for root in getattr(args, 'symbol_library', None) or []:
+        got, rep = library_glyphs(root, labeled_only=False)
+        glyphs += got
+        report[str(root)] = rep['counts']
+    stores = getattr(args, 'label_store', None) or []
+    if stores:
+        from annotator import label_store
+        from blueprint_symbols.verified_symbols import verified_symbol_glyphs
+        pages = [p for store in stores for p in label_store.training_pages(store, data_root=args.data_root)]
+        got, rep = verified_symbol_glyphs(pages)
+        glyphs += got
+        report['verified_labels'] = rep['counts']
+    return glyphs, report
+
+
 def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Namespace) -> str:
     """Fingerprint the source manifest and training settings for safe resume.
 
@@ -529,6 +536,9 @@ def run_fingerprint(train_manifest: dict, val_manifest: dict, args: argparse.Nam
     conf["clean_sampling_policy"] = "end_to_end_undistorted_crop_v1"
     conf["mask_visibility_policy"] = "known_inserted_symbols_max_60_percent_v1"
     conf["neca_svg_bank_sha256"] = neca_source_fingerprint(args.neca_dir)
+    if getattr(args, 'extra_glyphs_sha256', None):
+        conf["extra_symbol_glyphs_sha256"] = args.extra_glyphs_sha256
+        conf["library_symbol_share"] = args.library_symbol_share
     manifest = {"format": 1, "settings": conf,
                 "train": train_manifest, "validation": val_manifest}
     return hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
@@ -730,6 +740,12 @@ def train(args: argparse.Namespace) -> None:
             Path(f) for pattern in args.labeled_annotations for f in glob.glob(pattern, recursive=True)
         ],
     )
+    extra_glyphs, extra_report = load_extra_glyphs(args)
+    audit['extra_symbol_glyphs'] = {'total': len(extra_glyphs), 'sources': extra_report,
+                                    'library_symbol_share': getattr(args, 'library_symbol_share', 0.5)}
+    if extra_glyphs:
+        from blueprint_symbols.symbol_library import glyph_fingerprint
+        args.extra_glyphs_sha256 = glyph_fingerprint(extra_glyphs)
     identity = run_fingerprint(train_manifest, val_manifest, args)
     prior_fingerprint_file = out_dir / "run_fingerprint.txt"
     existing_checkpoint = out_dir / "last_pretrain.pt"
@@ -787,6 +803,8 @@ def train(args: argparse.Namespace) -> None:
         'placement_chaos': args.placement_chaos,
         'page_chaos_probability': args.page_chaos_probability,
         'page_chaos_strength': args.page_chaos_strength,
+        'extra_glyphs': extra_glyphs,
+        'library_symbol_share': getattr(args, 'library_symbol_share', 0.5),
     }
     train_ds = BlueprintSSLDataset(
         train_manifest, size=args.imgsz, items_per_epoch=args.items_per_epoch,
@@ -1009,6 +1027,14 @@ def main() -> None:
                    help='Verified positive device JSONs used for device-centered SSL crops')
     p.add_argument('--neca-dir', type=Path, default=None,
                    help='NECA_100_Vector_Library containing symbols.json and all vector SVGs')
+    p.add_argument('--symbol-library', type=Path, action='append', default=[],
+                   help='Crop library (legend_symbol_crops, harvested_symbols) whose non-rejected drawings '
+                        'are composited next to NECA glyphs; repeatable')
+    p.add_argument('--label-store', type=Path, action='append', default=[],
+                   help='Also composite crops of human-verified boxes from this label store '
+                        '(training drawings only: 1_blueprints/*.pdf, never 1_blueprints/evaluation)')
+    p.add_argument('--library-symbol-share', type=float, default=0.5,
+                   help='Probability an inserted symbol comes from the libraries instead of NECA')
     p.add_argument('--max-symbols', type=int, default=16,
                    help='Random number of synthetic symbols per crop: 0..N (inclusive)')
     p.add_argument('--symbol-min-px', type=float, default=12.0)

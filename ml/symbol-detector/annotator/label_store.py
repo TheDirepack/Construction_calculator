@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from annotator.web import LabelingSession, sha256_file
+from blueprint_symbols.label_schema import COORDINATE_SYSTEM, page_header
 
 DOCUMENT_FILE = "document.json"
 BATCH_DIR = "batches"
@@ -70,6 +71,38 @@ def parse_pages(raw: str | None, page_count: int) -> list[int]:
     if bad:
         raise ValueError(f"pages {bad[:5]} are outside this document (1-{page_count})")
     return sorted(pages)
+
+
+# --------------------------------------------------------------------------
+# training vs evaluation and DEVICES files: read from the blueprint folders at
+# runtime (blueprint_symbols.blueprint_sets)
+# --------------------------------------------------------------------------
+
+def devices_json_for(pdf: Path) -> Path | None:
+    """The extracted *_DEVICES.json of a drawing, from the ``devices`` folder beside it."""
+    from blueprint_symbols.blueprint_sets import devices_for
+    return devices_for(pdf)
+
+
+def document_role(doc: "Document", data_root: Path | None = None) -> str | None:
+    """``train``, ``evaluation`` or None for a stored document, decided by
+    where its PDF is now: ``1_blueprints/*.pdf`` trains,
+    ``1_blueprints/evaluation/*.pdf`` evaluates, anything else neither."""
+    from blueprint_symbols.blueprint_sets import blueprint_sets
+    try:
+        sets = blueprint_sets(data_root if data_root is not None else doc.source)
+    except FileNotFoundError:
+        return None
+    return sets.role(doc.source)
+
+
+def is_evaluation(source: Path, data_root: Path | None = None) -> bool:
+    """Whether a drawing is in the evaluation folder (never trained on)."""
+    from blueprint_symbols.blueprint_sets import EVALUATION, blueprint_sets
+    try:
+        return blueprint_sets(data_root if data_root is not None else source).role(source) == EVALUATION
+    except FileNotFoundError:
+        return False
 
 
 @dataclass
@@ -130,8 +163,11 @@ def load_document(folder: Path) -> Document:
     source = Path(data["source"])
     if not source.is_absolute():
         source = (folder / source).resolve()
-    if not source.is_file():
-        raise FileNotFoundError(f"source of {folder.name} is missing: {source}")
+    moved = not source.is_file()
+    if moved:
+        source = _moved_source(source, data.get("sha256"))
+        if source is None:
+            raise FileNotFoundError(f"source of {folder.name} is missing: {data['source']}")
     doc = Document(folder=folder, kind=data["kind"], source=source, sha256=data["sha256"],
                    page_count=int(data["page_count"]), json_prefix=data["json_prefix"],
                    targets={int(k): v for k, v in (data.get("targets") or {}).items()}, meta=data)
@@ -142,7 +178,27 @@ def load_document(folder: Path) -> Document:
             raise ValueError(f"{source.name} changed since its labels were started "
                              f"(sha {current[:12]} != {doc.sha256[:12]})")
         doc.save_meta()                     # same bytes, new mtime: refresh the recorded stat
+    elif moved:
+        if "evaluation" in doc.meta:        # shown by the annotator
+            doc.meta["evaluation"] = is_evaluation(source)
+        doc.save_meta()                     # remember where the PDF is now
     return doc
+
+
+def _moved_source(old: Path, sha: str | None) -> Path | None:
+    """A drawing moved between the blueprint folders (e.g. into evaluation/):
+    the PDF of the same name in 1_blueprints or 1_blueprints/evaluation,
+    if its bytes are the same."""
+    from blueprint_symbols.blueprint_sets import blueprint_sets
+    try:
+        sets = blueprint_sets(old.parent)
+    except FileNotFoundError:
+        return None
+    name = old.name.casefold()
+    for candidate in (sets.evaluation.get(name), sets.train.get(name)):
+        if candidate is not None and (sha is None or sha256_file(candidate) == sha):
+            return candidate.resolve()
+    return None
 
 
 def document_for(page_json: Path) -> Document:
@@ -171,8 +227,10 @@ def open_page(page_json: Path) -> tuple[LabelingSession, int, Document]:
         raise ValueError(f"this document's page {page} is {doc.page_json(page).name}")
     if doc.kind == "image":
         return LabelingSession(edit=page_json), 0, doc
+    # Same session as the browser annotator: a page opened for the first time
+    # starts with the same machine proposals (e.g. extracted DEVICES.json boxes).
     session = LabelingSession(pdf=doc.source, out_dir=doc.folder, page=page - 1,
-                              source_sha256=doc.sha256, auto_proposals=False)
+                              source_sha256=doc.sha256)
     return session, page - 1, doc
 
 
@@ -214,6 +272,50 @@ def batch_documents(batch: Path) -> list[Path]:
     return out
 
 
+def labeled_pages(store: Path, *, data_root: Path | None = None) -> dict[str, list[Path]]:
+    """Usable saved pages split by where their PDF is now:
+    ``{"train": [...], "evaluation": [...]}`` (``document_role``).
+
+    Labeling covers every drawing; this is where evaluation drawings are kept
+    out of training. Pages of PDFs in neither folder are left out of both.
+    """
+    out: dict[str, list[Path]] = {"train": [], "evaluation": []}
+    roles: dict[Path, str | None] = {}
+    for page in _usable_pages(store):
+        doc = document_for(page)
+        if doc.folder not in roles:
+            roles[doc.folder] = document_role(doc, data_root)
+        if roles[doc.folder]:
+            out[roles[doc.folder]].append(page)
+    return out
+
+
+def training_pages(store: Path, *, data_root: Path | None = None) -> list[Path]:
+    """Usable pages of training drawings (``labeled_pages``)."""
+    return labeled_pages(store, data_root=data_root)["train"]
+
+
+def _usable_pages(store: Path) -> list[Path]:
+    """Saved pages of every document that training or evaluation can use (see
+    ``label_schema.training_usable``), with their page image on disk.
+
+    A page image missing on this machine (labeled elsewhere, cache cleared) is
+    rendered again from the PDF; the session checks it against the saved hash.
+    """
+    from blueprint_symbols.label_schema import training_usable
+    out = []
+    for doc in iter_documents(store):
+        for path in sorted(doc.folder.glob(f"{doc.json_prefix}_p[0-9]*.json")):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not training_usable(data):
+                continue
+            if not (path.parent / str(data.get("image_path", ""))).is_file():
+                session, index, _ = open_page(path)
+                session.page_document(index)
+            out.append(path)
+    return out
+
+
 IMAGE_PAGE_FIELDS = ("format_version", "source_id", "source_license", "project_family_id",
                      "source_group_verified", "document_id", "page_index", "source_type",
                      "exhaustive_families", "verified_no_symbols", "annotation_completeness",
@@ -222,7 +324,8 @@ IMAGE_PAGE_FIELDS = ("format_version", "source_id", "source_license", "project_f
 
 
 def create_document(store: Path, source: Path, *, targets: dict[int, str] | None = None,
-                    meta: dict | None = None, image_page: dict | None = None) -> Document:
+                    meta: dict | None = None, image_page: dict | None = None,
+                    sha256: str | None = None) -> Document:
     """Add a PDF or a photo to the store (or merge triage targets into an existing entry).
 
     A PDF is referenced in place. A photo is copied into the document's
@@ -233,7 +336,7 @@ def create_document(store: Path, source: Path, *, targets: dict[int, str] | None
 
     store = Path(store).resolve()
     source = Path(source).resolve()
-    sha = sha256_file(source)
+    sha = sha256 or sha256_file(source)
     folder = store / doc_folder_name(source, sha)
     if (folder / DOCUMENT_FILE).is_file():
         doc = load_document(folder)
@@ -261,16 +364,13 @@ def create_document(store: Path, source: Path, *, targets: dict[int, str] | None
     doc = Document(folder=folder, kind="image", source=copy, sha256=sha, page_count=1,
                    json_prefix=json_prefix(source), targets={1: (targets or {}).get(1, "photo")},
                    meta=dict(meta or {}))
-    page = {k: v for k, v in (image_page or {}).items() if k in IMAGE_PAGE_FIELDS}
-    page.setdefault("format_version", 1)
-    page.setdefault("document_id", source.stem)
-    page.setdefault("page_index", 0)
-    page.setdefault("source_type", "real_construction_photo")
-    page.setdefault("exhaustive_families", [])
-    page.setdefault("instances", [])
+    page = page_header(source=source, document_id=source.stem, page_index=0,
+                       source_type="real_construction_photo", image_path=f"images/{copy.name}",
+                       image_sha256=sha, width=width, height=height)
+    page.update({k: v for k, v in (image_page or {}).items() if k in IMAGE_PAGE_FIELDS})
     page.update({"image_path": f"images/{copy.name}", "image_sha256": sha,
                  "image_width": width, "image_height": height,
-                 "coordinate_system": "original_page_pixels_top_left_y_down"})
+                 "coordinate_system": COORDINATE_SYSTEM})
     doc.page_json(1).write_text(json.dumps(page, indent=1), encoding="utf-8")
     doc.save_meta()
     return doc

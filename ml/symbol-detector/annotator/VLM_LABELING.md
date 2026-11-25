@@ -145,7 +145,7 @@ After each command that writes a PNG, open the PNG with your file-reading tool
   `power_pack_dimming`, usually a small box tagged "PP" near fixtures) are
   wired to low-voltage switches (`switch` / `low_voltage`,
   `low_voltage_dimmer`) or paired with wireless switches (`wireless`,
-  `wireless_dimmer`). Ceiling occupancy and vacancy sensors are `sensor`;
+  `wireless_dimmer`, `wireless_multi_button`). Ceiling occupancy and vacancy sensors are `sensor`;
   wall-box occupancy switches are `switch` / `occupancy_sensor`.
 
 * **Model proposals** (`review_source: "model"`, with a `model_confidence`)
@@ -154,6 +154,11 @@ After each command that writes a PNG, open the PNG with your file-reading tool
   needed), fix the box or family with `update_box`, delete wrong ones with
   `delete_box`, and add what the model missed. Low-confidence boxes are the
   most likely to be wrong.
+* **Extracted proposals** (`review_source: "devices_json"`) were pulled from
+  the drawing set's text and geometry when the page was first opened; the
+  browser annotator shows the same boxes. Their device is often only the
+  family (variant `unspecified`) and some boxes sit on the tag text instead of
+  the symbol: review them exactly like model proposals.
 * Marks are candidates, not answers: text letters, room numbers, column
   bubbles and furniture can get a mark too. Only add a mark you can match to
   a legend symbol or a vocabulary symbol.
@@ -212,7 +217,7 @@ An `"error"` reply means nothing was written: fix the JSON and retry.
 | `cctv_device` | electrical | dvr_nvr, camera_mini_dome, security_camera, camera_ptz, unspecified |
 | `circuit_breaker` | electrical | single_pole, two_pole, three_pole, gfci, afci, unspecified |
 | `conduit_fitting` | electrical | stub_up, stub_down, homerun, flexible_connection, unspecified |
-| `control_relay` | electrical | lighting_relay, contactor, shunt_trip, time_clock, power_pack_auxiliary, power_pack_dimming, power_pack, room_controller, emergency_transfer_device, unspecified |
+| `control_relay` | electrical | lighting_relay, contactor, shunt_trip, time_clock, power_pack, power_pack_dimming, power_pack_auxiliary, room_controller, emergency_transfer_device, unspecified |
 | `damper` | hvac | volume, motorized, backdraft, fire_smoke, unspecified |
 | `data_outlet` | electrical | data_wall, wap, catv_outlet, data_floor, telephone_outlet, voice_data_combo, data_ceiling, fiber_optic_outlet, telephone_data_wall, telephone_wall, telephone_data_floor, fiber, coax, audio_visual, voice_data_two_gang, data_wall_two_gang, unspecified |
 | `diffuser` | hvac | supply, return, exhaust, linear_slot, transfer, unspecified |
@@ -236,9 +241,9 @@ An `"error"` reply means nothing was written: fix the JSON and retry.
 | `pump` | mechanical | centrifugal, circulator, sump, booster, condensate, unspecified |
 | `receptacle` | electrical | duplex, quad, single, special_purpose, duplex_above_counter, duplex_gfci, floor_mounted, usb_charger_duplex, isolated_ground, weatherproof_gfci_duplex, ceiling_mounted, tamper_resistant, gfci, weatherproof, quad_gfci, afci, dedicated, duplex_receptacle_floor, duplex_receptacle_ceiling, duplex_receptacle_emergency, combination_floor_box, multioutlet_assembly, usb_receptacle, unspecified |
 | `security_device` | electrical | card_reader, glass_break_detector, panic_duress_button, door_release_button, request_to_exit, gate_operator, gate_release_button, card_reader_long_range, door_contact_switch, electric_door_strike, security_keypad, card_reader_proximity, magnetic_door_lock, security_alarm_strobe, unspecified |
-| `sensor` | electrical | thermostat, humidistat, occupancy_sensor, co2_sensor, daylight_photosensor, co_sensor, vacancy_sensor, occupancy_sensor_ceiling, differential_pressure_sensor, occupancy_sensor_wall, daylight_sensor, photocell, motion_detector, flow_switch, pressure_switch, occupancy_sensor_dual_technology, occupancy_sensor_wall_corner, occupancy_sensor_wireless, unspecified |
+| `sensor` | electrical | thermostat, humidistat, occupancy_sensor, co2_sensor, daylight_photosensor, co_sensor, vacancy_sensor, occupancy_sensor_ceiling, differential_pressure_sensor, occupancy_sensor_wall, daylight_sensor, photocell, motion_detector, flow_switch, pressure_switch, occupancy_sensor_wall_corner, occupancy_sensor_dual_technology, occupancy_sensor_wireless_ceiling, occupancy_sensor_wireless_wall, unspecified |
 | `sprinkler_head` | fire_protection | pendent, upright, sidewall, concealed, dry_pendent, unspecified |
-| `switch` | electrical | single_pole, dimmer, three_way, four_way, time_switch, momentary, key_operated, emergency_power_off_pushbutton, three_way_dimmer, four_way_dimmer, double_pole, dimmer_switch, occupancy_sensor, vacancy_sensor, timer, low_voltage, pilot_light, weatherproof, motor_control, double_throw, occupancy_sensor_dimming, low_voltage_dimmer, low_voltage_scene, wireless, wireless_dimmer, unspecified |
+| `switch` | electrical | single_pole, dimmer, three_way, four_way, time_switch, momentary, key_operated, emergency_power_off_pushbutton, three_way_dimmer, four_way_dimmer, double_pole, dimmer_switch, occupancy_sensor, vacancy_sensor, timer, low_voltage, pilot_light, weatherproof, motor_control, double_throw, occupancy_sensor_dimming, low_voltage_dimmer, wireless, wireless_dimmer, wireless_multi_button, unspecified |
 | `telecom_device` | electrical | equipment_rack, equipment_cabinet, terminal_cabinet, intercom, speaker, camera, card_reader, nurse_call, unspecified |
 | `thermostat` | hvac | wall_thermostat, programmable, humidistat, unspecified |
 | `transformer` | electrical | transformer, dry_type, pad_mounted, step_down, step_up, unspecified |

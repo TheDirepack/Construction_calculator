@@ -38,6 +38,7 @@ from urllib.parse import parse_qs
 from PIL import Image, ImageDraw, ImageFont
 
 from annotator.model import FAMILY_DISCIPLINES, RotatedBox
+from blueprint_symbols.label_schema import pending_instance
 
 DEFAULT_MAX_SIDE = 1400
 MIN_MAX_SIDE = 128
@@ -661,19 +662,11 @@ def _add_box(session, page, instances, action, *, width, height, warnings) -> di
     elif any(item.get("instance_id") == ident for item in instances):
         raise ValueError(f"id {ident!r} already exists on this page")
 
-    item = {
-        "instance_id": ident,
-        "symbol_family": family,
-        "symbol_variant": variant,
-        "bbox_xyxy": [round(v, 3) for v in box],
-        "attributes_from_text": [str(s).strip() for s in (action.get("text_attributes") or []) if str(s).strip()],
-        "uncertain": True,
-        "review_status": "unreviewed",
-        "review_source": "vlm_agent",
-        "verified_ground_truth": False,
-        "is_truncated": bool(action.get("truncated", False)),
-        "is_occluded": bool(action.get("occluded", False)),
-    }
+    item = pending_instance(
+        ident, family, variant, box, review_source="vlm_agent",
+        attributes_from_text=[str(s).strip() for s in (action.get("text_attributes") or []) if str(s).strip()],
+        is_truncated=bool(action.get("truncated", False)),
+        is_occluded=bool(action.get("occluded", False)))
     attributes = action.get("attributes", action.get("device_attributes"))
     if isinstance(attributes, dict) and attributes:
         item["device_attributes"] = attributes

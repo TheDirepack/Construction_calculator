@@ -11,13 +11,14 @@ from adapters.import_standardized_devices import import_all
 
 def test_real_devices_import_does_not_claim_exhaustive_symbols(tmp_path):
     data = tmp_path / "data"
-    data.mkdir()
+    blue = data / "1_blueprints"
+    (blue / "devices").mkdir(parents=True)
     pdf = fitz.open()
     pdf.new_page(width=240, height=200)
-    pdf.save(data / "site_plan.pdf")
+    pdf.save(blue / "site_plan.pdf")
     pdf.close()
 
-    (data / "site_plan_DEVICES.json").write_text(json.dumps({
+    (blue / "devices" / "site_plan_DEVICES.json").write_text(json.dumps({
         "source_file": "site_plan.pdf",
         "devices": [{
             "pdf_page": 1,

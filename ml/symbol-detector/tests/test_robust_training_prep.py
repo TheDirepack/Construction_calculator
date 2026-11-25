@@ -24,7 +24,7 @@ def _three_page_manifest(tmp_path):
         data={'image_path':p.name,'image_width':315,'image_height':245,
               'project_family_id':f'bldg-{i}','source_group_verified':True,
               'source_type':'synthetic_verified','exhaustive_families':['receptacle'],
-              'instances':[{'instance_id':f'i{i}','symbol_family':'receptacle',
+              'instances':[{'instance_id':f'i{i}','symbol_family':'receptacle','symbol_variant':'duplex',
                             'bbox_xyxy':[76,55,96,75]}]}
         j=tmp_path/f'{i}.json';j.write_text(json.dumps(data));ann.append(j)
     manifest=build_manifest(ann)
@@ -50,7 +50,7 @@ def test_raster_damage_shape_reproducible_and_effectful():
 def test_symbol_target_bands_reach_twenty_pixels(tmp_path):
     path,manifest,_=_three_page_manifest(tmp_path)
     records=read_records(manifest['splits']['train'])
-    ds=RasterTileDataset(records,{'receptacle':0},size=512,
+    ds=RasterTileDataset(records,{'receptacle.duplex':0},size=512,
         virtual_tiles_per_image=10,target_symbol_pixels=((20,20,1.),),
         degradation_profile='clean')
     got=[]

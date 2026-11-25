@@ -8,14 +8,19 @@ Two sources of documents, both safe to re-run:
   legend crops and surveys move over, with boxes rescaled from the pool raster
   to the store's own render of the PDF page. Photos (no PDF) are copied into
   the store, since the pool holds the only copy.
-* ``--scan PDF_DIR``: triage PDFs straight from disk. Pages whose text mentions
+* ``--scan BLUEPRINTS``: triage the training drawings (``1_blueprints/*.pdf``)
+  and the evaluation drawings (``1_blueprints/evaluation/*.pdf``) straight
+  from disk (``blueprint_symbols.blueprint_sets``). Pages whose text mentions
   electrical work become pages to label; PDFs with no such page are skipped.
-  Evaluation and held-out PDFs are never added.
+  Pages with extracted ``*_DEVICES.json`` boxes (the ``devices/`` folder
+  beside each PDF) are always pages to label: the annotator and the agents
+  open them with those boxes as proposals.
+  Both sets are labeled; only training leaves evaluation drawings out, decided
+  at training time by which folder the PDF is in.
 
   PYTHONPATH=code .venv/bin/python code/scripts_build_label_store.py \\
       --store work/labels --data-root data/blueprints_and_libraries \\
-      --from-pool work/pool --heldout work/heldout_real_pdfs.json
-  ... --scan data/blueprints_and_libraries/1_blueprints      # new PDFs later
+      --scan data/blueprints_and_libraries/1_blueprints
 """
 from __future__ import annotations
 
@@ -30,23 +35,6 @@ from annotator import label_store, vlm_tools
 from annotator.web import LabelingError, RevisionConflict
 
 PHOTO_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
-
-
-def _norm(name: str) -> str:
-    stem = Path(name).name
-    stem = stem[:-4] if stem.lower().endswith(".pdf") else stem
-    return re.sub(r"[^a-z0-9]+", "_", stem.lower()).strip("_")
-
-
-def heldout_names(data_root: Path, heldout: Path | None) -> set[str]:
-    names: set[str] = set()
-    eval_dir = data_root / "1_blueprints" / "evaluation"
-    if eval_dir.is_dir():
-        names.update(_norm(p.name) for p in eval_dir.rglob("*") if p.is_file())
-    if heldout is not None and heldout.is_file():
-        data = json.loads(heldout.read_text())
-        names.update(_norm(str(x)) for x in data.get("source_pdfs", []))
-    return names
 
 
 # --------------------------------------------------------------------------
@@ -191,17 +179,25 @@ def from_pool(store: Path, pool: Path, data_root: Path, *, dry_run: bool) -> dic
 SCANNED_FILE = "scanned_pdfs.json"
 
 
-def scan_pdfs(store: Path, pdf_dir: Path, blocked: set[str], *, dry_run: bool) -> dict:
+def _meta(pdf: Path, sets, origin: str) -> dict:
+    # "evaluation" is informational (the annotator shows it); training decides
+    # from the folder at the time it runs.
+    return {"source_rel": str(pdf.relative_to(sets.root.parent)), "origin": origin,
+            "evaluation": sets.role(pdf) == "evaluation"}
+
+
+def _drawings(sets) -> list[Path]:
+    return sets.pdfs("train") + sets.pdfs("evaluation")
+
+
+def scan_pdfs(store: Path, sets, *, dry_run: bool) -> dict:
     """Triage PDFs not yet in the store. PDFs already checked and found without
     electrical pages are remembered (by size and mtime) so daily runs stay cheap."""
     stats: dict[str, int] = defaultdict(int)
     known = {Path(d.source).resolve() for d in label_store.iter_documents(store)} if store.is_dir() else set()
     scanned_path = store / SCANNED_FILE
     scanned = json.loads(scanned_path.read_text()) if scanned_path.is_file() else {}
-    for pdf in sorted(pdf_dir.rglob("*.pdf")):
-        if "evaluation" in pdf.relative_to(pdf_dir).parts or _norm(pdf.name) in blocked:
-            stats["skipped_heldout"] += 1
-            continue
+    for pdf in _drawings(sets):
         if pdf.resolve() in known:
             stats["already_in_store"] += 1
             continue
@@ -228,10 +224,42 @@ def scan_pdfs(store: Path, pdf_dir: Path, blocked: set[str], *, dry_run: bool) -
         stats["pages_to_label"] += len(targets)
         if not dry_run:
             doc = label_store.create_document(store, pdf, targets=targets,
-                                              meta={"source_rel": str(pdf.relative_to(pdf_dir.parent)),
-                                                    "origin": "pdf_scan"})
+                                              meta=_meta(pdf, sets, "pdf_scan"))
             (doc.folder / "outline.json").write_text(json.dumps(
                 {"sha256": doc.sha256, "pages": {row["pdf_page"]: row for row in outline}}))
+    return dict(stats)
+
+
+def devices_pages(sets) -> dict[Path, dict[int, str]]:
+    """PDF -> {page: reason} for pages with extracted DEVICES.json boxes
+    (label_store.devices_json_for: the same files the annotator proposes from)."""
+    from blueprint_symbols.label_schema import device_for_raw_type, devices_skip_reason
+    out: dict[Path, dict[int, str]] = defaultdict(dict)
+    for pdf in _drawings(sets):
+        path = label_store.devices_json_for(pdf)
+        if path is None:
+            continue
+        counts: dict[int, int] = defaultdict(int)
+        for dev in json.loads(path.read_text()).get("devices") or []:
+            page = dev.get("pdf_page") or dev.get("page")
+            if (isinstance(page, int) and page >= 1 and not devices_skip_reason(dev)
+                    and device_for_raw_type(dev.get("device_type") or dev.get("symbol_name"))):
+                counts[page] += 1
+        for page, n in counts.items():
+            out[pdf][page] = f"devices_json:{n}"
+    return out
+
+
+def add_devices_pages(store: Path, sets, *, dry_run: bool) -> dict:
+    stats: dict[str, int] = defaultdict(int)
+    for pdf, targets in sorted(devices_pages(sets).items()):
+        stats["documents"] += 1
+        stats["pages"] += len(targets)
+        if sets.role(pdf) == "evaluation":
+            stats["evaluation_documents"] += 1
+        if not dry_run:
+            label_store.create_document(store, pdf, targets=targets,
+                                        meta=_meta(pdf, sets, "devices_json"))
     return dict(stats)
 
 
@@ -240,8 +268,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--store", type=Path, required=True)
     p.add_argument("--data-root", type=Path, required=True)
     p.add_argument("--from-pool", type=Path, help="migrate label_queue pages from this pool directory")
-    p.add_argument("--scan", type=Path, help="triage PDFs under this directory")
-    p.add_argument("--heldout", type=Path, help="held-out PDF manifest (never added)")
+    p.add_argument("--scan", type=Path,
+                   help="the 1_blueprints folder (or data root): triage its training and evaluation PDFs")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
     if not (args.from_pool or args.scan):
@@ -252,8 +280,10 @@ def main(argv: list[str] | None = None) -> int:
         report["from_pool"] = from_pool(store, args.from_pool.resolve(), args.data_root.resolve(),
                                         dry_run=args.dry_run)
     if args.scan:
-        blocked = heldout_names(args.data_root.resolve(), args.heldout)
-        report["scan"] = scan_pdfs(store, args.scan.resolve(), blocked, dry_run=args.dry_run)
+        from blueprint_symbols.blueprint_sets import blueprint_sets
+        sets = blueprint_sets(args.scan)
+        report["scan"] = scan_pdfs(store, sets, dry_run=args.dry_run)
+        report["devices_json"] = add_devices_pages(store, sets, dry_run=args.dry_run)
     print(json.dumps(report, indent=1))
     return 0
 

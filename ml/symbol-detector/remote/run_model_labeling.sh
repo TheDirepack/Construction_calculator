@@ -33,7 +33,5 @@ exec .venv/bin/python code/scripts_model_prelabel.py \
   --weights "$WEIGHTS" \
   --store work/labels \
   --out work/model_proposals \
-  --data-root data/blueprints_and_libraries \
-  --heldout work/heldout_real_pdfs.json \
   --device "$DEVICE" \
   "$@"

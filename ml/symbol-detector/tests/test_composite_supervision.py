@@ -109,8 +109,11 @@ def test_neca_writer_keeps_unreviewed_background_positive_only(tmp_path, monkeyp
     }))
 
     class DummyBank:
-        def __init__(self, root):
+        def __init__(self, root, **_):
             pass
+
+        families = ["receptacle"]
+        devices = ["receptacle.duplex"]
 
         def summary(self):
             return {}
@@ -253,8 +256,10 @@ def test_neca_writer_keeps_same_named_source_pages_distinct(tmp_path, monkeypatc
 
     sources = _same_named_source_pages(tmp_path)
     class DummyBank:
-        def __init__(self, root):
+        def __init__(self, root, **_):
             pass
+        families = ['receptacle']
+        devices = ['receptacle.duplex']
         def summary(self):
             return {}
     glyph = {

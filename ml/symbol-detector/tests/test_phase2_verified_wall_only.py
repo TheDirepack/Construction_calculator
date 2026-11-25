@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
-from blueprint_symbols.neca_svg_compositor import CANONICAL_CLASSES
+from blueprint_symbols.neca_svg_compositor import SAMPLING_GROUPS as CANONICAL_CLASSES
 from blueprint_symbols.raster_training import read_records
 from scripts_generate_phase2_wall_only import _modes, generate
 
@@ -182,6 +182,7 @@ def test_export_negative_sampling_prefers_verified_wall_ink(tmp_path):
             "wall_only_background_verified": not positive,
             "synthetic_targets_only": not positive,
             "instances": ([{"instance_id": "1", "symbol_family": "receptacle",
+                           "symbol_variant": "duplex",
                            "bbox_xyxy": [250, 250, 280, 280]}] if positive else []),
         }
         ann = tmp_path / f"sheet{i}.json"

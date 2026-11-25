@@ -76,7 +76,7 @@ def _args(tmp_path, store, **over):
     weights.write_bytes(b"fake")
     args = mlq.build_parser().parse_args([
         "--weights", str(weights), "--store", str(store), "--out", str(tmp_path / "out"),
-        "--device", "cpu", "--scales", "1.0", "--data-root", str(tmp_path / "data")])
+        "--device", "cpu", "--scales", "1.0"])
     for k, v in over.items():
         setattr(args, k, v)
     return args
@@ -137,7 +137,7 @@ def test_rerun_is_idempotent_and_respects_human_decisions(tmp_path):
     a, b, c = sorted(doc["instances"], key=lambda i: i["bbox_xyxy"][0])
     # Human accepts one, rejects one, leaves one.
     a.update(review_status="accepted", review_source="human", uncertain=False,
-             verified_ground_truth=True)
+             verified_ground_truth=True, symbol_variant="duplex")   # verifying names the device
     doc["instances"] = [a, c]
     b_rej = dict(b, review_status="rejected", review_source="human")
     doc["rejected_proposals"] = [b_rej]
@@ -153,20 +153,20 @@ def test_rerun_is_idempotent_and_respects_human_decisions(tmp_path):
                for i in doc["instances"])
 
 
-def test_skips_heldout_negative_pages_and_resumes(tmp_path):
+def test_labels_evaluation_pages_skips_negatives_and_resumes(tmp_path):
+    """Labeling covers the evaluation set too; only training leaves it out."""
     store = tmp_path / "work" / "labels"
-    (tmp_path / "data" / "1_blueprints" / "evaluation").mkdir(parents=True)
-    (tmp_path / "data" / "1_blueprints" / "evaluation" / "Locked_Set.pdf").write_bytes(b"%PDF")
-    held = _page(store, "Locked Set", squares=[(100, 100)])
+    held = _page(store, "evaluation/Locked Set", squares=[(100, 100)])
     neg = _page(store, "neg", squares=[(100, 100)], extra={"verified_no_symbols": True})
     ok = _page(store, "ok", squares=[(100, 100)])
     result = mlq.run(_args(tmp_path, store), model=FakeModel())
     t = result["totals"]
-    assert t["skipped_heldout"] == 1 and t["skipped_verified_negative"] == 1 and t["pages_written"] == 1
-    assert not held.exists()                                 # never rendered or written
+    assert "skipped_heldout" not in t
+    assert t["skipped_verified_negative"] == 1 and t["pages_written"] == 2
+    assert len(json.loads(held.read_text())["instances"]) == 1
     assert json.loads(neg.read_text())["instances"] == []
     again = mlq.run(_args(tmp_path, store), model=FakeModel())
-    assert again["totals"]["resumed"] == 1 and again["totals"].get("pages_written", 0) == 0
+    assert again["totals"]["resumed"] == 2 and again["totals"].get("pages_written", 0) == 0
 
 
 def test_class_map_overrides(tmp_path):
