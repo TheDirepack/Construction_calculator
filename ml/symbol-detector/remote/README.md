@@ -353,16 +353,51 @@ the default requires every selected coarse silhouette to survive
 reference screening. If there are no valid devices in the test PDF,
 that is not sufficient evidence of recall.
 
-### Partially annotated real drawings
+### Phase-two detection training after SSL v3
 
-Import real device annotations as `annotation_completeness=partial` with
-`exhaustive_families=[]`. Individually verified positive boxes are useful,
-but missing objects must not become negative targets. The existing strict YOLO
-export will intentionally refuse incomplete pages unless its exploratory
-override is enabled. Do **not** use that override for final training:
-prepare manually verified complete crops/regions, or implement a masked-loss
-objective that ignores unverified pixels. Whole-page evaluation still needs
-a smaller *fully reviewed* held-out set.
+The SSL reconstruction model provides a blueprint-specific YOLO26n-P2
+**backbone and neck**, not a trained object detector. Phase two initializes a
+new detection head from scratch for the active catalog device classes in the
+training split and fine-tunes all trainable detection layers with MuSGD.
+Check the checkpoint and evaluation sources before starting a GPU job:
+
+```bash
+BASE="$HOME/Projects/blueprint-symbols"
+ls -lh "$BASE/work/best_pretrain/backbone.pt"
+cd "$BASE/code"
+"$BASE/.venv/bin/python" scripts_verify_ssl_transfer.py \
+  "$BASE/work/best_pretrain/backbone.pt" --classes 6
+```
+
+Unreviewed proposals and incomplete real pages train only as **partial
+positives** via `--allow-partial-training` (class-masked YOLO loss); boxes
+with `verified_ground_truth=false` are never promoted to supervised targets.
+Never set `PHASE2_ALLOW_UNVERIFIED=1` or pass `--allow-unverified-completeness`.
+
+Validation and test come from fully reviewed pages in
+`1_blueprints/evaluation/devices/*/*_labels.json` across at least 2
+independent project groups (`annotation_completeness_verified=true` or
+`verified_no_symbols=true`, with real reviewed positives in both splits).
+Proven symbol-free walls-only backgrounds (`--walls-only-pages`) and optional
+`PHASE2_WALL_MANIFEST` sources provide verified negative tiles so the
+detector suppresses background false positives; missing verified negatives or
+empty held-out positives **fail closed** before GPU training starts:
+
+```bash
+cd "$HOME/Projects/blueprint-symbols/code"
+PHASE2_DRY_RUN=1 bash remote/run_phase2_train.sh
+# Only after dry-run preflight passes:
+systemd-run --user --unit=bps-phase2-v4 --collect \
+  bash "$HOME/Projects/blueprint-symbols/code/remote/run_phase2_train.sh"
+journalctl --user -fu bps-phase2-v4.service
+```
+
+The script writes to `work/phase2_v4/` by default, preserves incomplete
+exports rather than deleting them (`rm -rf`), and defaults to batch 12,
+512px tiles, and 200 epochs (`PHASE2_BATCH`, `PHASE2_EPOCHS`, `PHASE2_RUN_NAME`,
+`PHASE2_WORK`). Training completion still does not prove real-world precision or
+recall; measure held-out per-class recall/precision, false positives per negative
+page, and localization errors before app integration.
 
 ## Label store: labeling straight from the PDFs
 
