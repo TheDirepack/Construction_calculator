@@ -34,6 +34,31 @@ class EvaluatorTest {
         assertEquals("−10' 0\"", fmt("5' × − 2"))
     }
 
+    @Test fun mixedFractionsCarryAcrossAWholeFootBeforeFormatting() {
+        val result = eval("5'11\"63/64 + 1/64\"")
+        assertEquals(Quantity.inches(Rational.of(72)), result)
+        assertEquals("6' 0\"", fmt("5'11\"63/64 + 1/64\""))
+        assertEquals(0, MeasureFormat.roundingDirection(result, Precision.SIXTEENTH))
+    }
+
+    @Test fun roundingAtTheHalfStepCarriesIntoTheNextFootInBothDirections() {
+        val positive = eval("11\"31/32")
+        val negative = eval("− 11\"31/32")
+        assertEquals(Quantity.inches(Rational.of(383, 32)), positive)
+        assertEquals(Quantity.inches(Rational.of(-383, 32)), negative)
+        assertEquals("1' 0\"", fmt("11\"31/32"))
+        assertEquals("−1' 0\"", fmt("− 11\"31/32"))
+        assertEquals(1, MeasureFormat.roundingDirection(positive, Precision.SIXTEENTH))
+        assertEquals(-1, MeasureFormat.roundingDirection(negative, Precision.SIXTEENTH))
+    }
+
+    @Test fun mixedUnitVolumeDividedByLengthCanBeAddedToAnArea() {
+        // (18 in × 7.5 in × 28 in) / 15 in − 144 sq in = 108 sq in
+        val result = eval("1'6 × 7\"1/2 × 2'4 ÷ 15\" − 1' ²")
+        assertEquals(Quantity(Rational.of(108), Dimension.AREA), result)
+        assertEquals("0.75 sq ft", fmt("1'6 × 7\"1/2 × 2'4 ÷ 15\" − 1' ²"))
+    }
+
     @Test fun dividesIntoEqualParts() {
         assertEquals("3' 4\"", fmt("10' ÷ 3"))
         assertEquals(false, MeasureFormat.isRounded(eval("10' ÷ 4"), Precision.SIXTEENTH))

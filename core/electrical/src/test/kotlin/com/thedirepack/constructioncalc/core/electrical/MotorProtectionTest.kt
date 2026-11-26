@@ -8,6 +8,14 @@ import org.junit.Assert.assertNull
 /** Values from the printed NEC 2023 Table 430.52(C)(1) (70-350) and Table 110.26(A)(1) (70-68). */
 class MotorProtectionTest {
     @Test
+    fun workingSpaceIncludesTheUpperVoltageOfEachBand() {
+        assertEquals(36, WorkingSpace.depthInches(150.0, WorkingSpaceCondition.THREE))
+        assertEquals(48, WorkingSpace.depthInches(150.01, WorkingSpaceCondition.THREE))
+        assertEquals(48, WorkingSpace.depthInches(600.0, WorkingSpaceCondition.THREE))
+        assertEquals(60, WorkingSpace.depthInches(600.01, WorkingSpaceCondition.THREE))
+    }
+
+    @Test
     fun polyphaseInductionMotor() {
         assertEquals(300, MotorProtection.percent(MotorType.POLYPHASE_AC, NONTIME_DELAY_FUSE))
         assertEquals(175, MotorProtection.percent(MotorType.POLYPHASE_AC, DUAL_ELEMENT_FUSE))

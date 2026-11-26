@@ -40,6 +40,15 @@ class VoltageDropTest {
         assertEquals(58.2902, r.maxLengthFeet, 1e-3)
     }
 
+    @Test fun fractionalRunAndParallelConductorsGiveTheExpectedDropAndLoadVoltage() {
+        // 2 × 24 A × 62.5 ft × 1.93 Ω/kft ÷ 1000 ÷ 2 parallel sets = 2.895 V.
+        val result = VoltageDrop.calculate(dc12.copy(amps = 24.0, lengthFeet = 62.5, parallelSets = 2))!!
+        assertEquals(2.895, result.dropVolts, 1e-9)
+        assertEquals(117.105, result.voltsAtLoad, 1e-9)
+        assertEquals(2.4125, result.percent, 1e-9)
+        assertTrue(result.meetsTarget)
+    }
+
     @Test fun maxLengthIsConsistentWithDrop() {
         val r = VoltageDrop.calculate(dc12)!!
         val atMax = VoltageDrop.calculate(dc12.copy(lengthFeet = r.maxLengthFeet))!!

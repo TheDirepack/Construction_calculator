@@ -1,0 +1,100 @@
+name: Android CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COMPILE_PLATFORM: platforms;android-37.2
+
+jobs:
+  jvm:
+    name: JVM tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install compile SDK
+        run: sdkmanager --install "$COMPILE_PLATFORM" "build-tools;36.0.0"
+      - name: Run Kotlin and Android local unit tests
+        shell: bash
+        run: |
+          mkdir -p ci-logs
+          ./gradlew --console=plain --stacktrace test testDebugUnitTest 2>&1 | tee ci-logs/jvm.log
+      - name: Upload JVM diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jvm-failure
+          retention-days: 7
+          path: |
+            ci-logs/
+            **/build/test-results/
+            **/build/reports/tests/
+            **/build/reports/problems/
+
+  instrumentation:
+    name: Android instrumentation (API 36)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install compile SDK
+        run: sdkmanager --install "$COMPILE_PLATFORM" "build-tools;36.0.0"
+      - name: Build app and test APKs before booting the emulator
+        shell: bash
+        run: |
+          mkdir -p ci-logs
+          ./gradlew --console=plain --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest 2>&1 | tee ci-logs/apk-build.log
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo udevadm settle
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: Run device tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          # The compile SDK is independent of the API level under test.
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-boot-timeout: 360
+          script: bash .github/workflows/run-instrumentation.sh
+      - name: Upload Android diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instrumentation-failure
+          retention-days: 7
+          path: |
+            ci-logs/
+            **/build/outputs/androidTest-results/
+            **/build/reports/androidTests/
+            **/build/reports/problems/

@@ -36,6 +36,28 @@ scripts/gw :app:compileDebugKotlin      # everything compiles
 `scripts/gw` is `./gradlew` with the JDK picked and a lock so concurrent agents don't run builds
 at the same time.
 
+## Testing
+
+```sh
+./gradlew test testDebugUnitTest          # JVM and Android local unit tests
+./gradlew :app:connectedDebugAndroidTest # App tests on a connected Android device
+```
+
+[Android CI](.github/workflows/android-ci.yml) runs these in parallel jobs on pull requests and
+pushes to `main`, and supports manual runs. Both jobs compile with Android SDK 37.2 and JDK 21.
+The device tests run on a fresh API 36 x86_64 emulator. Use a disposable emulator for local
+instrumentation runs because the tests exercise app storage. On failures, the Actions job uploads
+available Gradle logs and test reports. The instrumentation job also captures device logs before
+shutting down the emulator when the test command fails. APK build and emulator boot failures are
+reported in their own steps.
+
+The app tests drive `MainActivity` through Compose semantics. PDF import and export substitute a
+local URI for the system picker's result, then use the app's real file handling. The two-page
+`field-plan.pdf` fixture is an original synthetic test asset. It contains two source text labels,
+one line per sheet, and a 90° rotation on page two. Some existing JVM reference tests in
+`core/plans` skip when their optional reference corpus is absent. The device tests use the
+checked-in fixture.
+
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): module map, how tools share values, projects
