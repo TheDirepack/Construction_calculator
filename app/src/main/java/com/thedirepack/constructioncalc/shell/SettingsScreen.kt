@@ -28,6 +28,7 @@ import com.thedirepack.constructioncalc.core.ui.components.CompanySettings
 import com.thedirepack.constructioncalc.core.ui.components.GeneralSettings
 import com.thedirepack.constructioncalc.core.ui.components.MeasurementSettings
 import com.thedirepack.constructioncalc.core.ui.components.SettingsGroup
+import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 
 /**
  * The app's only settings screen. The main page has General and Measurements; each tool with
@@ -46,6 +47,7 @@ fun SettingsScreen(
     onMessage: (String) -> Unit,
 ) {
     val tool = toolId?.let { id -> ToolRegistry.all.firstOrNull { it.id == id && it.hasSettings } }
+    val services = LocalAppServices.current
     Scaffold(
         topBar = {
             TopAppBar(
@@ -73,6 +75,13 @@ fun SettingsScreen(
                 }
             } else {
                 GeneralSettings()
+                SettingsGroup("Quick setup") {
+                    ActionRow(
+                        "Run quick setup again",
+                        onClick = { services.settings.setSetupDone(false) },
+                        subtitle = "Trade, where you work, units and keypad.",
+                    )
+                }
                 MeasurementSettings()
                 CodeSettings()
                 CompanySettings()

@@ -40,12 +40,13 @@ Citations in user-facing text go through the rule id, never a literal number:
 
 ## Adopting a new edition
 
-1. Copy `code/nec2023/` to `code/nec2026/` and rename the objects (`Nec2026`, `Nec2026Values`…). Add
-   `NEC_2026` to `CodeEdition`.
+1. Copy `code/nec2023/` to `code/nec2026/` and rename the objects (`Nec2026`, `Nec2026Values`…).
+   `NEC_2026` is already in `CodeEdition` with `isImplemented = false` (it resolves to NEC 2023 values, flagged).
 2. Check **every value and every citation** against the new printed book: each table cell, each
    single value, each section number (renumbered rules, the raceway articles, the xxx.24(B)
    sections). Update the KDoc page references.
-3. Point `Code.book` at `Nec2026`.
+3. Add `NEC_2026 to Nec2026` to `Code.books` and set `isImplemented = true`. Jurisdictions that adopted
+   2026 keep their amendments keyed by edition (`CodeRegion.amendments`); see `CodeProfiles.kt`.
 4. Update the tests' expected values **from the book** (never from the code): the per-table tests
    (below) and `ElectricalCodeTest.singleValuesMatchThe2023Book` (copy it for the new edition).
 5. Reread the rule descriptions in `CodeRule` and the Reference's notes for rules whose wording

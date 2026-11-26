@@ -3,40 +3,36 @@ package com.thedirepack.constructioncalc.core.electrical.code
 import com.thedirepack.constructioncalc.core.electrical.code.nec2023.Nec2023
 
 /**
- * A published code edition that the app's tables and rules come from.
- *
- * [NEC_2023] is the active implemented base edition. [NEC_2026] is planned and pending
- * finalization and verification against the printed edition; it is not active until verified.
+ * A published NEC edition. Only editions with [isImplemented] have data in the app (an
+ * [ElectricalCode] checked line by line against the printed book). An edition without data can
+ * still be picked (a jurisdiction may have adopted it), but its calculations use [DATA_FALLBACK]
+ * values and every result says so: see [CodeResolution.notices]. Never silently.
  */
 enum class CodeEdition(
     val label: String,
     val year: Int,
     /** True only once all tables, citations, and single values are verified against the printed book. */
-    val isImplemented: Boolean = true,
-    val statusNote: String = "Active implemented base edition.",
+    val isImplemented: Boolean,
 ) {
-    NEC_2023(
-        label = "NEC 2023",
-        year = 2023,
-        isImplemented = true,
-        statusNote = "Active implemented base edition.",
-    ),
-
-    /** Planned edition; pending finalization and line-by-line verification before activation. */
-    NEC_2026(
-        label = "NEC 2026",
-        year = 2026,
-        isImplemented = false,
-        statusNote = "Planned / pending finalization; not active until verified against the printed edition.",
-    ),
+    NEC_2020(label = "NEC 2020", year = 2020, isImplemented = false),
+    NEC_2023(label = "NEC 2023", year = 2023, isImplemented = true),
+    NEC_2026(label = "NEC 2026", year = 2026, isImplemented = false),
     ;
 
-    /** Alias for [isImplemented]: whether this edition can currently be used as an active book. */
-    val isActive: Boolean get() = isImplemented
+    /** Plain-language status for pickers. */
+    val statusNote: String
+        get() = if (isImplemented) {
+            "In the app. Every value checked against the printed book."
+        } else {
+            "Not in the app yet. Calculations use ${DATA_FALLBACK.label} values and say so."
+        }
 
     companion object {
-        /** Editions backed by a verified [ElectricalCode] implementation. */
-        val activeEntries: List<CodeEdition> get() = entries.filter { it.isImplemented }
+        /** The edition whose values stand in for an edition without data. */
+        val DATA_FALLBACK = NEC_2023
+
+        /** The edition named [name] (`"NEC_2023"`), or null. */
+        fun parse(name: String?): CodeEdition? = entries.firstOrNull { it.name == name }
     }
 }
 
@@ -160,53 +156,48 @@ enum class CodeRule(val title: String, val isTable: Boolean = false) {
 }
 
 /**
- * The code edition and optional regional amendment profile the app's tables and rules follow.
+ * The code edition and jurisdiction the app's tables and rules follow.
  *
  * Every code value and citation is read from [book], which checks a thread-local [withProfile]
- * override first and otherwise falls back to [globalProfile]. By default [globalProfile] uses
- * [CodeEdition.NEC_2023] with [CodeRegions.STANDARD_ID], resolving directly to [Nec2023].
+ * override first and otherwise uses [globalProfile]. [resolve] builds the book: the selected
+ * edition's data (or [CodeEdition.DATA_FALLBACK], flagged, when that edition isn't in the app),
+ * then the jurisdiction's amendments to that edition, then a custom amendment. Each lookup answers
+ * from the amendments first and falls through to the base edition.
  */
 object Code {
-    private data class GlobalState(val profile: CodeProfile, val book: ElectricalCode)
+    /** Edition data in the app. An edition missing here resolves to [CodeEdition.DATA_FALLBACK], flagged. */
+    private val books: Map<CodeEdition, ElectricalCode> = mapOf(CodeEdition.NEC_2023 to Nec2023)
 
     @Volatile
-    private var globalState = GlobalState(CodeProfile(), Nec2023)
+    private var globalResolution = resolution(CodeProfile())
 
     @PublishedApi
     internal val threadProfile = ThreadLocal<CodeProfile?>()
 
-    val globalProfile: CodeProfile get() = globalState.profile
+    val globalProfile: CodeProfile get() = globalResolution.profile
 
     /** Effective profile on the current thread (either [withProfile] override or [globalProfile]). */
-    val currentProfile: CodeProfile get() = threadProfile.get() ?: globalState.profile
+    val currentProfile: CodeProfile get() = threadProfile.get() ?: globalResolution.profile
 
     @Synchronized
     fun setGlobalProfile(profile: CodeProfile) {
-        globalState = GlobalState(profile, resolve(profile))
+        globalResolution = resolution(profile)
     }
 
-    /**
-     * Resolves [profile] to an [ElectricalCode].
-     *
-     * Unimplemented editions (such as planned [CodeEdition.NEC_2026]) safely fall back to the
-     * active verified base edition ([Nec2023]) so callers never read unverified numbers.
-     */
-    fun resolve(profile: CodeProfile): ElectricalCode {
-        val base: ElectricalCode = when (profile.edition) {
-            CodeEdition.NEC_2023 -> Nec2023
-            CodeEdition.NEC_2026 -> Nec2023
-        }
-        val regional = CodeRegions.find(profile.regionId)?.amendment
-        val custom = profile.customAmendment
-        var resolved = base
-        if (regional != null && !regional.isEmpty) {
-            resolved = AmendedElectricalCode(resolved, regional)
-        }
-        if (custom != null && !custom.isEmpty) {
-            resolved = AmendedElectricalCode(resolved, custom)
-        }
-        return resolved
+    /** How [profile] resolves: data edition, jurisdiction, amendments, and the user-facing text. */
+    fun resolution(profile: CodeProfile): CodeResolution {
+        val base = books[profile.edition] ?: books.getValue(CodeEdition.DATA_FALLBACK)
+        val jurisdiction = CodeRegions.getOrDefault(profile.regionId)
+        val amendments = listOfNotNull(
+            jurisdiction.amendmentFor(profile.edition),
+            profile.customAmendment?.takeUnless { it.isEmpty },
+        )
+        val book = amendments.fold(base) { code, amendment -> AmendedElectricalCode(code, amendment) }
+        return CodeResolution(profile, jurisdiction, base, amendments, book)
     }
+
+    /** The [ElectricalCode] for [profile]: see [resolution]. */
+    fun resolve(profile: CodeProfile): ElectricalCode = resolution(profile).book
 
     /**
      * Temporarily overrides [Code.book] on the calling thread for the duration of [block],
@@ -222,13 +213,17 @@ object Code {
         }
     }
 
-    val book: ElectricalCode
-        get() = threadProfile.get()?.let(::resolve) ?: globalState.book
+    /** The effective resolution on this thread. */
+    val current: CodeResolution
+        get() = threadProfile.get()?.let(::resolution) ?: globalResolution
 
+    val book: ElectricalCode get() = current.book
+
+    /** The edition whose data the numbers come from. */
     val edition: CodeEdition get() = book.edition
 
-    /** "NEC 2023", for notes and reports. */
-    val label: String get() = edition.label
+    /** Short source for notes and reports: "NEC 2023", "NEC 2023 · MA amended"… See [CodeResolution.label]. */
+    val label: String get() = current.label
 
-    val region: CodeRegion get() = CodeRegions.getOrDefault(currentProfile.regionId)
+    val region: CodeRegion get() = current.jurisdiction
 }

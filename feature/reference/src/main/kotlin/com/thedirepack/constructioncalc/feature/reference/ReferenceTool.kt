@@ -50,7 +50,7 @@ internal object ReferenceCodeProfiles {
         baseProfile: CodeProfile = Code.globalProfile,
     ): CodeProfile {
         val edition = override.editionName?.let { name ->
-            CodeEdition.entries.firstOrNull { it.name == name && it.isImplemented }
+            CodeEdition.parse(name)
         } ?: baseProfile.edition
         val regionId = override.regionId?.takeIf { it.isNotBlank() && CodeRegions.find(it) != null }
             ?: baseProfile.regionId
@@ -68,9 +68,7 @@ internal object ReferenceCodeProfiles {
     ): CodeProfile? = if (override.isInherited) null else resolve(override, baseProfile)
 
     fun chipLabel(profile: CodeProfile, isOverride: Boolean = false): String {
-        val region = CodeRegions.getOrDefault(profile.regionId)
-        val regionText = if (region.id == CodeRegions.STANDARD_ID) "Standard" else region.shortLabel
-        val base = "${profile.edition.label} · $regionText"
+        val base = Code.resolution(profile).label
         return if (isOverride) "$base · Override" else base
     }
 }
@@ -111,7 +109,7 @@ internal class ReferenceStore internal constructor(private val prefs: ReferenceP
 
     fun codeOverride(): ReferenceCodeOverride {
         val edition = prefs.getString(KEY_CODE_EDITION_OVERRIDE, "").takeIf { raw ->
-            raw.isNotBlank() && CodeEdition.entries.any { it.name == raw && it.isImplemented }
+            raw.isNotBlank() && CodeEdition.parse(raw) != null
         }
         val region = prefs.getString(KEY_CODE_REGION_OVERRIDE, "").takeIf { raw ->
             raw.isNotBlank() && CodeRegions.find(raw) != null
@@ -121,7 +119,7 @@ internal class ReferenceStore internal constructor(private val prefs: ReferenceP
 
     fun setCodeOverride(editionName: String?, regionId: String?) {
         val validEdition = editionName?.takeIf { raw ->
-            CodeEdition.entries.any { it.name == raw && it.isImplemented }
+            CodeEdition.parse(raw) != null
         }
         val validRegion = regionId?.takeIf { CodeRegions.find(it) != null }
         if (validEdition == null) prefs.remove(KEY_CODE_EDITION_OVERRIDE) else prefs.setString(KEY_CODE_EDITION_OVERRIDE, validEdition)

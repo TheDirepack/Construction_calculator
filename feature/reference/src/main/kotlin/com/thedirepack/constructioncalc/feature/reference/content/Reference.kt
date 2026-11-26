@@ -26,7 +26,7 @@ sealed interface RefSource {
     data class CodeRef(val rules: List<CodeRule>) : RefSource {
         constructor(rule: CodeRule) : this(listOf(rule))
 
-        override val label: String get() = "${Code.label} · ${rules.joinToString(", ") { it.cite }}"
+        override val label: String get() = Code.current.let { code -> "${code.label} · ${rules.joinToString(", ") { code.citeWithSource(it) }}" }
     }
 
     /** Math: exact unless the entry says otherwise. */

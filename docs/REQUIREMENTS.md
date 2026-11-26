@@ -637,6 +637,15 @@ Examples explicitly referenced:
 - Do not create independent, unrelated settings systems.
 - When settings are opened from a module, navigate directly to that module's settings section where applicable.
 
+### First-launch quick setup
+
+- On first launch, show a short, skippable, plain-language setup: primary trade (Electrical;
+  Plumbing and HVAC shown as coming later), where you work (jurisdiction and NEC edition), units
+  (imperial or metric), and the Foot-Inch keypad (Classic or Dual-Split, and whether the split
+  keypad marks keys with ' and " so feet and inches aren't distinguished by color alone).
+- Every choice is stored in the one settings system and editable in Settings; Settings can run the
+  setup again.
+
 ## 6.4 Animation
 
 - Minimize animations.
@@ -695,6 +704,21 @@ Locally referenced PDF:
 `documents/'NFPA 70 NEC 2023 National Fire Protection Association -- NFPA -- 2023 -- NFPA -- 832d6f3c4c3ba12bf82df4dcf8b13fe7 -- Anna’s Archive.pdf'`
 
 The original path/name is preserved for source identification.
+
+### Jurisdictions and amendments
+
+- A jurisdiction is a base NEC edition (the one it adopted) plus regional amendments to that
+  edition. Amendments override only specific rules, values or citations; everything else is pulled
+  from the base edition.
+- Never fabricate amendment contents or edition data. A jurisdiction with no entered amendments says
+  "NEC 20xx, no local amendments entered". An edition without data (e.g. NEC 2026) is shown as
+  unavailable and as using NEC 2023 values, never silently.
+- Results show which edition and jurisdiction a value came from, and when an amended value is used.
+
+### Multiple trades
+
+- Electrical is built first. Plumbing and HVAC follow later with their own calculators, formulas
+  and code books; the trade list is an extensible registry.
 
 ## 8.2 Authorized Research
 

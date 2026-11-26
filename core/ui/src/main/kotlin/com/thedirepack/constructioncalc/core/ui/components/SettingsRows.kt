@@ -15,6 +15,9 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.RadioButton
 import com.thedirepack.constructioncalc.core.electrical.code.CodeEdition
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRegions
+import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.electrical.code.CodeProfile
+import com.thedirepack.constructioncalc.core.electrical.code.CodeResolution
 import com.thedirepack.constructioncalc.core.measure.FractionRounding
 
 import androidx.compose.foundation.layout.heightIn
@@ -126,6 +129,15 @@ fun GeneralSettings() {
     val repo = LocalAppServices.current.settings
     val settings = rememberAppSettings()
     SettingsGroup("General") {
+        val planned = com.thedirepack.constructioncalc.core.data.Trade.entries.filterNot { it.isAvailable }
+        ChoiceRow(
+            "Trade",
+            com.thedirepack.constructioncalc.core.data.Trade.entries.filter { it.isAvailable },
+            settings.primaryTrade,
+            repo::setPrimaryTrade,
+            { it.label },
+            subtitle = if (planned.isEmpty()) null else "${planned.joinToString(" and ") { it.label }}: coming later.",
+        )
         ChoiceRow("Theme", ThemeMode.entries, settings.themeMode, repo::setThemeMode, { it.label })
         SwitchRow(
             "Animations",
@@ -258,73 +270,84 @@ fun MeasurementSettings() {
     }
 }
 
-/** Default electrical code edition and regional amendment profile. */
+/**
+ * The electrical code the app follows: a jurisdiction (which picks its adopted NEC edition) and the
+ * edition itself, with a plain line saying where values come from.
+ */
 @Composable
 fun CodeSettings() {
-    val repo = LocalAppServices.current.settings
-    val settings = rememberAppSettings()
-    val activeEdition = CodeEdition.entries.firstOrNull { it.name == settings.codeEdition && it.isImplemented } ?: CodeEdition.NEC_2023
-    val selectedRegion = CodeRegions.getOrDefault(settings.codeRegion)
-    SettingsGroup("Electrical Code") {
+    SettingsGroup("Electrical code") {
         Text(
-            "Default code edition and regional profile for electrical calculations. Projects can override these per job.",
+            "Pick where you work. The app uses that area's NEC edition and any local amendments entered for it. " +
+                "Projects can use a different code.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 24.dp),
         )
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp).selectableGroup(),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text("Code edition", style = MaterialTheme.typography.bodyLarge)
-            CodeEdition.entries.forEach { edition ->
-                val enabled = edition.isImplemented
-                val selected = enabled && activeEdition == edition
-                val title = if (enabled) "${edition.label} (Active)" else "${edition.label} (Planned)"
+        CodeJurisdictionChoices(Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+    }
+}
+
+/** Jurisdiction picker, edition radio list and the resolved source; shared by Settings and quick setup. */
+@Composable
+fun CodeJurisdictionChoices(modifier: Modifier = Modifier) {
+    val repo = LocalAppServices.current.settings
+    val settings = rememberAppSettings()
+    val edition = CodeEdition.parse(settings.codeEdition) ?: CodeEdition.NEC_2023
+    val region = CodeRegions.getOrDefault(settings.codeRegion)
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ChoiceField(
+            label = "Where you work",
+            options = CodeRegions.entries,
+            selected = region,
+            onSelect = { repo.setCodeRegion(it.id) },
+            optionLabel = { it.name },
+            supportingText = if (region.isNational) {
+                region.description
+            } else {
+                "${region.description} Adopted: ${region.baseEdition.label}. Confirm with your inspector."
+            },
+        )
+        Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("NEC edition", style = MaterialTheme.typography.bodyLarge)
+            CodeEdition.entries.forEach { option ->
+                val selected = option == edition
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .selectable(
-                            selected = selected,
-                            enabled = enabled,
-                            role = Role.RadioButton,
-                            onClick = { if (enabled) repo.setCodeEdition(edition.name) },
-                        )
+                        .selectable(selected = selected, role = Role.RadioButton, onClick = { repo.setCodeEdition(option.name) })
                         .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.Top,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    RadioButton(selected = selected, onClick = null, enabled = enabled)
+                    RadioButton(selected = selected, onClick = null)
                     Column(Modifier.weight(1f)) {
-                        Text(
-                            title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                        )
-                        Text(
-                            edition.statusNote,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                        )
+                        val adopted = if (option == region.baseEdition && !region.isNational) " (adopted here)" else ""
+                        Text("${option.label}$adopted", style = MaterialTheme.typography.bodyMedium)
+                        Text(option.statusNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
         }
-        val regionNote = buildString {
-            append(selectedRegion.description)
-            if (!selectedRegion.hasOverrides && selectedRegion.id != CodeRegions.STANDARD_ID) {
-                append(" Uses unamended ${activeEdition.label} until jurisdiction overrides are verified.")
-            }
-        }
-        ChoiceField(
-            label = "Regional amendment",
-            options = CodeRegions.entries,
-            selected = selectedRegion,
-            onSelect = { repo.setCodeRegion(it.id) },
-            optionLabel = { it.name },
-            supportingText = regionNote,
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+        CodeSourceNotice(Code.resolution(CodeProfile(edition, region.id)))
+    }
+}
+
+/**
+ * Which edition and jurisdiction values come from, and any warning (an edition not in the app,
+ * amendments applied). Show it wherever code-based results are shown.
+ */
+@Composable
+fun CodeSourceNotice(resolution: CodeResolution, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            "Code: ${resolution.summary}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        resolution.notices.forEach { notice ->
+            Text(notice, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+        }
     }
 }
 

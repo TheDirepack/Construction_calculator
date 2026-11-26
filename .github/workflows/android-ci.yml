@@ -15,6 +15,7 @@ concurrency:
 
 env:
   COMPILE_PLATFORM: platforms;android-37.2
+  BUILD_TOOLS: build-tools;36.0.0
 
 jobs:
   jvm:
@@ -30,8 +31,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v6
-      - name: Install compile SDK
-        run: sdkmanager --install "$COMPILE_PLATFORM" "build-tools;36.0.0"
+      - name: Install Android SDK packages
+        run: bash .github/workflows/install-android-sdk.sh "$COMPILE_PLATFORM" "$BUILD_TOOLS"
       - name: Run Kotlin and Android local unit tests
         shell: bash
         run: |
@@ -62,8 +63,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v6
-      - name: Install compile SDK
-        run: sdkmanager --install "$COMPILE_PLATFORM" "build-tools;36.0.0"
+      - name: Install Android SDK packages
+        run: bash .github/workflows/install-android-sdk.sh "$COMPILE_PLATFORM" "$BUILD_TOOLS"
       - name: Build app and test APKs before booting the emulator
         shell: bash
         run: |

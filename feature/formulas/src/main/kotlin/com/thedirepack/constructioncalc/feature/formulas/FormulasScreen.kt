@@ -107,7 +107,7 @@ fun FormulasScreen(host: ToolHost) {
     val codeOverride = remember(storeVersion) { store.codeOverride() }
     val appProfile = remember(settings.codeEdition, settings.codeRegion) {
         val global = Code.globalProfile
-        val edition = CodeEdition.entries.firstOrNull { it.name == settings.codeEdition && it.isImplemented }
+        val edition = CodeEdition.parse(settings.codeEdition)
             ?: CodeEdition.NEC_2023
         val regionId = CodeRegions.getOrDefault(settings.codeRegion).id
         if (global.edition == edition && global.regionId == regionId) global else CodeProfile(edition, regionId)
@@ -589,13 +589,13 @@ private fun FormulasCodeOverrideDialog(
                 Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Code edition", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                     CodeEdition.entries.forEach { edition ->
-                        val enabled = edition.isImplemented
+                        val enabled = true
                         val selected = !inheritApp && enabled && selectedEdition == edition
-                        val label = if (enabled) "${edition.label} (Active)" else "${edition.label} (Planned)"
+                        val label = edition.label
                         val note = if (enabled) {
                             edition.statusNote
                         } else {
-                            "Planned / pending finalization; activates once finalized and verified against the printed edition."
+                            edition.statusNote
                         }
                         Row(
                             Modifier
@@ -633,7 +633,7 @@ private fun FormulasCodeOverrideDialog(
                 }
 
                 Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Regional amendment", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    Text("Jurisdiction", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                     CodeRegions.entries.forEach { region ->
                         val selected = !inheritApp && selectedRegionId == region.id
                         Row(
@@ -657,7 +657,7 @@ private fun FormulasCodeOverrideDialog(
                                 val note = buildString {
                                     append(region.description)
                                     if (!region.hasOverrides && region.id != CodeRegions.STANDARD_ID) {
-                                        append(" Uses unamended ${selectedEdition.label} until jurisdiction overrides are verified.")
+                                        append(" No local amendments entered; uses ${selectedEdition.label} as published.")
                                     }
                                 }
                                 Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

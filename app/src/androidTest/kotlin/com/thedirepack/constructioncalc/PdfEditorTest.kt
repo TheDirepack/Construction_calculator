@@ -102,10 +102,16 @@ class PdfEditorTest : AppUiTest() {
         val editable = export("Export drawing JSON", "editable.json", "Drawing JSON saved.")
         back()
         withDocumentResult(Intent.ACTION_OPEN_DOCUMENT, editable) { click("Import drawing JSON") }
+        // "Drawing.pdf" is already in the project, so the import asks for a name first.
+        await(hasText("Name imported drawing"))
+        compose.onNode(hasSetTextAction() and hasText("Drawing (copy).pdf")).assertIsDisplayed()
+        click("Save")
         awaitPage(1)
         val copies = savedProject().drawings
         assertEquals(2, copies.size)
-        assertEquals(drawing, copies.last().copy(id = drawing.id))
+        val copy = copies.last()
+        assertEquals("Drawing (copy).pdf", copy.name)
+        assertEquals(drawing, copy.copy(id = drawing.id, name = drawing.name))
     }
 
     @Test

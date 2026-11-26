@@ -80,12 +80,19 @@ data class AppSettings(
     val activeProjectId: String? = null,
     val activeRunId: String? = null,
     val company: CompanyProfile = CompanyProfile(),
-    /** Active implemented electrical code edition name (`CodeEdition.NEC_2023.name`). */
+    /**
+     * Selected NEC edition name (`CodeEdition.NEC_2023.name`). An edition without data in the app
+     * can be selected; results then say they use NEC 2023 values.
+     */
     val codeEdition: String = CodeEdition.NEC_2023.name,
-    /** Selected regional code profile id (`CodeRegions.STANDARD_ID`, etc.). */
+    /** Selected jurisdiction id (`CodeRegions.STANDARD_ID`, etc.). */
     val codeRegion: String = CodeRegions.STANDARD_ID,
     /** How fractional inches round to the configured [precision] step. */
     val fractionRounding: FractionRounding = FractionRounding.NEAREST,
+    /** The trade the app opens for. */
+    val primaryTrade: Trade = Trade.DEFAULT,
+    /** False until the first-launch quick setup is finished or skipped. */
+    val setupDone: Boolean = false,
 )
 
 class SettingsRepository internal constructor(
@@ -135,6 +142,7 @@ class SettingsRepository internal constructor(
             put(KEY_FRACTION_ROUNDING, s.fractionRounding.name)
             put(KEY_CODE_EDITION, s.codeEdition)
             put(KEY_CODE_REGION, s.codeRegion)
+            put(KEY_TRADE, s.primaryTrade.name)
             s.activeProjectId?.let { put(KEY_PROJECT, it) }
             s.activeRunId?.let { put(KEY_RUN, it) }
             put(KEY_CO_NAME, s.company.name)
@@ -159,8 +167,9 @@ class SettingsRepository internal constructor(
             metricResolution = str(KEY_METRIC_RESOLUTION)?.let { n -> MetricResolution.entries.firstOrNull { it.name == n } } ?: current.metricResolution,
             feetInchStyle = str(KEY_FT_IN_STYLE)?.let { n -> FeetInchStyle.entries.firstOrNull { it.name == n } } ?: current.feetInchStyle,
             fractionRounding = str(KEY_FRACTION_ROUNDING)?.let { n -> FractionRounding.entries.firstOrNull { it.name == n } } ?: current.fractionRounding,
-            codeEdition = str(KEY_CODE_EDITION)?.let(::parseCodeEditionOrNull)?.name ?: current.codeEdition,
+            codeEdition = str(KEY_CODE_EDITION)?.let(CodeEdition::parse)?.name ?: current.codeEdition,
             codeRegion = str(KEY_CODE_REGION)?.let { id -> CodeRegions.find(id)?.id } ?: current.codeRegion,
+            primaryTrade = Trade.parse(str(KEY_TRADE)) ?: current.primaryTrade,
             activeProjectId = str(KEY_PROJECT) ?: current.activeProjectId,
             activeRunId = str(KEY_RUN) ?: current.activeRunId,
             company = CompanyProfile(
@@ -208,7 +217,16 @@ class SettingsRepository internal constructor(
 
     fun setCodeEdition(edition: String) = save { it.copy(codeEdition = parseCodeEdition(edition).name) }
 
-    fun setCodeRegion(regionId: String) = save { it.copy(codeRegion = CodeRegions.getOrDefault(regionId).id) }
+    /** Picks a jurisdiction and its adopted base edition (the edition can be changed afterwards). */
+    fun setCodeRegion(regionId: String) = save {
+        val region = CodeRegions.getOrDefault(regionId)
+        it.copy(codeRegion = region.id, codeEdition = region.baseEdition.name)
+    }
+
+    fun setPrimaryTrade(trade: Trade) = save { if (trade.isAvailable) it.copy(primaryTrade = trade) else it }
+
+    /** Marks the first-launch quick setup finished (or skipped); `false` shows it again. */
+    fun setSetupDone(done: Boolean) = save { it.copy(setupDone = done) }
 
     fun setActiveTarget(projectId: String?, runId: String?) =
         save { it.copy(activeProjectId = projectId, activeRunId = runId) }
@@ -229,6 +247,8 @@ class SettingsRepository internal constructor(
             putString(KEY_FRACTION_ROUNDING, s.fractionRounding.name)
             putString(KEY_CODE_EDITION, s.codeEdition)
             putString(KEY_CODE_REGION, s.codeRegion)
+            putString(KEY_TRADE, s.primaryTrade.name)
+            putBoolean(KEY_SETUP_DONE, s.setupDone)
             putString(KEY_PROJECT, s.activeProjectId)
             putString(KEY_RUN, s.activeRunId)
             putString(KEY_CO_NAME, s.company.name)
@@ -258,6 +278,8 @@ class SettingsRepository internal constructor(
             ?: FractionRounding.NEAREST,
         codeEdition = parseCodeEdition(prefs.getString(KEY_CODE_EDITION, null)).name,
         codeRegion = prefs.getString(KEY_CODE_REGION, null)?.let { CodeRegions.getOrDefault(it).id } ?: CodeRegions.STANDARD_ID,
+        primaryTrade = Trade.parse(prefs.getString(KEY_TRADE, null)) ?: Trade.DEFAULT,
+        setupDone = prefs.getBoolean(KEY_SETUP_DONE, false),
         activeProjectId = prefs.getString(KEY_PROJECT, null),
         activeRunId = prefs.getString(KEY_RUN, null),
         company = CompanyProfile(
@@ -279,17 +301,13 @@ class SettingsRepository internal constructor(
         )
     }
 
-    private fun parseCodeEditionOrNull(raw: String): CodeEdition? =
-        CodeEdition.entries.firstOrNull { it.name == raw && it.isImplemented }
-
-    private fun parseCodeEdition(raw: String?): CodeEdition =
-        raw?.let(::parseCodeEditionOrNull) ?: CodeEdition.NEC_2023
+    private fun parseCodeEdition(raw: String?): CodeEdition = CodeEdition.parse(raw) ?: CodeEdition.NEC_2023
 
     internal companion object {
         fun validateBackup(settings: JsonObject?, toolSettings: Map<String, JsonObject>) {
             val appKeys = listOf(
                 KEY_THEME, KEY_ANIMATIONS, KEY_PRECISION, KEY_DISPLAY, KEY_UNITS, KEY_METRIC_DISPLAY, KEY_METRIC_RESOLUTION, KEY_FT_IN_STYLE,
-                KEY_FRACTION_ROUNDING, KEY_CODE_EDITION, KEY_CODE_REGION,
+                KEY_FRACTION_ROUNDING, KEY_CODE_EDITION, KEY_CODE_REGION, KEY_TRADE,
                 KEY_PROJECT, KEY_RUN,
                 KEY_CO_NAME, KEY_CO_PREPARED, KEY_CO_LICENSE, KEY_CO_PHONE, KEY_CO_EMAIL, KEY_CO_ADDRESS,
             )
@@ -320,6 +338,8 @@ class SettingsRepository internal constructor(
         const val KEY_FRACTION_ROUNDING = "fraction_rounding"
         const val KEY_CODE_EDITION = "code_edition"
         const val KEY_CODE_REGION = "code_region"
+        const val KEY_TRADE = "primary_trade"
+        const val KEY_SETUP_DONE = "setup_done"
         const val KEY_PROJECT = "active_project"
         const val KEY_RUN = "active_run"
         const val KEY_MODULES = "module_ids"
