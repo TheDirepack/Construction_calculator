@@ -283,6 +283,7 @@ def test_training_reads_pages_straight_from_the_labels_file(drawing, tmp_path):
     bp, pdf, _ = drawing
     session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
     revision = session.save(1, revision=None, instances=[_verified("t")], rejected=[])
+    _mark_done(bp)
     [ref] = label_store.labeled_pages(bp)["train"]
     assert str(ref) == f"{session.out_dir / 'plans_labels.json'}#p2"
     data = label_schema.read_page(ref)
@@ -295,6 +296,7 @@ def test_training_reads_pages_straight_from_the_labels_file(drawing, tmp_path):
     # Un-verifying the page takes it out of training.
     pending = dict(_verified("t"), review_status="unreviewed", verified_ground_truth=False, uncertain=True)
     session.save(1, revision=revision, instances=[pending], rejected=[])
+    _mark_done(bp)
     assert label_store.labeled_pages(bp)["train"] == []
 
 
@@ -312,6 +314,7 @@ def test_merged_pages_get_their_image_recorded_when_training_lists_them(drawing,
     merge_script.merge(bp, [old], apply=True, with_proposals=False, backup_root=tmp_path / "b")
     assert document_labels.pages(session.out_dir, "plans")[1]["image_sha256"] is None
     shutil.rmtree(session.out_dir / "images", ignore_errors=True)
+    _mark_done(bp)
     [ref] = label_store.labeled_pages(bp)["train"]
     stored = document_labels.pages(session.out_dir, "plans")[1]
     assert stored["image_sha256"] and (session.out_dir / stored["image_path"]).is_file()
@@ -588,7 +591,143 @@ def test_training_finds_pages_by_globbing_the_labels_files(drawing, tmp_path):
     session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
     session.save(0, revision=None, instances=[_verified("a")], rejected=[])
     session.save(2, revision=None, instances=[_verified("c")], rejected=[])
-    found = prep.discover([str(bp / "devices" / "*" / "*_labels.json")])
+    pattern = str(bp / "devices" / "*" / "*_labels.json")
+    assert prep.discover([pattern]) == []                     # not marked done: nothing trains
+    _mark_done(bp)
+    found = prep.discover([pattern])
     labels = session.out_dir / "plans_labels.json"
     assert found == [Path(f"{labels}#p1"), Path(f"{labels}#p3")]
     assert prep.complete_pages([str(p) for p in found]) == []
+
+
+
+# ------------------------------------------------------------------ "PDF done -> training"
+
+def test_training_uses_only_pdfs_marked_done(drawing, tmp_path):
+    from blueprint_symbols import label_schema
+    from blueprint_symbols.dataset_manifest import build_manifest
+    bp, pdf, _ = drawing
+    session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
+    session.save(0, revision=None, instances=[_verified("a")], rejected=[])
+    labels = session.out_dir / "plans_labels.json"
+    assert session.page_state(0)["training_ready"] is False
+    assert label_store.labeled_pages(bp)["train"] == []
+    assert label_schema.expand_page_paths([labels]) == []
+    ref = label_schema.page_ref(labels, 1)
+    assert not label_schema.page_training_ready(ref)
+    with pytest.raises(ValueError, match="no training annotation"):
+        build_manifest([ref], val_fraction=.25, test_fraction=.25)    # an explicit page is refused too
+
+    result = session.set_training_ready(True)
+    assert result["training_ready"] is True and result["usable_pages"] == [1]
+    assert session.page_state(0)["training_ready"] is True
+    assert label_store.labeled_pages(bp)["train"] == [ref]
+    record = json.loads(labels.read_text())["training_ready"]
+    assert record["ready"] is True and record["set_by"] == "annotator" and record["set_at"]
+    # Later saves keep the flag; unmarking takes the PDF out again.
+    state = session.page_state(1)
+    session.save(1, revision=state["revision"], instances=[_verified("b")], rejected=[])
+    assert len(label_store.labeled_pages(bp)["train"]) == 2
+    session.set_training_ready(False)
+    assert label_store.labeled_pages(bp)["train"] == []
+    with pytest.raises(web.LabelingError):
+        session.set_training_ready("yes")
+
+
+def test_done_flag_over_http_and_in_the_pdf_list(drawing):
+    import http.client
+    bp, pdf, _ = drawing
+    other = _pdf(bp / "other.pdf")
+    session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        def post(query, body, token=session.token):
+            conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=20)
+            conn.request("POST", "/api/training_ready" + query, body=json.dumps(body),
+                         headers={"Content-Type": "application/json", "X-Labeler-Token": token})
+            resp = conn.getresponse()
+            data = json.loads(resp.read())
+            conn.close()
+            return resp.status, data
+        from urllib.parse import quote
+        assert post("?doc=" + quote(str(other), safe=""), {"ready": True}, token="wrong")[0] == 403
+        status, data = post("?doc=" + quote(str(other), safe=""), {"ready": True})
+        assert status == 200 and data["training_ready"] is True
+        assert post("?doc=" + quote(str(other), safe="") + "&page=1", {"ready": True})[0] == 400
+        listed = {d["name"]: d for d in session.list_documents()}
+        assert listed["other.pdf"]["training_ready"] is True
+        assert listed["plans.pdf"]["training_ready"] is False
+        assert session.for_document(str(other)).is_training_ready()
+        assert not session.is_training_ready()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
+
+
+def test_the_done_flag_travels_with_pushed_labels(drawing, tmp_path):
+    bp, pdf, _ = drawing
+    local = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
+    local.save(0, revision=None, instances=[_verified("local_1")], rejected=[])
+    local.set_training_ready(True)
+    remote_root = tmp_path / "remote" / "blueprints_and_libraries"
+    remote_bp = remote_root / "1_blueprints"
+    (remote_bp / "devices").mkdir(parents=True)
+    shutil.copy2(pdf, remote_bp / pdf.name)
+    remote = LabelingSession(pdf=remote_bp / pdf.name, blueprints_dir=remote_bp, auto_proposals=False)
+    assert not remote.is_training_ready()
+    staged, _, _ = label_store.stage_push(bp, tmp_path / "stage")
+    for rel in staged:
+        (remote_bp / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tmp_path / "stage" / rel, remote_bp / rel)
+    label_store.merge_pushed(remote_bp, remote_root)
+    assert remote.is_training_ready()
+
+
+def test_browser_marks_a_pdf_done(drawing):
+    from test_annotator_browser import _launch_browser
+    sync_api = pytest.importorskip("playwright.sync_api")
+    bp, pdf, _ = drawing
+    session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
+    session.save(0, revision=None, instances=[_verified("a")], rejected=[])
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with sync_api.sync_playwright() as pw:
+            try:
+                browser = _launch_browser(pw)
+            except Exception as exc:  # pragma: no cover
+                pytest.skip(f"no browser: {exc}")
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            page.goto(f"http://127.0.0.1:{server.server_port}/")
+            page.wait_for_function("() => window.__labelerState && window.__labelerState.doc"
+                                   " && !window.__labelerState.busy")
+            box = page.locator("#trainingReady")
+            assert not box.is_checked()
+            box.check()
+            page.wait_for_function("() => document.querySelector('#message').textContent.startsWith('PDF marked done')")
+            assert "1 reviewed page(s)" in page.locator("#message").inner_text()
+            assert session.is_training_ready()
+            page.reload()
+            page.wait_for_function("() => window.__labelerState && window.__labelerState.doc"
+                                   " && !window.__labelerState.busy")
+            assert page.locator("#trainingReady").is_checked()
+            page.locator("#trainingReady").uncheck()
+            page.wait_for_function("() => document.querySelector('#message').textContent.startsWith('PDF unmarked')")
+            assert not session.is_training_ready()
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=10)
+
+
+def _mark_done(store):
+    """The labeler's "PDF done -> training" flag on every PDF of a store."""
+    from annotator import document_labels, label_store as _ls
+    for doc in _ls.iter_documents(store, skip_missing=True):
+        if doc.kind == "pdf":
+            document_labels.set_training_ready(doc.folder, doc.json_prefix, True)

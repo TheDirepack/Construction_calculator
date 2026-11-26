@@ -444,9 +444,9 @@ def test_electrical_device_catalog_completeness_and_http_endpoint(tmp_path):
 
     catalog = load_electrical_device_catalog()
     assert catalog["summary"]["categories_count"] == 13
-    assert catalog["summary"]["total_devices"] == 182
+    assert catalog["summary"]["total_devices"] == 173
     assert len(catalog["categories"]) == 13
-    assert len(catalog["devices"]) == 182
+    assert len(catalog["devices"]) == 173
 
     pdf = _pdf(tmp_path / "catalog_plan.pdf", pages=1)
     session = LabelingSession(pdf=pdf, out_dir=tmp_path / "labels")
@@ -465,8 +465,12 @@ def test_electrical_device_catalog_completeness_and_http_endpoint(tmp_path):
 
     assert by_label["Card Reader - Long Range"]["symbol_family"] == "security_device"
     assert by_label["Card Reader - Long Range"]["symbol_variant"] == "card_reader_long_range"
-    assert by_label["Fire Alarm Horn / Strobe - Wall Mounted"]["symbol_family"] == "fire_alarm_device"
-    assert by_label["Fire Alarm Horn / Strobe - Wall Mounted"]["symbol_variant"] == "horn_strobe_wall"
+    assert by_label["Fire Alarm Horn / Strobe"]["symbol_family"] == "fire_alarm_device"
+    assert by_label["Fire Alarm Horn / Strobe"]["symbol_variant"] == "horn_and_strobe"
+    # No separate wall/ceiling-mounted versions (merged into the plain device).
+    # (occupancy sensors excepted: their wall and ceiling mounts are different devices)
+    assert not [d for d in catalog["devices"] if d["symbol_variant"].endswith(("_wall", "_ceiling"))
+                and not d["symbol_variant"].startswith("occupancy_sensor")]
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
     worker = threading.Thread(target=server.serve_forever, daemon=True)
@@ -478,19 +482,19 @@ def test_electrical_device_catalog_completeness_and_http_endpoint(tmp_path):
             r1 = conn.getresponse()
             session_body = json.loads(r1.read())
             assert r1.status == 200
-            assert len(session_body["device_catalog"]["devices"]) == 182
+            assert len(session_body["device_catalog"]["devices"]) == 173
 
             conn.request("GET", "/api/device_catalog")
             r2 = conn.getresponse()
             cat_body = json.loads(r2.read())
             assert r2.status == 200
-            assert len(cat_body["devices"]) == 182
+            assert len(cat_body["devices"]) == 173
             assert len(cat_body["categories"]) == 13
             labels = {d["label"]: d for d in cat_body["devices"]}
             assert labels["Card Reader - Long Range"]["symbol_family"] == "security_device"
             assert labels["Card Reader - Long Range"]["symbol_variant"] == "card_reader_long_range"
-            assert labels["Fire Alarm Horn / Strobe - Wall Mounted"]["symbol_family"] == "fire_alarm_device"
-            assert labels["Fire Alarm Horn / Strobe - Wall Mounted"]["symbol_variant"] == "horn_strobe_wall"
+            assert labels["Fire Alarm Horn / Strobe"]["symbol_family"] == "fire_alarm_device"
+            assert labels["Fire Alarm Horn / Strobe"]["symbol_variant"] == "horn_and_strobe"
         finally:
             conn.close()
     finally:
@@ -600,7 +604,8 @@ def test_saved_pages_are_training_ready(tmp_path):
         session.save(0, revision=revision, instances=[pending], rejected=[],
                      metadata={"page_complete": True})
     with pytest.raises(LabelingError, match="exact device"):
-        session.save(0, revision=revision, instances=[dict(box, symbol_variant="unspecified")],
+        session.save(0, revision=revision, instances=[dict(box, symbol_family="switch",
+                                                           symbol_variant="unspecified")],
                      rejected=[], metadata={"page_complete": False})
     session.save(0, revision=revision, instances=[pending], rejected=[], metadata={"page_complete": False})
     partial = document_labels.pages(labels, "job_a")[1]

@@ -84,6 +84,7 @@ def test_annotator_pages_split_and_train_on_detector_classes(tmp_path):
                  _verified(*extra, "c", (40, 10, 60, 30)),
                  _verified("luminaire", "troffer_2x4", "l", (70, 10, 120, 40))]
         session.save(0, revision=None, instances=boxes, rejected=[], metadata={"page_complete": True})
+    _mark_done(store)
     pages = label_store.training_pages(store)
     assert len(pages) == 4
     manifest = build_manifest(pages, val_fraction=.25, test_fraction=.25)
@@ -124,11 +125,13 @@ def test_browser_and_agents_open_the_same_page_with_the_same_proposals(tmp_path)
     assert second == first
     # Proposals alone give training nothing; a human verifying one does.
     agent.save(index, revision=revision, instances=second["instances"], rejected=[])
+    _mark_done(store)
     assert label_store.training_pages(store) == []
     _, revision, _ = web.page_document(0)
     box = dict(second["instances"][0], symbol_variant="duplex", review_status="accepted",
                review_source="human", verified_ground_truth=True, uncertain=False)
     web.save(0, revision=revision, instances=[box], rejected=[])
+    _mark_done(store)
     [view] = label_store.training_pages(store)
     assert label_store.page_source(view)[0].folder == doc.folder
     assert label_store.page_source(view)[1] == 1
@@ -263,12 +266,16 @@ def test_everything_is_labeled_and_only_training_skips_the_evaluation_set(tmp_pa
                    uncertain=False)
         web.save(0, revision=revision, instances=[box], rejected=[])
 
+    _mark_done(store)
+
     split = label_store.labeled_pages(store)
     assert [p.parent.name.startswith("eval_set") for p in split["evaluation"]] == [True]
     assert [p.parent.name.startswith("side_set") for p in split["train"]] == [True]
+    _mark_done(store)
     assert label_store.training_pages(store) == split["train"]
     # Moving the PDF into evaluation/ moves its labelled pages there, at once.
     side_pdf.rename(blue / "evaluation" / "side_set.pdf")
+    _mark_done(store)
     moved = label_store.labeled_pages(store, data_root=blue.parent)
     assert moved["train"] == [] and len(moved["evaluation"]) == 2
 
@@ -286,6 +293,15 @@ def test_training_split_skips_documents_whose_pdf_is_gone(tmp_path):
         web.save(0, revision=revision, instances=[box], rejected=[])
     (blue / "_set_aside").mkdir()
     gone.rename(blue / "_set_aside" / "gone.pdf")          # neither training nor evaluation now
+    _mark_done(store)
     split = label_store.labeled_pages(store, data_root=blue.parent)
     assert [p.parent.name.startswith("kept") for p in split["train"]] == [True]
     assert split["evaluation"] == []
+
+
+def _mark_done(store):
+    """The labeler's "PDF done -> training" flag on every PDF of a store."""
+    from annotator import document_labels, label_store as _ls
+    for doc in _ls.iter_documents(store, skip_missing=True):
+        if doc.kind == "pdf":
+            document_labels.set_training_ready(doc.folder, doc.json_prefix, True)

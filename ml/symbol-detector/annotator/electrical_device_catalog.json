@@ -1,7 +1,7 @@
 {
  "format_version": 1,
  "summary": {
-  "total_devices": 182,
+  "total_devices": 173,
   "categories_count": 13,
   "total_pdfs_scanned": 1001,
   "total_legend_sheets_found": 831,
@@ -48,6 +48,23 @@
    }
   },
   {
+   "label": "Receptacle - Duplex, Weatherproof",
+   "category": "Power Receptacles & Wiring Devices",
+   "symbol_family": "receptacle",
+   "symbol_variant": "duplex_weatherproof",
+   "source_count": 0,
+   "sample_legend_texts": [
+    "WEATHERPROOF DUPLEX RECEPTACLE",
+    "DUPLEX RECEPTACLE WITH WEATHERPROOF COVER"
+   ],
+   "aliases": {
+    "legend": [
+     "duplex receptacle|outlet weatherproof -gfci",
+     "weatherproof receptacle|outlet -gfci"
+    ]
+   }
+  },
+  {
    "label": "Receptacle - Quadruplex",
    "category": "Power Receptacles & Wiring Devices",
    "symbol_family": "receptacle",
@@ -64,6 +81,22 @@
     ],
     "legend": [
      "quad receptacle|outlet"
+    ]
+   }
+  },
+  {
+   "label": "Receptacle - Quadruplex, Weatherproof",
+   "category": "Power Receptacles & Wiring Devices",
+   "symbol_family": "receptacle",
+   "symbol_variant": "quad_weatherproof",
+   "source_count": 0,
+   "sample_legend_texts": [
+    "WEATHERPROOF 20A, 120V, NEMA 5-20R DOUBLE DUPLEX RECEPTACLE 18\"",
+    "WEATHERPROOF 20A, 120V, NEMA 5-20R DOUBLE DUPLEX RECEPTACLE, ONE"
+   ],
+   "aliases": {
+    "legend": [
+     "quad receptacle|outlet weatherproof"
     ]
    }
   },
@@ -88,6 +121,22 @@
    }
   },
   {
+   "label": "Receptacle - Simplex / Single, Weatherproof",
+   "category": "Power Receptacles & Wiring Devices",
+   "symbol_family": "receptacle",
+   "symbol_variant": "single_weatherproof",
+   "source_count": 0,
+   "sample_legend_texts": [
+    "WEATHERPROOF 120V SIMPLEX RECEPTACLE, NEMA CONFIGURATION",
+    "WEATHERPROOF 20 AMP SINGLE RECEPTACLE, TYPE, MOUNTING HEIGHT AND RATINGS"
+   ],
+   "aliases": {
+    "legend": [
+     "single receptacle weatherproof"
+    ]
+   }
+  },
+  {
    "label": "Receptacle - Special Purpose / Dedicated Voltage",
    "category": "Power Receptacles & Wiring Devices",
    "symbol_family": "receptacle",
@@ -105,6 +154,23 @@
     "legend": [
      "specialpurpose receptacle|outlet",
      "208v|240v|250v|480v receptacle"
+    ]
+   }
+  },
+  {
+   "label": "Receptacle - Special Purpose / Dedicated Voltage, Weatherproof",
+   "category": "Power Receptacles & Wiring Devices",
+   "symbol_family": "receptacle",
+   "symbol_variant": "special_purpose_weatherproof",
+   "source_count": 0,
+   "sample_legend_texts": [
+    "WEATHERPROOF \"SPECIAL PURPOSE RECEPTACLE SCHEDULE\".",
+    "WEATHERPROOF 208/240V RECEPTACLE 18\" COD UNLESS"
+   ],
+   "aliases": {
+    "legend": [
+     "specialpurpose receptacle|outlet weatherproof",
+     "208v|240v|250v|480v receptacle weatherproof"
     ]
    }
   },
@@ -201,10 +267,10 @@
    }
   },
   {
-   "label": "Receptacle - Weatherproof GFCI Duplex",
+   "label": "Receptacle - GFCI Duplex, Weatherproof",
    "category": "Power Receptacles & Wiring Devices",
    "symbol_family": "receptacle",
-   "symbol_variant": "weatherproof_gfci_duplex",
+   "symbol_variant": "duplex_gfci_weatherproof",
    "source_count": 4,
    "sample_legend_texts": [
     "DUPLEX WEATHERPROOF GROUND FAULT CIRCUIT INTERRUPTER RECEPTACLE WITH COVER",
@@ -215,7 +281,10 @@
     "legend": [
      "weatherproof gfci receptacle|duplex"
     ]
-   }
+   },
+   "merged_from": [
+    "receptacle.weatherproof_gfci_duplex"
+   ]
   },
   {
    "label": "Receptacle - Ceiling Mounted",
@@ -641,11 +710,11 @@
    }
   },
   {
-   "label": "Occupancy Sensor",
+   "label": "Occupancy Sensor (mount not shown)",
    "category": "Lighting Controls (Power Packs, Sensors, Low Voltage & Wireless)",
    "symbol_family": "sensor",
    "symbol_variant": "occupancy_sensor",
-   "source_count": 49,
+   "source_count": 79,
    "sample_legend_texts": [
     "20 AMP, 125 VOLT OCCUPANCY SENSOR LIGHT SWITCH",
     "3-WAY / MULTI-WAY OCCUPANCY SENSOR SWITCH.",
@@ -659,24 +728,7 @@
      "occupancy_sensor"
     ],
     "legend": [
-     "occupancy sensor|detector -relay -video -osr -power -pack"
-    ]
-   }
-  },
-  {
-   "label": "Occupancy Sensor - Ceiling Mounted",
-   "category": "Lighting Controls (Power Packs, Sensors, Low Voltage & Wireless)",
-   "symbol_family": "sensor",
-   "symbol_variant": "occupancy_sensor_ceiling",
-   "source_count": 21,
-   "sample_legend_texts": [
-    "CEILING MOUNT OCCUPANCY SENSOR",
-    "CEILING MOUNTED OCCUPANCY SENSOR",
-    "CEILING MOUNTED OCCUPANCY SENSOR (DUAL TECHNOLOGY)"
-   ],
-   "aliases": {
-    "legend": [
-     "occupancy sensor|detector ceiling -relay -video"
+     "occupancy sensor|detector -relay -video -osr -power -pack -wireless -ceiling -wall -corner"
     ]
    }
   },
@@ -693,21 +745,28 @@
    ],
    "aliases": {
     "legend": [
-     "occupancy sensor|detector wall"
+     "occupancy sensor|detector wall -wireless",
+     "occupancy sensor|detector corner -wireless"
     ]
-   }
+   },
+   "merged_from": [
+    "sensor.occupancy_sensor_wall_corner"
+   ]
   },
   {
-   "label": "Occupancy Sensor - Wall / Corner Mount",
+   "label": "Occupancy Sensor - Ceiling Mounted",
    "category": "Lighting Controls (Power Packs, Sensors, Low Voltage & Wireless)",
    "symbol_family": "sensor",
-   "symbol_variant": "occupancy_sensor_wall_corner",
-   "source_count": 0,
-   "sample_legend_texts": [],
-   "curated": true,
+   "symbol_variant": "occupancy_sensor_ceiling",
+   "source_count": 21,
+   "sample_legend_texts": [
+    "CEILING MOUNT OCCUPANCY SENSOR",
+    "CEILING MOUNTED OCCUPANCY SENSOR",
+    "CEILING MOUNTED OCCUPANCY SENSOR (DUAL TECHNOLOGY)"
+   ],
    "aliases": {
     "legend": [
-     "occupancy sensor|detector corner"
+     "occupancy sensor|detector ceiling -relay -video -wireless"
     ]
    }
   },
@@ -726,16 +785,16 @@
    }
   },
   {
-   "label": "Occupancy Sensor - Wireless, Ceiling Mounted",
+   "label": "Occupancy Sensor - Wireless (mount not shown)",
    "category": "Lighting Controls (Power Packs, Sensors, Low Voltage & Wireless)",
    "symbol_family": "sensor",
-   "symbol_variant": "occupancy_sensor_wireless_ceiling",
+   "symbol_variant": "occupancy_sensor_wireless",
    "source_count": 0,
    "sample_legend_texts": [],
    "curated": true,
    "aliases": {
     "legend": [
-     "wireless occupancy ceiling"
+     "wireless occupancy|vacancy -ceiling -wall"
     ]
    }
   },
@@ -749,7 +808,21 @@
    "curated": true,
    "aliases": {
     "legend": [
-     "wireless occupancy wall"
+     "wireless occupancy|sensor|detector wall|corner"
+    ]
+   }
+  },
+  {
+   "label": "Occupancy Sensor - Wireless, Ceiling Mounted",
+   "category": "Lighting Controls (Power Packs, Sensors, Low Voltage & Wireless)",
+   "symbol_family": "sensor",
+   "symbol_variant": "occupancy_sensor_wireless_ceiling",
+   "source_count": 0,
+   "sample_legend_texts": [],
+   "curated": true,
+   "aliases": {
+    "legend": [
+     "wireless occupancy|sensor|detector ceiling"
     ]
    }
   },
@@ -919,23 +992,6 @@
    }
   },
   {
-   "label": "Light Fixture - Linear / Strip",
-   "category": "Lighting Fixtures",
-   "symbol_family": "luminaire",
-   "symbol_variant": "linear_strip",
-   "source_count": 6,
-   "sample_legend_texts": [
-    "EXISTING CONTINUOUS LINEAR LIGHT FIXTURE SHALL BE SEPARATED",
-    "LINEAR LIGHT FIXTURE",
-    "LINEAR STRIP FIXTURE W/ DESIGNATION"
-   ],
-   "aliases": {
-    "legend": [
-     "linear strip"
-    ]
-   }
-  },
-  {
    "label": "Light Fixture - Chandelier",
    "category": "Lighting Fixtures",
    "symbol_family": "luminaire",
@@ -1062,20 +1118,28 @@
    "category": "Lighting Fixtures",
    "symbol_family": "luminaire",
    "symbol_variant": "strip_luminaire",
-   "source_count": 0,
-   "sample_legend_texts": [],
+   "source_count": 6,
+   "sample_legend_texts": [
+    "EXISTING CONTINUOUS LINEAR LIGHT FIXTURE SHALL BE SEPARATED",
+    "LINEAR LIGHT FIXTURE",
+    "LINEAR STRIP FIXTURE W/ DESIGNATION"
+   ],
    "curated": true,
    "aliases": {
     "neca_v7": [
      "light_fixture/strip"
     ],
     "legend": [
-     "strip luminaire|light"
+     "strip luminaire|light",
+     "linear strip"
     ],
     "devices_json": [
      "strip_light"
     ]
-   }
+   },
+   "merged_from": [
+    "luminaire.linear_strip"
+   ]
   },
   {
    "label": "Light Fixture - Surface Mounted",
@@ -1200,11 +1264,16 @@
    "category": "Emergency Lighting & Exit Signs",
    "symbol_family": "luminaire",
    "symbol_variant": "exit_sign",
-   "source_count": 41,
+   "source_count": 56,
    "sample_legend_texts": [
     "Back Exit Sign (Single Face)",
     "CEILING MTD. EXIT SIGN, SHADED AREAS INDICATE",
-    "CEILING MTD. EXIT SIGN, SHADED AREAS INDICATE NUMBER OF FACES,"
+    "CEILING MTD. EXIT SIGN, SHADED AREAS INDICATE NUMBER OF FACES,",
+    "WALL MOUNTED EXIT SIGN",
+    "WALL MOUNTED EXIT SIGN -",
+    "WALL MOUNTED EXIT SIGN W/DIRECTION INDICATED",
+    "CEILING MOUNT EXIT SIGN W/ 90 MINUTES",
+    "CEILING MOUNTED EXIT SIGN"
    ],
    "aliases": {
     "neca_v7": [
@@ -1214,9 +1283,15 @@
      "exit_sign"
     ],
     "legend": [
-     "exit"
+     "exit",
+     "exit wall",
+     "exit ceiling"
     ]
-   }
+   },
+   "merged_from": [
+    "luminaire.exit_sign_wall",
+    "luminaire.exit_sign_ceiling"
+   ]
   },
   {
    "label": "Emergency Battery Light Unit",
@@ -1232,40 +1307,6 @@
    "aliases": {
     "legend": [
      "batteryunit"
-    ]
-   }
-  },
-  {
-   "label": "Exit Sign - Wall Mounted",
-   "category": "Emergency Lighting & Exit Signs",
-   "symbol_family": "luminaire",
-   "symbol_variant": "exit_sign_wall",
-   "source_count": 9,
-   "sample_legend_texts": [
-    "WALL MOUNTED EXIT SIGN",
-    "WALL MOUNTED EXIT SIGN -",
-    "WALL MOUNTED EXIT SIGN W/DIRECTION INDICATED"
-   ],
-   "aliases": {
-    "legend": [
-     "exit wall"
-    ]
-   }
-  },
-  {
-   "label": "Exit Sign - Ceiling Mounted",
-   "category": "Emergency Lighting & Exit Signs",
-   "symbol_family": "luminaire",
-   "symbol_variant": "exit_sign_ceiling",
-   "source_count": 6,
-   "sample_legend_texts": [
-    "CEILING MOUNT EXIT SIGN W/ 90 MINUTES",
-    "CEILING MOUNTED EXIT SIGN",
-    "CEILING MOUNTED EXIT SIGN, SHADING INDICATES FACES"
-   ],
-   "aliases": {
-    "legend": [
-     "exit ceiling"
     ]
    }
   },
@@ -1322,20 +1363,6 @@
    "aliases": {
     "legend": [
      "linear luminaire emergency"
-    ]
-   }
-  },
-  {
-   "label": "Emergency Light Fixture - Linear / Strip",
-   "category": "Emergency Lighting & Exit Signs",
-   "symbol_family": "luminaire",
-   "symbol_variant": "linear_strip_emergency",
-   "source_count": 0,
-   "sample_legend_texts": [],
-   "curated": true,
-   "aliases": {
-    "legend": [
-     "linear strip emergency"
     ]
    }
   },
@@ -1433,9 +1460,13 @@
    "curated": true,
    "aliases": {
     "legend": [
-     "strip luminaire emergency"
+     "strip luminaire emergency",
+     "linear strip emergency"
     ]
-   }
+   },
+   "merged_from": [
+    "luminaire.linear_strip_emergency"
+   ]
   },
   {
    "label": "Emergency Light Fixture - Surface Mounted",
@@ -2001,20 +2032,27 @@
    "category": "Fire Alarm",
    "symbol_family": "fire_alarm_device",
    "symbol_variant": "smoke_detector",
-   "source_count": 68,
+   "source_count": 78,
    "sample_legend_texts": [
     "\"SD\" DENOTES TO CONNECT TO SMOKE DETECTOR.",
     "22. MECHANICAL CONTRACTOR SHALL SUPPLY SMOKE DETECTOR IN RETURN DUCT OF",
-    "35. PROVIDE RETURN AIR SMOKE DETECTOR IN EACH HVAC UNIT OVER 2,000 CFM AS REQUIRED BY THE LATEST ADOPTED INTERNATIONAL MECHANICAL CODE."
+    "35. PROVIDE RETURN AIR SMOKE DETECTOR IN EACH HVAC UNIT OVER 2,000 CFM AS REQUIRED BY THE LATEST ADOPTED INTERNATIONAL MECHANICAL CODE.",
+    "ADDRESSABLE SMOKE DETECTOR, CEILING MOUNTED.",
+    "FIRE ALARM SYSTEM - SMOKE DETECTOR - CEILING MOUNTED - COORDINATE EXACT",
+    "PHOTOELECTRIC TYPE SMOKE DETECTOR, CEILING MOUNTED UNLESS NOTED OTHERWISE."
    ],
    "aliases": {
     "neca_v7": [
      "fire_alarm/smoke_detector"
     ],
     "legend": [
-     "smokedetector -beam -remote -test"
+     "smokedetector -beam -remote -test",
+     "smokedetector ceiling"
     ]
-   }
+   },
+   "merged_from": [
+    "fire_alarm_device.smoke_detector_ceiling"
+   ]
   },
   {
    "label": "Fire Alarm Control Panel (FACP)",
@@ -2044,20 +2082,31 @@
    "category": "Fire Alarm",
    "symbol_family": "fire_alarm_device",
    "symbol_variant": "fire_alarm_strobe",
-   "source_count": 45,
+   "source_count": 52,
    "sample_legend_texts": [
     "EACH ALARM STROBE LIGHT CIRCUIT: 1 PAIR TWISTED NO. 14 A.W.G. COPPER",
     "FIRE ALARM STROBE ONLY",
-    "FOR INTRUSION DETECTION. COORDINATE STROBE LIGHT LOCATION WITH"
+    "FOR INTRUSION DETECTION. COORDINATE STROBE LIGHT LOCATION WITH",
+    "FIRE ALARM STROBE LIGHT - WALL MOUNTED",
+    "WALL MOUNTED STROBE",
+    "WALL MOUNTED STROBE - CANDELA SUBSCRIPT",
+    "CEILING MOUNTED STROBE SPEAKER",
+    "FIRE ALARM STROBE LIGHT - CEILING MOUNTED"
    ],
    "aliases": {
     "neca_v7": [
      "fire_alarm/strobe"
     ],
     "legend": [
-     "strobe -bell -extender -sounder -chime -supply -local -stack -scramble -power"
+     "strobe -bell -extender -sounder -chime -supply -local -stack -scramble -power",
+     "strobe wall",
+     "strobe ceiling"
     ]
-   }
+   },
+   "merged_from": [
+    "fire_alarm_device.strobe_wall",
+    "fire_alarm_device.strobe_ceiling"
+   ]
   },
   {
    "label": "Fire Alarm Annunciator Panel",
@@ -2144,11 +2193,16 @@
    "category": "Fire Alarm",
    "symbol_family": "fire_alarm_device",
    "symbol_variant": "horn_and_strobe",
-   "source_count": 15,
+   "source_count": 21,
    "sample_legend_texts": [
     "CEILING HORN STROBE - CANDELA SUBSCRIPT",
     "DEVICES (HORN/STROBE,STROBE) AND FROM 120 VAC CIRCUITS.",
-    "EMERGENCY ALARM HORN/STROBE"
+    "EMERGENCY ALARM HORN/STROBE",
+    "FIRE ALARM HORN/STROBE - WALL MOUNTED",
+    "HORN/STROBE, WALL MOUNTED CANDELA AS NOTED ON PLANS,",
+    "WALL MOUNTED HORN STROBE - CANDELA SUBSCRIPT",
+    "FIRE ALARM HORN/STROBE - CEILING MOUNTED",
+    "HORN/STROBE, CEILING MOUNTED, CANDELA AS NOTED ON PLANS,"
    ],
    "aliases": {
     "neca_v7": [
@@ -2156,37 +2210,31 @@
     ],
     "legend": [
      "hornstrobe -cabinet -assembly",
-     "horn strobe -cabinet -assembly"
+     "horn strobe -cabinet -assembly",
+     "hornstrobe wall",
+     "hornstrobe ceiling"
     ]
-   }
-  },
-  {
-   "label": "Smoke Detector - Ceiling Mounted",
-   "category": "Fire Alarm",
-   "symbol_family": "fire_alarm_device",
-   "symbol_variant": "smoke_detector_ceiling",
-   "source_count": 10,
-   "sample_legend_texts": [
-    "ADDRESSABLE SMOKE DETECTOR, CEILING MOUNTED.",
-    "FIRE ALARM SYSTEM - SMOKE DETECTOR - CEILING MOUNTED - COORDINATE EXACT",
-    "PHOTOELECTRIC TYPE SMOKE DETECTOR, CEILING MOUNTED UNLESS NOTED OTHERWISE."
-   ],
-   "aliases": {
-    "legend": [
-     "smokedetector ceiling"
-    ]
-   }
+   },
+   "merged_from": [
+    "fire_alarm_device.horn_strobe_wall",
+    "fire_alarm_device.horn_strobe_ceiling"
+   ]
   },
   {
    "label": "Fire Alarm Speaker / Strobe",
    "category": "Fire Alarm",
    "symbol_family": "fire_alarm_device",
    "symbol_variant": "speaker_and_strobe",
-   "source_count": 5,
+   "source_count": 10,
    "sample_legend_texts": [
     "(LEFT); SPEAKER/STROBE (CENTER); STROBE ONLY (RIGHT). LOCATE 84\" ABOVE",
     "(TOP LEFT); SPEAKER/STROBE (TOP RIGHT); STROBE ONLY (BOTTOM LEFT). 'CD'",
-    "FIRE ALARM SPEAKER/STROBE UNIT"
+    "FIRE ALARM SPEAKER/STROBE UNIT",
+    "FIRE ALARM SPEAKER/STROBE - WALL MOUNTED",
+    "SPEAKER/STROBE, WALL MOUNTED CANDELA AS NOTED ON PLANS,",
+    "FIRE ALARM SPEAKER/STROBE - CEILING MOUNTED",
+    "HORNS/SPEAKER/STROBE LIGHTS 80\" A.F.F. OR 6\" BELOW HUNG CEILING (WHICHEVER IS LOWER)",
+    "SPEAKER/STROBE, CEILING MOUNTED, CANDELA AS NOTED ON"
    ],
    "aliases": {
     "neca_v7": [
@@ -2195,77 +2243,15 @@
     "devices_json": [],
     "legend": [
      "speakerstrobe",
-     "speaker strobe"
-    ]
-   }
-  },
-  {
-   "label": "Fire Alarm Horn / Strobe - Wall Mounted",
-   "category": "Fire Alarm",
-   "symbol_family": "fire_alarm_device",
-   "symbol_variant": "horn_strobe_wall",
-   "source_count": 4,
-   "sample_legend_texts": [
-    "FIRE ALARM HORN/STROBE - WALL MOUNTED",
-    "HORN/STROBE, WALL MOUNTED CANDELA AS NOTED ON PLANS,",
-    "WALL MOUNTED HORN STROBE - CANDELA SUBSCRIPT"
-   ],
-   "aliases": {
-    "legend": [
-     "hornstrobe wall"
-    ]
-   }
-  },
-  {
-   "label": "Fire Alarm Strobe - Wall Mounted",
-   "category": "Fire Alarm",
-   "symbol_family": "fire_alarm_device",
-   "symbol_variant": "strobe_wall",
-   "source_count": 4,
-   "sample_legend_texts": [
-    "FIRE ALARM STROBE LIGHT - WALL MOUNTED",
-    "WALL MOUNTED STROBE",
-    "WALL MOUNTED STROBE - CANDELA SUBSCRIPT"
-   ],
-   "aliases": {
-    "legend": [
-     "strobe wall"
-    ]
-   }
-  },
-  {
-   "label": "Fire Alarm Speaker / Strobe - Ceiling Mounted",
-   "category": "Fire Alarm",
-   "symbol_family": "fire_alarm_device",
-   "symbol_variant": "speaker_strobe_ceiling",
-   "source_count": 3,
-   "sample_legend_texts": [
-    "FIRE ALARM SPEAKER/STROBE - CEILING MOUNTED",
-    "HORNS/SPEAKER/STROBE LIGHTS 80\" A.F.F. OR 6\" BELOW HUNG CEILING (WHICHEVER IS LOWER)",
-    "SPEAKER/STROBE, CEILING MOUNTED, CANDELA AS NOTED ON"
-   ],
-   "aliases": {
-    "legend": [
+     "speaker strobe",
+     "speakerstrobe wall",
      "speakerstrobe ceiling"
     ]
-   }
-  },
-  {
-   "label": "Fire Alarm Strobe - Ceiling Mounted",
-   "category": "Fire Alarm",
-   "symbol_family": "fire_alarm_device",
-   "symbol_variant": "strobe_ceiling",
-   "source_count": 3,
-   "sample_legend_texts": [
-    "CEILING MOUNTED STROBE SPEAKER",
-    "FIRE ALARM STROBE LIGHT - CEILING MOUNTED",
-    "STROBE LIGHT SURFACE MOUNTED TO CEILING."
-   ],
-   "aliases": {
-    "legend": [
-     "strobe ceiling"
-    ]
-   }
+   },
+   "merged_from": [
+    "fire_alarm_device.speaker_strobe_wall",
+    "fire_alarm_device.speaker_strobe_ceiling"
+   ]
   },
   {
    "label": "Voice Evacuation Panel",
@@ -2280,38 +2266,6 @@
    "aliases": {
     "legend": [
      "voiceevac panel|panelboard|control -supply -nac"
-    ]
-   }
-  },
-  {
-   "label": "Fire Alarm Horn / Strobe - Ceiling Mounted",
-   "category": "Fire Alarm",
-   "symbol_family": "fire_alarm_device",
-   "symbol_variant": "horn_strobe_ceiling",
-   "source_count": 2,
-   "sample_legend_texts": [
-    "FIRE ALARM HORN/STROBE - CEILING MOUNTED",
-    "HORN/STROBE, CEILING MOUNTED, CANDELA AS NOTED ON PLANS,"
-   ],
-   "aliases": {
-    "legend": [
-     "hornstrobe ceiling"
-    ]
-   }
-  },
-  {
-   "label": "Fire Alarm Speaker / Strobe - Wall Mounted",
-   "category": "Fire Alarm",
-   "symbol_family": "fire_alarm_device",
-   "symbol_variant": "speaker_strobe_wall",
-   "source_count": 2,
-   "sample_legend_texts": [
-    "FIRE ALARM SPEAKER/STROBE - WALL MOUNTED",
-    "SPEAKER/STROBE, WALL MOUNTED CANDELA AS NOTED ON PLANS,"
-   ],
-   "aliases": {
-    "legend": [
-     "speakerstrobe wall"
     ]
    }
   },
@@ -2784,24 +2738,32 @@
    }
   },
   {
-   "label": "Data Outlet - Wall Mounted",
+   "label": "Data Outlet",
    "category": "Telecommunications, Data & Network",
    "symbol_family": "data_outlet",
-   "symbol_variant": "data_wall",
-   "source_count": 37,
+   "symbol_variant": "data",
+   "source_count": 42,
    "sample_legend_texts": [
     "(1) VOICE + (1) DATA OUTLET EACH WITH FLUSH MOUNTED 4\"",
     "1  UL LISTED DATA CABLE PULLED TO EACH DATA JACK.",
-    "ABOVE CEILING DATA OUTLET, CABLE TYPE AS SPECIFIED WITH X = NUMBER OF CABLE"
+    "ABOVE CEILING DATA OUTLET, CABLE TYPE AS SPECIFIED WITH X = NUMBER OF CABLE",
+    "CEILING MOUNTED DATA NETWORK OUTLET. PROVIDE T-GRID BOX HANGER FOR",
+    "CEILING MOUNTED DATA OUTLET",
+    "DATA OUTLET IN CEILING"
    ],
    "aliases": {
     "neca_v7": [
      "data_outlet/data"
     ],
     "legend": [
-     "data outlet|jack"
+     "data outlet|jack",
+     "data ceiling"
     ]
-   }
+   },
+   "merged_from": [
+    "data_outlet.data_wall",
+    "data_outlet.data_ceiling"
+   ]
   },
   {
    "label": "Wireless Access Point (WAP)",
@@ -2895,23 +2857,6 @@
    }
   },
   {
-   "label": "Data Outlet - Ceiling Mounted",
-   "category": "Telecommunications, Data & Network",
-   "symbol_family": "data_outlet",
-   "symbol_variant": "data_ceiling",
-   "source_count": 5,
-   "sample_legend_texts": [
-    "CEILING MOUNTED DATA NETWORK OUTLET. PROVIDE T-GRID BOX HANGER FOR",
-    "CEILING MOUNTED DATA OUTLET",
-    "DATA OUTLET IN CEILING"
-   ],
-   "aliases": {
-    "legend": [
-     "data ceiling"
-    ]
-   }
-  },
-  {
    "label": "Fiber Optic Outlet",
    "category": "Telecommunications, Data & Network",
    "symbol_family": "data_outlet",
@@ -2946,7 +2891,7 @@
    "label": "Data Outlet - Two Gang",
    "category": "Telecommunications, Data & Network",
    "symbol_family": "data_outlet",
-   "symbol_variant": "data_wall_two_gang",
+   "symbol_variant": "data_two_gang",
    "source_count": 0,
    "sample_legend_texts": [],
    "curated": true,
@@ -2954,24 +2899,34 @@
     "legend": [
      "data two|2 gang"
     ]
-   }
+   },
+   "merged_from": [
+    "data_outlet.data_wall_two_gang"
+   ]
   },
   {
-   "label": "Speaker - Ceiling Mounted",
+   "label": "Speaker",
    "category": "Audio / Visual, Paging & Intercom",
    "symbol_family": "audio_visual_device",
-   "symbol_variant": "speaker_ceiling",
-   "source_count": 41,
+   "symbol_variant": "speaker",
+   "source_count": 44,
    "sample_legend_texts": [
     "CEILING MOUNTED SPEAKER",
     "CEILING MOUNTED SPEAKER - 1",
-    "CEILING SPEAKER"
+    "CEILING SPEAKER",
+    "ALARM WARNING SPEAKER",
+    "WALL MOUNTED SPEAKER-STROBE"
    ],
    "aliases": {
     "legend": [
-     "speaker ceiling"
+     "speaker ceiling",
+     "speaker wall"
     ]
-   }
+   },
+   "merged_from": [
+    "audio_visual_device.speaker_ceiling",
+    "audio_visual_device.speaker_wall"
+   ]
   },
   {
    "label": "Intercom Station - Weatherproof",
@@ -3024,22 +2979,6 @@
    }
   },
   {
-   "label": "Speaker - Wall Mounted",
-   "category": "Audio / Visual, Paging & Intercom",
-   "symbol_family": "audio_visual_device",
-   "symbol_variant": "speaker_wall",
-   "source_count": 3,
-   "sample_legend_texts": [
-    "ALARM WARNING SPEAKER",
-    "WALL MOUNTED SPEAKER-STROBE"
-   ],
-   "aliases": {
-    "legend": [
-     "speaker wall"
-    ]
-   }
-  },
-  {
    "label": "Intercom Master Station",
    "category": "Audio / Visual, Paging & Intercom",
    "symbol_family": "audio_visual_device",
@@ -3068,7 +3007,10 @@
    "keyword_fallback: for unknown extracted device_type strings, first rule whose word occurs wins.",
    "aliases.legend: how legend sheets describe the device. Each phrase lists words that must all occur in the description ('a|b' = either; '-word' = must not occur). The match covering the most description words wins; a tie between devices matches none. Words are compared after legend_synonyms rewrite the lowercased text (non-alphanumerics become spaces).",
    "non_electrical_types also lists marks that are not devices at all (homerun_arrow: a circuit home-run annotation).",
-   "Every box anywhere (annotator, agents, model, DEVICES/SAM/CircuitNet/VLM proposals, training) is one of these devices, or '<family>.unspecified' while its exact device is not picked yet (label_schema.canonical_device)."
+   "Every box anywhere (annotator, agents, model, DEVICES/SAM/CircuitNet/VLM proposals, training) is one of these devices, or '<family>.unspecified' while its exact device is not picked yet (label_schema.canonical_device).",
+   "renamed: former class ids -> the class they were merged into (no separate wall/ceiling-mounted versions; overlapping names folded). Old labels keep their meaning.",
+   "subtype_aliases: per family, subtypes that name a device by default (a plain receptacle is a duplex; plain GFCI = GFCI duplex; weatherproof = weatherproof duplex).",
+   "weatherproof_suffix: weatherproof is added on top of a receptacle device (duplex -> duplex_weatherproof, duplex_gfci -> duplex_gfci_weatherproof) when a source marks the device weatherproof."
   ],
   "family_aliases": {
    "receptacle": "receptacle",
@@ -3561,6 +3503,42 @@
     "\\b(call switch|call button|intercom station|substation|staff station)\\b",
     "substation"
    ]
-  ]
+  ],
+  "renamed": {
+   "luminaire.exit_sign_wall": "luminaire.exit_sign",
+   "luminaire.exit_sign_ceiling": "luminaire.exit_sign",
+   "luminaire.linear_strip": "luminaire.strip_luminaire",
+   "luminaire.linear_strip_emergency": "luminaire.strip_luminaire_emergency",
+   "fire_alarm_device.smoke_detector_ceiling": "fire_alarm_device.smoke_detector",
+   "fire_alarm_device.horn_strobe_wall": "fire_alarm_device.horn_and_strobe",
+   "fire_alarm_device.horn_strobe_ceiling": "fire_alarm_device.horn_and_strobe",
+   "fire_alarm_device.strobe_wall": "fire_alarm_device.fire_alarm_strobe",
+   "fire_alarm_device.strobe_ceiling": "fire_alarm_device.fire_alarm_strobe",
+   "fire_alarm_device.speaker_strobe_wall": "fire_alarm_device.speaker_and_strobe",
+   "fire_alarm_device.speaker_strobe_ceiling": "fire_alarm_device.speaker_and_strobe",
+   "sensor.occupancy_sensor_wall_corner": "sensor.occupancy_sensor_wall",
+   "data_outlet.data_wall": "data_outlet.data",
+   "data_outlet.data_ceiling": "data_outlet.data",
+   "data_outlet.data_wall_two_gang": "data_outlet.data_two_gang",
+   "audio_visual_device.speaker_ceiling": "audio_visual_device.speaker",
+   "audio_visual_device.speaker_wall": "audio_visual_device.speaker",
+   "receptacle.weatherproof_gfci_duplex": "receptacle.duplex_gfci_weatherproof"
+  },
+  "subtype_aliases": {
+   "receptacle": {
+    "": "duplex",
+    "unspecified": "duplex",
+    "weatherproof": "duplex_weatherproof",
+    "wp": "duplex_weatherproof",
+    "gfci": "duplex_gfci",
+    "gfi": "duplex_gfci",
+    "gf": "duplex_gfci",
+    "gfci_weatherproof": "duplex_gfci_weatherproof",
+    "weatherproof_gfci": "duplex_gfci_weatherproof",
+    "weatherproof_gfci_duplex": "duplex_gfci_weatherproof",
+    "gfci_duplex_weatherproof": "duplex_gfci_weatherproof"
+   }
+  },
+  "weatherproof_suffix": "_weatherproof"
  }
 }

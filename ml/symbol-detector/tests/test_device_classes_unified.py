@@ -36,7 +36,7 @@ def _v7_taxonomy() -> dict[str, list[str]]:
 def test_ui_device_list_is_the_catalog():
     from annotator.web import _load_neca_subtypes, load_electrical_device_catalog
     ui = {(d["symbol_family"], d["symbol_variant"]) for d in load_electrical_device_catalog()["devices"]}
-    assert ui == CATALOG and len(ui) == 182
+    assert ui == CATALOG and len(ui) == 173
     variants = _load_neca_subtypes(None)
     for family in CATALOG_FAMILIES:
         assert set(variants[family]) == {v for f, v in CATALOG if f == family} | {"unspecified"}
@@ -54,7 +54,7 @@ def test_every_v7_and_extractor_name_maps_to_one_ui_class():
              ("fire_alarm", "pull_station"): ("fire_alarm_device", "manual_pull_station"),
              ("light_fixture", "2x4"): ("luminaire", "troffer_2x4"),
              ("switch", "timer"): ("switch", "time_switch"),
-             ("data_outlet", "data"): ("data_outlet", "data_wall"),
+             ("data_outlet", "data"): ("data_outlet", "data"),
              ("security_device", "security_camera"): ("cctv_device", "security_camera")}
     for name, device in exact.items():
         assert canonical_device(*name) == device
@@ -75,7 +75,12 @@ def test_one_alias_never_names_two_devices():
 
 @pytest.mark.parametrize("raw_type,subtype,expected", [
     ("receptacle", "switched_duplex", ("receptacle", "unspecified")),   # not merged into duplex
-    ("speaker", "speaker", ("audio_visual_device", "unspecified")),    # not a speaker/strobe
+    ("speaker", "speaker", ("audio_visual_device", "speaker")),        # not a speaker/strobe
+    ("receptacle", None, ("receptacle", "duplex")),                    # a plain receptacle is a duplex
+    ("receptacle", "gfci", ("receptacle", "duplex_gfci")),
+    ("receptacle", "weatherproof", ("receptacle", "duplex_weatherproof")),
+    ("luminaire", "exit_sign_wall", ("luminaire", "exit_sign")),        # merged classes
+    ("fire_alarm_device", "smoke_detector_ceiling", ("fire_alarm_device", "smoke_detector")),
     ("homerun_arrow", None, None), ("hvac_device", "vav", None), ("ceiling_fan", "ceiling_fan", None),
     ("variable_air_volume_box", None, None),
     ("downlight", None, ("luminaire", "downlight")), ("switch_3way", None, ("switch", "three_way")),
@@ -99,8 +104,8 @@ def test_boxes_are_renamed_once_and_keep_their_old_names():
     assert (out["symbol_family"], out["symbol_variant"]) == ("fire_alarm_device", "manual_pull_station")
     assert (out["raw_device_type"], out["raw_subtype"]) == ("fire_alarm", "pull_station")
     assert out["verified_ground_truth"] is True                       # same device: still verified
-    vague = canonical_instance(dict(agent, symbol_family="receptacle", symbol_variant="weatherproof"))
-    assert (vague["symbol_family"], vague["symbol_variant"]) == ("receptacle", "unspecified")
+    vague = canonical_instance(dict(agent, symbol_family="switch", symbol_variant="scene_control"))
+    assert (vague["symbol_family"], vague["symbol_variant"]) == ("switch", "unspecified")
     assert vague["verified_ground_truth"] is False                    # pick the exact device again
     assert canonical_instance(canonical_instance(agent)) == out       # idempotent
     for family, variant in CATALOG:
@@ -157,7 +162,7 @@ def test_every_source_name_becomes_a_ui_class_in_the_labels_file(tmp_path, monke
     assert all(_allowed(c) for c in classes)
     assert classes == [("fire_alarm_device", "manual_pull_station"), ("luminaire", "troffer_2x4"),
                        ("receptacle", "unspecified"), ("receptacle", "duplex_gfci"),
-                       ("audio_visual_device", "unspecified"), ("security_device", "unspecified"),
+                       ("audio_visual_device", "speaker"), ("security_device", "unspecified"),
                        ("switch", "time_switch")]
     assert boxes[2]["raw_subtype"] == "switched_duplex"
 
@@ -175,3 +180,61 @@ def test_every_source_name_becomes_a_ui_class_in_the_labels_file(tmp_path, monke
     [legend] = record["extracted"]["mix_DEVICES.json"]["legend_types"]
     assert legend["catalog_class"] == "receptacle.duplex_gfci"
     assert record["sources"][0]["devices_left_out"] == {"not_an_electrical_device": 2}
+
+
+def test_merged_classes_keep_old_labels_and_models_meaningful():
+    renamed = label_schema.RENAMED
+    assert renamed[("luminaire", "exit_sign_ceiling")] == ("luminaire", "exit_sign")
+    assert renamed[("sensor", "occupancy_sensor_wall_corner")] == ("sensor", "occupancy_sensor_wall")
+    for old, new in renamed.items():
+        assert old not in CATALOG and new in CATALOG
+        # an old saved box, an older model's class name and training all land on the merged class
+        assert canonical_device(*old) == new
+        assert label_schema.device_for_class(f"{old[0]}.{old[1]}") == new
+        assert instance_class({"symbol_family": old[0], "symbol_variant": old[1]}) == f"{new[0]}.{new[1]}"
+        verified = {"symbol_family": old[0], "symbol_variant": old[1], "verified_ground_truth": True,
+                    "review_source": "human"}
+        assert canonical_instance(verified)["verified_ground_truth"] is True   # same device
+
+
+def test_every_light_has_an_emergency_version():
+    lights = {v for f, v in CATALOG if f == "luminaire"}
+    plain = {v for v in lights if not v.endswith("_emergency") and not v.startswith(("exit", "emergency"))}
+    assert plain and all(f"{v}_emergency" in lights for v in plain)
+
+
+def test_plain_receptacle_boxes_become_duplex_but_named_subtypes_do_not():
+    assert canonical_instance({"symbol_family": "receptacle", "symbol_variant": "unspecified"})[
+        "symbol_variant"] == "duplex"
+    switched = {"symbol_family": "receptacle", "symbol_variant": "unspecified", "raw_subtype": "switched_duplex"}
+    assert canonical_instance(switched)["symbol_variant"] == "unspecified"
+
+
+def test_occupancy_sensors_have_mount_and_wireless_versions():
+    sensors = {v for f, v in CATALOG if f == "sensor" and v.startswith("occupancy_sensor")}
+    assert {"occupancy_sensor", "occupancy_sensor_ceiling", "occupancy_sensor_wall", "occupancy_sensor_wireless",
+            "occupancy_sensor_wireless_ceiling", "occupancy_sensor_wireless_wall"} <= sensors
+    for text, variant in [("WIRELESS CEILING OCCUPANCY SENSOR", "occupancy_sensor_wireless_ceiling"),
+                          ("CEILING MOUNTED OCCUPANCY SENSOR", "occupancy_sensor_ceiling"),
+                          ("WALL MOUNTED OCCUPANCY SENSOR", "occupancy_sensor_wall"),
+                          ("WIRELESS WALL OCCUPANCY SENSOR", "occupancy_sensor_wireless_wall"),
+                          ("OCCUPANCY SENSOR", "occupancy_sensor")]:
+        assert canonical_device("occupancy_sensor", None, description=text) == ("sensor", variant), text
+    # A box the earlier merge folded into the plain sensor gets its mount back from its source name.
+    merged = {"symbol_family": "sensor", "symbol_variant": "occupancy_sensor", "raw_device_type": "sensor",
+              "raw_subtype": "occupancy_sensor_ceiling", "verified_ground_truth": True}
+    assert canonical_instance(merged)["symbol_variant"] == "occupancy_sensor_ceiling"
+
+
+def test_weatherproof_is_added_on_top_of_any_receptacle():
+    for base in ("single", "duplex", "quad", "duplex_gfci", "special_purpose"):
+        assert ("receptacle", f"{base}_weatherproof") in CATALOG
+        assert canonical_device("receptacle", base, weatherproof=True) == ("receptacle", f"{base}_weatherproof")
+    assert canonical_device("receptacle", None, weatherproof=True) == ("receptacle", "duplex_weatherproof")
+    assert canonical_device("receptacle", "gfci", weatherproof=True) == ("receptacle", "duplex_gfci_weatherproof")
+    assert canonical_device("receptacle", "weatherproof_gfci_duplex") == ("receptacle", "duplex_gfci_weatherproof")
+    assert canonical_device("receptacle", "floor_mounted", weatherproof=True) == ("receptacle", "floor_mounted")
+    assert label_schema.weatherproof_attribute({"weatherproof": True})
+    assert label_schema.weatherproof_attribute(["WP"]) and not label_schema.weatherproof_attribute({})
+    assert canonical_device("receptacle", None, description="WEATHERPROOF GFCI DUPLEX RECEPTACLE") == \
+        ("receptacle", "duplex_gfci_weatherproof")

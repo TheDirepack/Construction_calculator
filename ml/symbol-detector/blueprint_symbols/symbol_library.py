@@ -23,7 +23,7 @@ from pathlib import Path
 
 import cv2
 
-from .label_schema import device_class, device_for_class
+from .label_schema import RENAMED, device_class, device_for_class
 from .neca_svg_compositor import NecaGlyph
 from .verified_symbols import ink_alpha
 
@@ -44,7 +44,8 @@ def library_glyphs(root: str | Path, *, labeled_only: bool = True) -> tuple[list
         if status == "accepted":
             device = decision.get("device") or crop.get("device")
             fam_var = device_for_class(device) if device else None
-            if fam_var and device_class(*fam_var) != device:
+            if fam_var and device_class(*fam_var) != device and \
+                    tuple(str(device).split(".", 1)) not in RENAMED:     # a merged class keeps counting
                 fam_var = None
         if labeled_only and fam_var is None:
             stats["not_accepted_device"] += 1

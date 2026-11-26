@@ -238,6 +238,23 @@ def set_document_info(folder: Path, prefix: str, info: dict) -> None:
             _write_file(path, updated)
 
 
+def training_ready(folder: Path, prefix: str) -> bool:
+    """Whether a person marked this PDF done for now: training uses only
+    such PDFs (``label_store.labeled_pages``, ``label_schema.expand_page_paths``)."""
+    try:
+        return bool((read(folder, prefix).get("training_ready") or {}).get("ready"))
+    except (OSError, ValueError):
+        return False
+
+
+def set_training_ready(folder: Path, prefix: str, ready: bool, *, by: str = "annotator") -> dict:
+    import time
+    record = {"ready": bool(ready), "set_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "set_by": by}
+    set_document_info(folder, prefix, {"training_ready": record})
+    return record
+
+
 def has_labels(folder: Path) -> bool:
     """Whether a document folder has saved pages (labels file or old page files)."""
     folder = Path(folder)

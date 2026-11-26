@@ -78,6 +78,7 @@ def test_annotator_saves_into_the_devices_folder(blueprints):
         # One labels file per document, beside document.json.
         assert [p.name for p in session.out_dir.glob("*.json")] and \
             {p.name for p in session.out_dir.glob("*.json")} == {"document.json", f"{pdf.stem}_labels.json"}
+    _mark_done(bp)
     pages = label_store.labeled_pages(bp)
     folder = lambda view: label_store.page_source(view)[0].folder.parent  # noqa: E731
     assert [folder(p) for p in pages["train"]] == [bp / "devices"]
@@ -104,6 +105,7 @@ def test_a_drawing_moved_to_evaluation_keeps_its_labels(blueprints):
     doc = label_store.create_document(bp, moved)
     assert doc.folder == old_folder
     assert len(list(label_store.iter_documents(bp))) == 1
+    _mark_done(bp)
     assert label_store.labeled_pages(bp)["evaluation"]          # its role follows the PDF
 
 
@@ -140,6 +142,7 @@ def test_migration_copies_into_devices_and_never_touches_the_old_store(tmp_path,
     (old / "batches").mkdir()
     (old / "batches" / "batch_01.txt").write_text("\n".join(p.name for p in old.iterdir()
                                                             if p.name != "batches") + "\n")
+    _mark_done(old)                                  # flagged before the move: the flag moves too
     monkeypatch.delenv("BPS_LABELS_DIR")
     before = {p: p.read_bytes() for p in old.rglob("*") if p.is_file()}
 
@@ -193,3 +196,11 @@ def test_blueprint_mirror_never_sends_or_deletes_label_folders(tmp_path, bluepri
     assert not (remote / "evaluation" / "devices" / local_doc.folder.name).exists()   # not sent
     assert (remote / "devices" / "stale_DEVICES.json").is_file()            # DEVICES files still mirror
     assert (remote / "devices" / "train_set_DEVICES.json").is_file()
+
+
+def _mark_done(store):
+    """The labeler's "PDF done -> training" flag on every PDF of a store."""
+    from annotator import document_labels, label_store as _ls
+    for doc in _ls.iter_documents(store, skip_missing=True):
+        if doc.kind == "pdf":
+            document_labels.set_training_ready(doc.folder, doc.json_prefix, True)

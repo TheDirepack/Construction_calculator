@@ -401,7 +401,7 @@ def test_browser_electrical_device_catalog_search_modal_and_save(tmp_path):
                 page = browser.new_page(viewport={"width": 1420, "height": 900})
                 page.goto(f"http://127.0.0.1:{server.server_port}/")
                 page.wait_for_function(
-                    "() => document.querySelector('#deviceCatalogCount')?.textContent === '182'"
+                    "() => document.querySelector('#deviceCatalogCount')?.textContent === '173'"
                     " && document.querySelector('#pageIndicator')?.textContent === 'Page 1 / 1'"
                 )
                 page.locator("#drawTool").click()
@@ -422,10 +422,10 @@ def test_browser_electrical_device_catalog_search_modal_and_save(tmp_path):
 
                 page.locator("#openDeviceCatalogBtn").click()
                 page.wait_for_function("() => !document.querySelector('#deviceCatalogModal').hidden")
-                page.locator("#deviceModalSearch").fill("Horn / Strobe - Wall")
-                page.locator("#deviceModalGrid button", has_text="Fire Alarm Horn / Strobe - Wall Mounted").click()
+                page.locator("#deviceModalSearch").fill("Horn / Strobe")
+                page.locator("#deviceModalGrid button", has_text="Fire Alarm Horn / Strobe").first.click()
                 page.wait_for_function("() => document.querySelector('#deviceCatalogModal').hidden")
-                assert page.locator("#selectedLabel").inner_text() == "Fire Alarm Horn / Strobe - Wall Mounted"
+                assert page.locator("#selectedLabel").inner_text() == "Fire Alarm Horn / Strobe"
 
                 page.locator("#accept").click()
                 page.locator("#save").click()
@@ -433,7 +433,7 @@ def test_browser_electrical_device_catalog_search_modal_and_save(tmp_path):
                 saved = _saved(tmp_path / "labels", "catalog_devices", 1)
                 inst = saved["instances"][0]
                 assert inst["symbol_family"] == "fire_alarm_device"
-                assert inst["symbol_variant"] == "horn_strobe_wall"
+                assert inst["symbol_variant"] == "horn_and_strobe"
                 assert inst["discipline"] == "electrical"
                 assert inst["verified_ground_truth"] is True
             finally:

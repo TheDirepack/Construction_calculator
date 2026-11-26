@@ -20,7 +20,7 @@ from blueprint_symbols.symbol_library import legend_symbol_glyphs, library_glyph
     ("GFI DUPLEX RECEPTACLE, NEMA 5-20R", ("receptacle", "duplex_gfci")),     # most specific wins
     ("DOUBLE DUPLEX RECEPTACLE", ("receptacle", "quad")),
     ("3-WAY TOGGLE SWITCH", ("switch", "three_way")),
-    ("EXIT SIGN, CEILING MOUNTED", ("luminaire", "exit_sign_ceiling")),
+    ("EXIT SIGN, CEILING MOUNTED", ("luminaire", "exit_sign")),          # no ceiling version
     ("NON-FUSIBLE DISCONNECT SWITCH", ("disconnect", "non_fused")),
     ("COMBINATION VOICE/DATA OUTLET", ("data_outlet", "voice_data_combo")),
     ("HEAT TRACE", None),                         # 'heat' alone is not a heat detector
@@ -90,7 +90,7 @@ def test_library_composites_only_accepted_catalog_devices(tmp_path):
         # d4 unreviewed
     }))
     glyphs, report = legend_symbol_glyphs(tmp_path)
-    assert sorted(f"{g.family}.{g.variant}" for g in glyphs) == ["luminaire.exit_sign_ceiling", "receptacle.duplex"]
+    assert sorted(f"{g.family}.{g.variant}" for g in glyphs) == ["luminaire.exit_sign", "receptacle.duplex"]   # old name, merged class
     assert report["counts"]["not_accepted_device"] == 2
 
     # pretraining takes every drawing review did not reject, labelled or not

@@ -3370,6 +3370,37 @@ function stepPage(delta) {
   goToPage(base + delta);
 }
 
+// "PDF done -> training": training uses only PDFs a person marked done, and
+// only their saved, reviewed pages.
+async function setTrainingReady(event) {
+  const box = event.target;
+  const ready = box.checked;
+  if (ready && isAnyPageDirty()) {
+    box.checked = false;
+    notify("Save your changes first (Ctrl+S): training reads saved pages only.", "warning");
+    return;
+  }
+  box.disabled = true;
+  try {
+    const result = await api("/api/training_ready?" + docQuery().slice(1), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+      body: JSON.stringify({ ready }),
+    });
+    box.checked = Boolean(result.training_ready);
+    notify(result.training_ready
+      ? `PDF marked done: ${result.usable_pages.length} reviewed page(s) of ${result.saved_pages} saved will train.`
+      : "PDF unmarked: training no longer uses it.", result.training_ready && !result.usable_pages.length ? "warning" : "info");
+    const doc = (state.documents || []).find(isCurrentDoc);
+    if (doc) doc.training_ready = Boolean(result.training_ready);
+  } catch (error) {
+    box.checked = !ready;
+    notify(String(error.message || error), "error");
+  } finally {
+    box.disabled = state.modeKind !== "pdf";
+  }
+}
+
 function isAnyPageDirty() {
   return Boolean(state.dirty || Object.values(state.pageCache || {}).some(c => c.dirty));
 }
@@ -3446,6 +3477,11 @@ async function loadPage(page, force = false) {
     if ($("docSelect") && state.currentDocPath) $("docSelect").value = state.currentDocPath;
     state.siblingFiles = result.sibling_files || [];
     state.walls = Array.isArray(result.walls) ? result.walls : [];
+    const trainingBox = $("trainingReady");
+    if (trainingBox) {
+      trainingBox.checked = Boolean(result.training_ready);
+      trainingBox.disabled = state.modeKind !== "pdf";
+    }
 
     let cached = force ? null : state.pageCache[page];
     if (force) delete state.pageCache[page];
@@ -3537,7 +3573,8 @@ async function loadDocumentsList() {
           const opt = document.createElement("option");
           opt.value = doc.path;
           let badge = "• ";
-          if (doc.has_annotations) badge = "★ [Annotated] ";
+          if (doc.training_ready) badge = "✔ [Done] ";
+          else if (doc.has_annotations) badge = "★ [Annotated] ";
           else if (doc.has_proposals) badge = "◆ [Proposals] ";
           opt.textContent = `${badge}${doc.name} (${doc.rel_path})`;
           if (isCurrentDoc(doc)) {
@@ -3902,6 +3939,12 @@ function renderPdfGrid() {
     const tagsRow = document.createElement("div");
     tagsRow.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:auto;";
 
+    if (doc.training_ready) {
+      const tag = document.createElement("span");
+      tag.className = "tag accepted";
+      tag.textContent = "✔ Done → training";
+      tagsRow.appendChild(tag);
+    }
     if (doc.has_annotations) {
       const tag = document.createElement("span");
       tag.className = "tag accepted";
@@ -4240,6 +4283,7 @@ function wireEvents() {
 
   $("prevPage").addEventListener("click", () => stepPage(-1));
   $("nextReviewPage").addEventListener("click", nextReviewPage);
+  $("trainingReady").addEventListener("change", setTrainingReady);
   $("nextPage").addEventListener("click", () => stepPage(1));
   $("pageJump").addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;

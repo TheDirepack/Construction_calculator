@@ -8,7 +8,8 @@ from pathlib import Path
 from collections import Counter,defaultdict
 import hashlib, json, math
 import cv2
-from .label_schema import PageFingerprints, annotation_sha256, load_training_page, page_fingerprint, read_page
+from .label_schema import (PageFingerprints, annotation_sha256, load_training_page, page_fingerprint,
+                           page_training_ready, read_page)
 
 EXCLUDED={'__unmapped__','unmapped','ignore','unknown_symbol','__ignore__'}
 
@@ -73,7 +74,11 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     docs=[]; by_hash={}; by_group=defaultdict(list)
     negative_pages=PageFingerprints(); negative_digests={}; duplicate_negatives=[]
     warnings=[]; counts=Counter(); group_counts=defaultdict(Counter)
+    not_ready=[]
     for path in sorted(set(Path(f).resolve() for f in files)):
+        if not page_training_ready(path):   # its PDF is not marked done for training
+            not_ready.append(str(path))
+            continue
         raw=read_page(path)             # a page JSON, or a page of a PDF's labels file
         if not isinstance(raw,dict) or 'instances' not in raw:
             continue
@@ -152,6 +157,8 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     for row in docs:
         if row['verified_no_symbols']:
             row['exhaustive_families']=sorted(counts)
+    if not_ready:
+        warnings.append(f'{len(not_ready)} pages of PDFs not marked done for training were left out')
     if duplicate_negatives:
         warnings.append(f'{len(duplicate_negatives)} verified symbol-free pages repeat an earlier '
                         'page (same fingerprint) and were left out')

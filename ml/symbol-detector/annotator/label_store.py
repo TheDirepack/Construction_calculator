@@ -415,7 +415,8 @@ def training_pages(store: Path, *, data_root: Path | None = None) -> list[Path]:
 
 def _usable_pages(store: Path) -> list[tuple[Document, Path]]:
     """Every saved page that training or evaluation can use (see
-    ``label_schema.training_usable``), as a reference into its PDF's labels
+    ``label_schema.training_usable``) of the PDFs a person marked done for
+    training (the labeler's "PDF done" flag), as a reference into its PDF's labels
     file (``<stem>_labels.json#p12``, read with ``label_schema.read_page``),
     with its page image on disk.
 
@@ -432,6 +433,8 @@ def _usable_pages(store: Path) -> list[tuple[Document, Path]]:
             if data is not None and training_usable(data):
                 out.append((doc, path))
             continue
+        if not document_labels.training_ready(doc.folder, doc.json_prefix):
+            continue                        # not marked done for training yet
         for page, data in sorted(doc.saved_pages().items()):
             if not training_usable(data):
                 continue
@@ -545,6 +548,7 @@ def stage_push(store: Path, stage: Path) -> tuple[list[Path], list[Path], int]:
         (stage / rel).write_text(json.dumps({
             "kind": document_labels.KIND, "format_version": document_labels.FORMAT_VERSION,
             "json_prefix": doc.json_prefix,
+            "training_ready": document_labels.read(doc.folder, doc.json_prefix).get("training_ready"),
             "pages": {str(n): d for n, d in sorted(usable.items())}}), encoding="utf-8")
         staged.append(rel)
         count += len(usable)
@@ -588,5 +592,7 @@ def merge_pushed(store: Path, data_root: Path) -> dict:
             result["pages_replaced"] += old is not None
             document_labels.write_page(folder, prefix, int(number), page)
             result["pages_written"] += 1
+        if incoming.get("training_ready") is not None:      # the "PDF done" flag travels too
+            document_labels.set_document_info(folder, prefix, {"training_ready": incoming["training_ready"]})
         pushed.unlink()
     return result

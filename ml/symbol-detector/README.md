@@ -112,7 +112,7 @@ files directly: a page is `<stem>_labels.json#p12`, and a glob of
 `devices/*/*_labels.json` works wherever page JSONs were accepted.
 
 One class name per device: the annotator's device list
-(`annotator/electrical_device_catalog.json`, 182 devices) is the set of classes
+(`annotator/electrical_device_catalog.json`, 173 devices) is the set of classes
 everything uses. `label_schema.canonical_device` maps every source's names onto
 it: v7 taxonomy pairs (`fire_alarm/pull_station` ->
 `fire_alarm_device.manual_pull_station`), extractor types (`downlight`,
@@ -122,7 +122,12 @@ into a new class, and two different devices are never merged. Mechanical
 equipment and non-devices (homerun arrows) are not boxes. Proposals, every save
 (annotator, agents, model, imports) and the unify script all go through it;
 the old names stay on the box as `raw_device_type`/`raw_subtype`. New source
-names are added as catalog aliases, not code.
+names are added as catalog aliases, not code. There are no separate wall- or
+ceiling-mounted versions of a device; former ones are listed in the catalog's
+`naming.renamed` and old labels, model classes and legend reviews map onto the
+merged class. A receptacle with no subtype is a duplex (plain GFCI = GFCI
+duplex, weatherproof = weatherproof duplex: `naming.subtype_aliases`); every
+light has an `_emergency` version.
 
 **One label format, one source of truth.** `annotator/electrical_device_catalog.json`
 defines every device and what other sources call it (NECA 100 glyph names,

@@ -38,6 +38,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from annotator import agent_api
 from blueprint_symbols.label_schema import (
+    weatherproof_attribute,
     canonical_device,
     canonical_instance,
     completeness,
@@ -247,7 +248,7 @@ def _find_proposals_for_pdf(pdf: Path, work_dir: Path | None = None) -> Path | N
 
 # Bump when proposal files are turned into boxes differently (fields kept,
 # anchors, which entries count): saved pages then get refreshed machine boxes.
-PROPOSAL_CONVERSION = 3
+PROPOSAL_CONVERSION = 5
 
 
 def _parse_proposals(raw: bytes, source_hash: str | None, pdf_name: str | None = None) -> dict | None:
@@ -1425,7 +1426,8 @@ class LabelingSession:
                     f"{code} {str(raw).replace('_', ' ')}" if code else None)
                 # The catalog class (the annotator's device list), whatever the
                 # source calls it; None: not an electrical device.
-                device = canonical_device(raw, subtype, description=description)
+                device = canonical_device(raw, subtype, description=description,
+                                          weatherproof=weatherproof_attribute(proposal.get("attributes")))
                 if device is None:
                     continue
                 family, variant = device
@@ -1665,6 +1667,25 @@ class LabelingSession:
                                    expected_revision=stored_revision)
         return True
 
+    def set_training_ready(self, ready: object) -> dict:
+        """Mark this PDF done for now (training uses it) or not done."""
+        from annotator import document_labels
+        from blueprint_symbols.label_schema import training_usable
+        if not self.pdf:
+            raise LabelingError("only a PDF can be marked done for training")
+        if type(ready) is not bool:
+            raise LabelingError("ready must be true or false")
+        with self.lock:
+            record = document_labels.set_training_ready(self.out_dir, self.json_prefix, ready)
+            pages = document_labels.pages(self.out_dir, self.json_prefix)
+            usable = sorted(n for n, data in pages.items() if training_usable(data))
+        return {"training_ready": record["ready"], "set_at": record["set_at"],
+                "usable_pages": usable, "saved_pages": len(pages)}
+
+    def is_training_ready(self) -> bool:
+        from annotator import document_labels
+        return bool(self.pdf) and document_labels.training_ready(self.out_dir, self.json_prefix)
+
     def page_overview(self) -> dict:
         """Which pages need review, without opening them: counts from every
         saved page (the document's labels file, parsed once per change), and
@@ -1795,6 +1816,7 @@ class LabelingSession:
                 "attribute_schema": _attribute_schema_payload(),
                 "proposals_enabled": self.proposals is not None,
                 "proposals_version": self.proposals_sha,
+                "training_ready": self.is_training_ready(),
                 "page_presence_suggestion": self.page_presence.get(index),
                 "mode": "edit" if self.edit else "pdf",
                 "json_filename": json_path.name if self.edit else f"{json_path.name} (page {index + 1})",
@@ -1804,6 +1826,22 @@ class LabelingSession:
                 "sibling_files": self.list_sibling_jsons() if self.edit else [],
                 "walls": self.walls,
             }
+
+    def _ready_stems(self) -> set[str]:
+        """Sanitized stems of PDFs marked done for training."""
+        from annotator import document_labels, label_store
+        roots = []
+        if os.environ.get("BPS_LABELS_DIR"):
+            roots += label_store.store_roots(label_store.default_store())
+        if self.blueprints_dir:
+            roots += label_store.store_roots(self.blueprints_dir)
+        stems = set()
+        for root in roots:
+            for labels in root.glob(f"*/*{document_labels.SUFFIX}") if root.is_dir() else ():
+                prefix = labels.name[:-len(document_labels.SUFFIX)]
+                if document_labels.training_ready(labels.parent, prefix):
+                    stems.add(labels.parent.name.rsplit("_", 1)[0])
+        return stems
 
     def _labeled_stems(self) -> set[str]:
         """Sanitized PDF stems that have saved pages in the label store."""
@@ -1845,6 +1883,7 @@ class LabelingSession:
         current_resolved = self.pdf.resolve() if self.pdf else None
         labeled = self._labeled_stems()
 
+        ready_stems = self._ready_stems()
         for p in pdf_paths:
             resolved = p.resolve()
             stem = p.stem
@@ -1852,6 +1891,7 @@ class LabelingSession:
             prop_file = _find_proposals_for_pdf(p)
             has_prop = (prop_file is not None)
             annotated = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem)[:48] in labeled
+            ready = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem)[:48] in ready_stems
 
             try:
                 rel = str(p.relative_to(bp_dir))
@@ -1866,6 +1906,7 @@ class LabelingSession:
                 "has_proposals": has_prop,
                 "proposal_file": prop_file.name if prop_file else None,
                 "has_annotations": annotated,
+                "training_ready": ready,
                 "is_current": is_current,
             })
 
@@ -2458,7 +2499,7 @@ def make_handler(session: LabelingSession):
             valid_endpoints = (
                 "/api/save", "/api/validate", "/api/open", "/api/snap",
                 "/api/document", "/api/server_export", "/api/server_import",
-                "/api/agent/act", "/api/prefetch",
+                "/api/agent/act", "/api/prefetch", "/api/training_ready",
             )
             if url.path not in valid_endpoints:
                 self._json(404, {"error": "unknown endpoint"})
@@ -2484,6 +2525,13 @@ def make_handler(session: LabelingSession):
                         dry_run=dry_run,
                     )
                     self._json(200, result)
+                    return
+                if url.path == "/api/training_ready":
+                    q = parse_qs(url.query, keep_blank_values=True)
+                    if set(q) - {"doc"} or any(len(v) > 1 for v in q.values()):
+                        raise LabelingError("unsupported query")
+                    target = session.for_document(q.get("doc", [""])[0] or None)
+                    self._json(200, target.set_training_ready(data.get("ready")))
                     return
                 if url.path == "/api/prefetch":
                     self._json(200, session.prefetch(data.get("path"), data.get("pages", [0])))

@@ -46,6 +46,14 @@ EXHAUSTIVE_FAMILIES = sorted(CATALOG_FAMILIES)
 
 _NOT_A_DEVICE = frozenset(_NAMING.get("not_devices", ()))
 
+# Former class ids -> the class they were merged into (old labels keep their meaning).
+RENAMED: dict[tuple[str, str], tuple[str, str]] = {
+    tuple(old.split(".", 1)): tuple(new.split(".", 1)) for old, new in _NAMING.get("renamed", {}).items()}
+# Per family, subtypes that name a device by default ("" = no subtype at all).
+_SUBTYPE_ALIASES: dict[str, dict[str, tuple[str, str]]] = {
+    family: {sub: (family, variant) for sub, variant in table.items()}
+    for family, table in _NAMING.get("subtype_aliases", {}).items()}
+
 # Former coarse detector classes -> catalog device a proposal starts as.
 CLASS_DEVICE: dict[str, tuple[str, str]] = {
     name: (family, "unspecified") for name, family in _NAMING.get("legacy_detector_classes", {}).items()}
@@ -93,6 +101,8 @@ def device_for_class(name: str) -> tuple[str, str] | None:
     family, _, variant = str(name).partition(".")
     if variant and (family, variant) in _CATALOG_SET:
         return family, variant
+    if variant and (family, variant) in RENAMED:            # a class merged into another
+        return RENAMED[(family, variant)]
     return CLASS_DEVICE.get(name)
 
 
@@ -111,7 +121,8 @@ def instance_class(inst: dict) -> str | None:
         # already a device id (CAD/SVG/COCO class maps may name devices directly)
         return family if _parse_device(family) in _CATALOG_SET else UNMAPPED
     if family in CATALOG_FAMILIES:
-        return device_class(family, inst.get("symbol_variant")) or UNMAPPED
+        renamed = RENAMED.get((family, inst.get("symbol_variant")))
+        return device_class(*(renamed or (family, inst.get("symbol_variant")))) or UNMAPPED
     if family in _NOT_A_DEVICE:
         return UNMAPPED
     return family
@@ -132,8 +143,36 @@ def _key(text) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(text or "").strip().lower()).strip("_")
 
 
+_WEATHERPROOF = _NAMING.get("weatherproof_suffix", "_weatherproof")
+
+
+def weatherproof_attribute(attributes) -> bool:
+    """Whether a source's attributes (a dict or a list of words) say weatherproof."""
+    if isinstance(attributes, dict):
+        return any(_key(k) in ("weatherproof", "wp", "weather_resistant") and v not in (False, None, "no")
+                   for k, v in attributes.items())
+    if isinstance(attributes, (list, tuple)):
+        return any(_key(a) in ("weatherproof", "wp", "weather_resistant") for a in attributes)
+    return False
+
+
 def canonical_device(device_type: str | None = None, subtype: str | None = None, *,
-                     description: str | None = None) -> tuple[str, str] | None:
+                     description: str | None = None, weatherproof: bool = False) -> tuple[str, str] | None:
+    """``canonical_device`` plus the weatherproof add-on: a device marked
+    weatherproof becomes its ``<variant>_weatherproof`` version where the
+    catalog has one (a plain receptacle: the weatherproof duplex)."""
+    device = _canonical_device(device_type, subtype, description=description)
+    if weatherproof and device is not None and not device[1].endswith(_WEATHERPROOF):
+        variant = device[1]
+        if variant == "unspecified" and device[0] in _SUBTYPE_ALIASES:
+            variant = _SUBTYPE_ALIASES[device[0]].get("", (None, variant))[1]
+        if (device[0], f"{variant}{_WEATHERPROOF}") in _CATALOG_SET:
+            return device[0], f"{variant}{_WEATHERPROOF}"
+    return device
+
+
+def _canonical_device(device_type: str | None = None, subtype: str | None = None, *,
+                      description: str | None = None) -> tuple[str, str] | None:
     """The one class name for a device, from whatever a source calls it.
 
     Every box (annotator, agents, model, DEVICES/SAM/CircuitNet/VLM-review
@@ -150,6 +189,8 @@ def canonical_device(device_type: str | None = None, subtype: str | None = None,
     family_key, sub_key = _key(device_type), _key(subtype)
     if (family_key, sub_key) in _CATALOG_SET:
         return family_key, sub_key
+    if (family_key, sub_key) in RENAMED:
+        return RENAMED[(family_key, sub_key)]
     if (family_key, sub_key) in NECA_DEVICE:
         return NECA_DEVICE[(family_key, sub_key)]
     if (family_key, sub_key) in _V7_IN_FAMILY:        # luminaire / 2x4: catalog family, v7 subtype
@@ -162,15 +203,17 @@ def canonical_device(device_type: str | None = None, subtype: str | None = None,
         base = device_for_raw_type(family_key)
         if base is None:
             return None
-    if base[1] != "unspecified":
-        return base
     family = base[0]
     if sub_key and (family, sub_key) in _CATALOG_SET:          # same name in its family
         return family, sub_key
-    if description:
+    if description:                     # a legend text is more specific than a bare type
         found = device_for_legend_text(description)
         if found and (family == "unknown_symbol" or found[0] == family):
             return found
+    if base[1] != "unspecified":
+        return base
+    if sub_key in _SUBTYPE_ALIASES.get(family, {}):            # plain receptacle = duplex
+        return _SUBTYPE_ALIASES[family][sub_key]
     return base
 
 
@@ -196,10 +239,21 @@ def canonical_instance(item: dict) -> dict:
     box that only maps to ``family.unspecified`` is no longer verified: its
     exact device has to be picked again."""
     family, variant = item.get("symbol_family"), item.get("symbol_variant")
-    if (family, variant or "unspecified") in _CATALOG_SET or (
-            family in CATALOG_FAMILIES and variant in (None, "", "unspecified")):
+    raw = (item.get("raw_device_type"), item.get("raw_subtype"))
+    if raw[0] == family and raw[1] != variant and raw in _CATALOG_SET:
+        # The source named an exact device that an earlier catalog had merged
+        # away and that exists again (e.g. a ceiling-mounted occupancy sensor).
+        return dict(item, symbol_variant=raw[1])
+    if (family, variant or "unspecified") in _CATALOG_SET:
         return item
-    device = canonical_device(family, variant)
+    if family in CATALOG_FAMILIES and variant in (None, "", "unspecified"):
+        # Not picked yet: the subtype its source gave (if any) may still name
+        # the device (a plain receptacle is a duplex).
+        device = canonical_device(family, item.get("raw_subtype"))
+        if device is None or device[1] == "unspecified":
+            return item
+    else:
+        device = canonical_device(family, variant)
     if device is None or (device[0] == "unknown_symbol" and family != "unknown_symbol"):
         if item.get("review_source") in _PERSON:
             return item                    # a person's own name for it: shown for them to resolve
@@ -348,14 +402,30 @@ def annotation_sha256(path: str | Path) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def labels_training_ready(labels_file: str | Path) -> bool:
+    """Whether a PDF's labels file is marked done for training."""
+    try:
+        return bool((_labels_file(Path(labels_file)).get("training_ready") or {}).get("ready"))
+    except (OSError, ValueError):
+        return False
+
+
+def page_training_ready(path: str | Path) -> bool:
+    """A page JSON counts; a page of a labels file only when its PDF is marked done."""
+    ref = parse_page_ref(path)
+    return True if ref is None else labels_training_ready(ref[0])
+
+
 def expand_page_paths(paths) -> list[Path]:
     """Page JSONs and page references, with every labels file expanded into
-    references to each of its saved pages."""
+    references to each of its saved pages. Labels files of PDFs not marked
+    done for training (the labeler's "PDF done" flag) give nothing."""
     out: list[Path] = []
     for path in paths:
         path = Path(path)
         if parse_page_ref(path) is None and path.name.endswith(LABELS_SUFFIX) and path.is_file():
-            out += [page_ref(path, int(k)) for k in sorted(_labels_file(path)["pages"], key=int)]
+            if labels_training_ready(path):
+                out += [page_ref(path, int(k)) for k in sorted(_labels_file(path)["pages"], key=int)]
         else:
             out.append(path)
     return out

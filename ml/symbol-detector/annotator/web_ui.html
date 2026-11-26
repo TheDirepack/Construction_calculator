@@ -127,6 +127,9 @@
   <div class="toolbar-group">
     <span id="currentDocBadge" style="font-weight:600;font-size:12.5px;color:#56b4db;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
     <select id="docSelect" hidden aria-label="Select blueprint document"></select>
+    <label class="checkbox" id="trainingReadyLabel" style="font-size:12.5px;white-space:nowrap;"
+           title="This PDF is done for now: training uses its saved, reviewed pages. Training uses only PDFs marked done.">
+      <input id="trainingReady" type="checkbox"> PDF done → training</label>
   </div>
   <div class="toolbar-group">
     <button id="prevPage" title="Previous page or JSON ([)">&lt;</button>
