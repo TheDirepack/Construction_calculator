@@ -78,7 +78,7 @@ def migrate_page(doc: label_store.Document, page: int, old: dict) -> str:
     if not (instances or rejected or assessment):
         return "empty"
     target = doc.page_json(page)
-    if target.is_file():
+    if doc.has_page(page):
         return "exists"
     session, index, _ = label_store.open_page(target)
     data, revision, _ = session.page_document(index)
@@ -163,7 +163,7 @@ def from_pool(store: Path, pool: Path, data_root: Path, *, dry_run: bool) -> dic
                     result = "failed"
                 stats[f"pages_{result}"] += 1
                 if result in ("migrated", "exists"):
-                    new = json.loads(doc.page_json(page).read_text())
+                    new = doc.read_page(page)
                     scales[str(path)] = (new["image_width"] / data["image_width"],
                                          new["image_height"] / data["image_height"], page)
             stats["legend_entries"] += migrate_legend(pool, source, doc, scales)

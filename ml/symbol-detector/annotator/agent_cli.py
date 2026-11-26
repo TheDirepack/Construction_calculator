@@ -336,7 +336,7 @@ def cmd_doc(args) -> None:
         if page in outline:
             o = outline[page]
             row.update({"sheet": o.get("sheet"), "title": o.get("title"), "flags": o.get("flags")})
-        if doc.page_json(page).is_file():
+        if doc.has_page(page):
             status = label_store.page_status(doc, page)
             row.update({"assessed": status["assessed"], "boxes": status["boxes"]})
         rows.append(row)

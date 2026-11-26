@@ -620,7 +620,7 @@ def _vocabulary_warning(session, ident: str, family: str, variant: str, warnings
 def _mark_box(session, ident: object, page: int = 0) -> list[float]:
     """Box of a numbered candidate from the last ``marks`` call on this page."""
     from annotator import vlm_tools
-    marks = vlm_tools.load_marks(session._json_path(page))
+    marks = vlm_tools.load_marks(session.page_address(page))
     if not isinstance(ident, str) or ident not in marks:
         raise ValueError(f"unknown mark {ident!r}; run marks on this region first")
     return [float(v) for v in marks[ident]]

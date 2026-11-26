@@ -215,19 +215,36 @@ def _devices_json_for(pdf: Path) -> Path | None:
 
 
 def _find_proposals_for_pdf(pdf: Path, work_dir: Path | None = None) -> Path | None:
+    """The machine-proposal file for a PDF: its extracted ``*_DEVICES.json``
+    (the file people and agents edit) first, else a SAM/CircuitNet run."""
     work = work_dir or DEFAULT_WORK_DIR
     stem = pdf.stem
+    devices = _devices_json_for(pdf)
+    if devices is not None:
+        return devices
+    found = sorted(pdf.parent.glob(f"{stem}_devices.json")) + sorted(pdf.parent.glob(f"{stem}_DEVICES.json"))
+    if found:
+        return found[0]
     for folder, pattern in (("sam3_cleaned", f"{stem}*_CLEANED.json"),
                             ("circuitnet_proposals", f"{stem}*.json"),
                             ("sam3_proposals", f"{stem}*.json")):
         found = sorted((work / folder).glob(pattern))
         if found:
             return found[0]
-    devices = _devices_json_for(pdf)
-    if devices is not None:
-        return devices
-    found = sorted(pdf.parent.glob(f"{stem}_devices.json")) + sorted(pdf.parent.glob(f"{stem}_DEVICES.json"))
-    return found[0] if found else None
+    return None
+
+
+def _parse_proposals(raw: bytes, source_hash: str | None) -> dict | None:
+    """A proposal file's content, if it is one and matches this PDF revision."""
+    try:
+        loaded = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(loaded, dict) or not isinstance(loaded.get("devices"), list):
+        return None
+    if loaded.get("source_pdf_sha256") and loaded["source_pdf_sha256"] != source_hash:
+        return None
+    return loaded
 
 
 def _load_proposals(pdf: Path, source_hash: str | None) -> dict | None:
@@ -236,14 +253,32 @@ def _load_proposals(pdf: Path, source_hash: str | None) -> dict | None:
     if path is None or not path.is_file():
         return None
     try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return _parse_proposals(path.read_bytes(), source_hash)
+    except OSError:
         return None
-    if not isinstance(loaded, dict) or not isinstance(loaded.get("devices"), list):
-        return None
-    if loaded.get("source_pdf_sha256") and loaded["source_pdf_sha256"] != source_hash:
-        return None
-    return loaded
+
+
+def _box_iou(a, b) -> float:
+    try:
+        ax0, ay0, ax1, ay1 = (float(v) for v in a)
+        bx0, by0, bx1, by1 = (float(v) for v in b)
+    except (TypeError, ValueError):
+        return 0.0
+    w = min(ax1, bx1) - max(ax0, bx0)
+    h = min(ay1, by1) - max(ay0, by0)
+    if w <= 0 or h <= 0:
+        return 0.0
+    inter = w * h
+    union = (ax1 - ax0) * (ay1 - ay0) + (bx1 - bx0) * (by1 - by0) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _machine_pending(item: dict) -> bool:
+    """A machine proposal nobody has accepted, verified or redrawn yet."""
+    return (str(item.get("instance_id", "")).startswith("proposal_")
+            and item.get("review_status") != "accepted"
+            and item.get("verified_ground_truth") is not True
+            and item.get("review_source") not in ("human", "manual_draft"))
 
 
 def default_out_dir(pdf: Path, source_hash: str) -> Path:
@@ -925,6 +960,11 @@ class LabelingSession:
                     if isinstance(row.get("risk_terms", []), list) else [],
                 }
         self.proposals = None
+        self.proposals_sha: str | None = None
+        self._proposals_fixed = Path(proposals).resolve() if proposals is not None else None
+        self._proposals_sig: tuple | None = None
+        self._proposals_found_at = 0.0
+        self._stored_revisions: dict[int, str | None] = {}
         if proposals is not None:
             if not self.pdf:
                 raise LabelingError("--proposals requires --pdf")
@@ -937,14 +977,98 @@ class LabelingSession:
             if (not self.proposals.get("source_pdf_sha256") and
                     self.proposals.get("source_file") != self.pdf.name):
                 raise LabelingError("unhashed proposals must match the PDF filename")
-        elif self.pdf and auto_proposals:
-            self.proposals = _load_proposals(self.pdf, self.source_hash)
         self.auto_proposals = auto_proposals
         self._origin_pdf = self.pdf
+        if self.pdf:
+            self._sync_proposals(force=True)
         if self.pdf and not self._initial_out_dir:
             self._register_document()
+        if self.pdf:
+            self._init_proposals_record()
 
     MAX_OPEN_DOCUMENTS = 16
+    PROPOSALS_REDISCOVER_SECONDS = 5.0
+
+    def _sync_proposals(self, force: bool = False) -> None:
+        """Keep ``self.proposals`` equal to the proposal file on disk, so an
+        edited ``*_DEVICES.json`` shows up without restarting the server. The
+        known file is checked (one stat) on every page load; a newly added
+        file is looked for every few seconds."""
+        if not self.pdf:
+            return
+        now = time.monotonic()
+        path = self._proposals_fixed
+        if path is None and self.auto_proposals:
+            known = Path(self._proposals_sig[0]) if self._proposals_sig else None
+            if (force or known is None or not known.is_file()
+                    or now - self._proposals_found_at > self.PROPOSALS_REDISCOVER_SECONDS):
+                path = _find_proposals_for_pdf(self.pdf)
+                self._proposals_found_at = now
+            else:
+                path = known
+        try:
+            stat = path.stat() if path is not None else None
+        except OSError:
+            stat = None
+        if stat is None:
+            if self._proposals_sig is not None:      # the file it came from is gone
+                self.proposals, self.proposals_sha, self._proposals_sig = None, None, None
+            return
+        signature = (str(path), stat.st_size, stat.st_mtime_ns)
+        if signature == self._proposals_sig:
+            return
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return
+        self._proposals_sig = signature
+        self.proposals = _parse_proposals(raw, self.source_hash)
+        self.proposals_sha = hashlib.sha256(raw).hexdigest() if self.proposals is not None else None
+
+    def _proposals_record(self) -> dict:
+        return {"path": self._proposals_sig[0] if self._proposals_sig and self.proposals is not None
+                else None, "sha256": self.proposals_sha}
+
+    def _init_proposals_record(self) -> None:
+        """Pages saved before the proposal source was recorded count as
+        reviewed against the file as it is now; later edits to it show up."""
+        from annotator import document_labels
+        try:
+            data = document_labels.read(self.out_dir, self.json_prefix)
+        except (OSError, ValueError):
+            return
+        if data["pages"] and "proposals" not in data:
+            document_labels.set_proposals_record(self.out_dir, self.json_prefix,
+                                                 self._proposals_record())
+
+    def _baseline_proposals_sha(self, data: dict) -> str | None:
+        if "proposals_sha256" in data:
+            return data["proposals_sha256"]
+        from annotator import document_labels
+        return (document_labels.proposals_record(self.out_dir, self.json_prefix) or {}).get("sha256")
+
+    def _refresh_proposals(self, data: dict, index: int, width: int, height: int) -> dict:
+        """A saved page after its proposal file changed: untouched machine
+        boxes are replaced by the file's current boxes for this page. Accepted,
+        verified, hand-drawn and rejected boxes stay, and a new proposal on top
+        of one of them (IoU >= 0.5) is left out."""
+        kept = [i for i in data.get("instances", []) if isinstance(i, dict) and not _machine_pending(i)]
+        rejected = [r for r in data.get("rejected_proposals") or [] if isinstance(r, dict)]
+        blockers = [i.get("bbox_xyxy") for i in kept + rejected]
+        taken = {i.get("instance_id") for i in kept + rejected}
+        added = []
+        for item in self._proposal_instances(index, width, height):
+            if any(_box_iou(item["bbox_xyxy"], box) >= 0.5 for box in blockers):
+                continue
+            ident, n = item["instance_id"], 1
+            while ident in taken:
+                ident, n = f"{item['instance_id']}_r{n}", n + 1
+            taken.add(ident)
+            added.append(dict(item, instance_id=ident))
+        out = dict(data, instances=kept + added, proposals_sha256=self.proposals_sha)
+        if added:
+            out["verified_no_symbols"] = False
+        return out
 
     def resolve_pdf(self, path_or_name: str) -> Path:
         """A blueprint PDF by absolute path, path relative to the blueprints
@@ -1028,10 +1152,20 @@ class LabelingSession:
             raise LabelingError("page index out of range")
         return index
 
-    def _json_path(self, index: int) -> Path:
+    def page_address(self, index: int) -> Path:
+        """How agents name a page: ``<folder>/<prefix>_pNNNN.json`` (the page
+        file in --edit mode; for a PDF, an address inside the labels file)."""
         if self.edit:
             return self.edit_files[index]
         return self.out_dir / f"{self.json_prefix}_p{index + 1:04d}.json"
+
+    def _json_path(self, index: int) -> Path:
+        """The JSON holding a page: the page file in --edit mode, else the
+        document's labels file (every page of a PDF is in one file)."""
+        if self.edit:
+            return self.edit_files[index]
+        from annotator import document_labels
+        return document_labels.labels_path(self.out_dir, self.json_prefix)
 
     def _raster(self, index: int) -> tuple[Path, int, int, str]:
         self._assert_pdf_unchanged()
@@ -1125,22 +1259,35 @@ class LabelingSession:
             result = page_header(
                 source=self.pdf, document_id=self.pdf.name, page_index=index,
                 source_type="real_construction_pdf_manual", source_sha256=self.source_hash,
-                image_path=str(image.relative_to(page_path.parent)), image_sha256=image_hash,
+                image_path=str(image.relative_to(self.out_dir)), image_sha256=image_hash,
                 width=width, height=height)
             result["instances"] = self._proposal_instances(index, width, height)
+            result["proposals_sha256"] = self.proposals_sha
             return result
         return json.loads(page_path.read_text(encoding="utf-8"))
 
+    def _stored_page(self, index: int) -> tuple[dict | None, str | None, Path]:
+        """The saved page, its revision and the folder its image_path is relative to."""
+        path = self._json_path(index)
+        if self.edit:
+            if not path.is_file():
+                return None, None, path.parent
+            raw = path.read_bytes()
+            return json.loads(raw), hashlib.sha256(raw).hexdigest(), path.parent
+        from annotator import document_labels
+        data, revision = document_labels.get_page(self.out_dir, self.json_prefix, index + 1)
+        return data, revision, self.out_dir
+
     def _load(self, index: int) -> tuple[dict, str | None, Path]:
         self._page_index(index)
+        self._sync_proposals()
         image, width, height, image_hash = self._raster(index)
         path = self._json_path(index)
-        if path.is_file():
-            raw = path.read_bytes()
-            data = json.loads(raw)
+        data, revision, base = self._stored_page(index)
+        self._stored_revisions[index] = revision
+        if data is not None:
             if self.edit and _resolve_edit_image(path, str(data.get("image_path", ""))) != image:
                 raise RevisionConflict("source image reference changed during labeling; reopen the session")
-            revision = hashlib.sha256(raw).hexdigest()
             if self.pdf and data.get("source_pdf_sha256") != self.source_hash:
                 raise RevisionConflict("annotation belongs to another PDF revision")
             if data.get("image_width") is not None and int(data["image_width"]) != width:
@@ -1157,11 +1304,15 @@ class LabelingSession:
                     raise RevisionConflict("annotation image bytes changed")
             elif not stored_sha:
                 data["image_sha256"] = image_hash
-            if self.pdf and image.parent.parent == path.parent:
+            if self.pdf and image.parent.parent == base:
                 # Same bytes (hash checked above), possibly under a newer render
                 # name: training reads image_path, so it must name this file.
-                data["image_path"] = str(image.relative_to(path.parent))
+                data["image_path"] = str(image.relative_to(base))
             data = _normalize_loaded_document(data)
+            if self.pdf and self.proposals is not None and \
+                    self._baseline_proposals_sha(data) != self.proposals_sha:
+                data = self._refresh_proposals(data, index, width, height)
+                revision = hashlib.sha256(f"{revision}:{self.proposals_sha}".encode()).hexdigest()
         else:
             data = self._new_sheet(index, image, width, height, image_hash)
             revision = None
@@ -1171,34 +1322,48 @@ class LabelingSession:
 
     def page_overview(self) -> dict:
         """Which pages need review, without opening them: counts from every
-        saved page file, and for pages never opened, the machine proposals that
-        will appear as pending boxes on first open. Page files are read once
-        and remembered by size and modification time."""
+        saved page (the document's labels file, parsed once per change), and
+        for pages never opened, the machine proposals that will appear as
+        pending boxes on first open. A saved page whose proposal file changed
+        since counts the new proposals too (an estimate until it is opened)."""
         cache = self._overview_cache
         rows: dict[int, dict] = {}
         with self.lock:
             for index in range(self.page_count) if self.edit else ():
                 self._overview_row(self._json_path(index), index, rows, cache)
             if self.pdf:
-                pattern = re.compile(rf"^{re.escape(self.json_prefix)}_p(\d{{4,5}})\.json$")
-                for path in self.out_dir.glob(f"{self.json_prefix}_p*.json"):
-                    match = pattern.match(path.name)
-                    if match and 1 <= int(match.group(1)) <= self.page_count:
-                        self._overview_row(path, int(match.group(1)) - 1, rows, cache)
+                from annotator import document_labels
+                self._sync_proposals()
+                proposed: dict[int, int] = {}
                 for device in (self.proposals or {}).get("devices", []):
                     if not isinstance(device, dict):
                         continue
                     number = device.get("pdf_page") or device.get("page")
-                    if (type(number) is not int or not 1 <= number <= self.page_count
-                            or number - 1 in rows and rows[number - 1]["saved"]):
+                    if type(number) is not int or not 1 <= number <= self.page_count:
                         continue
                     if devices_skip_reason(device) or device_for_raw_type(
                             device.get("device_type") or device.get("broad_family")) is None:
                         continue
-                    row = rows.setdefault(number - 1, {"page": number - 1, "saved": False,
-                                                       "pending": 0, "verified": 0,
-                                                       "complete": False, "no_symbols": False})
-                    row["pending"] += 1
+                    proposed[number] = proposed.get(number, 0) + 1
+                record_sha = (document_labels.proposals_record(self.out_dir, self.json_prefix)
+                              or {}).get("sha256")
+                for number, data in document_labels.pages(self.out_dir, self.json_prefix).items():
+                    if not 1 <= number <= self.page_count:
+                        continue
+                    row = rows[number - 1] = {"page": number - 1, **_page_counts(data)}
+                    baseline = data.get("proposals_sha256", record_sha)
+                    if self.proposals is not None and baseline != self.proposals_sha and proposed.get(number):
+                        items = [i for i in data.get("instances") or [] if isinstance(i, dict)]
+                        settled = sum(1 for i in items if str(i.get("instance_id", "")).startswith("proposal_")
+                                      and not _machine_pending(i))
+                        settled += len(data.get("rejected_proposals") or [])
+                        human_pending = sum(1 for i in items if not _machine_pending(i)
+                                            and i.get("review_status") != "accepted")
+                        row["pending"] = human_pending + max(0, proposed[number] - settled)
+                for number, count in proposed.items():
+                    if number - 1 not in rows:
+                        rows[number - 1] = {"page": number - 1, "saved": False, "pending": count,
+                                            "verified": 0, "complete": False, "no_symbols": False}
         return {"page_count": self.page_count, "pages": [rows[k] for k in sorted(rows)]}
 
     @staticmethod
@@ -1213,14 +1378,7 @@ class LabelingSession:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 return
-            items = data.get("instances") or []
-            cache[str(path)] = (stat.st_size, stat.st_mtime_ns, {
-                "saved": True,
-                "pending": sum(1 for i in items if i.get("review_status") != "accepted"),
-                "verified": sum(1 for i in items if i.get("verified_ground_truth") is True),
-                "complete": data.get("page_complete") is True,
-                "no_symbols": data.get("verified_no_symbols") is True,
-            })
+            cache[str(path)] = (stat.st_size, stat.st_mtime_ns, _page_counts(data))
         rows[index] = {"page": index, **cache[str(path)][2]}
 
     def list_sibling_jsons(self) -> list[dict]:
@@ -1292,7 +1450,7 @@ class LabelingSession:
                 "proposals_enabled": self.proposals is not None,
                 "page_presence_suggestion": self.page_presence.get(index),
                 "mode": "edit" if self.edit else "pdf",
-                "json_filename": json_path.name,
+                "json_filename": json_path.name if self.edit else f"{json_path.name} (page {index + 1})",
                 "json_path": str(json_path),
                 "current_doc_name": doc_name,
                 "current_doc_path": doc_path,
@@ -1302,7 +1460,7 @@ class LabelingSession:
 
     def _labeled_stems(self) -> set[str]:
         """Sanitized PDF stems that have saved pages in the label store."""
-        from annotator import label_store
+        from annotator import document_labels, label_store
         roots = []
         if os.environ.get("BPS_LABELS_DIR"):
             roots += label_store.store_roots(label_store.default_store())
@@ -1315,10 +1473,13 @@ class LabelingSession:
             if not root.is_dir():
                 continue
             for folder in root.iterdir():
-                if folder.is_dir() and next(folder.glob("*_p[0-9][0-9][0-9][0-9]*.json"), None):
+                if folder.is_dir() and document_labels.has_labels(folder):
                     stems.add(folder.name.rsplit("_", 1)[0])
-            for page in root.glob("*_p[0-9][0-9][0-9][0-9]*.json"):     # flat --out-dir
-                stems.add(re.sub(r"[^a-zA-Z0-9_-]+", "_", page.name.rsplit("_p", 1)[0])[:48])
+            if document_labels.has_labels(root):                       # flat --out-dir
+                for page in root.glob(f"*{document_labels.SUFFIX}"):
+                    stems.add(re.sub(r"[^a-zA-Z0-9_-]+", "_", page.name[:-len(document_labels.SUFFIX)])[:48])
+                for page in root.glob("*_p[0-9][0-9][0-9][0-9]*.json"):
+                    stems.add(re.sub(r"[^a-zA-Z0-9_-]+", "_", page.name.rsplit("_p", 1)[0])[:48])
         return stems
 
     def list_documents(self) -> list[dict]:
@@ -1426,7 +1587,11 @@ class LabelingSession:
                 self.out_dir.mkdir(parents=True, exist_ok=True)
                 self._register_document()
             self.json_prefix = _store_json_prefix(self.out_dir) or self.json_prefix
-            self.proposals = _load_proposals(self.pdf, self.source_hash) if self.auto_proposals else None
+            self._proposals_fixed, self._proposals_sig = None, None
+            self._stored_revisions.clear()
+            self._render_cache.clear()
+            self._sync_proposals(force=True)
+            self._init_proposals_record()
 
             return self.page_state(0)
 
@@ -1454,24 +1619,28 @@ class LabelingSession:
             verified_instances = 0
             instances_by_family: dict[str, int] = {}
 
+            if self.pdf:
+                from annotator import document_labels
+                saved = document_labels.pages(self.out_dir, self.json_prefix)
+                stored = {n - 1: d for n, d in saved.items() if 1 <= n <= self.page_count}
+            else:
+                stored = {}
+                for page_idx in range(self.page_count):
+                    try:
+                        stored[page_idx] = json.loads(self._json_path(page_idx).read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        pass
             for page_idx in range(self.page_count):
                 page_json = self._json_path(page_idx)
-                p_data = None
-                if page_json.is_file():
-                    try:
-                        p_data = json.loads(page_json.read_text(encoding="utf-8"))
-                    except Exception:
-                        pass
-                if p_data is None:
-                    try:
-                        p_data, _, _ = self._load(page_idx)
-                    except Exception:
-                        p_data = {
-                            "image_width": 0, "image_height": 0,
-                            "instances": [], "rejected_proposals": [],
-                            "verified_no_symbols": False,
-                            "annotation_completeness": "unreviewed",
-                        }
+                saved_page = page_idx in stored
+                # Unsaved pages are listed without rendering them (a long set
+                # would otherwise render every sheet to export).
+                p_data = stored.get(page_idx) or {
+                    "image_width": None, "image_height": None,
+                    "instances": [], "rejected_proposals": [],
+                    "verified_no_symbols": False,
+                    "annotation_completeness": "unreviewed",
+                }
 
                 insts = p_data.get("instances", [])
                 total_instances += len(insts)
@@ -1485,9 +1654,9 @@ class LabelingSession:
                     "page_number": page_idx + 1,
                     "image_width": p_data.get("image_width"),
                     "image_height": p_data.get("image_height"),
-                    "json_path": str(page_json) if page_json.is_file() else None,
+                    "json_path": str(page_json) if saved_page else None,
                     "verified_no_symbols": p_data.get("verified_no_symbols", False),
-                    "annotation_completeness": p_data.get("annotation_completeness", "unreviewed" if not page_json.is_file() else "partial"),
+                    "annotation_completeness": p_data.get("annotation_completeness", "partial" if saved_page else "unreviewed"),
                     "instance_count": len(insts),
                     "instances": insts,
                     "rejected_proposals": p_data.get("rejected_proposals", []),
@@ -1749,9 +1918,29 @@ class LabelingSession:
             baseline.update(completeness(
                 verified_no_symbols=baseline.get("verified_no_symbols", False) is True,
                 page_complete=baseline.get("page_complete") is True))
-            encoded = (json.dumps(baseline, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-            _atomic_bytes(self._json_path(index), encoded)
-            return hashlib.sha256(encoded).hexdigest()
+            if self.edit:
+                encoded = (json.dumps(baseline, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+                _atomic_bytes(self._json_path(index), encoded)
+                return hashlib.sha256(encoded).hexdigest()
+            from annotator import document_labels
+            baseline["proposals_sha256"] = self.proposals_sha
+            try:
+                return document_labels.write_page(
+                    self.out_dir, self.json_prefix, index + 1, baseline,
+                    expected_revision=self._stored_revisions.get(index))
+            except document_labels.StaleRevision as exc:
+                raise RevisionConflict("page changed on disk; reload before saving") from exc
+
+
+def _page_counts(data: dict) -> dict:
+    items = [i for i in data.get("instances") or [] if isinstance(i, dict)]
+    return {
+        "saved": True,
+        "pending": sum(1 for i in items if i.get("review_status") != "accepted"),
+        "verified": sum(1 for i in items if i.get("verified_ground_truth") is True),
+        "complete": data.get("page_complete") is True,
+        "no_symbols": data.get("verified_no_symbols") is True,
+    }
 
 
 def _as_pending_import(item: dict) -> dict:
@@ -1761,6 +1950,11 @@ def _as_pending_import(item: dict) -> dict:
 
 
 def make_handler(session: LabelingSession):
+    # The page and its script are read once, so a long-running server always
+    # serves the UI that matches its own API, even after the files are edited.
+    ui_html = (MODULE_DIR / "web_ui.html").read_bytes()
+    ui_js = (MODULE_DIR / "web_ui.js").read_bytes()
+
     class Handler(BaseHTTPRequestHandler):
         def _reply(self, code: int, body: bytes, mime: str,
                    extra_headers: dict[str, str] | None = None) -> None:
@@ -1815,9 +2009,9 @@ def make_handler(session: LabelingSession):
             url = urlsplit(self.path)
             try:
                 if url.path == "/":
-                    self._reply(200, (MODULE_DIR / "web_ui.html").read_bytes(), "text/html; charset=utf-8")
+                    self._reply(200, ui_html, "text/html; charset=utf-8")
                 elif url.path == "/web_ui.js":
-                    self._reply(200, (MODULE_DIR / "web_ui.js").read_bytes(), "text/javascript; charset=utf-8")
+                    self._reply(200, ui_js, "text/javascript; charset=utf-8")
                 elif url.path == "/api/session":
                     self._json(200, {
                         "token": session.token,

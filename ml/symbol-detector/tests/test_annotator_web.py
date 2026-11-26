@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 fitz = pytest.importorskip("fitz")
+from annotator import document_labels  # noqa: E402
 from annotator.model import Sheet
 from annotator.web import (
     LabelingError, LabelingSession, RevisionConflict, make_handler,
@@ -76,7 +77,10 @@ def test_pdf_labeler_saves_safe_positive_only_page(tmp_path):
     assert next_page["revision"] is None
     assert next_page["document"]["instances"] == []
     assert next_page["document"]["annotation_completeness_verified"] is False
-    assert (tmp_path / "labels" / "electrical_p0001.json").is_file()
+    # Every page of the PDF is in one labels file; page 2 was never saved.
+    stored = document_labels.pages(tmp_path / "labels", "electrical")
+    assert list(stored) == [1] and stored[1]["instances"][0]["verified_ground_truth"] is True
+    assert not list((tmp_path / "labels").glob("*_p0001.json"))
 
 
 def test_verified_no_symbols_roundtrip_and_conflict_rejection(tmp_path):
@@ -116,7 +120,7 @@ def test_page_presence_proposals_are_read_only_and_source_hash_bound(tmp_path):
     page = session.page_state(0)
     assert page["page_presence_suggestion"]["suggestion"] == "possible_symbols"
     assert page["document"]["verified_no_symbols"] is False
-    assert not (tmp_path / "labels" / "source_p0001.json").exists()
+    assert not document_labels.pages(tmp_path / "labels", "source")
     forged = json.loads(suggestions.read_text())
     forged["documents"][0]["pages"][0]["verified_no_symbols"] = True
     suggestions.write_text(json.dumps(forged))
@@ -282,7 +286,8 @@ def test_cli_sheet_model_roundtrip_preserves_review_metadata(tmp_path):
     box = dict(_box(), proposal_score=.91, proposal_neca_symbol_id="NECA_X",
                modifier_evidence=[{"attribute":"control_features","value":"dimmer"}])
     session.save(0, revision=None, instances=[box], rejected=[])
-    file = tmp_path / "output" / "drawing_p0001.json"
+    entry = document_labels.pages(tmp_path / "output", "drawing")[1]
+    file = document_labels.write_page_view(tmp_path / "output", "drawing", 1, entry, tmp_path / "views")
     legacy_cli = Sheet.load(file)
     copy_path = tmp_path / "roundtrip.json"
     legacy_cli.save(copy_path)
@@ -578,11 +583,13 @@ def test_saved_pages_are_training_ready(tmp_path):
         doc.close()
         session = LabelingSession(pdf=pdf, out_dir=labels)
         session.save(0, revision=None, instances=[box], rejected=[], metadata={"page_complete": True})
-    saved = json.loads((labels / "job_a_p0001.json").read_text())
+    saved = document_labels.pages(labels, "job_a")[1]
     assert saved["project_family_id"] == "file_1_blueprints_job_a" and saved["source_group_verified"] is True
     assert saved["exhaustive_families"] == EXHAUSTIVE_FAMILIES
     assert saved["annotation_completeness"] == "complete" and saved["annotation_scope"] == "exhaustive_electrical"
-    manifest = build_manifest(sorted(labels.glob("*.json")), val_fraction=.25, test_fraction=.25)
+    views = [document_labels.write_page_view(labels, n, 1, document_labels.pages(labels, n)[1],
+                                             tmp_path / "views") for n in ("job_a", "job_b", "job_c", "job_d")]
+    manifest = build_manifest(views, val_fraction=.25, test_fraction=.25)
     assert sum(len(v) for v in manifest["splits"].values()) == 4
 
     session = LabelingSession(pdf=blue / "job_a.pdf", out_dir=labels)
@@ -596,5 +603,5 @@ def test_saved_pages_are_training_ready(tmp_path):
         session.save(0, revision=revision, instances=[dict(box, symbol_variant="unspecified")],
                      rejected=[], metadata={"page_complete": False})
     session.save(0, revision=revision, instances=[pending], rejected=[], metadata={"page_complete": False})
-    partial = json.loads((labels / "job_a_p0001.json").read_text())
+    partial = document_labels.pages(labels, "job_a")[1]
     assert partial["exhaustive_families"] == [] and partial["annotation_scope"] == "positive_only"

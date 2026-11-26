@@ -7,6 +7,7 @@ from __future__ import annotations
 import concurrent.futures
 import http.client
 import json
+import os
 import threading
 import time
 from http.server import ThreadingHTTPServer
@@ -17,6 +18,7 @@ import pytest
 
 fitz = pytest.importorskip("fitz")
 
+from annotator import document_labels  # noqa: E402
 from annotator import label_store, web  # noqa: E402
 from annotator.web import LabelingError, LabelingSession, make_handler  # noqa: E402
 
@@ -74,7 +76,8 @@ def test_any_page_of_a_long_document_opens_and_saves(long_pdf, tmp_path):
         assert f"page={page}" in state["image_url"]
     revision = session.save(399, revision=None, instances=[_pending("last_1")], rejected=[])
     assert session.page_state(399)["revision"] == revision
-    assert session._json_path(399).name.endswith("_p0400.json")
+    assert session.page_address(399).name.endswith("_p0400.json")
+    assert list(document_labels.pages(tmp_path / "labels", session.json_prefix)) == [400]
     for bad in (-1, 400, 10_000):
         with pytest.raises(LabelingError):
             session.page_state(bad)
@@ -104,14 +107,15 @@ def test_page_requests_out_of_range_are_refused_over_http(long_pdf, tmp_path):
         worker.join(timeout=10)
 
 
-def test_documents_over_ten_thousand_pages_use_five_digit_page_files(huge_pdf, tmp_path):
+def test_documents_over_ten_thousand_pages_use_five_digit_page_numbers(huge_pdf, tmp_path):
     store = tmp_path / "labels"
     session = LabelingSession(pdf=huge_pdf, out_dir=store, dpi=30)
     assert session.page_count == 10_002
     session.save(10_001, revision=None, instances=[_pending("far_1")], rejected=[])
-    path = session._json_path(10_001)
+    path = session.page_address(10_001)
     assert path.name.endswith("_p10002.json")
     assert label_store.page_number(path) == 10_002
+    assert list(document_labels.pages(store, session.json_prefix)) == [10_002]
     assert session.page_state(10_001)["document"]["instances"][0]["instance_id"] == "far_1"
     # The document list sees a document whose only labels are on 5-digit pages.
     assert "huge_set" in session._labeled_stems()
@@ -330,7 +334,7 @@ def test_browser_unsaved_pages_survive_a_long_walk_and_are_all_saved(chrome, lon
         dirty = _state(page, "Object.entries(s.pageCache).filter(([p, c]) => c.dirty).map(([p]) => Number(p))")
         assert sorted(dirty) == [0, 1, 2]
         assert len(cached) <= 3 + 12
-        assert not any((tmp_path / "labels").glob("*_p0002.json"))
+        assert 2 not in document_labels.pages(tmp_path / "labels", "long_set")
 
         page.locator("#pageJump").fill("2")
         page.locator("#pageJump").press("Enter")
@@ -340,9 +344,9 @@ def test_browser_unsaved_pages_survive_a_long_walk_and_are_all_saved(chrome, lon
         page.keyboard.press("Control+s")
         page.wait_for_function("() => document.querySelector('#message').textContent.startsWith('Saved')")
         for number in edited:
-            saved = json.loads(next((tmp_path / "labels").glob(f"*_p{number:04d}.json")).read_text())
+            saved = document_labels.pages(tmp_path / "labels", "long_set")[number]
             assert len(saved["instances"]) == 1, number
-        assert len(list((tmp_path / "labels").glob("*_p*.json"))) == 3     # visited pages are not written
+        assert len(document_labels.pages(tmp_path / "labels", "long_set")) == 3   # visited pages are not written
         page.close()
 
 
@@ -428,19 +432,21 @@ def test_overview_counts_saved_pages_and_unopened_proposal_pages(long_pdf, tmp_p
     assert session.page_state(59)["document"]["instances"] == []
     assert session.page_overview()["page_count"] == 400
 
-    # Page files are read once and again only after they change.
+    # The labels file is parsed once, and again only after it changes.
     reads = []
     real = Path.read_text
     monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: reads.append(self.name) or real(self, *a, **k))
     session.page_overview()
-    assert reads == []
-    time.sleep(0.01)
+    assert [n for n in reads if n.endswith("_labels.json")] == []
     session.save(9, revision=session.page_state(9)["revision"],
                  instances=[_verified("b")], rejected=[])
     reads.clear()
     rows = {r["page"]: r for r in session.page_overview()["pages"]}
     assert rows[9]["pending"] == 0
-    assert [n for n in reads if n.endswith(".json")] == [session._json_path(9).name]
+    assert [n for n in reads if n.endswith("_labels.json")] == []    # the writer cached what it wrote
+    os.utime(session._json_path(9), ns=(time.time_ns(), time.time_ns()))   # changed by someone else
+    session.page_overview()
+    assert [n for n in reads if n.endswith("_labels.json")] == [session._json_path(9).name]
 
 
 def test_overview_of_a_ten_thousand_page_document_is_fast(huge_pdf, tmp_path):

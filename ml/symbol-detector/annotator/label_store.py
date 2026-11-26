@@ -14,7 +14,7 @@ extracted ``*_DEVICES.json``. The store is the ``1_blueprints`` folder::
 Each document folder holds::
 
     document.json          source, hash, page count, pages to label
-    <prefix>_p0012.json    annotation page (web annotator --pdf format)
+    <prefix>_labels.json   every saved page of the PDF (annotator.document_labels)
     images/                pages rendered on demand from the PDF
     legend/                per-document legend crops (agents)
     marks/                 numbered candidate cache (agents)
@@ -25,10 +25,17 @@ Sources outside the two drawing folders (pool photos) go to
 a ``1_blueprints`` folder) is a flat store instead: ``<store>/<stem>_<sha12>/``
 and ``<store>/batches``. The annotator, agents, model pre-labeling and
 training all resolve folders through this module, so they read and write the
-same page files. Page JSONs are named by 1-based PDF page number.
+same labels file. Pages are numbered from 1 (PDF page numbers).
 
-Photos (no PDF) are ``kind: "image"`` documents: one page whose JSON points at
-the photo kept in the document's ``images/`` folder.
+Agents name a page by its address ``<document folder>/<prefix>_p0012.json``
+(``Document.page_json``); for a PDF that is not a file on disk, the page is
+stored in the labels file. Training reads generated per-page views
+(``training_view``, under ``work/label_pages``), rewritten from the labels
+file each time pages are listed.
+
+Photos (no PDF) are ``kind: "image"`` documents: one page whose JSON (a real
+file at its address) points at the photo kept in the document's ``images/``
+folder.
 """
 from __future__ import annotations
 
@@ -38,13 +45,20 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from annotator.web import LabelingSession, sha256_file
+from annotator import document_labels
+from annotator.web import DEFAULT_WORK_DIR, LabelingSession, sha256_file
 from blueprint_symbols.label_schema import COORDINATE_SYSTEM, page_header
 
 DOCUMENT_FILE = "document.json"
 BATCH_DIR = "batches"
 LABELS_DIR = "devices"                # beside each drawing, with its DEVICES.json
 EVALUATION_DIR = "evaluation"
+TRAINING_VIEWS_DIR = DEFAULT_WORK_DIR / "label_pages"     # $BPS_LABEL_VIEWS_DIR overrides
+
+
+def views_root() -> Path:
+    env = os.environ.get("BPS_LABEL_VIEWS_DIR")
+    return Path(env).expanduser().resolve() if env else TRAINING_VIEWS_DIR
 PAGE_NAME = re.compile(r"_p(\d{4,5})\.json$")
 SAFE = re.compile(r"[^a-zA-Z0-9_-]+")
 
@@ -196,7 +210,32 @@ class Document:
         return str(self.meta.get("source_rel") or self.source.name)
 
     def page_json(self, page: int) -> Path:
+        """A page's address (what agents pass around). For a photo it is the
+        page file; a PDF's pages are stored in ``labels_path``."""
         return self.folder / f"{self.json_prefix}_p{page:04d}.json"
+
+    @property
+    def labels_path(self) -> Path:
+        return document_labels.labels_path(self.folder, self.json_prefix)
+
+    def read_page(self, page: int) -> dict | None:
+        """A saved page (a copy), or None if it was never saved."""
+        if self.kind == "image":
+            path = self.page_json(page)
+            return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+        return document_labels.get_page(self.folder, self.json_prefix, page)[0]
+
+    def has_page(self, page: int) -> bool:
+        if self.kind == "image":
+            return self.page_json(page).is_file()
+        return page in self.saved_pages()
+
+    def saved_pages(self) -> dict[int, dict]:
+        """Every saved page by page number (shared data: do not mutate)."""
+        if self.kind == "image":
+            data = self.read_page(1)
+            return {1: data} if data is not None else {}
+        return document_labels.pages(self.folder, self.json_prefix)
 
     @property
     def survey_path(self) -> Path:
@@ -313,8 +352,8 @@ def page_status(doc: Document, page: int) -> dict:
     path = doc.page_json(page)
     row = {"pdf_page": page, "page": str(path), "assessed": False, "boxes": 0, "agent_boxes": 0,
            "model_boxes": 0, "human_verified": 0, "symbols_present": None, "page_kind": None}
-    if path.is_file():
-        data = json.loads(path.read_text(encoding="utf-8"))
+    data = doc.read_page(page)
+    if data is not None:
         assessment = data.get("vlm_assessment") or {}
         instances = data.get("instances") or []
         row.update({
@@ -367,8 +406,7 @@ def labeled_pages(store: Path, *, data_root: Path | None = None) -> dict[str, li
     """
     out: dict[str, list[Path]] = {"train": [], "evaluation": []}
     roles: dict[Path, str | None] = {}
-    for page in _usable_pages(store):
-        doc = document_for(page)
+    for doc, page in _usable_pages(store):
         if doc.folder not in roles:
             roles[doc.folder] = document_role(doc, data_root)
         if roles[doc.folder]:
@@ -381,9 +419,9 @@ def training_pages(store: Path, *, data_root: Path | None = None) -> list[Path]:
     return labeled_pages(store, data_root=data_root)["train"]
 
 
-def _usable_pages(store: Path) -> list[Path]:
-    """Saved pages of every document that training or evaluation can use (see
-    ``label_schema.training_usable``), with their page image on disk.
+def _usable_pages(store: Path) -> list[tuple[Document, Path]]:
+    """Training views of every saved page that training or evaluation can use
+    (see ``label_schema.training_usable``), with their page image on disk.
 
     A page image missing on this machine (labeled elsewhere, cache cleared) is
     rendered again from the PDF; the session checks it against the saved hash.
@@ -391,15 +429,52 @@ def _usable_pages(store: Path) -> list[Path]:
     from blueprint_symbols.label_schema import training_usable
     out = []
     for doc in iter_documents(store, skip_missing=True):
-        for path in sorted(doc.folder.glob(f"{doc.json_prefix}_p[0-9]*.json")):
-            data = json.loads(path.read_text(encoding="utf-8"))
+        if doc.kind == "image":
+            path = doc.page_json(1)
+            data = doc.read_page(1)
+            if data is not None and training_usable(data):
+                out.append((doc, path))
+            continue
+        views = []
+        for page, data in sorted(doc.saved_pages().items()):
             if not training_usable(data):
                 continue
-            if not (path.parent / str(data.get("image_path", ""))).is_file():
-                session, index, _ = open_page(path)
+            if not (doc.folder / str(data.get("image_path", ""))).is_file():
+                session, index, _ = open_page(doc.page_json(page))
                 session.page_document(index)
-            out.append(path)
+                data = doc.read_page(page)
+            views.append(training_view(doc, page, data))
+        _prune_views(doc, views)
+        out += [(doc, view) for view in views]
     return out
+
+
+def training_view(doc: Document, page: int, data: dict, root: Path | None = None) -> Path:
+    """A per-page JSON for training (generated, never edited): the saved page
+    with an absolute image path, at ``work/label_pages/<folder>/<prefix>_pNNNN.json``.
+    Rewritten only when its content changed."""
+    return document_labels.write_page_view(
+        doc.folder, doc.json_prefix, page, data, Path(root or views_root()) / doc.folder.name,
+        label_store_document=str(doc.folder), label_store_page=page)
+
+
+def _prune_views(doc: Document, keep: list[Path], root: Path | None = None) -> None:
+    folder = Path(root or views_root()) / doc.folder.name
+    if folder.is_dir():
+        for stale in set(folder.glob("*_p[0-9]*.json")) - set(keep):
+            stale.unlink()
+
+
+def view_source(view: Path) -> tuple[Document, int]:
+    """The document and page a training view (or a page address) is of."""
+    view = Path(view)
+    try:
+        data = json.loads(view.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if data.get("label_store_document"):
+        return load_document(Path(data["label_store_document"])), int(data["label_store_page"])
+    return document_for(view), page_number(view)
 
 
 IMAGE_PAGE_FIELDS = ("format_version", "source_id", "source_license", "project_family_id",
@@ -460,3 +535,83 @@ def create_document(store: Path, source: Path, *, targets: dict[int, str] | None
     doc.page_json(1).write_text(json.dumps(page, indent=1), encoding="utf-8")
     doc.save_meta()
     return doc
+
+
+# --------------------------------------------------------------------------
+# moving labels between machines (remote/push_labels.sh)
+# --------------------------------------------------------------------------
+
+PUSHED_SUFFIX = "_labels.pushed.json"
+REMOTE_BACKUP_SUFFIX = "_labels.remote_backup.json"
+
+
+def stage_push(store: Path, stage: Path) -> tuple[list[Path], list[Path], int]:
+    """Write each document's training-usable pages as
+    ``<folder>/<prefix>_labels.pushed.json`` under ``stage`` (same relative
+    folders as the store). Returns (staged files relative to ``stage``, page
+    images relative to ``store``, number of pages)."""
+    from blueprint_symbols.label_schema import training_usable
+    store, stage = Path(store).resolve(), Path(stage)
+    staged, images, count = [], [], 0
+    for doc in iter_documents(store, skip_missing=True):
+        if doc.kind != "pdf":
+            continue
+        usable = {n: d for n, d in doc.saved_pages().items() if training_usable(d)}
+        if not usable:
+            continue
+        rel = doc.folder.relative_to(store) / f"{doc.json_prefix}{PUSHED_SUFFIX}"
+        (stage / rel).parent.mkdir(parents=True, exist_ok=True)
+        (stage / rel).write_text(json.dumps({
+            "kind": document_labels.KIND, "format_version": document_labels.FORMAT_VERSION,
+            "json_prefix": doc.json_prefix,
+            "pages": {str(n): d for n, d in sorted(usable.items())}}), encoding="utf-8")
+        staged.append(rel)
+        count += len(usable)
+        for data in usable.values():
+            image = doc.folder / str(data.get("image_path", ""))
+            if data.get("image_path") and image.is_file():
+                images.append(image.relative_to(store))
+    return staged, sorted(set(images)), count
+
+
+def merge_pushed(store: Path, data_root: Path) -> dict:
+    """On the receiving machine: merge every ``*_labels.pushed.json`` into its
+    document's labels file, page by page. Pages labelled here and not pushed
+    are kept; a page that is replaced is kept in ``*_labels.remote_backup.json``.
+    A drawing this store never added gets its document entry from this
+    machine's own copy of the PDF (same name in 1_blueprints or evaluation,
+    same bytes)."""
+    from blueprint_symbols.blueprint_sets import blueprint_sets
+    store = Path(store).resolve()
+    sets = blueprint_sets(data_root)
+    result = {"pages_written": 0, "pages_replaced": 0, "documents_added": 0, "missing_pdf": []}
+    for pushed in sorted(p for root in store_roots(store) if root.is_dir()
+                         for p in root.glob(f"*/*{PUSHED_SUFFIX}")):
+        folder = pushed.parent
+        incoming = json.loads(pushed.read_text(encoding="utf-8"))
+        prefix = incoming["json_prefix"]
+        if not (folder / DOCUMENT_FILE).exists():
+            first = next(iter(incoming["pages"].values()))
+            name, sha = first.get("document_id", ""), first.get("source_pdf_sha256") or ""
+            pdf = sets.evaluation.get(name.casefold()) or sets.train.get(name.casefold())
+            if pdf is None or not sha or doc_folder_name(pdf, sha) != folder.name:
+                result["missing_pdf"].append(folder.name)
+                continue
+            create_document(store, pdf, sha256=sha, meta={"origin": "pushed_labels"})
+            result["documents_added"] += 1
+        backup_path = folder / f"{prefix}{REMOTE_BACKUP_SUFFIX}"
+        backup = (json.loads(backup_path.read_text(encoding="utf-8")) if backup_path.is_file()
+                  else {"pages": {}})
+        for number, page in incoming["pages"].items():
+            old, _ = document_labels.get_page(folder, prefix, int(number))
+            if old == page:
+                continue
+            if old is not None:
+                backup["pages"].setdefault(number, []).append(old)
+                result["pages_replaced"] += 1
+            document_labels.write_page(folder, prefix, int(number), page)
+            result["pages_written"] += 1
+        if backup["pages"]:
+            backup_path.write_text(json.dumps(backup, indent=1), encoding="utf-8")
+        pushed.unlink()
+    return result

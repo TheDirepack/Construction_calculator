@@ -112,7 +112,8 @@ def test_browser_and_agents_open_the_same_page_with_the_same_proposals(tmp_path)
     store = label_store.default_store()
     doc = label_store.load_document(web.out_dir)         # registered in the store
     assert web.out_dir.parent == store
-    assert web._json_path(0) == doc.page_json(1)
+    assert web.page_address(0) == doc.page_json(1)
+    assert web._json_path(0) == doc.labels_path
     first, _, _ = web.page_document(0)
     assert [(i["symbol_family"], i["review_source"], i["verified_ground_truth"])
             for i in first["instances"]] == [("receptacle", "devices_json", False)]
@@ -128,8 +129,10 @@ def test_browser_and_agents_open_the_same_page_with_the_same_proposals(tmp_path)
     box = dict(second["instances"][0], symbol_variant="duplex", review_status="accepted",
                review_source="human", verified_ground_truth=True, uncertain=False)
     web.save(0, revision=revision, instances=[box], rejected=[])
-    assert label_store.training_pages(store) == [doc.page_json(1)]
-    trained = label_schema.load_training_page(doc.page_json(1))["instances"][0]
+    [view] = label_store.training_pages(store)
+    assert label_store.view_source(view)[0].folder == doc.folder
+    assert label_store.view_source(view)[1] == 1
+    trained = label_schema.load_training_page(view)["instances"][0]
     assert trained["symbol_family"] == "receptacle.duplex"
     assert (trained["device_family"], trained["device_variant"]) == ("receptacle", "duplex")
 

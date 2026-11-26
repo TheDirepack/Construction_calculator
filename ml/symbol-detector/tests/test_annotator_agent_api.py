@@ -10,6 +10,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 fitz = pytest.importorskip("fitz")
+from annotator import document_labels  # noqa: E402
 from annotator import agent_api
 from annotator.web import LabelingError, LabelingSession, RevisionConflict, make_handler
 
@@ -160,7 +161,7 @@ def test_act_adds_unreviewed_proposal_and_advances_revision(tmp_path):
     assert result["boxes"][0]["status"] == "proposed"
     assert result["counts"]["total"] == 1
 
-    saved = json.loads((tmp_path / "labels" / "plans_p0001.json").read_text())
+    saved = document_labels.pages(tmp_path / "labels", "plans")[1]
     stored = saved["instances"][0]
     assert stored["review_source"] == "vlm_agent"
     assert stored["review_status"] == "unreviewed"
@@ -194,7 +195,7 @@ def test_act_dry_run_validates_without_writing(tmp_path):
     result = agent_api.apply_actions(session, 0, revision=None, actions=[_add()], dry_run=True)
     assert result["written"] is False and result["dry_run"] is True
     assert result["revision"] is None
-    assert not (tmp_path / "labels" / "plans_p0001.json").exists()
+    assert 1 not in document_labels.pages(tmp_path / "labels", "plans")
     assert agent_api.page_context(session, 0)["boxes"] == []
     # A dry run still reports every gate that a real write would hit.
     with pytest.raises(ValueError, match="action 0"):
@@ -240,7 +241,7 @@ def test_act_supports_rotation_and_keeps_aabb_consistent(tmp_path):
     session = _session(tmp_path, pages=1)
     result = agent_api.apply_actions(session, 0, revision=None,
                                      actions=[_add(box=(300.0, 300.0, 400.0, 320.0), rotation_deg=90)])
-    saved = json.loads((tmp_path / "labels" / "plans_p0001.json").read_text())["instances"][0]
+    saved = document_labels.pages(tmp_path / "labels", "plans")[1]["instances"][0]
     assert saved["rotation_degrees"] == 90
     assert saved["bbox_rotated"]["angle_deg"] == 90
     x0, y0, x1, y1 = saved["bbox_xyxy"]
@@ -277,7 +278,7 @@ def test_assess_page_is_stored_as_advisory_metadata(tmp_path):
     assert stored["agent"] == "nemotron" and stored["assessed_at"].endswith("Z")
     assert result["page_flags"]["verified_no_symbols"] is False
 
-    saved = json.loads((tmp_path / "labels" / "plans_p0001.json").read_text())
+    saved = document_labels.pages(tmp_path / "labels", "plans")[1]
     assert saved["vlm_assessment"]["page_kind"] == "other_discipline_plan"
     assert saved["annotation_completeness"] == "partial"
     assert saved["verified_no_symbols"] is False
@@ -447,7 +448,7 @@ def test_cli_batches_next_act_and_status(tmp_path, capsys):
     code, acted = run("act", nxt["next"], "--actions", actions, "--agent", "test-vlm")
     assert code == 0 and acted["written"] is True
     assert acted["page_flags"]["vlm_assessment"]["agent"] == "test-vlm"
-    saved = json.loads(scan.page_json(1).read_text())
+    saved = scan.read_page(1)
     assert saved["source_pdf_sha256"] == scan.sha256 and (scan.folder / saved["image_path"]).is_file()
 
     # Survey: page 4 is an electrical plan triage missed, page 3 is not electrical.
@@ -617,7 +618,7 @@ def test_build_store_migrates_pool_labels_and_photos(tmp_path):
     docs = {d.kind: d for d in label_store.iter_documents(store)}
     pdf_doc, photo = docs["pdf"], docs["image"]
     assert pdf_doc.source == pdf.resolve() and pdf_doc.targets == {2: "text:ELECTRICAL"}
-    page = json.loads(pdf_doc.page_json(2).read_text())
+    page = pdf_doc.read_page(2)
     assert page["image_width"] == 400 and page["vlm_assessment"]["symbols_present"] == "yes"
     assert page["instances"][0]["bbox_xyxy"] == [200.0, 130.0, 224.0, 154.0]
     assert photo.source.parent == photo.folder / "images" and photo.page_count == 1

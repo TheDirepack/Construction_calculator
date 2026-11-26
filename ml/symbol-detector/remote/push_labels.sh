@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # Copy this machine's human-labelled pages to the training machine's label
 # store, so post-training sees them. Both stores are the 1_blueprints folder:
-# each drawing's labels are in the devices/ folder beside it.
+# each drawing's labels are one <prefix>_labels.json in the devices/ folder
+# beside it (annotator.document_labels).
 #
 #   ml/symbol-detector/remote/push_labels.sh [local_store]
 #
 # Sends every page training can use (a verified box, "every symbol on this
-# page is labeled", or "verified no target symbols") with its page image.
-# Files it would replace on the remote are kept as *.remote_backup. Safe to
-# re-run: rsync only sends what changed. Override the target with REMOTE=user@host
-# and REMOTE_STORE=path.
+# page is labeled", or "verified no target symbols") with its page image. The
+# remote merges them page by page into its own labels file, so pages labelled
+# there (agents, model) are kept; a remote page it replaces is saved in
+# <prefix>_labels.remote_backup.json. Safe to re-run. Override the target with
+# REMOTE=user@host and REMOTE_STORE=path. The remote needs this code synced
+# (remote/sync.sh) first.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,68 +22,34 @@ REMOTE="${REMOTE:-max@192.168.1.30}"
 REMOTE_DIR="${REMOTE_DIR:-Projects/blueprint-symbols}"
 REMOTE_STORE="${REMOTE_STORE:-$REMOTE_DIR/data/blueprints_and_libraries/1_blueprints}"
 
-LIST="$(mktemp)"
-trap 'rm -f "$LIST"' EXIT
-PYTHONPATH="$HERE" python3 - "$STORE" > "$LIST" <<'PY'
-import json
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+PYTHONPATH="$HERE" python3 - "$STORE" "$STAGE" <<'PY'
 import sys
 from pathlib import Path
 
 from annotator import label_store
-from blueprint_symbols.label_schema import training_usable
 
-store = Path(sys.argv[1]).resolve()
-pages = 0
-for page in sorted(p for root in label_store.store_roots(store) for p in root.glob("*/*_p[0-9]*.json")):
-    data = json.loads(page.read_text(encoding="utf-8"))
-    if not training_usable(data):
-        continue
-    pages += 1
-    folder = page.parent
-    print(page.relative_to(store))
-    # document.json is not sent: each machine's copy names its own PDF path.
-    if not (folder / "document.json").exists():
-        print(f"warning: {folder.name} has no document.json here", file=sys.stderr)
-    image = folder / data.get("image_path", "")
-    if data.get("image_path") and image.is_file():
-        print(image.relative_to(store))
-print(f"{pages} labelled pages to push", file=sys.stderr)
+staged, images, pages = label_store.stage_push(Path(sys.argv[1]), Path(sys.argv[2]))
+(Path(sys.argv[2]) / "staged.txt").write_text("".join(f"{p}\n" for p in staged))
+(Path(sys.argv[2]) / "images.txt").write_text("".join(f"{p}\n" for p in images))
+print(f"{pages} labelled pages in {len(staged)} documents to push", file=sys.stderr)
 PY
-sort -u -o "$LIST" "$LIST"
-rsync -a --files-from="$LIST" --backup --suffix=.remote_backup "$STORE/" "$REMOTE:$REMOTE_STORE/"
+rsync -a --files-from="$STAGE/images.txt" "$STORE/" "$REMOTE:$REMOTE_STORE/"
+rsync -a --files-from="$STAGE/staged.txt" "$STAGE/" "$REMOTE:$REMOTE_STORE/"
 echo "labels -> $REMOTE:$REMOTE_STORE"
 
-# A drawing the remote store never added (no document.json there) gets its
-# document entry from the remote's own copy of the PDF: the same file name in
-# 1_blueprints or 1_blueprints/evaluation, and the same bytes (folder hash).
-# Paths are relative to the remote home directory, as rsync uses them.
+# Merge on the remote (label_store.merge_pushed). Paths are relative to the
+# remote home directory, as rsync uses them.
 ssh -o BatchMode=yes "$REMOTE" "bash -lc 'cd \$HOME && PYTHONPATH=$REMOTE_DIR/code PYTHONWARNINGS=ignore $REMOTE_DIR/.venv/bin/python - $REMOTE_STORE $REMOTE_DIR/data/blueprints_and_libraries'" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 from annotator import label_store
-from blueprint_symbols.blueprint_sets import blueprint_sets
 
-store, data = Path(sys.argv[1]).resolve(), Path(sys.argv[2])
-sets = blueprint_sets(data)
-added, missing = 0, []
-for folder in sorted(p for root in label_store.store_roots(store) if root.is_dir()
-                     for p in root.iterdir() if p.is_dir()):
-    if (folder / label_store.DOCUMENT_FILE).exists():
-        continue
-    pages = sorted(folder.glob("*_p[0-9]*.json"))
-    if not pages:
-        continue
-    name = json.loads(pages[0].read_text()).get("document_id", "")
-    pdf = sets.evaluation.get(name.casefold()) or sets.train.get(name.casefold())
-    sha = (json.loads(pages[0].read_text()).get("source_pdf_sha256") or "")
-    if pdf is None or not sha or label_store.doc_folder_name(pdf, sha) != folder.name:
-        missing.append(folder.name)
-        continue
-    label_store.create_document(store, pdf, sha256=sha, meta={"origin": "pushed_labels"})
-    added += 1
-print(f"remote documents added for pushed labels: {added}")
-if missing:
-    print(f"no matching PDF on the remote for: {', '.join(missing[:10])}", file=sys.stderr)
+result = label_store.merge_pushed(Path(sys.argv[1]), Path(sys.argv[2]))
+print(json.dumps(result))
+if result["missing_pdf"]:
+    print(f"no matching PDF on the remote for: {', '.join(result['missing_pdf'][:10])}", file=sys.stderr)
 PY

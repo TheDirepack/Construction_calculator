@@ -17,8 +17,18 @@ import pytest
 fitz = pytest.importorskip("fitz")
 playwright = pytest.importorskip("playwright.sync_api")
 
+from annotator import document_labels  # noqa: E402
 from annotator.web import LabelingSession, make_handler
 
+
+
+def _saved(folder, prefix, page):
+    """A page saved in a document's labels file."""
+    return document_labels.pages(folder, prefix)[page]
+
+
+def _has(folder, prefix, page):
+    return page in document_labels.pages(folder, prefix)
 
 def _launch_browser(playwright_instance):
     # GitHub's Ubuntu 24.04 runner already provides Chrome; avoid downloading
@@ -114,7 +124,7 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
                 page.wait_for_function(
                     "() => document.querySelector('#dirty').textContent === 'Saved'"
                 )
-                saved = json.loads((tmp_path / "labels" / "label_test_p0001.json").read_text())
+                saved = _saved(tmp_path / "labels", "label_test", 1)
                 assert saved["exhaustive_families"] == []
                 assert saved["annotation_completeness_verified"] is False
                 # Training splits by project: every saved page names a verified group.
@@ -134,13 +144,13 @@ def test_browser_draw_verify_rotate_save_and_navigate(tmp_path):
                     "() => document.querySelector('#pageIndicator').textContent === 'Page 2 / 2'"
                 )
                 assert "0 active" in page.locator("#count").inner_text()
-                assert not (tmp_path / "labels" / "label_test_p0002.json").exists()
+                assert not _has(tmp_path / "labels", "label_test", 2)
                 assert session.page_state(1)["document"]["annotation_completeness_verified"] is False
                 page.locator("#verifiedNoSymbols").check()
                 _answer_confirm(page)
                 page.locator("#save").click()
                 page.wait_for_function("() => document.querySelector('#dirty').textContent === 'Saved'")
-                saved_negative = json.loads((tmp_path / "labels" / "label_test_p0002.json").read_text())
+                saved_negative = _saved(tmp_path / "labels", "label_test", 2)
                 assert saved_negative["verified_no_symbols"] is True
                 assert saved_negative["instances"] == []
                 page.locator("#prevPage").click()
@@ -204,7 +214,7 @@ def test_browser_sam_class_alternative_is_not_automatically_verified(tmp_path):
                 tab.wait_for_function(
                     "() => document.querySelector('#dirty').textContent === 'Saved'"
                 )
-                pending = json.loads((tmp_path / "review" / "source_p0001.json").read_text())
+                pending = _saved(tmp_path / "review", "source", 1)
                 assert pending["instances"][0]["uncertain"] is True
                 assert pending["instances"][0]["verified_ground_truth"] is False
                 assert pending["instances"][0]["symbol_family"] == "receptacle"
@@ -213,7 +223,7 @@ def test_browser_sam_class_alternative_is_not_automatically_verified(tmp_path):
                 tab.wait_for_function(
                     "() => document.querySelector('#dirty').textContent === 'Saved'"
                 )
-                verified = json.loads((tmp_path / "review" / "source_p0001.json").read_text())
+                verified = _saved(tmp_path / "review", "source", 1)
                 assert verified["instances"][0]["review_source"] == "human"
                 assert verified["instances"][0]["verified_ground_truth"] is True
             finally:
@@ -279,7 +289,7 @@ def test_browser_draft_restore_rejects_different_source_even_with_null_revision(
                 page.locator("#restoreDraftBtn").click()
                 page.wait_for_function("() => document.querySelector('#count')?.textContent?.includes('1 pending')")
                 assert "0 verified" in page.locator("#count").inner_text()
-                assert not (tmp_path / "labels" / "plan_p0001.json").exists()
+                assert not _has(tmp_path / "labels", "plan", 1)
             finally:
                 browser.close()
     finally:
@@ -419,7 +429,7 @@ def test_browser_electrical_device_catalog_search_modal_and_save(tmp_path):
                 page.locator("#accept").click()
                 page.locator("#save").click()
                 page.wait_for_function("() => document.querySelector('#dirty').textContent === 'Saved'")
-                saved = json.loads((tmp_path / "labels" / "catalog_devices_p0001.json").read_text())
+                saved = _saved(tmp_path / "labels", "catalog_devices", 1)
                 inst = saved["instances"][0]
                 assert inst["symbol_family"] == "fire_alarm_device"
                 assert inst["symbol_variant"] == "horn_strobe_wall"
@@ -485,7 +495,7 @@ def test_browser_next_pdf_starts_with_empty_page(tmp_path):
                 b_session = session.for_document(str(docs_dir / "switch_b.pdf"))
                 assert b_session.page_state(0)["document"]["instances"] == []
                 # Accepting the switch prompt saved the first PDF's own page.
-                saved_a = json.loads((tmp_path / "labels" / "switch_a_p0001.json").read_text())
+                saved_a = _saved(tmp_path / "labels", "switch_a", 1)
                 assert len(saved_a["instances"]) == 1
             finally:
                 browser.close()
@@ -557,7 +567,7 @@ def test_browser_save_conflict_reloads_the_conflicting_page(tmp_path):
                     "() => !document.querySelector('#conflictBanner').hidden"
                 )
                 # The unaffected page still saved.
-                assert (tmp_path / "labels" / "conflict_p0002.json").exists()
+                assert _has(tmp_path / "labels", "conflict", 2)
                 assert "page 1 changed on disk" in page.locator("#message").inner_text()
 
                 page.locator("#reloadFromDisk").click()
@@ -581,7 +591,7 @@ def test_browser_save_conflict_reloads_the_conflicting_page(tmp_path):
                     "() => document.querySelector('#dirty').textContent === 'Saved'"
                 )
                 assert page.locator("#conflictBanner").is_hidden()
-                saved = json.loads((tmp_path / "labels" / "conflict_p0001.json").read_text())
+                saved = _saved(tmp_path / "labels", "conflict", 1)
                 assert saved["verified_no_symbols"] is True
             finally:
                 browser.close()
@@ -641,7 +651,7 @@ def test_browser_anchor_any_box_without_selecting_it(tmp_path):
                 page.locator("#anchorAllBoxes").click()
                 page.locator("#save").click()
                 page.wait_for_function("() => document.querySelector('#dirty').textContent === 'Saved'")
-                saved = json.loads((tmp_path / "labels" / "anchors_p0001.json").read_text())
+                saved = _saved(tmp_path / "labels", "anchors", 1)
                 first, second = sorted(saved["instances"], key=lambda i: i["bbox_xyxy"][0])
                 round_families = {"receptacle", "luminaire", "junction_box", "fire_alarm_device",
                                   "sprinkler_head", "sensor"}
@@ -770,6 +780,6 @@ def test_browser_two_tabs_on_different_pdfs_save_their_own_pages(tmp_path):
                 browser.close()
     finally:
         _stop(server, worker)
-    saved_a = json.loads((tmp_path / "labels" / "tab_a_p0001.json").read_text())
+    saved_a = _saved(tmp_path / "labels", "tab_a", 1)
     assert len(saved_a["instances"]) == 1 and saved_a["source_id"] == "tab_a"
-    assert not (tmp_path / "labels" / "tab_b_p0001.json").exists()
+    assert not _has(tmp_path / "labels", "tab_b", 1)

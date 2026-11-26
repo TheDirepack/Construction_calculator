@@ -75,9 +75,13 @@ def test_annotator_saves_into_the_devices_folder(blueprints):
         assert session.out_dir.parent == pdf.parent / "devices"
         session.save(0, revision=None, instances=[_verified()], rejected=[])
         assert (session.out_dir / label_store.DOCUMENT_FILE).is_file()
+        # One labels file per document, beside document.json.
+        assert [p.name for p in session.out_dir.glob("*.json")] and \
+            {p.name for p in session.out_dir.glob("*.json")} == {"document.json", f"{pdf.stem}_labels.json"}
     pages = label_store.labeled_pages(bp)
-    assert [p.parent.parent for p in pages["train"]] == [bp / "devices"]
-    assert [p.parent.parent for p in pages["evaluation"]] == [bp / "evaluation" / "devices"]
+    folder = lambda view: label_store.view_source(view)[0].folder.parent  # noqa: E731
+    assert [folder(p) for p in pages["train"]] == [bp / "devices"]
+    assert [folder(p) for p in pages["evaluation"]] == [bp / "evaluation" / "devices"]
     listed = {d["name"]: d for d in LabelingSession(pdf=train, blueprints_dir=bp).list_documents()}
     assert listed["train_set.pdf"]["has_annotations"] and listed["exam_set.pdf"]["has_annotations"]
     # Nothing was written in the drawing folders outside devices/.
@@ -155,7 +159,7 @@ def test_migration_copies_into_devices_and_never_touches_the_old_store(tmp_path,
     again = migration.migrate(old, bp, apply=True)
     assert again.get("files_copied", 0) == 0 and not again["conflicts"]
 
-    page = next((bp / "devices").glob("*/*_p0001.json"))
+    page = next((bp / "devices").glob("*/*_labels.json"))
     page.write_text(page.read_text().replace("duplex", "quad"))
     clash = migration.migrate(old, bp, apply=True)
     assert clash["conflicts"] == [str(page)]

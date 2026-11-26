@@ -9,7 +9,8 @@ import pytest
 
 cv2 = pytest.importorskip("cv2")
 
-import scripts_model_prelabel as mlq
+import scripts_model_prelabel as mlq  # noqa: E402
+from annotator import document_labels  # noqa: E402
 
 
 class _Arr:
@@ -66,8 +67,16 @@ def _page(store, name, *, squares, extra=None):
         session, index, _ = label_store.open_page(doc.page_json(1))
         data, _, _ = session.page_document(index)
         data.update(extra)
-        doc.page_json(1).write_text(json.dumps(data))
-    return doc.page_json(1)
+        document_labels.write_page(doc.folder, doc.json_prefix, 1, data)
+    return doc
+
+
+def _read(doc):
+    return doc.read_page(1)
+
+
+def _write(doc, data):
+    document_labels.write_page(doc.folder, doc.json_prefix, 1, data)
 
 
 def _args(tmp_path, store, **over):
@@ -114,7 +123,7 @@ def test_writes_unreviewed_model_proposals_and_priority(tmp_path):
     result = mlq.run(_args(tmp_path, store), model=FakeModel())
     assert result["totals"]["added"] == 2
     assert result["totals"]["unmapped_class"] == 2          # mystery_class dropped, not guessed
-    doc = json.loads(page.read_text())
+    doc = _read(page)
     boxes = doc["instances"]
     assert {b["symbol_family"] for b in boxes} == {"receptacle"}
     for b in boxes:
@@ -124,7 +133,7 @@ def test_writes_unreviewed_model_proposals_and_priority(tmp_path):
     x0, y0, x1, y1 = sorted(b["bbox_xyxy"] for b in boxes)[0]
     assert abs(x0 - 100) <= 2 and abs(x1 - 120) <= 2
     priority = (tmp_path / "out" / result["model_tag"] / "review_priority.txt").read_text()
-    assert priority.splitlines() == [page.parent.name]
+    assert priority.splitlines() == [page.folder.name]
 
 
 def test_rerun_is_idempotent_and_respects_human_decisions(tmp_path):
@@ -133,7 +142,7 @@ def test_rerun_is_idempotent_and_respects_human_decisions(tmp_path):
     args = _args(tmp_path, store)
     first = mlq.run(args, model=FakeModel())
     tag = first["model_tag"]
-    doc = json.loads(page.read_text())
+    doc = _read(page)
     a, b, c = sorted(doc["instances"], key=lambda i: i["bbox_xyxy"][0])
     # Human accepts one, rejects one, leaves one.
     a.update(review_status="accepted", review_source="human", uncertain=False,
@@ -141,10 +150,10 @@ def test_rerun_is_idempotent_and_respects_human_decisions(tmp_path):
     doc["instances"] = [a, c]
     b_rej = dict(b, review_status="rejected", review_source="human")
     doc["rejected_proposals"] = [b_rej]
-    page.write_text(json.dumps(doc))
+    _write(page, doc)
 
     second = mlq.run(_args(tmp_path, store, force=True), model=FakeModel())
-    doc = json.loads(page.read_text())
+    doc = _read(page)
     statuses = sorted((i["review_status"], round(i["bbox_xyxy"][0])) for i in doc["instances"])
     assert statuses == [("accepted", 100), ("unreviewed", 600)]   # no duplicate, no re-proposal
     assert second["totals"]["dup_existing"] == 1 and second["totals"]["dup_rejected"] == 1
@@ -163,8 +172,8 @@ def test_labels_evaluation_pages_skips_negatives_and_resumes(tmp_path):
     t = result["totals"]
     assert "skipped_heldout" not in t
     assert t["skipped_verified_negative"] == 1 and t["pages_written"] == 2
-    assert len(json.loads(held.read_text())["instances"]) == 1
-    assert json.loads(neg.read_text())["instances"] == []
+    assert len(_read(held)["instances"]) == 1
+    assert _read(neg)["instances"] == []
     again = mlq.run(_args(tmp_path, store), model=FakeModel())
     assert again["totals"]["resumed"] == 2 and again["totals"].get("pages_written", 0) == 0
 
