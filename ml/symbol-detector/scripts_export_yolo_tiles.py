@@ -19,12 +19,21 @@ import cv2
 import numpy as np
 from blueprint_symbols.raster_training import read_records, RasterTileDataset
 from blueprint_symbols.dataset_manifest import validate_manifest_sources, trusted_training_instance
-from blueprint_symbols.variants import make_variant, EVAL_VARIANTS, TRAIN_VARIANTS
+from blueprint_symbols.variants import (make_variant, rotate90, skew, symbols_survive,
+                                        EVAL_VARIANTS, TRAIN_VARIANTS)
 from blueprint_symbols.multiscale import plan_pyramid_tiles, sample_tile
-from blueprint_symbols.label_schema import load_training_page
+from blueprint_symbols.label_schema import allowed_rotations, load_training_page
 
-# Target refers to MAX(width, height) of a symbol as seen by detector.
-PIXEL_BANDS = ((10,16,.08),(16,24,.34),(24,40,.32),(40,72,.20),(72,128,.06))
+# Target refers to MAX(width, height) of a symbol as seen by the detector.
+# Full-page inference tiles the page at its native 150 DPI render (scale 1),
+# where verified symbols measure ~24-115 px (median ~59). Training draws a
+# size around that, and TRAIN_SCALE_LIMITS keeps each tile within 0.6-2.2
+# source px per model px: a 32 px symbol is never shrunk to 2-5 px (the old
+# bands drew 10-40 px for most tiles: s up to ~6) nor upsampled into blur.
+PIXEL_BANDS = ((14,20,.05),(20,32,.17),(32,48,.28),(48,72,.28),(72,112,.17),(112,160,.05))
+TRAIN_SCALE_LIMITS = (.6, 2.2)        # source px per model px for symbol-centred tiles
+TRAIN_RANDOM_SCALES = (.75, 1.6)      # tiles not centred on a symbol (background, negatives)
+MIN_SYMBOL_PIXELS = 14.               # never shrink the picked symbol below this
 
 def _export_annotations(instances: list[dict], tile, classes: dict[str,int],
                         represented_indices: set[int] | None = None):
@@ -45,6 +54,79 @@ def _export_annotations(instances: list[dict], tile, classes: dict[str,int],
             if represented_indices is not None:
                 represented_indices.add(idx)
     return targets,ignored
+
+
+def mask_ignored(image: np.ndarray, ignored, keep=()) -> tuple[np.ndarray, int]:
+    """Paint ignore regions out with the tile's paper colour instead of
+    discarding the whole tile.
+
+    An ignore region is an edge-clipped symbol (<98% inside the tile), a
+    pending/unverified box, or an ``__unmapped__`` / non-class box. Plain YOLO
+    training has no ignore boxes, so leaving the ink there would teach it as
+    background; dropping the tile threw away every verified symbol beside it.
+    Pixels inside a kept target box are never painted (an overlapping pending
+    duplicate must not erase a verified symbol). Returns (image, regions painted).
+    """
+    if not ignored:
+        return image, 0
+    h, w = image.shape[:2]
+    mask = np.zeros((h, w), np.uint8)
+    for x0, y0, x1, y1 in ignored:
+        # pad 2 px: anti-aliased stroke edges outside the labelled box
+        mask[max(0, int(np.floor(y0)) - 2):min(h, int(np.ceil(y1)) + 2),
+             max(0, int(np.floor(x0)) - 2):min(w, int(np.ceil(x1)) + 2)] = 1
+    for _, (x0, y0, x1, y1) in keep:
+        mask[max(0, int(np.floor(y0))):min(h, int(np.ceil(y1))),
+             max(0, int(np.floor(x0))):min(w, int(np.ceil(x1)))] = 0
+    if not mask.any():
+        return image, 0
+    flat = image.reshape(-1, image.shape[2]) if image.ndim == 3 else image.reshape(-1, 1)
+    paper = np.percentile(flat, 90, axis=0).astype(image.dtype)   # paper, not ink
+    out = image.copy()
+    out[mask.astype(bool)] = paper if image.ndim == 3 else paper[0]
+    return out, len(ignored)
+
+
+def train_variant(image: np.ndarray, targets, classes: dict[str,int], *, base_index: int,
+                  variant_index: int, seed: int):
+    """One exported training variant of a base tile: (image, targets, damage).
+
+    The single place the export augments a training tile (the tile preview,
+    ``scripts_preview_training_tiles.py``, runs exactly this).
+
+    Variant 0 is the clean upright tile. Every other variant is turned by a
+    multiple of 90 degrees that every labelled device in the tile allows
+    (catalog ``augmentation``; ``label_schema.allowed_rotations``; never
+    mirrored), then damaged (``TRAIN_VARIANTS``: vector re-render, scan,
+    ...); scan variants are also skewed up to 1.5 degrees.
+    """
+    variant_name=TRAIN_VARIANTS[min(variant_index,len(TRAIN_VARIANTS)-1)]
+    variant_seed=int.from_bytes(hashlib.sha256(f'{seed}/train/{base_index}/{variant_index}'.encode()).digest()[:8],'big')
+    if variant_index >= len(TRAIN_VARIANTS):
+        variant_name='mixed_random' if variant_index % 2 else 'lowres_random'
+    rng=np.random.default_rng(variant_seed)
+    names={v:k for k,v in classes.items()}
+    allowed=set(allowed_rotations(None))          # an empty tile: background text rules
+    for cls,_ in targets:
+        allowed&=set(allowed_rotations(names.get(cls)))
+    degrees=0 if variant_index==0 else int(rng.choice(sorted(allowed | {0})))
+    targets=list(targets)
+    if degrees:
+        image,targets=rotate90(image,targets,degrees//90)
+    tilt=0.
+    if variant_name in ('scan_random','mixed_random') and rng.random()<.7:
+        tilt=float(rng.uniform(-1.5,1.5))
+        image,targets=skew(image,targets,tilt)
+    variant,damage=make_variant(image,rng,variant_name)
+    if targets and not symbols_survive(image,variant,targets):
+        # The damage wiped a labelled symbol out (a hard threshold or heavy
+        # blur on faint lines): draw once more, else keep the tile undamaged.
+        variant,damage=make_variant(image,rng,variant_name)
+        if not symbols_survive(image,variant,targets):
+            variant,damage=image.copy(),{'variant':variant_name,'reverted':'symbol_ink_lost',
+                                         'operators':[]}
+    damage.update(rotation_degrees=degrees,skew_degrees=round(tilt,3))
+    return variant,targets,damage
 
 
 def _save_sample(out:Path, split:str, name:str, img:np.ndarray, labels, *, counters:Counter, fmt='.png'):
@@ -138,14 +220,17 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
                 raise ValueError(f'cross-split group leakage: {rec.group}')
             groups[rec.group]=split
     train=RasterTileDataset(per_split['train'], classes, size=512,
-        virtual_tiles_per_image=samples, seed=seed,
-        target_symbol_pixels=PIXEL_BANDS, degradation_profile=None)
+        virtual_tiles_per_image=samples, seed=seed, source_scales=TRAIN_RANDOM_SCALES,
+        target_symbol_pixels=PIXEL_BANDS, degradation_profile=None,
+        scale_limits=TRAIN_SCALE_LIMITS, min_symbol_pixels=MIN_SYMBOL_PIXELS)
     for i in range(len(train)):
         rgb,targets,info=train.sample(i)
-        if info['ignore_boxes']:
-            count['train_skipped_ignore_regions']+=1
-            continue
         image=cv2.cvtColor(rgb,cv2.COLOR_RGB2BGR)
+        # Clipped/pending/unmapped boxes are painted out, the tile is kept.
+        image,masked=mask_ignored(image,info['ignore_boxes'],targets)
+        if masked:
+            count['train_tiles_with_masked_regions']+=1
+            count['train_masked_regions']+=masked
         complete_names=set(info['exhaustive_families'])
         verified_class_ids=sorted(classes[k] for k in classes if k in complete_names)
         partial_positive_only=len(verified_class_ids)<len(classes)
@@ -175,13 +260,10 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
         # unchanged. Positive tiles get all variants; negative tiles get fewer.
         n_variants = 1 if is_blank else (min(2, train_variants) if is_empty else train_variants)
         for variant_index in range(n_variants):
-            variant_name=TRAIN_VARIANTS[min(variant_index,len(TRAIN_VARIANTS)-1)]
-            variant_seed=int.from_bytes(hashlib.sha256(f'{seed}/train/{i}/{variant_index}'.encode()).digest()[:8],'big')
-            if variant_index >= len(TRAIN_VARIANTS):
-                variant_name='mixed_random' if variant_index % 2 else 'lowres_random'
-            variant,damage=make_variant(image,np.random.default_rng(variant_seed),variant_name)
+            variant,variant_targets,damage=train_variant(image,targets,classes,base_index=i,
+                                                         variant_index=variant_index,seed=seed)
             name=f'train_{i:08d}_v{variant_index:02d}'
-            _save_sample(out,'train',name,variant,targets,counters=count)
+            _save_sample(out,'train',name,variant,variant_targets,counters=count)
             supervision[name]=verified_class_ids
             count['train_partial_images' if partial_positive_only else 'train_complete_images']+=1
             meta.append({'verified_negative_class_ids':verified_class_ids,
@@ -193,7 +275,8 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
                          'source_scale':info['tile'].source_scale,
                          'target_symbol_pixels':info['target_symbol_pixels'],
                          'damage':damage,'split':'train', 'variant_index':variant_index,
-                         'base_sample':f'train_{i:08d}'})
+                         'base_sample':f'train_{i:08d}',
+                         'masked_ignore_regions':masked})
     # Full-coverage tiles for VAL and TEST. No random sampling or augmentation.
     for split in ('val','test'):
         for ri,rec in enumerate(per_split[split]):
@@ -205,14 +288,13 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
             for ti,tile in enumerate(tiles):
                 represented=set()
                 targets,ignored=_export_annotations(rec.instances,tile,classes,represented)
-                if ignored:
-                    count[f'{split}_skipped_ignore_regions']+=1
-                    continue
                 # Keep explicit source-instance coverage separate from mAP.
                 # Overlapping validation tiles can duplicate detections; they
                 # cannot substitute for fused full-page evaluation.
                 observed.update(represented & expected)
-                patch=sample_tile(image,tile)
+                patch,masked=mask_ignored(sample_tile(image,tile),ignored,targets)
+                if masked:
+                    count[f'{split}_tiles_with_masked_regions']+=1
                 if not targets:
                     is_blank=_ink_fraction(patch) < blank_ink_threshold
                     ev_seed=int.from_bytes(hashlib.sha256(f'{seed}/{split}_empty/{ri}/{ti}'.encode()).digest()[:8],'big')
@@ -281,7 +363,8 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
     report={'source_manifest':str(manifest.resolve()),'classes':classes,
             'counts':dict(count),'unverified_annotation_completeness':sorted(unchecked),
             'notes':['No training performed.','Only trusted class-labeled instances exported.',
-                     'Ignored/clipped regions cause tile rejection; evaluation coverage must be audited.',
+                     'Ignored regions (edge-clipped, pending/unverified, unmapped boxes) are painted '
+                     'out with paper colour; the tile and its verified symbols are kept.',
                      'Held-out whole-page evaluation must fuse tiled predictions and count missed instances.',
                      'Stress tiles are diagnostics; realistic held-out real photos/scans remain necessary.',
                      'Paired variants are correlated; report source-group-level metrics, not independent-sample confidence.'],

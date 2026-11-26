@@ -1,4 +1,4 @@
-"""Convert the Voxel51 FiftyOne export of FloorPlanCAD into normalized page JSON.
+"""Convert the Voxel51 FiftyOne export of FloorPlanCAD into Format-2 labels files.
 
     python -I adapters/import_floorplancad_fiftyone.py \
         DATA/5_datasets/floorplancad_sample  OUT/normalized/floorplancad \
@@ -10,6 +10,8 @@ Input layout (as downloaded from huggingface.co/datasets/Voxel51/FloorPlanCAD):
   data/NNNN-MMMM.png      1000x1000 RGBA rasters (transparent background)
 
 What this does:
+- Writes one labels file per raster, ``fpcad_<NNNN-MMMM>_labels.json`` (page 1;
+  ``label_schema.write_labels_file``), with the flattened PNG beside it.
 - Flattens each RGBA raster onto white and writes an RGB PNG next to the JSON.
   (OpenCV's IMREAD_COLOR drops alpha, which turns the transparent background
   black; the exporter reads pages that way.)
@@ -34,8 +36,13 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import sys
+
 import cv2
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # run as `python -I adapters/...`
+from blueprint_symbols.label_schema import LABELS_SUFFIX, write_labels_file  # noqa: E402
 
 
 def flatten_rgba(path: Path) -> np.ndarray:
@@ -114,7 +121,8 @@ def convert(source: Path, out: Path, class_map: dict[str, str]) -> dict:
             'exhaustive_families': targets,
             'instances': instances,
         }
-        png.with_suffix('.json').write_text(json.dumps(doc, indent=1))
+        # one Format-2 labels file per raster (page 1), image beside it
+        write_labels_file(out / f'fpcad_{stem}{LABELS_SUFFIX}', {1: doc}, imported_by='floorplancad_fiftyone')
         counts['pages'] += 1
     if unknown:
         raise ValueError(f'labels missing from the class map (add them as a family, '

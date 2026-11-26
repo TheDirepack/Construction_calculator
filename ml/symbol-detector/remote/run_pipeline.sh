@@ -77,7 +77,7 @@ if [[ ! -f "$PREP/yolo/data.yaml" ]]; then
   rm -rf "$PREP"
   $PY scripts_prepare_training_data.py --annotations "$WORK/composited/*/*.json" --output "$PREP" \
       --train-tiles-per-page "${TILES:-16}" --train-variants "${VARIANTS:-3}" \
-      --eval-scales "${EVAL_SCALES:-1,2}" --eval-overlap "${EVAL_OVERLAP:-192}" \
+      --eval-scales "${EVAL_SCALES:-1}" --eval-overlap "${EVAL_OVERLAP:-192}" \
       --stress-val --stress-test | tail -40
 fi
 

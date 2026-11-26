@@ -110,6 +110,13 @@ if [[ -n "${PHASE2_WALL_MANIFEST:-}" ]]; then
 fi
 
 echo "=== [4/6] PREPARE CLASS-MASKED, BUILDING-ISOLATED YOLO DATASET (REAL + NECA COMPOSITED) ==="
+# Scale: pages are rendered at 150 DPI (annotator, label store), where device
+# symbols measure ~24-115 px. Validation/test tile each page at that native
+# resolution (--eval-scales 1), like full-page inference; downscaled scales
+# (2, 4, 8, 16) only shrank a 32 px symbol to 16, 8, 4 and 2 px. Training
+# tiles stay within 0.6-2.2 source px per model px (scripts_export_yolo_tiles
+# PIXEL_BANDS / TRAIN_SCALE_LIMITS). The overlap (192 px) exceeds the largest
+# symbols, so every symbol is whole in at least one tile.
 # Pages not marked "every symbol labeled" are POSITIVE-ONLY and train with
 # class-masked loss so unlabelled symbols are never taught as background.
 if [[ ! -f "$WORK/prepared/yolo/data.yaml" ]]; then
@@ -125,8 +132,8 @@ if [[ ! -f "$WORK/prepared/yolo/data.yaml" ]]; then
     --train-variants 3 \
     --val-fraction 0.14 \
     --test-fraction 0.14 \
-    --eval-scales 1,2,4,8,16 \
-    --eval-overlap 256 \
+    --eval-scales 1 \
+    --eval-overlap 192 \
     --allow-partial-training
 fi
 
@@ -167,12 +174,16 @@ echo "=== [6/6] VERIFY DYNAMIC-CLASS SSL TRANSFER, THEN TRAIN YOLO26N-P2 ==="
 NCLASSES=$("$PY" -c "import json,sys; print(len(json.load(open(sys.argv[1]))['class_ids']))" "$WORK/prepared/source_manifest.json")
 echo "device classes: $NCLASSES"
 "$PY" scripts_verify_ssl_transfer.py "$PRETRAIN_WEIGHTS" --classes "$NCLASSES"
+# No flips: a mirrored tile shows mirrored text and arrows (S3, GFI, WP, exit
+# arrows) that never occur in drawings. Rotation is done per device class in
+# the export (catalog "augmentation": 90/270 for all, 180 for purely graphic
+# symbols), so Ultralytics' own rotation stays off.
 TRAIN_ARGS=(
   "$WORK/prepared/yolo/data.yaml"
   --weights "$PRETRAIN_WEIGHTS"
   --imgsz 512 --batch "$PHASE2_BATCH" --epochs "$PHASE2_EPOCHS"
   --optimizer MuSGD --lr0 0.005
-  --fliplr 0.5 --flipud 0.5 --scale 0.2 --translate 0.05
+  --fliplr 0 --flipud 0 --scale 0.2 --translate 0.05
   --workers 2 --project "$WORK/runs"
   --name "$RUN_NAME"
   --exist-ok

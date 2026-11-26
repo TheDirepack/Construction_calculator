@@ -88,7 +88,9 @@ class RasterTileDataset(Dataset):
                  target_symbol_pixels: tuple[tuple[int,int,float],...] | None = None,
                  degradation_profile: str | None = None,
                  class_balance_exponent: float = .5,
-                 cache_max_mb: int = 128):
+                 cache_max_mb: int = 128,
+                 scale_limits: tuple[float,float] = (.15, 32.),
+                 min_symbol_pixels: float = 0.):
         if not records or not classes or virtual_tiles_per_image <= 0 or size < 32:
             raise ValueError('invalid dataset parameters')
         if min(source_scales) <= 0 or source_scales[1] < source_scales[0]:
@@ -109,6 +111,14 @@ class RasterTileDataset(Dataset):
                 for lo,hi,weight in target_symbol_pixels):
                 raise ValueError('bad target symbol pixel bands')
         self.target_symbol_pixels = target_symbol_pixels
+        # Source pixels per tile pixel allowed when a symbol size is drawn:
+        # inference tiles the page at its native render (scale 1), so training
+        # stays near it instead of shrinking symbols to unreadable specks or
+        # blowing them up into blur.
+        if not 0 < scale_limits[0] <= scale_limits[1] or min_symbol_pixels < 0:
+            raise ValueError('bad scale limits')
+        self.scale_limits = (float(scale_limits[0]), float(scale_limits[1]))
+        self.min_symbol_pixels = float(min_symbol_pixels)
         self.degradation_profile = degradation_profile
         if not 0 <= class_balance_exponent <= 1:
             raise ValueError('class_balance_exponent must be in [0,1]')
@@ -162,7 +172,10 @@ class RasterTileDataset(Dataset):
             a,b,c,d=map(float,picked['bbox_xyxy'])
             extent=max(c-a,d-b)
             s=float(extent/target_px)
-            s=max(.15,min(32.,s))
+            s=max(self.scale_limits[0],min(self.scale_limits[1],s))
+            if self.min_symbol_pixels and extent/s < self.min_symbol_pixels:
+                # never shrink the picked symbol below a legible size
+                s=max(self.scale_limits[0],extent/self.min_symbol_pixels)
         else:
             s=float(np.exp(rng.uniform(np.log(self.scales[0]),np.log(self.scales[1]))))
         span=self.size*s

@@ -308,7 +308,12 @@ def main() -> None:
                    help='randomly subsample at most N input pages (0 = all)')
     p.add_argument('--seed', type=int, default=7)
     a = p.parse_args()
-    paths = sorted({Path(f).resolve() for pat in a.annotations for f in glob.glob(pat, recursive=True)})
+    from blueprint_symbols.label_schema import expand_page_paths, parse_page_ref, read_page
+    # page JSONs, labels files (every page) or page references (X_labels.json#p1)
+    found = [f for pat in a.annotations
+             for f in ([pat] if parse_page_ref(pat) else glob.glob(pat, recursive=True))]
+    paths = sorted({Path(f).resolve() for f in expand_page_paths(found)})
+    paths = [p for p in paths if not p.name.endswith('.report.json')]
     if not paths:
         raise SystemExit('no annotation JSON matched')
     if a.limit > 0 and len(paths) > a.limit:
@@ -320,7 +325,7 @@ def main() -> None:
     total = 0
     wall_total = 0
     for n, path in enumerate(paths):
-        doc = json.loads(path.read_text())
+        doc = read_page(path)
         # Preserve independently verified source class coverage, but do not
         # infer symbol absence from the source's category or empty labels.
         composite_supervision(doc, [], generated_families=out_electrical)

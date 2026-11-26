@@ -302,12 +302,14 @@ To reproduce the local snapping demo, run `python scripts_make_demo.py`, then
 python scripts_inspect_raw_datasets.py 'downloads/**/*' --out raw_inventory.json
 
 # The CLI adapters do not claim that a dataset contains complete labels.
+# Each writes one Format-2 labels file, <stem>_labels.json (page 1; training
+# reads its pages as <stem>_labels.json#p1), never per-page JSON files.
 python scripts_import_svg.py drawing.svg paired.png class_map.json \
-    normalized/drawing.json --group ORIGINAL_PROJECT --aligned-verified
+    normalized/drawing_labels.json --group ORIGINAL_PROJECT --aligned-verified
 python scripts_import_primitives.py primitives.json paired.png class_map.json \
-    normalized/cad.json --group ORIGINAL_PROJECT --aligned-verified
+    normalized/cad_labels.json --group ORIGINAL_PROJECT --aligned-verified
 python scripts_autolabel_dxf.py drawing.dxf paired.png cad_mapping.json \
-    normalized/dxf.json --group ORIGINAL_PROJECT --aligned-verified
+    normalized/dxf_labels.json --group ORIGINAL_PROJECT --aligned-verified
 python scripts_import_coco.py blueprint_annotations.json blueprint_images/ normalized/ \
     class_map.json --groups original_project_groups.json
 ```

@@ -3540,5 +3540,105 @@
    }
   },
   "weatherproof_suffix": "_weatherproof"
+ },
+ "augmentation": {
+  "_comment": "Training-time geometry per device class (scripts_export_yolo_tiles.train_variant). A training tile is turned as a whole, symbol and nearby text together, by a multiple of 90 degrees counter-clockwise; a tile uses only the rotations every labelled device in it allows. Mirroring is never used: drawings never show mirrored letters or arrows (S3, GFI, WP, exit arrows). Symbols rotate with their walls, so 90/270 are realistic for all devices; letters in or beside a symbol are drafted to read from the bottom or the right and appear read-from-the-left in rotated blocks, but rarely upside down, so 180 is only for purely graphic symbols. Keys are a device (family.variant) or a family; a device key wins.",
+  "mirror": false,
+  "default_rotations": [
+   0,
+   90,
+   270
+  ],
+  "rotations": {
+   "luminaire": [
+    0,
+    90,
+    180,
+    270
+   ],
+   "luminaire.exit_sign": [
+    0,
+    90,
+    270
+   ],
+   "luminaire.exit_sign_double_arrow": [
+    0,
+    90,
+    270
+   ],
+   "luminaire.exit_sign_double_face": [
+    0,
+    90,
+    270
+   ],
+   "luminaire.exit_sign_double_face_arrow": [
+    0,
+    90,
+    270
+   ],
+   "luminaire.exit_sign_single_arrow": [
+    0,
+    90,
+    270
+   ],
+   "luminaire.exit_sign_single_face": [
+    0,
+    90,
+    270
+   ],
+   "luminaire.exit_emergency_combo": [
+    0,
+    90,
+    270
+   ],
+   "receptacle.duplex": [
+    0,
+    90,
+    180,
+    270
+   ],
+   "receptacle.quad": [
+    0,
+    90,
+    180,
+    270
+   ],
+   "receptacle.single": [
+    0,
+    90,
+    180,
+    270
+   ],
+   "receptacle.special_purpose": [
+    0,
+    90,
+    180,
+    270
+   ],
+   "receptacle.floor_mounted": [
+    0,
+    90,
+    180,
+    270
+   ],
+   "receptacle.ceiling_mounted": [
+    0,
+    90,
+    180,
+    270
+   ],
+   "panelboard.panelboard": [
+    0,
+    90,
+    180,
+    270
+   ],
+   "data_outlet.data": [
+    0,
+    90,
+    180,
+    270
+   ]
+  }
  }
 }

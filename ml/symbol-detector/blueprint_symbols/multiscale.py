@@ -42,6 +42,23 @@ class ScaleTile:
         return (a[0], a[1], b[0], b[1])
 
 
+def touches_inner_edge(tile: ScaleTile, box: tuple[float, float, float, float], *,
+                       margin: float = 2.0) -> bool:
+    """Whether a detection (tile/model pixels) touches a tile edge that is not
+    also the page edge: the symbol is probably cut there. With an overlap
+    larger than the biggest symbol, the neighbouring tile sees it whole, so
+    the cut copy is dropped before merging (instead of surviving NMS as a
+    second, partial box)."""
+    x0, y0, x1, y1 = box
+    px0, py0, px1, py1 = tile.source_box
+    span = tile.size
+    left = x0 <= margin and px0 > 0.5
+    top = y0 <= margin and py0 > 0.5
+    right = x1 >= span - margin and px1 < tile.image_width - 0.5
+    bottom = y1 >= span - margin and py1 < tile.image_height - 0.5
+    return left or top or right or bottom
+
+
 def _origins(length: int, span: float, step: float) -> list[float]:
     if span >= length:
         return [0.0]
@@ -84,8 +101,25 @@ def sample_tile(image: np.ndarray, tile: ScaleTile, *, padding: int = 255) -> np
     if image.ndim not in (2, 3) or image.shape[:2] != (tile.image_height, tile.image_width):
         raise ValueError('source image dimensions do not match tile plan')
     s = tile.source_scale
-    affine = np.array([[s, 0, tile.x + .5 * s - .5],
-                       [0, s, tile.y + .5 * s - .5]], dtype=np.float64)
+    ox, oy = tile.x + .5 * s - .5, tile.y + .5 * s - .5
+    if s > 1.05:
+        # Downscaling: low-pass first (Gaussian, sigma (s-1)/2 as in
+        # skimage's anti-aliased rescale). Bilinear sampling alone skips
+        # source pixels, so 1 px drawing lines break into dashes or vanish.
+        # Only the tile's region (plus the filter margin) is filtered.
+        sigma = (s - 1) / 2
+        margin = int(math.ceil(3 * sigma)) + 2
+        span = tile.size * s
+        rx0 = max(0, int(math.floor(tile.x)) - margin)
+        ry0 = max(0, int(math.floor(tile.y)) - margin)
+        rx1 = min(tile.image_width, int(math.ceil(tile.x + span)) + margin)
+        ry1 = min(tile.image_height, int(math.ceil(tile.y + span)) + margin)
+        if rx1 > rx0 and ry1 > ry0:
+            image = cv2.GaussianBlur(image[ry0:ry1, rx0:rx1], (0, 0), sigma,
+                                     borderType=cv2.BORDER_REPLICATE)
+            ox, oy = ox - rx0, oy - ry0
+    affine = np.array([[s, 0, ox],
+                       [0, s, oy]], dtype=np.float64)
     return cv2.warpAffine(image, affine, (tile.size, tile.size),
                           flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
                           borderMode=cv2.BORDER_CONSTANT, borderValue=(padding,)*3)

@@ -46,7 +46,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from blueprint_symbols.multiscale import plan_pyramid_tiles, sample_tile
+from blueprint_symbols.multiscale import plan_pyramid_tiles, sample_tile, touches_inner_edge
 from annotator import label_store
 from blueprint_symbols.label_schema import CLASS_DEVICE, device_for_class, iou as _iou, pending_instance
 from blueprint_symbols.pseudolabel import consolidate_predictions
@@ -88,6 +88,8 @@ def predict_page(model, image: np.ndarray, *, scales: tuple[float, ...], confide
             classes = boxes.cls.cpu().numpy().astype(int)
             scores = boxes.conf.cpu().numpy()
             for box, cls, score in zip(xyxy, classes, scores):
+                if touches_inner_edge(tile, tuple(float(v) for v in box)):
+                    continue        # cut by this tile's edge; an overlapping tile sees it whole
                 bb = list(tile.to_page_box(tuple(float(v) for v in box)))
                 bb = [max(0.0, min(w, bb[0])), max(0.0, min(h, bb[1])),
                       max(0.0, min(w, bb[2])), max(0.0, min(h, bb[3]))]
@@ -96,7 +98,10 @@ def predict_page(model, image: np.ndarray, *, scales: tuple[float, ...], confide
                 raw.append({"symbol_family": names.get(int(cls), str(int(cls))),
                             "bbox_xyxy": bb, "confidence": float(score),
                             "source_scale": float(tile.source_scale)})
-    merged = consolidate_predictions(raw, min_confidence=confidence) if raw else []
+    # Cross-class suppression waits until classes are mapped to catalog devices
+    # (merge_into_page dedups across classes): an unmapped model class must not
+    # swallow a mapped one here.
+    merged = consolidate_predictions(raw, min_confidence=confidence, cross_class_iou=None) if raw else []
     return merged, {"tiles": len(tiles), "raw_detections": len(raw)}
 
 

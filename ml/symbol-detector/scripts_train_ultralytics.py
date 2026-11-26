@@ -24,6 +24,11 @@ def plan(data: Path, *, batch: int = 2, epochs: int = 300,
         raise ValueError('invalid training dimensions/settings')
     if optimizer not in ('auto', 'AdamW', 'MuSGD', 'SGD'):
         raise ValueError('invalid optimizer')
+    from blueprint_symbols.label_schema import MIRROR_ALLOWED
+    if (fliplr or flipud) and not MIRROR_ALLOWED:
+        raise ValueError('flips mirror text and arrows (S3, GFI, WP, exit arrows) that never occur '
+                         'in drawings; the catalog augmentation policy forbids them (mirror: false). '
+                         'Rotations are applied per device class by the tile export.')
     cfg = {
         'architecture': 'yolo26n-p2.yaml',
         'initialization': 'random',

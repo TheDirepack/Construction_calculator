@@ -19,6 +19,7 @@ def predict_split(model, manifest: dict, *, split: str, scales: tuple[float,...]
                   confidence: float, device: str, max_tiles: int = 30000) -> dict:
     from blueprint_symbols.multiscale import plan_pyramid_tiles
     from blueprint_symbols.dataset_manifest import validate_manifest_sources
+    from blueprint_symbols.label_schema import load_training_page
     validate_manifest_sources(manifest)
     if split not in ('val','test') or not 0<confidence<1 or not scales:
         raise ValueError('invalid held-out inference configuration')
@@ -26,7 +27,9 @@ def predict_split(model, manifest: dict, *, split: str, scales: tuple[float,...]
     total_tiles=0
     for annotation in manifest['splits'][split]:
         source=Path(annotation).resolve()
-        record=json.loads(source.read_text())
+        # a page JSON or a page of a PDF's labels file (<stem>_labels.json#p12),
+        # as training sees it (device classes, image_path made absolute)
+        record=load_training_page(source)
         if record.get('project_family_id') not in manifest['split_groups'][split]:
             raise ValueError(f'group does not match held-out partition: {source}')
         if not set(manifest['class_ids']).issubset(set(record.get('exhaustive_families',[]))):
@@ -57,7 +60,8 @@ def main():
     p.add_argument('local_weights',type=Path)
     p.add_argument('output_predictions',type=Path)
     p.add_argument('--split',choices=('val','test'),default='val')
-    p.add_argument('--scales',default='.5,1.,1.5',help='source pixels per detector pixel')
+    p.add_argument('--scales',default='.75,1.,1.5',
+                   help='source pixels per detector pixel (training covers 0.6-2.2; 1 = native 150 DPI)')
     p.add_argument('--confidence',type=float,default=.05)
     p.add_argument('--device',default='cpu')
     p.add_argument('--max-tiles',type=int,default=30000)

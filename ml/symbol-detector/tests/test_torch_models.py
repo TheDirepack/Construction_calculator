@@ -1,6 +1,7 @@
 """Model and training tests. They need PyTorch, which only the training machine installs
 (requirements-train.txt); without it they are skipped."""
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -140,7 +141,7 @@ def test_coco_import_ignores_unmapped_categories_in_training_tiles(tmp_path):
     ann.write_text(json.dumps(coco))
     # Class maps name catalog devices (label_schema): the class is the device.
     convert_coco(ann,tmp_path,tmp_path/'converted',{'switch':'switch.three_way'},project_groups={'page.png':'family1'})
-    recs=read_records([tmp_path/'converted/image_00000001.json'])
+    recs=read_records([Path(str(tmp_path/'converted/image_00000001_labels.json')+'#p1')])
     assert recs[0].instances[0]['symbol_family']=='switch.three_way'
     data=RasterTileDataset(recs,{'switch.three_way':0},size=128,source_scales=(1.,1.),seed=2)
     _,target,info=data[0]

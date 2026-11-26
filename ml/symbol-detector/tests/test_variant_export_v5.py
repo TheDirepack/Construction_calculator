@@ -70,15 +70,20 @@ def test_paired_training_heldout_degradation_never_in_train(tmp_path):
     assert (out/'evaluation_configs'/'val_stress_thin_strokes.yaml').exists()
     samples=[json.loads(v) for v in (out/'sample_provenance.jsonl').read_text().splitlines()]
     train=[v for v in samples if v['split']=='train']
-    assert {v['damage']['variant'] for v in train}=={'clean','lowres_random','mixed_random'}
+    assert {v['damage']['variant'] for v in train}=={'clean','vector_random','scan_random'}
+    assert all(v['damage']['rotation_degrees']==0 for v in train if v['variant_index']==0)
     assert {v['group'] for v in train}.isdisjoint({v['group'] for v in samples if v['split'].startswith(('test','val'))})
     base={}
     for v in train:
         base.setdefault(v['base_sample'],[]).append(v)
     assert all(len(g)==3 for g in base.values())
     for group in base.values():
-        labels=[(out/'labels'/'train'/f"{v['sample']}.txt").read_text() for v in group]
-        assert len(set(labels))==1
+        # Variants may be turned by 90 degrees (boxes move with them): the same
+        # symbols, by class and count, in every variant of a base tile.
+        labels=[sorted(line.split()[0] for line in
+                       (out/'labels'/'train'/f"{v['sample']}.txt").read_text().splitlines())
+                for v in group]
+        assert all(x==labels[0] for x in labels)
 
 
 def test_full_page_missing_predictions_count_as_misses(tmp_path):

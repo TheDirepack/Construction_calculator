@@ -31,10 +31,16 @@ Run every command from `ml/symbol-detector/` on the laptop. The wrapper
 forwards it to the training machine. Pages are named by remote paths of the form
 `data/blueprints_and_libraries/1_blueprints/devices/<document>/<name>_p0012.json` (`p0012` = PDF page 12;
 evaluation drawings use `1_blueprints/evaluation/devices/`); copy them
-exactly as `next` and `doc` print them. These are page addresses, not files:
-every page of a PDF is stored in that folder's one `<name>_labels.json`,
-which your `act` updates (the same file the annotator, model pre-labeling and
-training use). Review sheets you fill in for `scripts_circuitnet_review_sheets.py`
+exactly as `next` and `doc` print them. These are page **addresses, not
+files**: there are no per-page JSON files. Every page of a PDF is stored in
+that folder's one labels file, `<name>_labels.json` (`{"kind":
+"document_labels", "format_version": 2, "pages": {"12": {...}}}`), which your
+`act` updates under a file lock (the same file the annotator, model
+pre-labeling and training use; training names a page in it as
+`<name>_labels.json#p12`). Never create or edit `*_pNNNN.json` files: old
+ones are folded into the labels file and moved to `page_files_converted/`.
+Training only uses a PDF once a person marks it done ("PDF done" in the
+annotator), and only boxes a person verified. Review sheets you fill in for `scripts_circuitnet_review_sheets.py`
 go into it too: `apply` writes the reviewed boxes into each PDF's labels file. You can view any page before your first `act`.
 
 ```
@@ -149,8 +155,11 @@ After each command that writes a PNG, open the PNG with your file-reading tool
   `power_pack_dimming`, usually a small box tagged "PP" near fixtures) are
   wired to low-voltage switches (`switch` / `low_voltage`,
   `low_voltage_dimmer`) or paired with wireless switches (`wireless`,
-  `wireless_dimmer`, `wireless_multi_button`). Ceiling occupancy and vacancy sensors are `sensor`;
-  wall-box occupancy switches are `switch` / `occupancy_sensor`.
+  `wireless_dimmer`, `wireless_multi_button`). Occupancy and vacancy sensors
+  are `sensor` with their mounting (`occupancy_sensor_ceiling`,
+  `occupancy_sensor_wall`, `occupancy_sensor_dual_technology`, wireless
+  versions, `vacancy_sensor`); wall-box occupancy switches (a switch with a
+  sensor in it) are `switch` / `occupancy_sensor`.
 
 * **Model proposals** (`review_source: "model"`, with a `model_confidence`)
   come from the fine-tuned detector. Treat them like any other proposal:
@@ -213,43 +222,38 @@ An `"error"` reply means nothing was written: fix the JSON and retry.
 
 ## Vocabulary
 
-| family | discipline | variants |
-|---|---|---|
-| `air_terminal` | hvac | vav_box, cav_box, fan_powered, unspecified |
-| `alarm_device` | fire_protection | horn_strobe, bell, waterflow, tamper, pull_station, unspecified |
-| `audio_visual_device` | electrical | speaker_ceiling, intercom_weatherproof, intercom_substation, clock_outlet, speaker_wall, intercom_master_station, unspecified |
-| `cctv_device` | electrical | dvr_nvr, camera_mini_dome, security_camera, camera_ptz, unspecified |
-| `circuit_breaker` | electrical | single_pole, two_pole, three_pole, gfci, afci, unspecified |
-| `conduit_fitting` | electrical | stub_up, stub_down, homerun, flexible_connection, unspecified |
-| `control_relay` | electrical | lighting_relay, contactor, shunt_trip, time_clock, power_pack, power_pack_dimming, power_pack_auxiliary, room_controller, emergency_transfer_device, unspecified |
-| `damper` | hvac | volume, motorized, backdraft, fire_smoke, unspecified |
-| `data_outlet` | electrical | data_wall, wap, catv_outlet, data_floor, telephone_outlet, voice_data_combo, data_ceiling, fiber_optic_outlet, telephone_data_wall, telephone_wall, telephone_data_floor, fiber, coax, audio_visual, voice_data_two_gang, data_wall_two_gang, unspecified |
-| `diffuser` | hvac | supply, return, exhaust, linear_slot, transfer, unspecified |
-| `disconnect` | electrical | disconnect_switch, fused, non_fused, motor_rated, weatherproof, magnetic_motor_starter, vfd_asd, unspecified |
-| `door` | architectural | single_swing, double_swing, sliding, revolving, overhead, unspecified |
-| `drain` | plumbing | floor_drain, roof_drain, trench_drain, cleanout, unspecified |
-| `electrical_meter` | electrical | kwh_meter, submeter, ct_cabinet, unspecified |
-| `fan` | hvac | exhaust, supply, ceiling_fan, wall_fan, inline, unspecified |
-| `fire_alarm_device` | electrical | smoke_detector, fire_alarm_control_panel, fire_alarm_strobe, annunciator_panel, duct_smoke_detector, manual_pull_station, heat_detector, tamper_switch, horn_and_strobe, smoke_detector_ceiling, waterflow_switch, speaker_and_strobe, horn_strobe_wall, strobe_wall, speaker_strobe_ceiling, strobe_ceiling, voice_evacuation_panel, horn_strobe_ceiling, speaker_strobe_wall, heat_detector_rate_of_rise, smoke_detector_sounder_base, strobe_unit, horn_unit, bell_and_strobe, beam_smoke_detector, carbon_monoxide_detector, door_holder, area_of_refuge_station, elevator_recall_detector, emergency_responder_radio, unspecified |
-| `fire_damper` | hvac | fire, smoke, combination_fire_smoke, unspecified |
-| `fire_protection_device` | fire_protection | fire_extinguisher, hose_cabinet, fdc, standpipe, unspecified |
-| `generator` | electrical | standby, emergency, transfer_switch, unspecified |
-| `grille` | hvac | return, exhaust, supply, transfer, louver, unspecified |
-| `grounding_symbol` | electrical | ground_rod, ground_bus, bonding_jumper, unspecified |
-| `junction_box` | electrical | junction_box, pull_box, wall, ceiling, floor, combination_floor_box, power_pole, telecom_pole, unspecified |
-| `luminaire` | electrical | exit_sign, emergency_battery_light, recessed_downlight, exit_sign_wall, pole_floodlight, wall_mounted, exit_sign_ceiling, linear_strip, downlight, troffer_2x4, troffer_2x2, linear, strip_luminaire, wall_sconce, wallpack, pendant, track_light, high_bay, low_bay, spotlight, pole_luminaire, chandelier, surface_mounted, troffer_1x4, vanity, chandelier_emergency, downlight_emergency, high_bay_emergency, linear_emergency, linear_strip_emergency, low_bay_emergency, pendant_emergency, pole_floodlight_emergency, pole_luminaire_emergency, recessed_downlight_emergency, spotlight_emergency, strip_luminaire_emergency, surface_mounted_emergency, track_light_emergency, troffer_1x4_emergency, troffer_2x2_emergency, troffer_2x4_emergency, vanity_emergency, wall_mounted_emergency, wall_sconce_emergency, wallpack_emergency, emergency_remote_head, exit_sign_double_arrow, exit_sign_double_face, exit_sign_double_face_arrow, exit_sign_single_arrow, exit_sign_single_face, exit_emergency_combo, unspecified |
-| `motor` | electrical | single_phase, three_phase, fractional_hp, motor_connection, unspecified |
-| `motor_control` | electrical | vfd, motor_starter, magnetic_motor_starter, vfd_asd, unspecified |
-| `panelboard` | electrical | panelboard, lighting_control_panel, automatic_transfer_switch, switchboard_switchgear, lighting_or_power_panel, distribution_panel, subpanel, switchboard, mcc, transfer_switch, unspecified |
-| `plumbing_fixture` | plumbing | water_closet, lavatory, sink, urinal, shower, drinking_fountain, unspecified |
-| `pump` | mechanical | centrifugal, circulator, sump, booster, condensate, unspecified |
-| `receptacle` | electrical | duplex, quad, single, special_purpose, duplex_above_counter, duplex_gfci, floor_mounted, usb_charger_duplex, isolated_ground, weatherproof_gfci_duplex, ceiling_mounted, tamper_resistant, gfci, weatherproof, quad_gfci, afci, dedicated, duplex_receptacle_floor, duplex_receptacle_ceiling, duplex_receptacle_emergency, combination_floor_box, multioutlet_assembly, usb_receptacle, unspecified |
-| `security_device` | electrical | card_reader, glass_break_detector, panic_duress_button, door_release_button, request_to_exit, gate_operator, gate_release_button, card_reader_long_range, door_contact_switch, electric_door_strike, security_keypad, card_reader_proximity, magnetic_door_lock, security_alarm_strobe, unspecified |
-| `sensor` | electrical | thermostat, humidistat, occupancy_sensor, co2_sensor, daylight_photosensor, co_sensor, vacancy_sensor, occupancy_sensor_ceiling, differential_pressure_sensor, occupancy_sensor_wall, daylight_sensor, photocell, motion_detector, flow_switch, pressure_switch, occupancy_sensor_wall_corner, occupancy_sensor_dual_technology, occupancy_sensor_wireless_ceiling, occupancy_sensor_wireless_wall, unspecified |
-| `sprinkler_head` | fire_protection | pendent, upright, sidewall, concealed, dry_pendent, unspecified |
-| `switch` | electrical | single_pole, dimmer, three_way, four_way, time_switch, momentary, key_operated, emergency_power_off_pushbutton, three_way_dimmer, four_way_dimmer, double_pole, dimmer_switch, occupancy_sensor, vacancy_sensor, timer, low_voltage, pilot_light, weatherproof, motor_control, double_throw, occupancy_sensor_dimming, low_voltage_dimmer, wireless, wireless_dimmer, wireless_multi_button, unspecified |
-| `telecom_device` | electrical | equipment_rack, equipment_cabinet, terminal_cabinet, intercom, speaker, camera, card_reader, nurse_call, unspecified |
-| `thermostat` | hvac | wall_thermostat, programmable, humidistat, unspecified |
-| `transformer` | electrical | transformer, dry_type, pad_mounted, step_down, step_up, unspecified |
-| `valve` | mechanical | gate, ball, butterfly, check, balancing, control, prv, unspecified |
-| `window` | architectural | fixed, casement, sliding, storefront, unspecified |
+The classes are the devices of `annotator/electrical_device_catalog.json`
+(the single source of truth): 15 families, 173 devices. The
+detector learns each exact device (`family.variant`, e.g. `switch.three_way`),
+so pick the exact variant whenever the legend or tag text tells you.
+`unspecified` is allowed while you only know the family, but such a box
+cannot be verified or trained on until a person picks the device. Anything
+not in this table (doors, plumbing fixtures, HVAC diffusers, sprinkler heads,
+grid bubbles, keynote tags) is not a device: leave it unboxed.
+
+* Weatherproof versions end in `_weatherproof` (`receptacle` /
+  `duplex_weatherproof`, `duplex_gfci_weatherproof`); a plain receptacle is a
+  `duplex`.
+* Mounting is not a separate device except for occupancy sensors
+  (`occupancy_sensor_wall`, `occupancy_sensor_ceiling`, and their wireless
+  versions): a wall or ceiling smoke detector, strobe, speaker or data outlet
+  is the one device (`smoke_detector`, `fire_alarm_strobe`, `speaker`, `data`).
+* Former names still read correctly but are not offered: `luminaire.exit_sign_wall` -> `luminaire.exit_sign`, `luminaire.exit_sign_ceiling` -> `luminaire.exit_sign`, `luminaire.linear_strip` -> `luminaire.strip_luminaire`, `luminaire.linear_strip_emergency` -> `luminaire.strip_luminaire_emergency`, `fire_alarm_device.smoke_detector_ceiling` -> `fire_alarm_device.smoke_detector`, `fire_alarm_device.horn_strobe_wall` -> `fire_alarm_device.horn_and_strobe`, `fire_alarm_device.horn_strobe_ceiling` -> `fire_alarm_device.horn_and_strobe`, `fire_alarm_device.strobe_wall` -> `fire_alarm_device.fire_alarm_strobe`, `fire_alarm_device.strobe_ceiling` -> `fire_alarm_device.fire_alarm_strobe`, `fire_alarm_device.speaker_strobe_wall` -> `fire_alarm_device.speaker_and_strobe`, `fire_alarm_device.speaker_strobe_ceiling` -> `fire_alarm_device.speaker_and_strobe`, `sensor.occupancy_sensor_wall_corner` -> `sensor.occupancy_sensor_wall`, `data_outlet.data_wall` -> `data_outlet.data`, `data_outlet.data_ceiling` -> `data_outlet.data`, `data_outlet.data_wall_two_gang` -> `data_outlet.data_two_gang`, `audio_visual_device.speaker_ceiling` -> `audio_visual_device.speaker`, `audio_visual_device.speaker_wall` -> `audio_visual_device.speaker`, `receptacle.weatherproof_gfci_duplex` -> `receptacle.duplex_gfci_weatherproof`.
+
+| family | variants |
+|---|---|
+| `receptacle` | duplex, duplex_weatherproof, quad, quad_weatherproof, single, single_weatherproof, special_purpose, special_purpose_weatherproof, duplex_above_counter, duplex_gfci, floor_mounted, usb_charger_duplex, isolated_ground, duplex_gfci_weatherproof, ceiling_mounted, tamper_resistant |
+| `switch` | single_pole, double_pole, three_way, four_way, dimmer, three_way_dimmer, four_way_dimmer, pilot_light, key_operated, momentary, time_switch, occupancy_sensor, occupancy_sensor_dimming, vacancy_sensor, low_voltage, low_voltage_dimmer, wireless, wireless_dimmer, wireless_multi_button, emergency_power_off_pushbutton |
+| `control_relay` | power_pack, power_pack_dimming, power_pack_auxiliary, room_controller, time_clock, lighting_relay, contactor, emergency_transfer_device |
+| `sensor` | occupancy_sensor, occupancy_sensor_wall, occupancy_sensor_ceiling, occupancy_sensor_dual_technology, occupancy_sensor_wireless, occupancy_sensor_wireless_wall, occupancy_sensor_wireless_ceiling, vacancy_sensor, daylight_photosensor, photocell, thermostat, humidistat, co2_sensor, co_sensor, differential_pressure_sensor |
+| `panelboard` | lighting_control_panel, panelboard, automatic_transfer_switch, switchboard_switchgear |
+| `luminaire` | recessed_downlight, pole_floodlight, wall_mounted, chandelier, downlight, high_bay, linear, low_bay, pendant, pole_luminaire, spotlight, strip_luminaire, surface_mounted, track_light, troffer_1x4, troffer_2x2, troffer_2x4, vanity, wall_sconce, wallpack, exit_sign, emergency_battery_light, chandelier_emergency, downlight_emergency, high_bay_emergency, linear_emergency, low_bay_emergency, pendant_emergency, pole_floodlight_emergency, pole_luminaire_emergency, recessed_downlight_emergency, spotlight_emergency, strip_luminaire_emergency, surface_mounted_emergency, track_light_emergency, troffer_1x4_emergency, troffer_2x2_emergency, troffer_2x4_emergency, vanity_emergency, wall_mounted_emergency, wall_sconce_emergency, wallpack_emergency, emergency_remote_head, exit_sign_double_arrow, exit_sign_double_face, exit_sign_double_face_arrow, exit_sign_single_arrow, exit_sign_single_face, exit_emergency_combo |
+| `junction_box` | junction_box, pull_box |
+| `transformer` | transformer |
+| `motor_control` | vfd, motor_starter |
+| `disconnect` | disconnect_switch, fused, non_fused, motor_rated, weatherproof |
+| `fire_alarm_device` | smoke_detector, fire_alarm_control_panel, fire_alarm_strobe, annunciator_panel, duct_smoke_detector, manual_pull_station, heat_detector, horn_and_strobe, speaker_and_strobe, voice_evacuation_panel, heat_detector_rate_of_rise, smoke_detector_sounder_base, tamper_switch, waterflow_switch, area_of_refuge_station, carbon_monoxide_detector, elevator_recall_detector, emergency_responder_radio, door_holder |
+| `security_device` | card_reader, glass_break_detector, panic_duress_button, door_release_button, request_to_exit, gate_operator, gate_release_button, card_reader_long_range, door_contact_switch, electric_door_strike, security_keypad, card_reader_proximity, magnetic_door_lock, security_alarm_strobe |
+| `cctv_device` | dvr_nvr, camera_mini_dome, security_camera, camera_ptz |
+| `data_outlet` | data, wap, catv_outlet, data_floor, telephone_outlet, voice_data_combo, fiber_optic_outlet, voice_data_two_gang, data_two_gang |
+| `audio_visual_device` | speaker, intercom_weatherproof, intercom_substation, clock_outlet, intercom_master_station |
