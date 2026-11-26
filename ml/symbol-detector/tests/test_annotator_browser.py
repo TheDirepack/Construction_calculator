@@ -402,6 +402,7 @@ def test_browser_electrical_device_catalog_search_modal_and_save(tmp_path):
                 page.goto(f"http://127.0.0.1:{server.server_port}/")
                 page.wait_for_function(
                     "() => document.querySelector('#deviceCatalogCount')?.textContent === '182'"
+                    " && document.querySelector('#pageIndicator')?.textContent === 'Page 1 / 1'"
                 )
                 page.locator("#drawTool").click()
                 canvas = page.locator("#canvas").bounding_box()
