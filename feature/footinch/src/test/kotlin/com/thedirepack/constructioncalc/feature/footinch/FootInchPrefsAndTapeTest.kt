@@ -8,10 +8,10 @@ import com.thedirepack.constructioncalc.core.measure.MeasureFormat
 import com.thedirepack.constructioncalc.core.measure.Operator
 import com.thedirepack.constructioncalc.core.measure.Precision
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.measure.Token
 import com.thedirepack.constructioncalc.core.measure.input.CalcInput
 import com.thedirepack.constructioncalc.core.measure.input.CalcState
 import com.thedirepack.constructioncalc.core.measure.input.Key
-import com.thedirepack.constructioncalc.core.model.stored
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -81,33 +81,30 @@ class FootInchPrefsAndTapeTest {
     }
 
     @Test
-    fun inlineTapeRecallRenameDeleteAndClipboardRoundTrip() {
-        val sixFeet = Quantity.inches(Rational.of(72))
-        val sixInches = Quantity.inches(Rational.of(6))
+    fun inlineTapeRecallLabelDeleteAndClipboardRoundTrip() {
+        var groups = CalculationTapeOps.startNewGroup(emptyList(), listOf(Token.Literal("4'"), Token.Op(Operator.ADD), Token.Literal("2'"))).first
+        groups = CalculationTapeOps.startNewGroup(groups, listOf(Token.Literal("2\""), Token.Op(Operator.ADD), Token.Literal("4\""))).first
+        assertEquals(2, groups.size)
 
-        var tape = emptyList<HistoryEntry>()
-        tape = HistoryTapeOps.add(tape, HistoryEntry("4' + 2'", sixFeet.stored(), preferInches = false))
-        tape = HistoryTapeOps.add(tape, HistoryEntry("2\" + 4\"", sixInches.stored(), preferInches = true))
-        assertEquals(2, tape.size)
-
-        // Tap row recalls its stored quantity and preferInches into an active expression
-        val firstRow = tape[0]
-        var calcState = CalcInput.reduce(CalcState(), Key.Recall(firstRow.result.toQuantity(), firstRow.preferInches)).state
+        // Tapping a line recalls its exact result into an active expression
+        val first = groups[1].finalStep!!
+        val second = groups[0].finalStep!!
+        var calcState = CalcInput.reduce(CalcState(), Key.Recall(first.result.toQuantity(), first.preferInches)).state
         calcState = CalcInput.reduce(calcState, Key.Op(Operator.ADD)).state
-        val secondRow = tape[1]
-        calcState = CalcInput.reduce(calcState, Key.Recall(secondRow.result.toQuantity(), secondRow.preferInches)).state
+        calcState = CalcInput.reduce(calcState, Key.Recall(second.result.toQuantity(), second.preferInches)).state
         calcState = CalcInput.reduce(calcState, Key.Equals).state
         assertEquals(Quantity.inches(Rational.of(78)), calcState.answer)
 
-        // Copy formats cleanly for clipboard
-        val copied = MeasureFormat.forClipboard(FootInchFormat.primary(secondRow.result.toQuantity(), AppSettings(), secondRow.preferInches))
+        // Copy formats cleanly for the clipboard
+        val copied = MeasureFormat.forClipboard(FootInchFormat.primary(first.result.toQuantity(), AppSettings(), first.preferInches))
         assertEquals("6' 0\"", copied)
 
-        // Rename & delete preserve remaining entries
-        tape = HistoryTapeOps.setLabel(tape, firstRow.id, "Blocking")
-        assertEquals("Blocking", tape.first { it.id == firstRow.id }.label)
-        tape = HistoryTapeOps.remove(tape, firstRow.id)
-        assertEquals(1, tape.size)
-        assertEquals(secondRow.id, tape.single().id)
+        // Notes and deletes touch only their own group
+        val groupId = groups[1].id
+        groups = CalculationTapeOps.setStepLabel(groups, groupId, first.id, "Blocking")
+        assertEquals("Blocking", groups.first { it.id == groupId }.finalStep!!.label)
+        groups = CalculationTapeOps.removeGroup(groups, groupId)
+        assertEquals(1, groups.size)
+        assertFalse(groups.any { it.id == groupId })
     }
 }

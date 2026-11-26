@@ -12,7 +12,7 @@ object ReelLengthTool : ToolModule {
 
     override val id = ID
     override val title = "Reel Length"
-    override val summary = "Cable left on a partial reel, and reel capacity"
+    override val summary = "Wire left on a reel from a resistance reading, or a rough estimate from reel size"
     override val category = ToolCategory.ELECTRICAL
     override val icon = R.drawable.ic_tool_reel
 

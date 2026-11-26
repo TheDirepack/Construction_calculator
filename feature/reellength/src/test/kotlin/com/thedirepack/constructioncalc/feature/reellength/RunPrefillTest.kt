@@ -34,6 +34,9 @@ class RunPrefillTest {
         assertEquals(pull.cableLengthIn!!, filled.cableNeeded!!.toQuantity().value.toDouble(), 1e-6)
         assertEquals(0.6, filled.cableDiameter!!.toQuantity().value.toDouble(), 1e-9)
         assertEquals(reel.flange, filled.flange)
+        // The resistance method gets the run's wire size; the method itself is left alone
+        assertEquals(ConductorSize.AWG_4_0.label, filled.wireSize)
+        assertEquals(reel.method, filled.method)
     }
 
     @Test fun missingRunGivesNothing() {

@@ -8,8 +8,6 @@ import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.AP
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.thedirepack.constructioncalc.core.data.AppSettings
-import com.thedirepack.constructioncalc.core.measure.CalcException
-import com.thedirepack.constructioncalc.core.measure.Evaluator
 import com.thedirepack.constructioncalc.core.measure.Operator
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.measure.Token
@@ -29,8 +27,8 @@ class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
     var state by mutableStateOf(CalcState())
         private set
 
-    /** Stored memory register (`M+`, `M−`, `MR`, `MC`). Null when empty (a zero total clears it). */
-    var memory by mutableStateOf<Register?>(null)
+    /** Which tape group the display belongs to; see [TapeLink]. */
+    var link by mutableStateOf(TapeLink.NONE)
         private set
 
     /** Most recent completed answer for the `Ans` key. */
@@ -39,85 +37,170 @@ class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
 
     private var restoredItemId: String? = null
 
-    val hasMemory: Boolean get() = memory != null
+    val activeGroupId: Long? get() = link.activeGroupId
 
-    /** What `Ans` inserts: the last answer, else the newest tape entry. */
+    /** What `Ans` inserts: the last answer, else the newest tape result. */
     val effectiveAns: Register?
-        get() = lastAnswer ?: history.entries.value.firstOrNull()?.let { Register(it.result.toQuantity(), it.preferInches) }
+        get() = lastAnswer ?: history.groups.value.firstOrNull()?.finalStep?.let { Register(it.result.toQuantity(), it.preferInches) }
 
     /** Applies a key. Returns the finished calculation when `=` succeeded. */
-    fun onKey(key: Key, settings: AppSettings): CalcInput.Outcome =
-        recordOutcome(CalcInput.reduce(state, key), settings)
+    fun onKey(key: Key, settings: AppSettings): CalcInput.Outcome = record(CalcInput.reduce(state, key))
 
     /** Applies an action from the dual-split keypad via [DualSplitKeyMapper]. */
     internal fun onDualSplitAction(action: DualSplitAction, settings: AppSettings): CalcInput.Outcome =
-        recordOutcome(DualSplitKeyMapper.apply(state, action), settings)
+        record(DualSplitKeyMapper.apply(state, action))
 
-    private fun recordOutcome(outcome: CalcInput.Outcome, settings: AppSettings): CalcInput.Outcome {
+    private fun record(outcome: CalcInput.Outcome): CalcInput.Outcome {
         if (!outcome.accepted && outcome.state == state) return outcome
+        val before = state
         state = outcome.state
-        outcome.completed?.let { calc ->
-            val inches = CalcInput.prefersInches(calc.expression)
-            lastAnswer = Register(calc.result, inches)
-            history.add(
-                HistoryEntry(
-                    expression = formatExpression(calc.expression, settings),
-                    result = calc.result.stored(),
-                    preferInches = inches,
-                ),
-            )
-        }
+        link = TapeLink.afterKey(link, before, outcome.state)
+        outcome.completed?.let(::commit)
         return outcome
     }
 
-    /** Adds the current displayed value to memory (`M+`). Returns true if accepted. */
-    fun memoryAdd(): Boolean = updateMemory(Operator.ADD)
-
-    /** Subtracts the current displayed value from memory (`M−`). Returns true if accepted. */
-    fun memorySubtract(): Boolean = updateMemory(Operator.SUBTRACT)
-
-    private fun updateMemory(op: Operator): Boolean {
-        val current = state.result ?: return false
-        val existing = memory?.value
-        val updated = if (existing == null) {
-            if (op == Operator.SUBTRACT) current.copy(value = -current.value) else current
+    /** Puts a finished calculation on the tape: continues the active group, corrects its last steps, or starts a new one. */
+    private fun commit(calc: Calculation) {
+        val groupId = link.activeGroupId?.takeIf { id -> history.groups.value.any { it.id == id } }
+        val continues = calc.expression.any { it is Token.Value && it.fromPreviousAnswer }
+        val added = when {
+            groupId != null && link.editingLastStepCount > 0 ->
+                history.replaceLastSteps(groupId, link.editingLastStepCount, calc.expression)
+            groupId != null && continues -> history.appendToGroup(groupId, calc.expression)
+            else -> 0
+        }
+        link = if (added > 0) {
+            TapeLink(groupId, added, 0)
         } else {
-            try {
-                Evaluator.apply(op, existing, current)
-            } catch (e: CalcException) {
-                state = state.copy(error = e.message)
-                return false
+            val group = history.startNewGroup(calc.expression)
+            TapeLink(group.id, group.steps.size, 0)
+        }
+        lastAnswer = Register(calc.result, CalcInput.prefersInches(calc.expression))
+    }
+
+    // --- Tape editing ---
+
+    /** Applies an edited step; returns an error message, or null when it worked. */
+    fun editStep(groupId: Long, stepId: Long, newTokens: List<SavedToken>): String? =
+        when (val result = history.editStep(groupId, stepId, newTokens)) {
+            is TapeEditResult.Invalid -> result.message
+            is TapeEditResult.Updated -> {
+                result.group?.let(::syncWithGroup)
+                null
             }
         }
-        memory = if (updated.value.isZero) null else Register(updated, memory?.preferInches ?: preferInches())
+
+    fun deleteStep(groupId: Long, stepId: Long): String? =
+        when (val result = history.deleteStep(groupId, stepId)) {
+            is TapeEditResult.Invalid -> result.message
+            is TapeEditResult.Updated -> {
+                if (result.group != null) {
+                    syncWithGroup(result.group)
+                } else if (groupId == link.activeGroupId) {
+                    link = TapeLink.NONE
+                    if (state.answer != null) state = CalcState()
+                }
+                null
+            }
+        }
+
+    fun deleteGroup(groupId: Long) {
+        history.removeGroup(groupId)
+        if (groupId == link.activeGroupId) link = TapeLink.NONE
+    }
+
+    fun clearRecentGroups() {
+        history.clearRecent()
+        if (history.groups.value.none { it.id == link.activeGroupId }) link = TapeLink.NONE
+    }
+
+    fun clearAllGroups() {
+        history.clear()
+        link = TapeLink.NONE
+    }
+
+    /** Shows [group]'s total as the answer, so the next operator keeps adding steps to it. */
+    fun continueGroup(group: CalcGroup) {
+        val last = group.finalStep ?: return
+        val qty = last.result.toQuantity()
+        link = TapeLink(group.id, 1, 0)
+        state = CalcState(tokens = CalculationTapeOps.resolvedTokensForStep(group, group.steps.lastIndex), answer = qty)
+        lastAnswer = Register(qty, last.preferInches)
+    }
+
+    /** After an edit changed [group]'s results, refresh a display that shows (or builds on) its answer. */
+    private fun syncWithGroup(group: CalcGroup) {
+        if (group.id != link.activeGroupId) return
+        val finalStep = group.finalStep ?: return
+        val finalQty = finalStep.result.toQuantity()
+        lastAnswer = Register(finalQty, finalStep.preferInches)
+        when {
+            state.answer != null -> {
+                state = CalcState(CalculationTapeOps.resolvedTokensForStep(group, group.steps.lastIndex), answer = finalQty)
+                link = TapeLink(group.id, 1, 0)
+            }
+            state.tokens.any { it is Token.Value && it.fromPreviousAnswer } -> {
+                val source = if (link.editingLastStepCount > 0) {
+                    group.steps.getOrNull(group.steps.lastIndex - link.editingLastStepCount)
+                } else {
+                    finalStep
+                } ?: return
+                state = CalcState(
+                    state.tokens.map { tok ->
+                        if (tok is Token.Value && tok.fromPreviousAnswer) {
+                            Token.Value(source.result.toQuantity(), source.preferInches, fromPreviousAnswer = true)
+                        } else {
+                            tok
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    // --- Named memory ---
+
+    /** Saves the shown value as [name] (blank: `M1`, `M2`…). Returns false when there's nothing to save. */
+    fun memorySave(name: String): Boolean {
+        val current = state.result ?: return false
+        history.storeMemory(current, preferInches(), name)
         return true
     }
 
-    /** Inserts the stored memory value into the expression (`MR`). Returns true if accepted. */
-    fun memoryRecall(): Boolean {
-        val mem = memory ?: return false
-        return recallQuantity(mem.value, mem.preferInches)
+    /** `M+` on the top memory value. Returns true if accepted. */
+    fun memoryAdd(): Boolean = applyMemoryOp(Operator.ADD)
+
+    /** `M−` on the top memory value. Returns true if accepted. */
+    fun memorySubtract(): Boolean = applyMemoryOp(Operator.SUBTRACT)
+
+    private fun applyMemoryOp(op: Operator): Boolean {
+        val current = state.result ?: return false
+        return when (val res = history.applyMemoryOp(op, current, preferInches())) {
+            is MemoryOpResult.Success -> true
+            is MemoryOpResult.Error -> {
+                state = state.copy(error = res.message)
+                false
+            }
+        }
     }
 
-    /** Clears the memory register (`MC`). Returns true if memory was non-empty. */
-    fun memoryClear(): Boolean {
-        if (memory == null) return false
-        memory = null
-        return true
+    /** Inserts [entry] into the expression and moves it to the top of memory. */
+    fun memoryRecall(entry: MemoryEntry): Boolean {
+        history.touchMemory(entry.id)
+        return recallQuantity(entry.value.toQuantity(), entry.preferInches)
     }
 
-    /** Inserts the most recent answer (`Ans`) into the expression. Returns true if accepted. */
+    /** Inserts the most recent answer (`Ans`); right after `=` it continues the same tape group. */
     fun recallAns(): Boolean {
+        val active = history.groups.value.firstOrNull { it.id == link.activeGroupId }?.finalStep
+        if (active != null) return recallQuantity(active.result.toQuantity(), active.preferInches, fromPreviousAnswer = true)
         val ans = effectiveAns ?: return false
         return recallQuantity(ans.value, ans.preferInches)
     }
 
-    /** Inserts an exact [Quantity] (e.g. from Helpers or Tape) into the current expression. */
-    fun recallQuantity(quantity: Quantity, preferInches: Boolean? = null): Boolean {
-        val outcome = CalcInput.reduce(state, Key.Recall(quantity, preferInches))
-        state = outcome.state
-        return outcome.accepted
-    }
+    /** Inserts an exact [Quantity] (from Helpers, the tape, or memory) into the current expression. */
+    fun recallQuantity(quantity: Quantity, preferInches: Boolean? = null, fromPreviousAnswer: Boolean = false): Boolean =
+        record(CalcInput.reduce(state, Key.Recall(quantity, preferInches, fromPreviousAnswer))).accepted
 
     /** Loads a saved item once (the screen may recompose many times). */
     fun restore(item: ProjectItem) {
@@ -126,6 +209,7 @@ class FootInchViewModel(val history: FootInchHistory) : ViewModel() {
         val inputs = ToolInputs.decode<FootInchInputs>(item.inputs) ?: return
         val tokens = inputs.tokens.map { it.toToken() }
         val answer = inputs.answer?.toQuantity()
+        link = TapeLink.NONE
         state = CalcState(tokens = tokens, answer = answer)
         if (answer != null) lastAnswer = Register(answer, inputs.preferInches)
     }

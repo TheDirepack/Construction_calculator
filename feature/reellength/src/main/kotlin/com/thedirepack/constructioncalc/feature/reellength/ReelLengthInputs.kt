@@ -1,5 +1,10 @@
 package com.thedirepack.constructioncalc.feature.reellength
 
+import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
+import com.thedirepack.constructioncalc.core.electrical.ConductorSize
+import com.thedirepack.constructioncalc.core.electrical.ResistanceLength
+import com.thedirepack.constructioncalc.core.electrical.ResistanceUnit
+import com.thedirepack.constructioncalc.core.electrical.Stranding
 import com.thedirepack.constructioncalc.core.measure.Decimals
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Dimension
@@ -10,7 +15,14 @@ import com.thedirepack.constructioncalc.feature.reellength.domain.ReelRequest
 import kotlinx.serialization.Serializable
 import kotlin.math.PI
 
-/** What the tool is working out. */
+/** How the length is found. Resistance is the default: it measures the wire itself instead of guessing at the winding. */
+@Serializable
+enum class ReelMethod(val label: String) {
+    RESISTANCE("Measured resistance"),
+    DIMENSIONS("Estimate from reel dimensions"),
+}
+
+/** What the reel-dimension estimate is working out. */
 @Serializable
 enum class ReelMode(val label: String) {
     REMAINING("Cable on reel"),
@@ -27,6 +39,18 @@ enum class DrumMeasurement(val label: String) {
 /** What a saved Reel Length item stores in `ProjectItem.inputs`. Never rename a field. */
 @Serializable
 data class ReelLengthInputs(
+    val method: ReelMethod = ReelMethod.RESISTANCE,
+    // --- Measured resistance ---
+    val wireSize: String = ConductorSize.AWG_12.label,
+    val wireMaterial: ConductorMaterial = ConductorMaterial.COPPER,
+    val wireStranding: Stranding = Stranding.STRANDED,
+    val measuredResistance: String = "",
+    val resistanceUnit: ResistanceUnit = ResistanceUnit.OHM,
+    /** Conductor temperature when measured, °C (the field shows it in the app's units). */
+    val conductorTempC: String = DEFAULT_TEMP_C,
+    /** Measured as a loop: two conductors shorted together at the far end, so the reading is twice one length. */
+    val measuredLoop: Boolean = false,
+    // --- Reel dimensions ---
     val mode: ReelMode = ReelMode.REMAINING,
     /** Flange diameter, F. */
     val flange: StoredQuantity? = null,
@@ -44,10 +68,13 @@ data class ReelLengthInputs(
     val drumMeasurement: DrumMeasurement = DrumMeasurement.DIAMETER,
     val drumCircumference: StoredQuantity? = null,
     val flangeToCore: StoredQuantity? = null,
-    /** Optional: cable a pull needs (e.g. a run's "cable needed" from the Wire Pull Planner), to check the reel. */
+    /** Optional, both methods: cable a pull needs (e.g. a run's "cable needed" from the Wire Pull Planner), to check the reel. */
     val cableNeeded: StoredQuantity? = null,
 ) {
+    val conductorSize: ConductorSize get() = ConductorSize.fromLabel(wireSize) ?: ConductorSize.AWG_12
+
     companion object {
+        val DEFAULT_TEMP_C: String = Decimals.trim(ResistanceLength.DEFAULT_AMBIENT_C, 1)
         val DEFAULT_CLEARANCE: StoredQuantity = StoredQuantity.of(Quantity.inches(Rational.of(2)))
     }
 }

@@ -136,9 +136,15 @@ fun FootInchScreen(host: ToolHost) {
     val view = LocalView.current
     var showHistory by remember { mutableStateOf(false) }
     var showHelpers by remember { mutableStateOf(false) }
-    var labelingEntry by remember { mutableStateOf<HistoryEntry?>(null) }
+    var showMemory by remember { mutableStateOf(false) }
+    var savingMemory by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<Pair<Long, Long>?>(null) }
+    var labelingStep by remember { mutableStateOf<Pair<Long, CalcStep>?>(null) }
+    var namingGroup by remember { mutableStateOf<CalcGroup?>(null) }
+    var tapeError by remember { mutableStateOf<String?>(null) }
     val state = viewModel.state
-    val entries by viewModel.history.entries.collectAsStateWithLifecycle()
+    val groups by viewModel.history.groups.collectAsStateWithLifecycle()
+    val memory by viewModel.history.memory.collectAsStateWithLifecycle()
 
     val publishIfCompleted: (CalcInput.Outcome) -> Unit = { outcome ->
         outcome.completed?.let { calc ->
@@ -188,14 +194,27 @@ fun FootInchScreen(host: ToolHost) {
                 .padding(horizontal = horizontalPad)
                 .padding(bottom = 12.dp),
         ) {
-            if (footInchSettings.showInlineTape && entries.isNotEmpty()) {
+            if (footInchSettings.showInlineTape && groups.isNotEmpty()) {
                 InlineCalculationTape(
-                    entries = entries,
+                    groups = groups,
+                    activeGroupId = viewModel.activeGroupId,
                     settings = settings,
-                    onRecall = { entry -> press(Key.Recall(entry.result.toQuantity(), entry.preferInches)) },
+                    onRecall = { q, inches -> hapticAction { viewModel.recallQuantity(q, inches) } },
                     onCopy = copy,
-                    onRequestRename = { entry -> labelingEntry = entry },
-                    onDelete = viewModel.history::remove,
+                    onEditStep = { g, st -> editing = g to st },
+                    onLabelStep = { g, st -> labelingStep = g to st },
+                    onDeleteStep = { g, st -> tapeError = viewModel.deleteStep(g, st) },
+                    onContinue = viewModel::continueGroup,
+                    onNameGroup = { namingGroup = it },
+                    onDeleteGroup = viewModel::deleteGroup,
+                )
+            }
+            tapeError?.let { msg ->
+                Text(
+                    msg,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp).clickable { tapeError = null },
                 )
             }
             val inches = viewModel.preferInches()
@@ -204,9 +223,8 @@ fun FootInchScreen(host: ToolHost) {
                 result = state.result,
                 isAnswer = state.answer != null,
                 error = state.error,
-                memory = viewModel.memory?.value,
-                memoryPreferInches = viewModel.memory?.preferInches,
-                onRecallMemory = { hapticAction(viewModel::memoryRecall) },
+                memory = memory,
+                onOpenMemory = { showMemory = true },
                 settings = settings,
                 preferInches = inches,
                 showFractionKeys = footInchSettings.showFractionKeys,
@@ -233,10 +251,11 @@ fun FootInchScreen(host: ToolHost) {
             if (footInchSettings.showFunctionStrip) {
                 FunctionAndMemoryStrip(
                     metric = settings.isMetric,
-                    hasMemory = viewModel.hasMemory,
+                    canSave = state.result != null,
+                    hasMemory = memory.isNotEmpty(),
                     hasAns = viewModel.effectiveAns != null,
-                    onMemoryClear = { hapticAction(viewModel::memoryClear) },
-                    onMemoryRecall = { hapticAction(viewModel::memoryRecall) },
+                    onMemorySave = { savingMemory = true },
+                    onMemoryOpen = { showMemory = true },
                     onMemoryAdd = { hapticAction(viewModel::memoryAdd) },
                     onMemorySubtract = { hapticAction(viewModel::memorySubtract) },
                     onAns = { hapticAction(viewModel::recallAns) },
@@ -272,17 +291,92 @@ fun FootInchScreen(host: ToolHost) {
     }
 
     if (showHistory) {
-        HistorySheet(
-            entries = entries,
+        GroupedHistorySheet(
+            groups = groups,
+            activeGroupId = viewModel.activeGroupId,
             settings = settings,
-            onPick = {
-                press(Key.Recall(it.result.toQuantity(), it.preferInches))
-                showHistory = false
-            },
-            onDelete = viewModel.history::remove,
-            onRequestRename = { labelingEntry = it },
-            onClear = viewModel.history::clear,
+            onContinueGroup = viewModel::continueGroup,
+            onEditStep = { g, st -> editing = g to st },
+            onRecallStep = { step -> hapticAction { viewModel.recallQuantity(step.result.toQuantity(), step.preferInches) } },
+            onToggleFavorite = viewModel.history::toggleFavorite,
+            onRenameGroup = viewModel.history::setGroupLabel,
+            onRenameStep = viewModel.history::setStepLabel,
+            onDeleteGroup = viewModel::deleteGroup,
+            onClearRecent = viewModel::clearRecentGroups,
+            onClearAll = viewModel::clearAllGroups,
             onDismiss = { showHistory = false },
+        )
+    }
+
+    editing?.let { (groupId, stepId) ->
+        val group = groups.firstOrNull { it.id == groupId }
+        val stepIndex = group?.steps?.indexOfFirst { it.id == stepId } ?: -1
+        if (group == null || stepIndex < 0) {
+            LaunchedEffect(Unit) { editing = null }
+        } else {
+            EditStepSheet(
+                group = group,
+                step = group.steps[stepIndex],
+                stepIndex = stepIndex,
+                settings = settings,
+                onRenameStep = { viewModel.history.setStepLabel(groupId, stepId, it) },
+                onDeleteStep = { viewModel.deleteStep(groupId, stepId).also { if (it == null) editing = null } },
+                onApply = { tokens -> viewModel.editStep(groupId, stepId, tokens).also { if (it == null) editing = null } },
+                onDismiss = { editing = null },
+            )
+        }
+    }
+
+    labelingStep?.let { (groupId, step) ->
+        NoteLabelDialog(
+            title = "Note for this step",
+            initial = step.label,
+            onConfirm = {
+                viewModel.history.setStepLabel(groupId, step.id, it)
+                labelingStep = null
+            },
+            onDismiss = { labelingStep = null },
+        )
+    }
+
+    namingGroup?.let { group ->
+        NoteLabelDialog(
+            title = "Name calculation",
+            initial = group.label,
+            onConfirm = {
+                viewModel.history.setGroupLabel(group.id, it)
+                namingGroup = null
+            },
+            onDismiss = { namingGroup = null },
+        )
+    }
+
+    if (showMemory) {
+        MemorySheet(
+            entries = memory,
+            currentResult = state.result,
+            currentPreferInches = viewModel.preferInches(),
+            settings = settings,
+            onSaveCurrent = { savingMemory = true },
+            onRecall = { entry -> hapticAction { viewModel.memoryRecall(entry) } },
+            onRename = viewModel.history::renameMemory,
+            onDelete = viewModel.history::removeMemory,
+            onClearAll = viewModel.history::clearMemory,
+            onDismiss = { showMemory = false },
+        )
+    }
+
+    val valueToSave = state.result
+    if (savingMemory && valueToSave != null) {
+        SaveMemoryDialog(
+            valueText = FootInchFormat.primary(valueToSave, settings, viewModel.preferInches()),
+            suggestedName = MemoryOps.defaultName(memory),
+            existingNames = memory.map { it.label },
+            onSave = { name ->
+                viewModel.memorySave(name)
+                savingMemory = false
+            },
+            onDismiss = { savingMemory = false },
         )
     }
 
@@ -298,138 +392,16 @@ fun FootInchScreen(host: ToolHost) {
         )
     }
 
-    labelingEntry?.let { entry ->
-        TapeLabelDialog(
-            initial = entry.label,
-            onConfirm = { newLabel ->
-                viewModel.history.setLabel(entry.id, newLabel)
-                labelingEntry = null
-            },
-            onDismiss = { labelingEntry = null },
-        )
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun InlineCalculationTape(
-    entries: List<HistoryEntry>,
-    settings: AppSettings,
-    onRecall: (HistoryEntry) -> Unit,
-    onCopy: (String) -> Unit,
-    onRequestRename: (HistoryEntry) -> Unit,
-    onDelete: (Long) -> Unit,
-) {
-    val scheme = MaterialTheme.colorScheme
-    val listState = rememberLazyListState()
-    LaunchedEffect(entries.firstOrNull()?.id) {
-        if (entries.isNotEmpty()) listState.animateScrollToItem(0)
-    }
-
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = scheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.45f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 4.dp),
-    ) {
-        LazyColumn(
-            state = listState,
-            reverseLayout = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 112.dp),
-        ) {
-            itemsIndexed(entries, key = { _, entry -> entry.id }) { index, entry ->
-                var menuOpen by remember { mutableStateOf(false) }
-                val formattedResult = FootInchFormat.primary(entry.result.toQuantity(), settings, entry.preferInches)
-                Column(Modifier.fillMaxWidth()) {
-                    if (index < entries.lastIndex) {
-                        HorizontalDivider(color = scheme.outlineVariant.copy(alpha = 0.35f))
-                    }
-                    Box {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .combinedClickable(
-                                    onClickLabel = "Recall result",
-                                    onClick = { onRecall(entry) },
-                                    onLongClickLabel = "Tape actions",
-                                    onLongClick = { menuOpen = true },
-                                )
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            if (entry.label.isNotBlank()) {
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = scheme.primaryContainer,
-                                    contentColor = scheme.onPrimaryContainer,
-                                ) {
-                                    Text(
-                                        entry.label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                    )
-                                }
-                            }
-                            Text(
-                                fractionText(entry.expression),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = scheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(
-                                fractionText("= $formattedResult"),
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                color = scheme.primary,
-                                maxLines = 1,
-                            )
-                        }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Copy result") },
-                                onClick = {
-                                    onCopy(formattedResult)
-                                    menuOpen = false
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text(if (entry.label.isBlank()) "Label" else "Rename") },
-                                onClick = {
-                                    menuOpen = false
-                                    onRequestRename(entry)
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Delete", color = scheme.error) },
-                                onClick = {
-                                    menuOpen = false
-                                    onDelete(entry.id)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 @Composable
 private fun FunctionAndMemoryStrip(
     metric: Boolean,
+    canSave: Boolean,
     hasMemory: Boolean,
     hasAns: Boolean,
-    onMemoryClear: () -> Unit,
-    onMemoryRecall: () -> Unit,
+    onMemorySave: () -> Unit,
+    onMemoryOpen: () -> Unit,
     onMemoryAdd: () -> Unit,
     onMemorySubtract: () -> Unit,
     onAns: () -> Unit,
@@ -437,10 +409,10 @@ private fun FunctionAndMemoryStrip(
 ) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            MiniKey("MC", "Memory clear", enabled = hasMemory, onClick = onMemoryClear, modifier = Modifier.weight(1f))
-            MiniKey("MR", "Memory recall", enabled = hasMemory, onClick = onMemoryRecall, modifier = Modifier.weight(1f))
-            MiniKey("M+", "Memory add", onClick = onMemoryAdd, modifier = Modifier.weight(1f))
-            MiniKey("M−", "Memory subtract", onClick = onMemorySubtract, modifier = Modifier.weight(1f))
+            MiniKey("MS", "Save the value to memory with a name", enabled = canSave, onClick = onMemorySave, modifier = Modifier.weight(1f))
+            MiniKey("MR", "Open memory to use a saved value", enabled = hasMemory, onClick = onMemoryOpen, modifier = Modifier.weight(1f))
+            MiniKey("M+", "Add the value to the top memory value", enabled = canSave, onClick = onMemoryAdd, modifier = Modifier.weight(1f))
+            MiniKey("M−", "Subtract the value from the top memory value", enabled = canSave, onClick = onMemorySubtract, modifier = Modifier.weight(1f))
             MiniKey("Ans", "Previous answer", enabled = hasAns, onClick = onAns, modifier = Modifier.weight(1f))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -503,9 +475,8 @@ private fun Display(
     result: Quantity?,
     isAnswer: Boolean,
     error: String?,
-    memory: Quantity?,
-    memoryPreferInches: Boolean?,
-    onRecallMemory: () -> Unit,
+    memory: List<MemoryEntry>,
+    onOpenMemory: () -> Unit,
     settings: AppSettings,
     preferInches: Boolean?,
     showFractionKeys: Boolean,
@@ -519,20 +490,23 @@ private fun Display(
         verticalArrangement = Arrangement.Bottom,
         horizontalAlignment = Alignment.End,
     ) {
-        if (memory != null && !memory.value.isZero) {
-            val memText = FootInchFormat.primary(memory, settings, memoryPreferInches)
+        memory.firstOrNull()?.let { top ->
+            val memText = FootInchFormat.primary(top.value.toQuantity(), settings, top.preferInches)
+            val more = if (memory.size > 1) "  +${memory.size - 1}" else ""
             Surface(
-                onClick = onRecallMemory,
+                onClick = onOpenMemory,
                 shape = RoundedCornerShape(8.dp),
                 color = scheme.secondaryContainer,
                 contentColor = scheme.onSecondaryContainer,
                 modifier = Modifier
                     .padding(bottom = 4.dp)
-                    .semantics { contentDescription = "Memory $memText. Tap to recall." },
+                    .semantics { contentDescription = "Memory ${top.label}: $memText. Tap to open memory." },
             ) {
                 Text(
-                    fractionText("M  $memText"),
+                    fractionText("M ${top.label}  $memText$more"),
                     style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                 )
             }
@@ -689,130 +663,6 @@ private fun ControlRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
-@Composable
-private fun HistorySheet(
-    entries: List<HistoryEntry>,
-    settings: AppSettings,
-    onPick: (HistoryEntry) -> Unit,
-    onDelete: (Long) -> Unit,
-    onRequestRename: (HistoryEntry) -> Unit,
-    onClear: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Calculation Tape", style = MaterialTheme.typography.titleLarge)
-                if (entries.isNotEmpty()) {
-                    Text(
-                        "${entries.size} saved · tap to recall, long-press to label",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (entries.isNotEmpty()) TextButton(onClick = onClear) { Text("Clear all") }
-        }
-        if (entries.isEmpty()) {
-            Text(
-                "Finished calculations show up here. Tap one to recall its result, or long-press to add a note.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(24.dp),
-            )
-        } else {
-            LazyColumn(Modifier.navigationBarsPadding()) {
-                items(entries, key = { it.id }) { entry ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .combinedClickable(
-                                onClickLabel = "Recall result",
-                                onClick = { onPick(entry) },
-                                onLongClickLabel = "Label calculation",
-                                onLongClick = { onRequestRename(entry) },
-                            )
-                            .padding(start = 20.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(
-                            Modifier.weight(1f),
-                            horizontalAlignment = Alignment.End,
-                        ) {
-                            if (entry.label.isNotBlank()) {
-                                Text(
-                                    entry.label,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    textAlign = TextAlign.End,
-                                )
-                            }
-                            Text(
-                                fractionText(entry.expression),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.End,
-                            )
-                            Text(
-                                fractionText("= " + FootInchFormat.primary(entry.result.toQuantity(), settings, entry.preferInches)),
-                                style = MaterialTheme.typography.titleLarge,
-                                textAlign = TextAlign.End,
-                            )
-                        }
-                        IconButton(onClick = { onRequestRename(entry) }) {
-                            Icon(
-                                painterResource(R.drawable.ic_edit),
-                                contentDescription = "Label calculation",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        IconButton(onClick = { onDelete(entry.id) }) {
-                            Icon(
-                                painterResource(R.drawable.ic_delete),
-                                contentDescription = "Delete calculation",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    HorizontalDivider(Modifier.padding(horizontal = 20.dp))
-                }
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-    }
-}
-
-@Composable
-private fun TapeLabelDialog(
-    initial: String,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var text by rememberSaveable(initial) { mutableStateOf(initial) }
-    val focus = remember { FocusRequester() }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Label calculation") },
-        text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                label = { Text("Note (blank to clear)") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { onConfirm(text.trim()) }),
-                modifier = Modifier.focusRequester(focus),
-            )
-            LaunchedEffect(focus) { focus.requestFocus() }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(text.trim()) }) { Text("Save") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
-}
-
 private val SETTINGS_PREVIEW_LENGTH = Quantity.inches(Rational.of(127, 2)) // 5' 3 1/2"
 
 /** Foot-Inch's page in the app's Settings screen. */
@@ -851,7 +701,7 @@ internal fun FootInchSettingsPage() {
             "Function & memory strip",
             checked = footInchSettings.showFunctionStrip,
             onCheckedChange = { store.setBoolean(FootInchPrefs.SHOW_FUNCTION_STRIP, it) },
-            subtitle = "Show MC, MR, M+, M−, Ans, parentheses, √ and x² keys.",
+            subtitle = "Show MS, MR, M+, M−, Ans, parentheses, √ and x² keys.",
         )
         SwitchRow(
             "Color-blind key shapes",
@@ -947,9 +797,10 @@ internal fun FootInchSettingsPage() {
             "Inline calculation tape",
             checked = footInchSettings.showInlineTape,
             onCheckedChange = { store.setBoolean(FootInchPrefs.SHOW_INLINE_TAPE, it) },
-            subtitle = "Show a compact scrollable tape above the live expression.",
+            subtitle = "Show the steps of the current calculation above the display, with earlier calculations as one line each.",
         )
         ActionRow("Clear calculation tape", onClick = { FootInchHistory.get(context).clear() })
+        ActionRow("Clear memory", onClick = { FootInchHistory.get(context).clearMemory() })
     }
 
     SettingsGroup("Entering measurements") {
@@ -964,14 +815,16 @@ internal fun FootInchSettingsPage() {
                     footInchSettings.keypadLayout == KeypadLayout.DUAL_SPLIT ->
                         "Dual-Split: tap blue Feet keys, green Inches keys, and the Fractions column.\n" +
                             "5 [Feet] 3 [Inches] [1/2]  →  5' 3 1/2\"     Tap '# Num' for plain numbers (× 3).\n" +
-                            "Tap an inline tape line to recall it, or long-press to copy, label, or delete."
+                            "Tap a tape line to use its result; long-press to copy, edit, or delete it."
                     else ->
                         "Type feet, then ' — inches — then tap a fraction key (or type \" and a fraction with /).\n" +
                             "5 ' 3 [1/2]  →  5' 3 1/2\"     [7/16]  →  7/16\"\n" +
                             "Metric units (mm, cm, m), parentheses, √, x², and memory keys are above the keypad.\n" +
                             "A number with no mark next to a length counts as inches: 5' + 6 = 5' 6\".\n" +
                             "Tap the result or a conversion to copy it. Long-press ⌫ to clear."
-                },
+                } + "\n\nTape: chaining (= then +, −, ×, ÷) keeps steps together; a new number starts a new calculation. " +
+                    "Edit any step and the later steps recompute. ⌫ right after = reopens the last entry to fix it.\n" +
+                    "Memory: MS saves the value with a name, MR lists saved values to use, M+ / M− change the top one.",
             ),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

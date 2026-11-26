@@ -31,6 +31,16 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.thedirepack.constructioncalc.core.data.AppSettings
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Switch
+import com.thedirepack.constructioncalc.core.electrical.ConductorMaterial
+import com.thedirepack.constructioncalc.core.electrical.ConductorResistance
+import com.thedirepack.constructioncalc.core.electrical.ConductorSize
+import com.thedirepack.constructioncalc.core.electrical.ResistanceUnit
+import com.thedirepack.constructioncalc.core.electrical.Stranding
+import com.thedirepack.constructioncalc.core.electrical.code.Code
+import com.thedirepack.constructioncalc.core.model.ValueKind
+import com.thedirepack.constructioncalc.core.ui.conductorSizeLabel
 import com.thedirepack.constructioncalc.core.electrical.code.CodeRule
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Decimals
@@ -83,7 +93,8 @@ fun ReelLengthScreen(host: ToolHost) {
     val (presetStore, presetsState) = rememberReelPresets()
     val output = remember(inputs, settings) { reelLengthOutput(inputs, settings) }
     val results = output.results
-    val capacity = inputs.mode == ReelMode.CAPACITY
+    val byResistance = inputs.method == ReelMethod.RESISTANCE
+    val capacity = !byResistance && inputs.mode == ReelMode.CAPACITY
     val projects = LocalAppServices.current.projects
     val currentReel = remember(inputs) { extractReelGeometry(inputs) }
     val currentCableOdIn = remember(inputs.cableDiameter) { positiveInches(inputs.cableDiameter) }
@@ -137,7 +148,11 @@ fun ReelLengthScreen(host: ToolHost) {
             host.saveToProject(
                 ItemDraft(
                     ReelLengthTool.ID,
-                    if (capacity) "Reel capacity" else "Reel length",
+                    when {
+                        byResistance -> "Wire length (resistance)"
+                        capacity -> "Reel capacity"
+                        else -> "Reel length"
+                    },
                     ToolInputs.encode(inputs),
                     results,
                     output.summary,
@@ -149,6 +164,23 @@ fun ReelLengthScreen(host: ToolHost) {
             Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            SegmentedChoice(
+                options = ReelMethod.entries,
+                selected = inputs.method,
+                onSelect = { m -> vm.update { it.copy(method = m) } },
+                label = "Method",
+                optionLabel = { if (it == ReelMethod.RESISTANCE) "Resistance" else "Reel dimensions" },
+            )
+
+            if (byResistance) {
+                ResistanceInputs(inputs, settings, onUpdate = vm::update)
+            } else {
+            Text(
+                "Rough estimate from the reel's size. Winding varies too much for this to be exact; " +
+                    "measure resistance when the number matters.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             SegmentedChoice(
                 options = ReelMode.entries,
                 selected = inputs.mode,
@@ -312,6 +344,8 @@ fun ReelLengthScreen(host: ToolHost) {
                 }
             }
 
+            }
+
             FormSection("Pull") {
                 MeasureField(
                     "Cable needed (optional)",
@@ -323,7 +357,8 @@ fun ReelLengthScreen(host: ToolHost) {
 
             ResultCard(
                 results,
-                notices = output.notices + if (results.isEmpty()) parsedMissing(inputs) else emptyList(),
+                notices = output.notices + if (results.isEmpty() && !byResistance) parsedMissing(inputs) else emptyList(),
+                onOpenReference = host::openReference,
             )
         }
     }
@@ -805,3 +840,91 @@ private fun parsedMissing(inputs: ReelLengthInputs): List<Notice> {
         Notice("Still needed: " + parsed.missing.joinToString(", ") + "."),
     )
 }
+
+/** The primary workflow: conductor, measured resistance, temperature, loop or not. */
+@Composable
+private fun ResistanceInputs(
+    inputs: ReelLengthInputs,
+    settings: AppSettings,
+    onUpdate: ((ReelLengthInputs) -> ReelLengthInputs) -> Unit,
+) {
+    val size = inputs.conductorSize
+    val hasSolid = remember(size) { ConductorResistance.hasSolidOption(size) }
+    val tableBasis = remember(settings.unitSystem) {
+        "${settings.show(Measure.TEMPERATURE, Code.book.values.resistanceReferenceC, 0)} values of NEC ${CodeRule.CONDUCTOR_PROPERTIES.cite}"
+    }
+
+    FormSection("Conductor") {
+        ChoiceField(
+            label = "Wire size",
+            options = ConductorSize.entries,
+            selected = size,
+            onSelect = { s -> onUpdate { it.copy(wireSize = s.label) } },
+            optionLabel = { settings.conductorSizeLabel(it).replace("/0", "∕0") },
+        )
+        ChoiceField(
+            label = "Material",
+            options = ConductorMaterial.entries,
+            selected = inputs.wireMaterial,
+            onSelect = { m -> onUpdate { it.copy(wireMaterial = m) } },
+            optionLabel = { it.label },
+        )
+        if (hasSolid) {
+            SegmentedChoice(
+                options = Stranding.entries,
+                selected = inputs.wireStranding,
+                onSelect = { st -> onUpdate { it.copy(wireStranding = st) } },
+                label = "Stranding",
+                optionLabel = { it.label },
+            )
+        }
+    }
+
+    FormSection("Measurement") {
+        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumberField(
+                label = "Measured resistance",
+                value = inputs.measuredResistance,
+                onValueChange = { t -> onUpdate { it.copy(measuredResistance = t) } },
+                modifier = Modifier.weight(1f),
+                pickKinds = setOf(ValueKind.RESISTANCE),
+                onPick = { picked ->
+                    picked.rational?.toDouble()?.let { ohms ->
+                        onUpdate { it.copy(measuredResistance = Decimals.trim(ohms / it.resistanceUnit.ohmsPerUnit, 6)) }
+                    }
+                },
+            )
+            ChoiceField(
+                label = "Unit",
+                options = ResistanceUnit.entries,
+                selected = inputs.resistanceUnit,
+                onSelect = { u -> onUpdate { it.copy(resistanceUnit = u) } },
+                optionLabel = { it.label },
+                modifier = Modifier.width(104.dp).padding(top = 8.dp),
+            )
+        }
+        UnitField(
+            label = "Wire temperature",
+            measure = Measure.TEMPERATURE,
+            value = inputs.conductorTempC,
+            onValueChange = { t -> onUpdate { it.copy(conductorTempC = t) } },
+            pickKinds = setOf(ValueKind.TEMPERATURE),
+            supportingText = "Usually the room temperature. Corrects the $tableBasis.",
+        )
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Measured as a loop", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Two conductors shorted together at the far end, read at your end. The length is halved.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = inputs.measuredLoop, onCheckedChange = { loop -> onUpdate { it.copy(measuredLoop = loop) } })
+        }
+    }
+}
+

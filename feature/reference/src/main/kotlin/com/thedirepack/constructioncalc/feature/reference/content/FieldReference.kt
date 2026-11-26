@@ -201,6 +201,7 @@ internal object FieldReference {
                         "Let a reel reach the room's temperature first, and zero the meter's leads. Stranding and compact conductors change the result a little.",
                     ),
                 ),
+                ToolLink("Measure wire left on a reel", ToolIds.REEL_LENGTH),
                 ToolLink("Find a wire's length", ToolIds.FORMULAS, topic = "resistance-length"),
             )
         },
