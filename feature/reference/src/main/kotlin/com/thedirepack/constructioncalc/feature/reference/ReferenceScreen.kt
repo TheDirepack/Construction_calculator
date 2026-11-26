@@ -89,7 +89,7 @@ fun ReferenceScreen(host: ToolHost) {
     val override = remember(version) { store.codeOverride() }
     val appProfile = remember(appSettings.codeEdition, appSettings.codeRegion) {
         val global = Code.globalProfile
-        val edition = CodeEdition.entries.firstOrNull { it.name == appSettings.codeEdition && it.isImplemented }
+        val edition = CodeEdition.parse(appSettings.codeEdition)
             ?: CodeEdition.NEC_2023
         val regionId = CodeRegions.getOrDefault(appSettings.codeRegion).id
         if (global.edition == edition && global.regionId == regionId) global else CodeProfile(edition, regionId)
@@ -526,9 +526,9 @@ private fun ReferenceCodeOverrideDialog(
                 Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Code edition", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                     CodeEdition.entries.forEach { edition ->
-                        val enabled = edition.isImplemented
+                        val enabled = true
                         val selected = !inheritApp && enabled && selectedEdition == edition
-                        val label = if (enabled) "${edition.label} (Active)" else "${edition.label} (Planned)"
+                        val label = edition.label
                         Row(
                             Modifier
                                 .fillMaxWidth()
@@ -565,7 +565,7 @@ private fun ReferenceCodeOverrideDialog(
                 }
 
                 Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Regional amendment", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    Text("Jurisdiction", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                     CodeRegions.entries.forEach { region ->
                         val selected = !inheritApp && selectedRegionId == region.id
                         Row(
@@ -589,7 +589,7 @@ private fun ReferenceCodeOverrideDialog(
                                 val note = buildString {
                                     append(region.description)
                                     if (!region.hasOverrides && region.id != CodeRegions.STANDARD_ID) {
-                                        append(" Uses unamended ${selectedEdition.label} until jurisdiction overrides are verified.")
+                                        append(" No local amendments entered; uses ${selectedEdition.label} as published.")
                                     }
                                 }
                                 Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -21,6 +21,50 @@ See [Master Design Specification](plans/master-specification.md) for the definit
 - One Settings screen: General (theme, animations on/off), Measurements (Auto/ft-in/in, precision),
   and a page per tool that has options (opened directly from inside that tool)
 
+## Direction: one app for the trades, electrical first
+
+The app is an all-in-one toolbox for electrical work (industrial, commercial and residential;
+planning, installing and documenting), usable by an average person without guessing. Electrical is
+the only trade built. Plumbing and HVAC come later, each with its own calculators, formulas and code
+book. `core/data/Trade.kt` is the trade registry (Electrical available; Plumbing and HVAC shown as
+"coming later"); a new trade adds its entry there, its tools as `:feature:` modules, and its own
+code source next to `core/electrical/.../code/`.
+
+### Code jurisdictions (done)
+
+- A **jurisdiction** (`CodeRegion`) names the NEC edition it adopted (`baseEdition`) plus its local
+  **amendments**, keyed by the edition they amend. An amendment lists only what differs (citations,
+  single values, Article 220 values); every lookup answers from the amendment first and falls
+  through to the base edition (`AmendedElectricalCode`, `Code.resolution`).
+- Only NEC 2023 data exists. NEC 2020 and 2026 can be picked; they resolve to NEC 2023 values and
+  every place that names the code says so ("NEC 2023 values (NEC 2026 not in app)" plus a notice).
+  Never silent.
+- No amendment contents are entered yet (California, Massachusetts, Washington, New York State).
+  They show "NEC 2023, no local amendments entered". Amendments are added only from the published
+  text, in `core/electrical/.../code/`, like edition data.
+- `CodeResolution` gives the source of every value: `label` for notes and reports ("NEC 2023 · MA
+  amended"), `summary` for Settings, `citeWithSource(rule)` marking amended citations, `notices`
+  for warnings.
+- Next: enter verified amendments for the listed states; confirm each state's adopted edition with
+  its published adoption; a per-project jurisdiction picker that uses the same model.
+
+### First-launch quick setup (done)
+
+Three short, skippable steps on first launch: trade, where you work (jurisdiction + NEC edition),
+and units + Foot-Inch keypad (Classic or Dual-Split, and ' / " badges so feet and inches keys aren't
+told apart by color alone). Every choice is saved as it's made and is also in the one Settings
+screen, which can run the setup again ("Run quick setup again").
+
+### Symbol recognition on drawings (planned)
+
+- The model runs **on the device**; drawings never leave the phone.
+- Inputs are mainly **vector PDFs and scanned PDFs**, not camera photos.
+- The user opens a page and taps **Recognize all symbols**, or runs it over all pages or all
+  drawings in a project.
+- Every detection snaps to a device in the **full device catalog** (the catalog JSON is the one
+  source of classes) and is **reviewed by the user before it's counted** in takeoffs.
+- Training and data live in `ml/symbol-detector/`, outside the Android build, until a model is ready.
+
 Feature references are in [`docs/research/`](research/): ArchCalc, Southwire Voltage Drop, Conduit
 Fill (`com.conduit`), Partial Reel, Conversion and VFD Sizing (each with a "gap vs. our app"
 section). They are written from public store listings and vendor pages (the Play listings could

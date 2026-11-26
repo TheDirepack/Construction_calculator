@@ -9,6 +9,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -23,18 +24,24 @@ class CodeProfileTest {
     }
 
     @Test
-    fun nec2023IsActiveAndNec2026IsMarkedPending() {
+    fun onlyNec2023HasDataAndOtherEditionsFallBackExplicitly() {
         assertTrue(CodeEdition.NEC_2023.isImplemented)
-        assertTrue(CodeEdition.NEC_2023.isActive)
         assertFalse(CodeEdition.NEC_2026.isImplemented)
-        assertFalse(CodeEdition.NEC_2026.isActive)
-        assertTrue(CodeEdition.NEC_2026.statusNote.contains("not active", ignoreCase = true))
-        assertEquals(listOf(CodeEdition.NEC_2023), CodeEdition.activeEntries)
+        assertFalse(CodeEdition.NEC_2020.isImplemented)
+        assertTrue(CodeEdition.NEC_2026.statusNote.contains("NEC 2023 values"))
 
-        // Resolving NEC_2026 falls back to active verified NEC_2023 base edition
-        val resolved = Code.resolve(CodeProfile(edition = CodeEdition.NEC_2026))
-        assertSame(Nec2023, resolved)
-        assertEquals(CodeEdition.NEC_2023, resolved.edition)
+        val resolution = Code.resolution(CodeProfile(edition = CodeEdition.NEC_2026))
+        assertSame(Nec2023, resolution.book)
+        assertEquals(CodeEdition.NEC_2026, resolution.selectedEdition)
+        assertEquals(CodeEdition.NEC_2023, resolution.dataEdition)
+        assertTrue(resolution.usesFallbackEdition)
+        // Never silent: the label and the notices both name the substitution.
+        assertEquals("NEC 2023 values (NEC 2026 not in app)", resolution.label)
+        assertTrue(resolution.notices.single().startsWith("NEC 2026 isn't in the app yet"))
+
+        Code.setGlobalProfile(CodeProfile(edition = CodeEdition.NEC_2026))
+        assertEquals("NEC 2023 values (NEC 2026 not in app)", Code.label)
+        assertEquals(CodeEdition.NEC_2023, Code.edition)
     }
 
     @Test
@@ -42,59 +49,92 @@ class CodeProfileTest {
         assertEquals(CodeProfile(CodeEdition.NEC_2023, CodeRegions.STANDARD_ID), Code.globalProfile)
         assertSame(Nec2023, Code.resolve(CodeProfile()))
         assertSame(Nec2023, Code.book)
+        val resolution = Code.current
+        assertFalse(resolution.usesFallbackEdition)
+        assertFalse(resolution.isAmended)
+        assertTrue(resolution.notices.isEmpty())
+        assertEquals("NEC 2023", resolution.label)
+        assertEquals("NEC 2023, as published, no local amendments", resolution.summary)
     }
 
     @Test
-    fun regionsRegistryHasStandardAndStructuredRegionalSlots() {
+    fun jurisdictionsWithoutEnteredAmendmentsResolveToTheirBaseEditionAndSaySo() {
         assertEquals(CodeRegions.STANDARD, CodeRegions.find(CodeRegions.STANDARD_ID))
-        assertNotNull(CodeRegions.find(CodeRegions.CALIFORNIA_ID))
-        assertNotNull(CodeRegions.find(CodeRegions.MASSACHUSETTS_ID))
-        assertNotNull(CodeRegions.find(CodeRegions.WASHINGTON_ID))
-        assertNotNull(CodeRegions.find(CodeRegions.NEW_YORK_ID))
-        assertNotNull(CodeRegions.find(CodeRegions.CUSTOM_ID))
         assertEquals(CodeRegions.STANDARD, CodeRegions.getOrDefault("nonexistent-region"))
+        assertFalse("Custom isn't a pickable jurisdiction", CodeRegions.CUSTOM in CodeRegions.entries)
+        assertNotNull(CodeRegions.find(CodeRegions.CUSTOM_ID))
 
-        // Regional slots resolve cleanly without unverified state overrides
-        listOf(
-            CodeRegions.CALIFORNIA_ID,
-            CodeRegions.MASSACHUSETTS_ID,
-            CodeRegions.WASHINGTON_ID,
-            CodeRegions.NEW_YORK_ID,
-        ).forEach { id ->
-            val book = Code.resolve(CodeProfile(regionId = id))
-            assertEquals(CodeEdition.NEC_2023, book.edition)
+        CodeRegions.entries.filterNot { it.isNational }.forEach { region ->
+            assertFalse("${region.id} must not carry unverified amendments", region.hasOverrides)
+            val resolution = Code.resolution(CodeProfile(edition = region.baseEdition, regionId = region.id))
+            assertSame(Nec2023, resolution.book)
+            assertEquals(region, resolution.jurisdiction)
+            assertEquals("${region.name} · ${region.baseEdition.label}, no local amendments entered", resolution.summary)
+            assertEquals("NEC 2023 · ${region.shortLabel}", resolution.label)
+            assertTrue(resolution.notices.isEmpty())
         }
     }
 
     @Test
-    fun amendedElectricalCodeOverridesCitationsAndValues() {
+    fun jurisdictionAmendmentWinsAndEverythingElseFallsThroughToItsBaseEdition() {
         val amendment = RegionalAmendment(
-            regionId = CodeRegions.MASSACHUSETTS_ID,
-            label = "Massachusetts Custom Test",
-            citationOverrides = mapOf(
-                CodeRule.MINIMUM_CONDUCTOR_SIZE to "527 CMR 12.00 Rule 310.3(A)",
-                CodeRule.VOLTAGE_DROP_BRANCH to "Custom 2% VD Rule",
-            ),
-            valuesTransform = { v ->
-                v.copy(
-                    minimumSizeCopper = ConductorSize.AWG_12,
-                    voltageDropBranchPercent = 2.0,
-                )
-            },
-            loadCalculationTransform = { lc ->
-                lc.copy(smallApplianceCircuitVa = 1800.0)
-            },
+            regionId = "test",
+            label = "Test amendment",
+            citationOverrides = mapOf(CodeRule.MINIMUM_CONDUCTOR_SIZE to "Local 310.3(A)"),
+            valuesTransform = { it.copy(minimumSizeCopper = ConductorSize.AWG_12) },
+            valueRules = setOf(CodeRule.MINIMUM_CONDUCTOR_SIZE),
         )
-        val amended = AmendedElectricalCode(Nec2023, amendment)
+        val region = CodeRegion(
+            id = "test",
+            name = "Testland",
+            shortLabel = "TL",
+            baseEdition = CodeEdition.NEC_2023,
+            amendments = mapOf(CodeEdition.NEC_2023 to amendment),
+        )
+        assertTrue(region.hasOverrides)
+        assertSame(amendment, region.amendmentFor(CodeEdition.NEC_2023))
+        assertNull(region.amendmentFor(CodeEdition.NEC_2026))
 
-        assertEquals(CodeEdition.NEC_2023, amended.edition)
-        assertEquals("527 CMR 12.00 Rule 310.3(A)", amended.cite(CodeRule.MINIMUM_CONDUCTOR_SIZE))
-        assertEquals("Custom 2% VD Rule", amended.cite(CodeRule.VOLTAGE_DROP_BRANCH))
-        assertEquals(Nec2023.cite(CodeRule.AMPACITY_TABLE), amended.cite(CodeRule.AMPACITY_TABLE))
-        assertEquals(ConductorSize.AWG_12, amended.values.minimumSizeCopper)
-        assertEquals(2.0, amended.values.voltageDropBranchPercent, 0.0)
-        assertEquals(1800.0, amended.loadCalculation.smallApplianceCircuitVa, 0.0)
-        assertSame(Nec2023.ampacity, amended.ampacity)
+        val book = AmendedElectricalCode(Nec2023, amendment)
+        // Amendment first…
+        assertEquals("Local 310.3(A)", book.cite(CodeRule.MINIMUM_CONDUCTOR_SIZE))
+        assertEquals(ConductorSize.AWG_12, book.values.minimumSizeCopper)
+        // …then the base edition for everything it doesn't touch.
+        assertEquals(Nec2023.cite(CodeRule.AMPACITY_TABLE), book.cite(CodeRule.AMPACITY_TABLE))
+        assertEquals(Nec2023.values.minimumSizeAluminum, book.values.minimumSizeAluminum)
+        assertSame(Nec2023.ampacity, book.ampacity)
+        assertSame(Nec2023.loadCalculation, book.loadCalculation)
+    }
+
+    @Test
+    fun resolutionReportsWhichRulesComeFromAnAmendment() {
+        val profile = CodeProfile(
+            regionId = CodeRegions.CALIFORNIA_ID,
+            customAmendment = RegionalAmendment(
+                label = "Project spec",
+                citationOverrides = mapOf(CodeRule.VOLTAGE_DROP_BRANCH to "Spec 26 05 19"),
+                valuesTransform = { it.copy(voltageDropBranchPercent = 2.0) },
+                valueRules = setOf(CodeRule.VOLTAGE_DROP_BRANCH),
+            ),
+        )
+        val resolution = Code.resolution(profile)
+        assertTrue(resolution.isAmended)
+        assertTrue(resolution.isAmended(CodeRule.VOLTAGE_DROP_BRANCH))
+        assertFalse(resolution.isAmended(CodeRule.AMPACITY_TABLE))
+        assertEquals("Project spec", resolution.sourceOf(CodeRule.VOLTAGE_DROP_BRANCH))
+        assertEquals("NEC 2023", resolution.sourceOf(CodeRule.AMPACITY_TABLE))
+        assertEquals("Spec 26 05 19 (Project spec)", resolution.citeWithSource(CodeRule.VOLTAGE_DROP_BRANCH))
+        assertEquals("Table 310.16", resolution.citeWithSource(CodeRule.AMPACITY_TABLE))
+        assertEquals(2.0, resolution.book.values.voltageDropBranchPercent, 0.0)
+        assertEquals("NEC 2023 · CA amended", resolution.label)
+        assertEquals("California (CEC) · NEC 2023, with Project spec (1 rules)", resolution.summary)
+    }
+
+    @Test
+    fun pickingAnEditionOtherThanTheAdoptedOneIsFlagged() {
+        val resolution = Code.resolution(CodeProfile(edition = CodeEdition.NEC_2026, regionId = CodeRegions.WASHINGTON_ID))
+        assertEquals(2, resolution.notices.size)
+        assertTrue(resolution.notices.any { it.contains("adopted NEC 2023; you picked NEC 2026") })
     }
 
     @Test

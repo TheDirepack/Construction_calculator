@@ -36,24 +36,36 @@ class SettingsRepositoryTest {
         assertEquals(FractionRounding.NEAREST, repo.settings.value.fractionRounding)
         assertEquals(CodeProfile(CodeEdition.NEC_2023, CodeRegions.STANDARD_ID), Code.globalProfile)
 
+        assertEquals(Trade.ELECTRICAL, repo.settings.value.primaryTrade)
+        assertEquals(false, repo.settings.value.setupDone)
+
         repo.setFractionRounding(FractionRounding.UP)
-        repo.setCodeRegion(CodeRegions.CALIFORNIA_ID)
-        // Unimplemented NEC 2026 must remain inactive and fall back safely to NEC 2023.
         repo.setCodeEdition(CodeEdition.NEC_2026.name)
+        // Picking a jurisdiction selects the edition it adopted.
+        repo.setCodeRegion(CodeRegions.CALIFORNIA_ID)
+        assertEquals(CodeRegions.CALIFORNIA.baseEdition.name, repo.settings.value.codeEdition)
+        // An edition without data can be selected; resolution flags the NEC 2023 stand-in.
+        repo.setCodeEdition(CodeEdition.NEC_2026.name)
+        repo.setPrimaryTrade(Trade.PLUMBING) // not available yet: ignored
+        repo.setSetupDone(true)
 
         assertEquals(FractionRounding.UP, repo.settings.value.fractionRounding)
         assertEquals(CodeRegions.CALIFORNIA_ID, repo.settings.value.codeRegion)
-        assertEquals(CodeEdition.NEC_2023.name, repo.settings.value.codeEdition)
-        assertEquals(CodeProfile(CodeEdition.NEC_2023, CodeRegions.CALIFORNIA_ID), Code.globalProfile)
+        assertEquals(CodeEdition.NEC_2026.name, repo.settings.value.codeEdition)
+        assertEquals(Trade.ELECTRICAL, repo.settings.value.primaryTrade)
+        assertEquals(CodeProfile(CodeEdition.NEC_2026, CodeRegions.CALIFORNIA_ID), Code.globalProfile)
         assertEquals(CodeRegions.CALIFORNIA, Code.region)
+        assertEquals(CodeEdition.NEC_2023, Code.edition)
+        assertEquals(true, Code.current.usesFallbackEdition)
 
         // Reset global profile and construct a fresh repository over the same preferences to verify load/init sync.
         Code.setGlobalProfile(CodeProfile())
         val reloaded = newRepo(prefs)
         assertEquals(FractionRounding.UP, reloaded.settings.value.fractionRounding)
         assertEquals(CodeRegions.CALIFORNIA_ID, reloaded.settings.value.codeRegion)
-        assertEquals(CodeEdition.NEC_2023.name, reloaded.settings.value.codeEdition)
-        assertEquals(CodeProfile(CodeEdition.NEC_2023, CodeRegions.CALIFORNIA_ID), Code.globalProfile)
+        assertEquals(CodeEdition.NEC_2026.name, reloaded.settings.value.codeEdition)
+        assertEquals(true, reloaded.settings.value.setupDone)
+        assertEquals(CodeProfile(CodeEdition.NEC_2026, CodeRegions.CALIFORNIA_ID), Code.globalProfile)
     }
 
     @Test

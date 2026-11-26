@@ -20,7 +20,7 @@ import com.thedirepack.constructioncalc.core.electrical.code.ElectricalCode
  * - [Nec2023LoadCalculations]: Article 220 Tables 220.45, 220.47, 220.54, 220.55, 220.82.
  *
  * Moving to a new edition: copy this package (e.g. `nec2026`), check every line against the new
- * book and point [com.thedirepack.constructioncalc.core.electrical.code.Code.book] at it.
+ * book and add it to `Code.books` (marking its [CodeEdition] implemented).
  * docs/CODE_UPDATES.md has the checklist.
  */
 object Nec2023 : ElectricalCode {

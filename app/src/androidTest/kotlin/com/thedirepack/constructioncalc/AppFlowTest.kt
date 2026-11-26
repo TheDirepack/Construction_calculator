@@ -8,6 +8,8 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
@@ -43,7 +45,31 @@ class AppFlowTest : AppUiTest() {
         compose.onNodeWithText("Can't divide by zero").assertIsDisplayed()
         icon("Calculation tape").activate()
         compose.onNodeWithText("Calculation Tape").assertIsDisplayed()
-        compose.onNodeWithText("= 5' 9\"").assertIsDisplayed()
+        // The inline tape under the display shows the same "= 5' 9"": match only the row inside the
+        // sheet (a container holding the sheet title but not the toolbar's tape button).
+        val tapeSheet = hasAnyDescendant(hasText("Calculation Tape")) and
+            !hasAnyDescendant(hasContentDescription("Calculation tape"))
+        compose.onNode(hasText("= 5' 9\"") and hasAnyAncestor(tapeSheet)).assertIsDisplayed()
+    }
+
+    @Test
+    fun quickSetupRunsFromSettingsAndCanBeFinishedOrSkipped() {
+        openTool("Settings")
+        click("Run quick setup again", scroll = true)
+        await(hasText("Quick setup · 1 of 3"))
+        compose.onNodeWithText("Plumbing").assertIsDisplayed()
+        click("Next")
+        await(hasText("Where do you work?"))
+        click("Next")
+        await(hasText("Units and keypad"))
+        click("Done")
+        await(hasContentDescription("Open tools menu"))
+
+        openTool("Settings")
+        click("Run quick setup again", scroll = true)
+        await(hasText("Quick setup · 1 of 3"))
+        click("Skip")
+        await(hasContentDescription("Open tools menu"))
     }
 
     @Test
@@ -96,6 +122,8 @@ abstract class AppUiTest {
     @Before
     fun launch() {
         fixtures = Files.createTempDirectory(context.cacheDir.toPath(), "ci-fixtures-").toFile()
+        // Tests start in the app, past the first-launch quick setup (its own test reruns it).
+        instrumentation.runOnMainSync { services.settings.setSetupDone(true) }
         relaunch()
     }
 

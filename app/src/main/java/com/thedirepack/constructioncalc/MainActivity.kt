@@ -25,6 +25,7 @@ import com.thedirepack.constructioncalc.core.ui.theme.ConstructionCalcTheme
 import com.thedirepack.constructioncalc.core.ui.tool.LocalAppServices
 import com.thedirepack.constructioncalc.core.ui.tool.LocalTools
 import com.thedirepack.constructioncalc.shell.AppShell
+import com.thedirepack.constructioncalc.shell.QuickSetupScreen
 import com.thedirepack.constructioncalc.shell.ToolRegistry
 import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.Dispatchers
@@ -78,7 +79,11 @@ class MainActivity : ComponentActivity() {
             }
             ConstructionCalcTheme(darkTheme = dark) {
                 CompositionLocalProvider(LocalAppServices provides services, LocalTools provides ToolRegistry.all) {
-                    AppShell(imports = importFlow)
+                    if (settings.setupDone) {
+                        AppShell(imports = importFlow)
+                    } else {
+                        QuickSetupScreen(onDone = { services.settings.setSetupDone(true) })
+                    }
                 }
             }
         }
