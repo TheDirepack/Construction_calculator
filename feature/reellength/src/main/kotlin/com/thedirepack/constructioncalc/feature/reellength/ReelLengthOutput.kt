@@ -38,7 +38,13 @@ internal fun formatRunLength(feet: Double, settings: AppSettings): String =
 /** A double as an exact Rational, rounded to 4 decimals so saved values stay short. */
 private fun exact(value: Double): Rational = Rational.of(BigDecimal(value).setScale(4, RoundingMode.HALF_UP))
 
-internal fun reelLengthOutput(inputs: ReelLengthInputs, settings: AppSettings): ReelLengthOutput {
+internal fun reelLengthOutput(inputs: ReelLengthInputs, settings: AppSettings): ReelLengthOutput = when (inputs.method) {
+    ReelMethod.RESISTANCE -> resistanceReelOutput(inputs, settings)
+    ReelMethod.DIMENSIONS -> dimensionsReelOutput(inputs, settings)
+}
+
+/** The geometric estimate from flange, drum, traverse and cable diameter. */
+internal fun dimensionsReelOutput(inputs: ReelLengthInputs, settings: AppSettings): ReelLengthOutput {
     val parsed = inputs.parse()
     val errors = parsed.problems.map { Notice(it, NoticeLevel.ERROR) }
     val request = parsed.request ?: return ReelLengthOutput(emptyList(), errors, "")
@@ -68,9 +74,9 @@ internal fun reelLengthOutput(inputs: ReelLengthInputs, settings: AppSettings): 
     val notices = buildList {
         add(
             Notice(
-                "Estimate for level-wound cable: even layers, no gaps or slack, perfectly round cable. " +
-                    "Verify by weight if the number is critical.",
-                NoticeLevel.INFO,
+                "Rough estimate: assumes level-wound, perfectly round cable with no gaps or slack. Real reels vary a lot; " +
+                    "for a number you can rely on, use Measured resistance.",
+                NoticeLevel.WARNING,
             ),
         )
         if (request.packingFactor != 1.0) {

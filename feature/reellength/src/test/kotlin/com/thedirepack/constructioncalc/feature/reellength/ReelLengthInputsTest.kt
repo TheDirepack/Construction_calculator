@@ -36,13 +36,13 @@ class ReelLengthInputsTest {
         assertNull(parsed.request)
         assertEquals(listOf("Flange diameter", "Drum diameter", "Traverse", "Distance from flange edge", "Cable diameter"), parsed.missing)
         assertTrue(parsed.problems.isEmpty())
-        assertTrue(reelLengthOutput(ReelLengthInputs(), AppSettings()).notices.isEmpty())
+        assertTrue(dimensionsReelOutput(ReelLengthInputs(), AppSettings()).notices.isEmpty())
     }
 
     @Test fun capacityModeUsesTheClearanceNotX() {
         val capacity = filled.copy(mode = ReelMode.CAPACITY, distance = null)
         assertEquals(2.0, capacity.parse().request!!.topClearance, 0.0)
-        val length = reelLengthOutput(capacity, AppSettings()).results.first { it.key == "length" }.rational!!.toDouble()
+        val length = dimensionsReelOutput(capacity, AppSettings()).results.first { it.key == "length" }.rational!!.toDouble()
         assertEquals(PI * 199.5 * 12, length, 1e-3)
     }
 
@@ -77,7 +77,7 @@ class ReelLengthInputsTest {
         val restored = ToolInputs.decode<ReelLengthInputs>(ToolInputs.encode(circumference))!!
         assertEquals(circumference, restored)
         assertEquals(12.0, restored.parse().request!!.drumDiameter, 1e-9)
-        assertEquals(reelLengthOutput(filled, AppSettings()).results, reelLengthOutput(restored, AppSettings()).results)
+        assertEquals(dimensionsReelOutput(filled, AppSettings()).results, dimensionsReelOutput(restored, AppSettings()).results)
         assertEquals(listOf("Drum circumference"), circumference.copy(drumCircumference = null).parse().missing)
     }
 
@@ -90,7 +90,7 @@ class ReelLengthInputsTest {
         val restored = ToolInputs.decode<ReelLengthInputs>(ToolInputs.encode(depth))!!
         assertEquals(depth, restored)
         assertEquals(12.0, restored.parse().request!!.drumDiameter, 1e-9)
-        assertEquals(reelLengthOutput(filled, AppSettings()).results, reelLengthOutput(restored, AppSettings()).results)
+        assertEquals(dimensionsReelOutput(filled, AppSettings()).results, dimensionsReelOutput(restored, AppSettings()).results)
         for (invalidDepth in listOf(inches(-1), inches(0), inches(15))) {
             assertNull(depth.copy(flangeToCore = invalidDepth).parse().request)
             assertTrue(depth.copy(flangeToCore = invalidDepth).parse().problems.isNotEmpty())
@@ -98,7 +98,7 @@ class ReelLengthInputsTest {
     }
 
     @Test fun remainingResults() {
-        val out = reelLengthOutput(filled, AppSettings())
+        val out = dimensionsReelOutput(filled, AppSettings())
         val byKey = out.results.associateBy { it.key }
         assertEquals(listOf("length", "length_feet", "wound_depth", "layers", "turns_per_layer"), out.results.map { it.key })
         assertEquals(ValueKind.LENGTH, byKey.getValue("length").kind)
@@ -117,7 +117,7 @@ class ReelLengthInputsTest {
 
     @Test fun metricShowsMetersAndMillimeters() {
         val metric = AppSettings(unitSystem = UnitSystem.METRIC)
-        val out = reelLengthOutput(filled, metric)
+        val out = dimensionsReelOutput(filled, metric)
         val byKey = out.results.associateBy { it.key }
         assertEquals("155 m", byKey.getValue("length_feet").text)
         assertEquals("Cable remaining (meters)", byKey.getValue("length_feet").label)
@@ -130,7 +130,7 @@ class ReelLengthInputsTest {
     }
 
     @Test fun badInputsAreErrors() {
-        val tooDeep = reelLengthOutput(filled.copy(distance = inches(10)), AppSettings())
+        val tooDeep = dimensionsReelOutput(filled.copy(distance = inches(10)), AppSettings())
         assertTrue(tooDeep.results.isEmpty())
         assertEquals(NoticeLevel.ERROR, tooDeep.notices.single().level)
         assertEquals(listOf("Packing factor isn't a number."), filled.copy(packingFactor = "1.2.3").parse().problems)
@@ -139,23 +139,23 @@ class ReelLengthInputsTest {
 
     @Test fun outOfRangeEstimateShowsAnErrorInsteadOfFormattingInfinity() {
         val largeFlange = Quantity.inches(Rational.of(1e200)).stored()
-        val output = reelLengthOutput(filled.copy(flange = largeFlange), AppSettings())
+        val output = dimensionsReelOutput(filled.copy(flange = largeFlange), AppSettings())
         assertTrue(output.results.isEmpty())
         assertEquals(NoticeLevel.ERROR, output.notices.single().level)
     }
 
     @Test fun cableNeededSaysWhetherTheReelIsEnough() {
-        val remaining = reelLengthOutput(filled, AppSettings()).results.first { it.key == "length" }.rational!!.toDouble()
-        val enough = reelLengthOutput(filled.copy(cableNeeded = inches(remaining.toLong() - 120)), AppSettings())
+        val remaining = dimensionsReelOutput(filled, AppSettings()).results.first { it.key == "length" }.rational!!.toDouble()
+        val enough = dimensionsReelOutput(filled.copy(cableNeeded = inches(remaining.toLong() - 120)), AppSettings())
         assertEquals("Left after the pull", enough.results.single { it.key == "spare_after_pull" }.label)
         assertTrue(enough.notices.any { it.level == NoticeLevel.INFO && it.text.startsWith("Enough for the") })
-        val short = reelLengthOutput(filled.copy(cableNeeded = inches(remaining.toLong() + 120)), AppSettings())
+        val short = dimensionsReelOutput(filled.copy(cableNeeded = inches(remaining.toLong() + 120)), AppSettings())
         val spare = short.results.single { it.key == "spare_after_pull" }
         assertEquals("Short for the pull", spare.label)
         assertTrue(spare.rational!!.signum > 0)
         assertTrue(short.notices.any { it.level == NoticeLevel.WARNING && it.text.startsWith("Short by") })
         // No value: no comparison.
-        assertTrue(reelLengthOutput(filled, AppSettings()).results.none { it.key == "spare_after_pull" })
+        assertTrue(dimensionsReelOutput(filled, AppSettings()).results.none { it.key == "spare_after_pull" })
         assertEquals(filled.copy(cableNeeded = inches(5)), ToolInputs.decode<ReelLengthInputs>(ToolInputs.encode(filled.copy(cableNeeded = inches(5)))))
     }
 }
