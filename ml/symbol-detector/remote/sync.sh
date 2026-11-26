@@ -13,6 +13,10 @@
 # only ever added to, never deleted: the remote holds datasets downloaded or
 # recovered there that this machine never had.
 #
+# Label folders inside the devices/ folders (devices/<stem>_<sha12>/ and
+# devices/batches/) are never mirrored: agents and model pre-labeling write
+# them on the remote, and remote/push_labels.sh sends this machine's labels.
+#
 # Override the target with REMOTE=user@host and REMOTE_DIR=path.
 set -euo pipefail
 
@@ -30,7 +34,9 @@ echo "code -> $REMOTE:$REMOTE_DIR/code"
 
 if [[ "${1:-}" == "--data" || "${1:-}" == "--blueprints" ]]; then
   # Root PDFs, evaluation/ and devices/ folders only; other subfolders untouched.
+  # Excluded label folders are neither sent nor deleted on the remote.
   rsync -a --delete --info=stats1 \
+    --exclude='/devices/*/' --exclude='/evaluation/devices/*/' --exclude='/devices/scanned_pdfs.json' \
     --include='/*.pdf' --include='/*.PDF' --include='/devices/***' --include='/evaluation/***' \
     --exclude='*' \
     "$REPO/blueprints_and_libraries/1_blueprints/" "$REMOTE:$REMOTE_DIR/data/blueprints_and_libraries/1_blueprints/"

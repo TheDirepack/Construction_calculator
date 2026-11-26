@@ -132,6 +132,9 @@
     <button id="prevPage" title="Previous page or JSON ([)">&lt;</button>
     <span id="pageIndicator" class="page-number">Page -</span>
     <button id="nextPage" title="Next page or JSON (])">&gt;</button>
+    <input id="pageJump" type="number" min="1" inputmode="numeric" aria-label="Go to page number"
+           title="Type a page number and press Enter (Home / End: first / last page)" style="width:118px;padding:5px 7px;font-size:12.5px;">
+    <button id="nextReviewPage" class="ghost" title="Next page with pending boxes, including unopened pages with proposals (Shift+N)">Review ›</button>
     <select id="fileSwitcher" hidden aria-label="Switch existing JSON file" title="Switch existing annotation JSON"></select>
   </div>
   <span class="spacer"></span>
@@ -153,7 +156,7 @@
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" title="Redo (Ctrl+Y)">Redo</button>
     <button id="save" class="primary" title="Save the label JSON of every changed page (Ctrl+S)">Save</button>
-    <button id="helpBtn" class="ghost" title="Keys: 1–9 family · C device catalog · B box · O oriented · V select · K anchor · G snap edges · I view filter · L labels · A verify · X reject · D duplicate · N next pending · Arrows nudge (Shift=10px) · Ctrl+C/V stamp at cursor · Delete remove · Ctrl+Z/Y undo/redo · Ctrl+S save · [ ] pages · 0 fit">?</button>
+    <button id="helpBtn" class="ghost" title="Keys: 1–9 family · C device catalog · B box · O oriented · V select · K anchor · G snap edges · I view filter · L labels · A verify · X reject · D duplicate · N next pending · Shift+N next page to review · Arrows nudge (Shift=10px) · Ctrl+C/V stamp at cursor · Delete remove · Ctrl+Z/Y undo/redo · Ctrl+S save · [ ] pages · Home/End first/last page · 0 fit">?</button>
   </div>
 </header>
 <div id="pdfMenuScreen" style="position:fixed;inset:0;background:#0e151c;z-index:9000;display:flex;flex-direction:column;padding:20px;overflow-y:auto;" hidden>

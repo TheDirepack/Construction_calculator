@@ -11,7 +11,7 @@ set -euo pipefail
 BASE="$HOME/Projects/blueprint-symbols"
 CODE="$BASE/code"
 DATA="$BASE/data/blueprints_and_libraries"
-LABELS="${BPS_LABELS_DIR:-$BASE/work/labels}"
+LABELS="${BPS_LABELS_DIR:-$DATA/1_blueprints}"   # labels: devices/ beside each PDF
 # Read from the folders when this runs (no index or manifest): labelled pages of
 # $DATA/1_blueprints/*.pdf train; fully labelled pages of
 # $DATA/1_blueprints/evaluation/*.pdf are validation and test.

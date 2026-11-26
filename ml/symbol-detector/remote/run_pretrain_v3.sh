@@ -34,7 +34,7 @@ PY="$BASE/.venv/bin/python"
 NECA="$DATA/2_component_libraries/neca_100_2013_svgs/NECA_100_Vector_Library"
 LEGEND_CROPS="$DATA/2_component_libraries/legend_symbol_crops"
 HARVESTED="$DATA/2_component_libraries/harvested_symbols"
-LABEL_STORE="${BPS_LABELS_DIR:-$WORK/labels}"
+LABEL_STORE="${BPS_LABELS_DIR:-$DATA/1_blueprints}"   # labels: devices/ beside each PDF
 LABELS="$WORK/ssl_real_device_labels"
 
 export PYTHONPATH="$CODE"

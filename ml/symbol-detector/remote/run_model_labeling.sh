@@ -31,7 +31,7 @@ export PYTHONPATH="$BASE/code" PYTHONUNBUFFERED=1 PYTHONWARNINGS=ignore
 cd "$BASE"
 exec .venv/bin/python code/scripts_model_prelabel.py \
   --weights "$WEIGHTS" \
-  --store work/labels \
+  --store data/blueprints_and_libraries/1_blueprints \
   --out work/model_proposals \
   --device "$DEVICE" \
   "$@"

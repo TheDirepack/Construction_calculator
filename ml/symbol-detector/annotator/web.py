@@ -10,13 +10,17 @@ Run from ml/symbol-detector:
 All coordinates are original rendered-page pixels, top-left origin. Pages
 remain positive-only and non-exhaustive by default. SAM proposals are
 unverified until individually accepted; the UI never attests full coverage.
-No cloud requests, framework dependency, or remote listen address.
+No cloud requests or framework dependency. It listens on the LAN by default
+and opens only drawings in 1_blueprints/ and 1_blueprints/evaluation/; labels
+are written to the devices/ folder beside each PDF (annotator.label_store).
 """
 from __future__ import annotations
 
 import argparse
 import copy
 import hashlib
+import hmac
+import ipaddress
 import json
 import math
 import os
@@ -30,7 +34,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from annotator import agent_api
 from blueprint_symbols.label_schema import (
@@ -163,20 +167,44 @@ def get_lan_ip() -> str:
         return "127.0.0.1"
 
 
+LAN_NAME_SUFFIXES = (".local", ".lan", ".home", ".internal", ".home.arpa")
+
+
 def _is_private_ip(host_part: str) -> bool:
+    """True for a literal loopback / private / unspecified IP address.
+
+    Names are never resolved: a DNS lookup would let any website whose name
+    resolves to a LAN address (DNS rebinding) pass the Host-header check.
+    """
     try:
-        ip = socket.gethostbyname(host_part)
-        parts = [int(p) for p in ip.split(".")]
-        if len(parts) == 4:
-            if parts[0] in (127, 10, 0):
-                return True
-            if parts[0] == 172 and 16 <= parts[1] <= 31:
-                return True
-            if parts[0] == 192 and parts[1] == 168:
-                return True
-    except Exception:
-        pass
-    return False
+        ip = ipaddress.ip_address(host_part.strip("[]"))
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private or ip.is_unspecified
+
+
+def _is_lan_host(host_name: str) -> bool:
+    """A Host header this server answers: a private IP, or a LAN machine name
+    (``mypc``, ``mypc.local``). Public DNS names never qualify."""
+    host_name = host_name.lower().rstrip(".")
+    if _is_private_ip(host_name) or host_name == "localhost":
+        return True
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", host_name):
+        return False
+    return "." not in host_name or host_name.endswith(LAN_NAME_SUFFIXES)
+
+
+def openable_pdfs(blueprints_dir: Path) -> list[Path]:
+    """The drawings the labeler shows: training PDFs directly in ``1_blueprints``
+    and evaluation PDFs directly in ``1_blueprints/evaluation``. Other
+    subfolders (new downloads, archives) belong to neither set and stay hidden."""
+    from blueprint_symbols.blueprint_sets import EVALUATION_DIR
+    found = []
+    for folder in (Path(blueprints_dir), Path(blueprints_dir) / EVALUATION_DIR):
+        if folder.is_dir():
+            found += sorted(p.resolve() for p in folder.iterdir()
+                            if p.is_file() and p.suffix.lower() == ".pdf")
+    return found
 
 
 def _devices_json_for(pdf: Path) -> Path | None:
@@ -219,14 +247,18 @@ def _load_proposals(pdf: Path, source_hash: str | None) -> dict | None:
 
 
 def default_out_dir(pdf: Path, source_hash: str) -> Path:
-    """A PDF's folder in the label store: ``<store>/<stem>_<hash12>``.
+    """A PDF's label folder: ``devices/<stem>_<hash12>`` beside the PDF
+    (``1_blueprints/devices`` or ``1_blueprints/evaluation/devices``), or
+    ``$BPS_LABELS_DIR/<stem>_<hash12>`` when that flat store is set.
 
-    The store (``$BPS_LABELS_DIR``, else ``work/labels``) is shared by the
-    browser annotator, the labeling agents and model pre-labeling, so every
-    path reads and writes the same page files.
+    The browser annotator, the labeling agents and model pre-labeling all
+    resolve folders through ``annotator.label_store``, so every path reads and
+    writes the same page files.
     """
     from annotator import label_store
-    return label_store.default_store() / label_store.doc_folder_name(Path(pdf), source_hash)
+    if os.environ.get("BPS_LABELS_DIR"):
+        return label_store.document_folder(label_store.default_store(), Path(pdf), source_hash)
+    return label_store.labels_folder_beside(Path(pdf), source_hash)
 
 
 def _store_json_prefix(out_dir: Path) -> str | None:
@@ -307,10 +339,16 @@ def _find_rendered(images_dir: Path, index: int, dpi: int, source_hash: str) -> 
     return None
 
 
-def _prefetch_job(pdf: str, pages: list[int], dpi: int, out_dir: str | None) -> tuple[str, str]:
-    """Worker-process side of prefetch: hash the PDF and pre-render pages."""
+def _prefetch_job(pdf: str, pages: list[int], dpi: int, out_dir: str | None,
+                  sha: str | None = None) -> tuple[str, str]:
+    """Worker-process side of prefetch: pre-render pages.
+
+    The caller passes the PDF hash when it knows it; otherwise the worker hashes
+    the file once and remembers it (a drawing set can be 700 MB: re-hashing it
+    for every page turn made prefetch slower than rendering).
+    """
     source = Path(pdf)
-    sha = sha256_file(source)
+    sha = sha or cached_sha256(source)
     images = Path(out_dir) if out_dir else default_out_dir(source, sha)
     images = images / "images"
     fitz = _import_fitz()
@@ -332,23 +370,42 @@ class _Prefetcher:
     def __init__(self) -> None:
         self._pool = None
         self._seen: set[tuple] = set()
+        self._queued: dict[tuple, list] = {}      # (pdf, dpi, out_dir) -> futures not yet done
         self._lock = threading.Lock()
 
-    def submit(self, pdf: Path, pages: list[int], dpi: int, out_dir: Path | None) -> bool:
+    def submit(self, pdf: Path, pages: list[int], dpi: int, out_dir: Path | None,
+               sha: str | None = None) -> bool:
         key = (str(pdf), tuple(pages), dpi, str(out_dir))
+        stream = (str(pdf), dpi, str(out_dir))
         with self._lock:
             if key in self._seen:
                 return False
             self._seen.add(key)
+            # Latest wins: pages requested for this PDF earlier and not started
+            # yet are ones the user has already paged past. They are cancelled
+            # after the lock is released: cancel() runs their done-callback,
+            # which takes this lock.
+            stale = self._queued.pop(stream, [])
             if self._pool is None:
                 import concurrent.futures
                 import multiprocessing
                 self._pool = concurrent.futures.ProcessPoolExecutor(
                     max_workers=1, mp_context=multiprocessing.get_context("spawn"))
             future = self._pool.submit(_prefetch_job, str(pdf), list(pages), dpi,
-                                       str(out_dir) if out_dir else None)
+                                       str(out_dir) if out_dir else None, sha)
+            self._queued.setdefault(stream, []).append(future)
+        for old in stale:
+            old.cancel()
 
         def remember(done) -> None:
+            with self._lock:
+                queued = self._queued.get(stream, [])
+                if done in queued:
+                    queued.remove(done)
+            if done.cancelled():
+                with self._lock:
+                    self._seen.discard(key)        # may be asked for again later
+                return
             try:
                 path, sha = done.result()
             except Exception:
@@ -778,6 +835,7 @@ class LabelingSession:
         proposals: Path | None = None, walls: Path | None = None, neca_catalog: Path | None = None,
         page_presence: Path | None = None,
         source_sha256: str | None = None, auto_proposals: bool = True,
+        token: str | None = None, lock: threading.RLock | None = None,
     ) -> None:
         if (pdf is None) == (edit is None):
             raise LabelingError("specify exactly one of --pdf or --edit")
@@ -804,8 +862,14 @@ class LabelingSession:
             else:
                 raise FileNotFoundError(self.edit)
         self.dpi = dpi
-        self.lock = threading.RLock()
-        self.token = secrets.token_urlsafe(32)
+        # Sessions for other PDFs opened through this server share the lock
+        # (one page file is never checked and written by two threads at once)
+        # and the access token.
+        self.lock = lock or threading.RLock()
+        self.token = token or secrets.token_urlsafe(32)
+        self._neca_catalog = neca_catalog
+        self._documents: dict[Path, LabelingSession] = {}
+        self._overview_cache: dict[str, tuple[int, int, dict]] = {}   # page file -> size, mtime, counts
         self._render_cache: dict[int, tuple[Path, int, int, str]] = {}
         # Callers that already know the PDF's hash (the label store records it
         # with size and mtime) skip re-reading a large drawing set per command.
@@ -876,8 +940,72 @@ class LabelingSession:
         elif self.pdf and auto_proposals:
             self.proposals = _load_proposals(self.pdf, self.source_hash)
         self.auto_proposals = auto_proposals
+        self._origin_pdf = self.pdf
         if self.pdf and not self._initial_out_dir:
             self._register_document()
+
+    MAX_OPEN_DOCUMENTS = 16
+
+    def resolve_pdf(self, path_or_name: str) -> Path:
+        """A blueprint PDF by absolute path, path relative to the blueprints
+        folder, or file name. Only training and evaluation drawings
+        (:func:`openable_pdfs`) and the PDF the server was started with open."""
+        raw = str(path_or_name or "").strip()
+        if not raw or "\x00" in raw:
+            raise LabelingError("document path or name required")
+        bp_dir = self.blueprints_dir
+        target = Path(raw).resolve() if Path(raw).is_absolute() else None
+        if target is None or not target.is_file():
+            candidate = (bp_dir / raw).resolve() if bp_dir else None
+            if candidate is not None and candidate.is_file():
+                target = candidate
+            elif bp_dir and "/" not in raw and "\\" not in raw:
+                # A name in both folders is the evaluation copy (blueprint_sets rule).
+                matches = [p for p in openable_pdfs(bp_dir) if p.name == raw]
+                target = matches[-1] if matches else None
+        if target is None or not target.is_file():
+            raise LabelingError(f"blueprint PDF not found: {raw}")
+        from blueprint_symbols.blueprint_sets import EVALUATION_DIR
+        allowed = (target in (self._origin_pdf, self.pdf) or
+                   (bp_dir is not None and target.parent in (bp_dir, bp_dir / EVALUATION_DIR)))
+        if target.suffix.lower() != ".pdf" or not allowed:
+            raise LabelingError("only drawings in the blueprints folder or its evaluation "
+                                "folder can be opened")
+        return target
+
+    def for_document(self, doc: str | None) -> "LabelingSession":
+        """The session for the PDF a request names (``?doc=``).
+
+        Every browser tab sends the PDF it is editing, so two tabs on different
+        drawings never read or save each other's pages.
+        """
+        if not doc:
+            return self
+        if self.edit:
+            if Path(doc).resolve() in (self.edit, *self.edit_files):
+                return self
+            raise LabelingError("this server edits annotation JSON files; it has no PDFs to open")
+        target = self.resolve_pdf(doc)
+        with self.lock:
+            if target == self.pdf:
+                return self
+            existing = self._documents.get(target)
+            if existing is not None:
+                stat = target.stat()
+                if (stat.st_size, stat.st_mtime_ns) == (existing.source_stat.st_size,
+                                                        existing.source_stat.st_mtime_ns):
+                    return existing
+                del self._documents[target]          # PDF replaced on disk: reopen it
+            opened = LabelingSession(
+                pdf=target, blueprints_dir=self.blueprints_dir, out_dir=self._initial_out_dir,
+                dpi=self.dpi, neca_catalog=self._neca_catalog, auto_proposals=self.auto_proposals,
+                token=self.token, lock=self.lock,
+            )
+            opened._origin_pdf = self._origin_pdf
+            while len(self._documents) >= self.MAX_OPEN_DOCUMENTS:
+                self._documents.pop(next(iter(self._documents)))
+            self._documents[target] = opened
+            return opened
 
     def _register_document(self) -> None:
         """Record the open PDF in the label store (document.json), so agents,
@@ -1041,6 +1169,60 @@ class LabelingSession:
             raise LabelingError("unsupported annotation coordinate system")
         return data, revision, image
 
+    def page_overview(self) -> dict:
+        """Which pages need review, without opening them: counts from every
+        saved page file, and for pages never opened, the machine proposals that
+        will appear as pending boxes on first open. Page files are read once
+        and remembered by size and modification time."""
+        cache = self._overview_cache
+        rows: dict[int, dict] = {}
+        with self.lock:
+            for index in range(self.page_count) if self.edit else ():
+                self._overview_row(self._json_path(index), index, rows, cache)
+            if self.pdf:
+                pattern = re.compile(rf"^{re.escape(self.json_prefix)}_p(\d{{4,5}})\.json$")
+                for path in self.out_dir.glob(f"{self.json_prefix}_p*.json"):
+                    match = pattern.match(path.name)
+                    if match and 1 <= int(match.group(1)) <= self.page_count:
+                        self._overview_row(path, int(match.group(1)) - 1, rows, cache)
+                for device in (self.proposals or {}).get("devices", []):
+                    if not isinstance(device, dict):
+                        continue
+                    number = device.get("pdf_page") or device.get("page")
+                    if (type(number) is not int or not 1 <= number <= self.page_count
+                            or number - 1 in rows and rows[number - 1]["saved"]):
+                        continue
+                    if devices_skip_reason(device) or device_for_raw_type(
+                            device.get("device_type") or device.get("broad_family")) is None:
+                        continue
+                    row = rows.setdefault(number - 1, {"page": number - 1, "saved": False,
+                                                       "pending": 0, "verified": 0,
+                                                       "complete": False, "no_symbols": False})
+                    row["pending"] += 1
+        return {"page_count": self.page_count, "pages": [rows[k] for k in sorted(rows)]}
+
+    @staticmethod
+    def _overview_row(path: Path, index: int, rows: dict, cache: dict) -> None:
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+        known = cache.get(str(path))
+        if known is None or known[:2] != (stat.st_size, stat.st_mtime_ns):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return
+            items = data.get("instances") or []
+            cache[str(path)] = (stat.st_size, stat.st_mtime_ns, {
+                "saved": True,
+                "pending": sum(1 for i in items if i.get("review_status") != "accepted"),
+                "verified": sum(1 for i in items if i.get("verified_ground_truth") is True),
+                "complete": data.get("page_complete") is True,
+                "no_symbols": data.get("verified_no_symbols") is True,
+            })
+        rows[index] = {"page": index, **cache[str(path)][2]}
+
     def list_sibling_jsons(self) -> list[dict]:
         base_dir = self.out_dir if self.pdf else self.edit.parent
         files = []
@@ -1101,7 +1283,8 @@ class LabelingSession:
                 "page_count": self.page_count,
                 "revision": revision,
                 "document": data,
-                "image_url": f"/api/image?page={index}",
+                "image_url": f"/api/image?page={index}" + (
+                    f"&doc={quote(str(self.pdf), safe='')}" if self.pdf else ""),
                 "families": sorted(FAMILY_DISCIPLINES),
                 "family_disciplines": FAMILY_DISCIPLINES,
                 "variants_by_family": self.variants_by_family,
@@ -1120,7 +1303,11 @@ class LabelingSession:
     def _labeled_stems(self) -> set[str]:
         """Sanitized PDF stems that have saved pages in the label store."""
         from annotator import label_store
-        roots = [label_store.default_store()]
+        roots = []
+        if os.environ.get("BPS_LABELS_DIR"):
+            roots += label_store.store_roots(label_store.default_store())
+        if self.blueprints_dir:
+            roots += label_store.store_roots(self.blueprints_dir)
         if self._initial_out_dir:
             roots.append(self._initial_out_dir)
         stems: set[str] = set()
@@ -1128,9 +1315,9 @@ class LabelingSession:
             if not root.is_dir():
                 continue
             for folder in root.iterdir():
-                if folder.is_dir() and next(folder.glob("*_p[0-9][0-9][0-9][0-9].json"), None):
+                if folder.is_dir() and next(folder.glob("*_p[0-9][0-9][0-9][0-9]*.json"), None):
                     stems.add(folder.name.rsplit("_", 1)[0])
-            for page in root.glob("*_p[0-9][0-9][0-9][0-9].json"):      # flat --out-dir
+            for page in root.glob("*_p[0-9][0-9][0-9][0-9]*.json"):     # flat --out-dir
                 stems.add(re.sub(r"[^a-zA-Z0-9_-]+", "_", page.name.rsplit("_p", 1)[0])[:48])
         return stems
 
@@ -1145,7 +1332,7 @@ class LabelingSession:
                 }]
             return []
 
-        pdf_paths = sorted(bp_dir.rglob("*.pdf"))
+        pdf_paths = openable_pdfs(bp_dir)
         docs = []
         current_resolved = self.pdf.resolve() if self.pdf else None
         labeled = self._labeled_stems()
@@ -1190,34 +1377,29 @@ class LabelingSession:
 
     def prefetch(self, path: str | None, pages: list[int]) -> dict:
         """Pre-render pages of this or another blueprint PDF in the background."""
-        if not isinstance(pages, list) or not all(type(p) is int and 0 <= p < 10000 for p in pages[:8]):
+        if (not isinstance(pages, list) or not pages
+                or not all(type(p) is int and 0 <= p < 1_000_000 for p in pages[:8])):
             raise LabelingError("pages must be a list of page indexes")
         pages = pages[:8]
         if path:
-            target = Path(path).resolve()
-            if target.suffix.lower() != ".pdf" or not target.is_file():
-                raise LabelingError("prefetch path must be an existing PDF")
-            if self.blueprints_dir and self.blueprints_dir not in target.parents and target != self.pdf:
-                raise LabelingError("prefetch path must be inside the blueprints folder")
+            target = self.resolve_pdf(path)
         elif self.pdf:
             target = self.pdf
         else:
             return {"queued": False}
-        queued = PREFETCHER.submit(target, pages, self.dpi, self._initial_out_dir)
+        known = self if target == self.pdf else self._documents.get(target)
+        if known is not None:
+            pages = [p for p in pages if p < known.page_count]
+            if not pages:
+                return {"queued": False}
+        sha = known.source_hash if known is not None else _SHA_CACHE.get(
+            (str(target), target.stat().st_size, target.stat().st_mtime_ns))
+        queued = PREFETCHER.submit(target, pages, self.dpi, self._initial_out_dir, sha)
         return {"queued": queued}
 
     def switch_document(self, path_or_name: str) -> dict:
-        target = Path(path_or_name).resolve()
-        if not target.is_file():
-            candidate = (self.blueprints_dir / path_or_name).resolve()
-            if candidate.is_file():
-                target = candidate
-            else:
-                matches = list(self.blueprints_dir.rglob(path_or_name))
-                if matches and matches[0].is_file():
-                    target = matches[0].resolve()
-                else:
-                    raise FileNotFoundError(f"blueprint PDF not found: {path_or_name}")
+        """Change the PDF that requests without ``?doc=`` use (agents, old tabs)."""
+        target = self.resolve_pdf(path_or_name)
 
         with self.lock:
             self.pdf = target
@@ -1256,11 +1438,13 @@ class LabelingSession:
             stem = self.pdf.stem if self.pdf else self.edit.stem
             doc_name = self.pdf.name if self.pdf else self.edit.name
 
+            export_dir = (self.out_dir / "exports").resolve()
             if target_path:
-                export_file = Path(target_path).resolve()
+                export_file = Path(target_path)
+                export_file = (export_file if export_file.is_absolute() else export_dir / export_file).resolve()
+                if export_dir not in export_file.parents or export_file.suffix.lower() != ".json":
+                    raise LabelingError(f"exports are written as .json files inside {export_dir}")
             else:
-                export_dir = self.out_dir / "exports"
-                export_dir.mkdir(parents=True, exist_ok=True)
                 export_file = export_dir / f"{stem}_full_export.json"
 
             export_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1384,88 +1568,92 @@ class LabelingSession:
             return sources
 
     def import_server(self, page_index: int, source_path: str) -> dict:
+        """Add boxes from a listed server source (proposals, CircuitNet/SAM
+        output, DEVICES.json or a full-document export) as pending boxes.
+
+        Every page goes through the same checks and revision guard as a save,
+        and nothing is written unless every affected page passes them.
+        """
         target = Path(source_path).resolve()
-        if not target.is_file():
-            raise FileNotFoundError(f"server file not found: {source_path}")
-
         with self.lock:
+            listed = {Path(s["path"]) for s in self.list_server_sources(page_index)}
+            if target not in listed:
+                raise LabelingError("import only from the sources listed for this document")
+            if not target.is_file():
+                raise FileNotFoundError(f"server file not found: {source_path}")
             raw = json.loads(target.read_text(encoding="utf-8"))
-            imported_count = 0
 
-            baseline, revision, _ = self._load(page_index)
-            width, height = int(baseline["image_width"]), int(baseline["image_height"])
-
-            current_instances = list(baseline.get("instances", []))
-            existing_ids = {inst["instance_id"] for inst in current_instances}
-
+            incoming: dict[int, list[dict]] = {}
+            negatives: dict[int, bool] = {}
             if isinstance(raw, dict) and isinstance(raw.get("devices"), list):
-                self.proposals = raw
-                new_proposals = self._proposal_instances(page_index, width, height)
-                for prop in new_proposals:
-                    if prop["instance_id"] not in existing_ids:
-                        current_instances.append(prop)
-                        existing_ids.add(prop["instance_id"])
-                        imported_count += 1
+                baseline, _, _ = self._load(page_index)
+                saved_proposals = self.proposals
+                self.proposals = raw              # this file only, for this page only
+                try:
+                    incoming[page_index] = self._proposal_instances(
+                        page_index, int(baseline["image_width"]), int(baseline["image_height"]))
+                finally:
+                    self.proposals = saved_proposals
             elif isinstance(raw, dict) and isinstance(raw.get("pages"), list):
-                pages_imported = 0
+                # Review decisions carry over only from an export of this exact PDF.
+                same_pdf = bool(self.source_hash) and raw.get("source_pdf_sha256") == self.source_hash
                 for p in raw["pages"]:
-                    p_idx = p.get("page_index")
-                    if p_idx is None or not (0 <= p_idx < self.page_count):
+                    p_idx = p.get("page_index") if isinstance(p, dict) else None
+                    if type(p_idx) is not int or not 0 <= p_idx < self.page_count:
                         continue
-                    p_baseline, p_rev, _ = self._load(p_idx)
-                    p_insts = list(p_baseline.get("instances", []))
-                    p_existing = {inst["instance_id"] for inst in p_insts}
-                    added_this_page = 0
-                    for inst in p.get("instances", []):
-                        if isinstance(inst, dict):
-                            inst_id = inst.get("instance_id")
-                            if not inst_id or inst_id in p_existing:
-                                inst_id = f"imported_p{p_idx + 1}_{len(p_insts) + 1}"
-                                inst = dict(inst, instance_id=inst_id)
-                            p_insts.append(inst)
-                            p_existing.add(inst_id)
-                            imported_count += 1
-                            added_this_page += 1
-                    if added_this_page > 0 or p.get("verified_no_symbols"):
-                        p_baseline["instances"] = [_normalize_instance_for_save(x) for x in p_insts]
-                        if p.get("verified_no_symbols") is not None:
-                            p_baseline["verified_no_symbols"] = p["verified_no_symbols"]
-                        p_json = self._json_path(p_idx)
-                        encoded = (json.dumps(p_baseline, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-                        _atomic_bytes(p_json, encoded)
-                        pages_imported += 1
-                return {
-                    "success": True,
-                    "filename": target.name,
-                    "imported_count": imported_count,
-                    "pages_imported": pages_imported or len(raw["pages"]),
-                }
+                    incoming.setdefault(p_idx, []).extend(
+                        x if same_pdf else _as_pending_import(x)
+                        for x in p.get("instances", []) if isinstance(x, dict))
+                    if same_pdf and p.get("verified_no_symbols") is True and not p.get("instances"):
+                        negatives[p_idx] = True
             elif isinstance(raw, dict) and isinstance(raw.get("instances"), list):
-                for inst in raw["instances"]:
-                    if isinstance(inst, dict):
-                        inst_id = inst.get("instance_id")
-                        if not inst_id or inst_id in existing_ids:
-                            inst_id = f"imported_p{page_index + 1}_{len(current_instances) + 1}"
-                            inst = dict(inst, instance_id=inst_id)
-                        current_instances.append(inst)
-                        existing_ids.add(inst_id)
-                        imported_count += 1
+                incoming[page_index] = [_as_pending_import(x) for x in raw["instances"] if isinstance(x, dict)]
             else:
                 raise LabelingError(f"unrecognized annotation or proposal format in {target.name}")
 
-            baseline["instances"] = [_normalize_instance_for_save(inst) for inst in current_instances]
-            self.save(
-                page_index,
-                revision=revision,
-                instances=baseline["instances"],
-                rejected=baseline.get("rejected_proposals", []),
-                metadata={"verified_no_symbols": False},
-            )
+            plans = []
+            imported_count = 0
+            for p_idx in sorted(set(incoming) | set(negatives)):
+                baseline, revision, _ = self._load(p_idx)
+                instances = list(baseline.get("instances", []))
+                taken = {inst["instance_id"] for inst in instances}
+                taken |= {inst.get("instance_id") for inst in baseline.get("rejected_proposals", [])}
+                added = 0
+                for inst in incoming.get(p_idx, []):
+                    inst_id = inst.get("instance_id")
+                    if not isinstance(inst_id, str) or not ID_PATTERN.fullmatch(inst_id) or inst_id in taken:
+                        n = len(instances) + 1
+                        while f"imported_p{p_idx + 1}_{n}" in taken:
+                            n += 1
+                        inst = dict(inst, instance_id=f"imported_p{p_idx + 1}_{n}")
+                    instances.append(inst)
+                    taken.add(inst["instance_id"])
+                    added += 1
+                if not added and not negatives.get(p_idx):
+                    continue
+                metadata = {
+                    "verified_no_symbols": not instances and bool(
+                        negatives.get(p_idx) or baseline.get("verified_no_symbols") is True),
+                    # A page with new pending boxes is no longer fully labeled.
+                    "page_complete": (baseline.get("page_complete") is True and
+                                      all(x.get("verified_ground_truth") is True for x in instances)),
+                }
+                instances = [_normalize_instance_for_save(x) for x in instances]
+                rejected = baseline.get("rejected_proposals", [])
+                self.validate_review_payload(p_idx, revision=revision, instances=instances,
+                                             rejected=rejected, metadata=metadata)
+                plans.append((p_idx, revision, instances, rejected, metadata))
+                imported_count += added
+
+            for p_idx, revision, instances, rejected, metadata in plans:
+                self.save(p_idx, revision=revision, instances=instances,
+                          rejected=rejected, metadata=metadata)
 
             return {
                 "success": True,
                 "imported_count": imported_count,
                 "filename": target.name,
+                "pages_imported": len(plans),
                 "page_state": self.page_state(page_index),
             }
 
@@ -1566,10 +1754,19 @@ class LabelingSession:
             return hashlib.sha256(encoded).hexdigest()
 
 
+def _as_pending_import(item: dict) -> dict:
+    """An imported box from another source: shown for review, never trusted."""
+    return dict(item, uncertain=True, review_status="unreviewed", review_source="import",
+                verified_ground_truth=False)
+
+
 def make_handler(session: LabelingSession):
     class Handler(BaseHTTPRequestHandler):
-        def _reply(self, code: int, body: bytes, mime: str) -> None:
+        def _reply(self, code: int, body: bytes, mime: str,
+                   extra_headers: dict[str, str] | None = None) -> None:
             self.send_response(code)
+            for name, value in (extra_headers or {}).items():
+                self.send_header(name, value)
             self.send_header("Content-Type", mime)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
@@ -1583,8 +1780,21 @@ def make_handler(session: LabelingSession):
             self.end_headers()
             self.wfile.write(body)
 
-        def _json(self, code: int, data: dict) -> None:
-            self._reply(code, json.dumps(data, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+        def _json(self, code: int, data: dict, extra_headers: dict[str, str] | None = None) -> None:
+            self._reply(code, json.dumps(data, ensure_ascii=False).encode("utf-8"),
+                        "application/json; charset=utf-8", extra_headers)
+
+        def _doc_page(self, query: str) -> tuple[LabelingSession, int]:
+            """The session of the PDF named by ``?doc=`` and the ``?page=`` index."""
+            q = parse_qs(query, keep_blank_values=True)
+            if set(q) - {"page", "doc"} or any(len(v) > 1 for v in q.values()):
+                raise LabelingError("unsupported page query")
+            target = session.for_document(q.get("doc", [""])[0] or None)
+            raw = q.get("page", [str(target.start_page)])[0]
+            try:
+                return target, target._page_index(int(raw))
+            except (ValueError, TypeError):
+                raise LabelingError("invalid page number") from None
 
         def _trusted_host(self) -> bool:
             host_header = self.headers.get("Host", "").lower()
@@ -1596,19 +1806,7 @@ def make_handler(session: LabelingSession):
             else:
                 host_name = host_header
 
-            if host_name in ("127.0.0.1", "localhost", "0.0.0.0") or host_name.endswith(".local"):
-                return True
-            return _is_private_ip(host_name)
-
-        def _page(self, query: str) -> int:
-            q = parse_qs(query, keep_blank_values=True)
-            if set(q) - {"page"} or len(q.get("page", [])) > 1:
-                raise LabelingError("unsupported page query")
-            raw = q.get("page", [str(session.start_page)])[0]
-            try:
-                return session._page_index(int(raw))
-            except (ValueError, TypeError):
-                raise LabelingError("invalid page number") from None
+            return _is_lan_host(host_name)
 
         def do_GET(self) -> None:
             if not self._trusted_host():
@@ -1632,16 +1830,25 @@ def make_handler(session: LabelingSession):
                 elif url.path == "/api/device_catalog":
                     self._json(200, session.device_catalog)
                 elif url.path == "/api/page":
-                    self._json(200, session.page_state(self._page(url.query)))
+                    target, page_idx = self._doc_page(url.query)
+                    self._json(200, target.page_state(page_idx))
                 elif url.path == "/api/image":
-                    data, mime = session.image_response(self._page(url.query))
+                    target, page_idx = self._doc_page(url.query)
+                    data, mime = target.image_response(page_idx)
                     self._reply(200, data, mime)
+                elif url.path == "/api/overview":
+                    q = parse_qs(url.query, keep_blank_values=True)
+                    if set(q) - {"doc"} or any(len(v) > 1 for v in q.values()):
+                        raise LabelingError("unsupported overview query")
+                    target = session.for_document(q.get("doc", [""])[0] or None)
+                    self._json(200, target.page_overview())
                 elif url.path == "/api/files":
                     self._json(200, {"files": session.list_sibling_jsons()})
                 elif url.path == "/api/documents":
                     self._json(200, {"documents": session.list_documents()})
                 elif url.path == "/api/server_sources":
-                    self._json(200, {"sources": session.list_server_sources(self._page(url.query))})
+                    target, page_idx = self._doc_page(url.query)
+                    self._json(200, {"sources": target.list_server_sources(page_idx)})
                 elif url.path == "/api/agent/tools":
                     self._json(200, agent_api.tool_manifest(session))
                 elif url.path == "/api/agent/context":
@@ -1657,7 +1864,8 @@ def make_handler(session: LabelingSession):
                 self._json(409, {"error": str(exc)})
 
         def do_POST(self) -> None:
-            if not self._trusted_host() or self.headers.get("X-Labeler-Token") != session.token:
+            if not self._trusted_host() or not hmac.compare_digest(
+                    self.headers.get("X-Labeler-Token", "").encode(), session.token.encode()):
                 self._json(403, {"error": "local session authorization required"})
                 return
             origin = self.headers.get("Origin")
@@ -1722,8 +1930,8 @@ def make_handler(session: LabelingSession):
                     src_path = data.get("path")
                     if not src_path:
                         raise LabelingError("server source path required")
-                    page_idx = self._page(url.query)
-                    result = session.import_server(page_idx, str(src_path))
+                    target, page_idx = self._doc_page(url.query)
+                    result = target.import_server(page_idx, str(src_path))
                     self._json(200, result)
                     return
                 if url.path == "/api/open":
@@ -1732,16 +1940,16 @@ def make_handler(session: LabelingSession):
                     self._json(200, {"page_index": page_idx, "page_count": session.page_count})
                     return
                 if url.path == "/api/snap":
-                    page_idx = self._page(url.query)
+                    target, page_idx = self._doc_page(url.query)
                     inst = data.get("instance")
                     if not isinstance(inst, dict):
                         raise LabelingError("instance object required")
-                    snap = session.resolve_snap_preview(page_idx, inst)
+                    snap = target.resolve_snap_preview(page_idx, inst)
                     self._json(200, {"snap": snap})
                     return
-                page_idx = self._page(url.query)
+                target, page_idx = self._doc_page(url.query)
                 if url.path == "/api/validate":
-                    session.validate_review_payload(
+                    target.validate_review_payload(
                         page_idx, revision=data.get("revision"),
                         instances=data.get("instances"),
                         rejected=data.get("rejected_proposals"),
@@ -1749,14 +1957,14 @@ def make_handler(session: LabelingSession):
                     )
                     self._json(200, {"valid": True})
                     return
-                new_revision = session.save(
+                new_revision = target.save(
                     page_idx,
                     revision=data.get("revision"),
                     instances=data.get("instances"),
                     rejected=data.get("rejected_proposals"),
                     metadata=data.get("metadata"),
                 )
-                saved_state = session.page_state(page_idx)
+                saved_state = target.page_state(page_idx)
                 self._json(200, {
                     "revision": new_revision,
                     "saved": True,
@@ -1764,6 +1972,8 @@ def make_handler(session: LabelingSession):
                 })
             except RevisionConflict as exc:
                 self._json(409, {"error": str(exc)})
+            except FileNotFoundError as exc:
+                self._json(404, {"error": str(exc)})
             except (LabelingError, ValueError, TypeError, KeyError) as exc:
                 self._json(400, {"error": str(exc)})
 
@@ -1783,7 +1993,8 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path,
                         help="Put every PDF's pages in this one folder instead of the label store")
     parser.add_argument("--store", type=Path,
-                        help="Label store root (default $BPS_LABELS_DIR, else work/labels)")
+                        help="Flat label store to use instead of the devices folder beside each PDF "
+                             "(same as $BPS_LABELS_DIR)")
     parser.add_argument("--proposals", type=Path)
     parser.add_argument("--page-presence", type=Path,
                         help="Read-only page candidates from scripts_triage_pdf_symbol_pages.py")
@@ -1803,7 +2014,7 @@ def main() -> None:
     if chosen_pdf is None and chosen_edit is None:
         bp_dir = Path(args.blueprints_dir).resolve()
         if bp_dir.is_dir():
-            pdfs = sorted(bp_dir.rglob("*.pdf"))
+            pdfs = openable_pdfs(bp_dir)
             if pdfs:
                 best = pdfs[0]
                 for p in pdfs:

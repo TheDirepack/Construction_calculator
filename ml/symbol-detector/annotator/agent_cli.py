@@ -450,7 +450,7 @@ def cmd_batches(args) -> None:
     arrive. ``--force`` redistributes everything.
     """
     store = Path(args.store).resolve()
-    out = store / label_store.BATCH_DIR
+    out = label_store.state_dir(store) / label_store.BATCH_DIR
     out.mkdir(parents=True, exist_ok=True)
     count = max(1, args.count)
     bins: list[list[str]] = [[] for _ in range(count)]

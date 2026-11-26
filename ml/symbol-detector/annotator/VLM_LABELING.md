@@ -29,13 +29,14 @@ To make each image count, the tools pack a lot into one picture:
 
 Run every command from `ml/symbol-detector/` on the laptop. The wrapper
 forwards it to the training machine. Page paths are remote paths of the form
-`work/labels/<document>/<name>_p0012.json` (`p0012` = PDF page 12); copy them
+`data/blueprints_and_libraries/1_blueprints/devices/<document>/<name>_p0012.json` (`p0012` = PDF page 12;
+evaluation drawings use `1_blueprints/evaluation/devices/`); copy them
 exactly as `next` and `doc` print them. A page's file appears on your first
 `act`; you can view any page before that.
 
 ```
 W=remote/vlm_label.sh
-B=work/labels/batches/batch_NN.txt             # your batch
+B=data/blueprints_and_libraries/1_blueprints/devices/batches/batch_NN.txt   # your batch
 V=work/vlm_views/batch_NN                      # your local scratch folder
 
 $W next    $B                          # current document + next page to label   (no image)

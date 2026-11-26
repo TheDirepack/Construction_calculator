@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Add new PDFs to the label store and assign them to agent batches.
+# Labels go to the devices/ folder beside each PDF; batches to
+# 1_blueprints/devices/batches/.
 #
 #   remote/update_label_store.sh            # on the training machine
 #
@@ -15,7 +17,7 @@ BATCHES="${BATCHES:-10}"
 export PYTHONPATH="$BASE/code" PYTHONUNBUFFERED=1 PYTHONWARNINGS=ignore
 cd "$BASE"
 nice -n 15 .venv/bin/python code/scripts_build_label_store.py \
-  --store work/labels \
+  --store data/blueprints_and_libraries/1_blueprints \
   --data-root data/blueprints_and_libraries \
   --scan data/blueprints_and_libraries/1_blueprints
-.venv/bin/python -m annotator.agent_cli batches --store work/labels --count "$BATCHES"
+.venv/bin/python -m annotator.agent_cli batches --store data/blueprints_and_libraries/1_blueprints --count "$BATCHES"

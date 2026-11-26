@@ -19,8 +19,12 @@ Two sources of documents, both safe to re-run:
   at training time by which folder the PDF is in.
 
   PYTHONPATH=code .venv/bin/python code/scripts_build_label_store.py \\
-      --store work/labels --data-root data/blueprints_and_libraries \\
+      --store data/blueprints_and_libraries/1_blueprints \\
+      --data-root data/blueprints_and_libraries \\
       --scan data/blueprints_and_libraries/1_blueprints
+
+``--store`` is the ``1_blueprints`` folder: each drawing's labels go to the
+``devices`` folder beside it (``annotator.label_store``).
 """
 from __future__ import annotations
 
@@ -195,7 +199,7 @@ def scan_pdfs(store: Path, sets, *, dry_run: bool) -> dict:
     electrical pages are remembered (by size and mtime) so daily runs stay cheap."""
     stats: dict[str, int] = defaultdict(int)
     known = {Path(d.source).resolve() for d in label_store.iter_documents(store, skip_missing=True)} if store.is_dir() else set()
-    scanned_path = store / SCANNED_FILE
+    scanned_path = label_store.state_dir(store) / SCANNED_FILE
     scanned = json.loads(scanned_path.read_text()) if scanned_path.is_file() else {}
     for pdf in _drawings(sets):
         if pdf.resolve() in known:
@@ -217,7 +221,7 @@ def scan_pdfs(store: Path, sets, *, dry_run: bool) -> dict:
             stats["no_electrical_pages"] += 1
             scanned[str(pdf.resolve())] = [stat.st_size, stat.st_mtime_ns]
             if not dry_run:
-                store.mkdir(parents=True, exist_ok=True)
+                scanned_path.parent.mkdir(parents=True, exist_ok=True)
                 scanned_path.write_text(json.dumps(scanned))
             continue
         stats["new_documents"] += 1

@@ -106,6 +106,7 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   token: null, page: 0, pageCount: 1, revision: null, doc: null,
+  loadingPage: null, pendingPage: null, lastLoadError: "",
   image: null, mode: "pan", selectedId: null,
   selectedIds: new Set(),
   pageCache: {},
@@ -143,6 +144,9 @@ const state = {
   deviceModalQuery: "",
   deviceModalCategory: "all",
 };
+
+// Read by the browser tests (tests/test_annotator_long_documents.py).
+if (typeof window !== "undefined") window.__labelerState = state;
 
 const elements = typeof document === "undefined" ? null : {
   canvas: $("canvas"), viewport: $("viewport"), items: $("items"),
@@ -1591,8 +1595,15 @@ function refreshControls() {
   $("pageIndicator").textContent = (state.pageCount === 1 && state.doc?.page_index > 0)
     ? "Source p" + (state.doc.page_index + 1)
     : "Page " + (state.page + 1) + " / " + state.pageCount;
-  $("prevPage").disabled = state.page === 0 || state.busy;
-  $("nextPage").disabled = state.page >= state.pageCount - 1 || state.busy;
+  const navBase = state.pendingPage ?? state.loadingPage ?? state.page;
+  $("prevPage").disabled = navBase <= 0;
+  $("nextPage").disabled = navBase >= state.pageCount - 1;
+  const jump = $("pageJump");
+  if (jump) {
+    jump.max = String(state.pageCount);
+    jump.placeholder = state.pageCount > 1 ? `Go to (1-${state.pageCount})` : "Go to";
+    jump.disabled = state.pageCount <= 1;
+  }
   for (const name of ["pan", "select", "draw", "oriented", "anchor", "snap"]) {
     const el = $(name + "Tool");
     if (el) el.setAttribute("aria-pressed", String(state.mode === name));
@@ -3167,7 +3178,7 @@ async function snapRefineSelected() {
 
   let snapRes = null;
   try {
-    const res = await api("/api/snap?page=" + state.page, {
+    const res = await api("/api/snap?page=" + state.page + docQuery(), {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
       body: JSON.stringify({ instance: JSON.parse(JSON.stringify(item)) }),
@@ -3266,6 +3277,98 @@ async function snapRefineSelected() {
   }
 }
 
+// Every page request names the PDF this tab is editing, so another tab (or an
+// agent) opening a different drawing never redirects this tab's reads or saves.
+function docQuery() {
+  return state.modeKind === "pdf" && state.currentDocPath
+    ? "&doc=" + encodeURIComponent(state.currentDocPath) : "";
+}
+function isCurrentDoc(doc) {
+  return state.currentDocPath ? doc.path === state.currentDocPath : Boolean(doc.is_current);
+}
+
+// Pages kept in memory besides unsaved ones. A long drawing set visited page
+// by page would otherwise keep every page (with 80 undo snapshots each).
+const CLEAN_PAGES_KEPT = 12;
+
+function cachePage(page) {
+  state.pageCache[page] = {
+    doc: JSON.parse(JSON.stringify(state.doc)),
+    dirty: Boolean(state.dirty),
+    revision: state.revision,
+    undo: [...state.undo],
+    redo: [...state.redo],
+    selectedIds: new Set(state.selectedIds),
+    selectedId: state.selectedId,
+    visited: Date.now() + (state.visitSeq = (state.visitSeq || 0) + 1) / 1e6,
+  };
+  trimPageCache(page);
+}
+
+function trimPageCache(keep) {
+  const clean = Object.entries(state.pageCache)
+    .filter(([p, c]) => !c.dirty && Number(p) !== keep)
+    .sort((a, b) => (b[1].visited || 0) - (a[1].visited || 0));
+  const keepIsClean = state.pageCache[keep] && !state.pageCache[keep].dirty;
+  for (const [p] of clean.slice(CLEAN_PAGES_KEPT - (keepIsClean ? 1 : 0))) delete state.pageCache[p];
+}
+
+// Page navigation for long documents: a request made while a page is loading
+// is remembered (latest wins) and opened as soon as that load finishes, and
+// steps count from the page being opened, so three quick "next" clicks move
+// three pages instead of one.
+function goToPage(page) {
+  if (!Number.isInteger(page)) return;
+  const last = Math.max(0, state.pageCount - 1);
+  if (page < 0 || page > last) {
+    notify(page < 0 ? "Already on the first page." : `Already on the last page (${state.pageCount}).`, "warning");
+    return;
+  }
+  if (state.busy || state.drag) {
+    if (state.drag) { notify("Finish drawing or moving the box first.", "warning"); return; }
+    state.pendingPage = page;
+    notify(`Going to page ${page + 1} / ${state.pageCount}...`);
+    refreshControls();
+    return;
+  }
+  if (page === state.page && state.doc) return;
+  loadPage(page);
+}
+
+// The next page with pending boxes after the one shown (wrapping), from the
+// server's overview of saved pages and unopened proposal pages, corrected by
+// this tab's unsaved edits.
+async function nextReviewPage() {
+  let overview;
+  try {
+    const q = docQuery();
+    overview = await api("/api/overview" + (q ? "?" + q.slice(1) : ""));
+  } catch (error) {
+    notify("Could not read the page overview: " + (error.message || error), "error");
+    return;
+  }
+  const pendingIn = (doc) => (doc?.instances || []).filter(x => x.review_status !== "accepted").length;
+  const pending = new Map((overview.pages || []).map(row => [row.page, row.pending]));
+  for (const [p, cached] of Object.entries(state.pageCache)) pending.set(Number(p), pendingIn(cached.doc));
+  if (state.doc) pending.set(state.page, pendingIn(state.doc));
+  const from = state.pendingPage ?? state.loadingPage ?? state.page;
+  const pages = [...pending].filter(([, n]) => n > 0).map(([p]) => p).sort((a, b) => a - b);
+  const next = pages.find(p => p > from) ?? pages[0];
+  if (next === undefined) {
+    notify("No page in this document has pending boxes.", "saved");
+  } else if (next === from) {
+    notify("Only this page has pending boxes.", "warning");
+  } else {
+    notify(`Page ${next + 1}: ${pending.get(next)} pending (${pages.length} page${pages.length === 1 ? "" : "s"} to review).`);
+    goToPage(next);
+  }
+}
+
+function stepPage(delta) {
+  const base = state.pendingPage ?? state.loadingPage ?? state.page;
+  goToPage(base + delta);
+}
+
 function isAnyPageDirty() {
   return Boolean(state.dirty || Object.values(state.pageCache || {}).some(c => c.dirty));
 }
@@ -3292,42 +3395,32 @@ async function api(path, options = {}, retried = false) {
 
 async function reattachSession() {
   const fresh = await (await fetch("/api/session", { cache: "no-store" })).json();
+  if (!fresh.token) throw new Error(fresh.error || "The labeling server did not accept this browser; reload the page.");
+  // Requests name this tab's PDF (?doc=), so a restarted server that opened
+  // another start-up PDF still reads and saves the right pages.
   state.token = fresh.token;
-  // A restarted server opens its start-up PDF; point it back at the one this
-  // tab is editing before anything is saved, or pages would land in the wrong file.
-  if (state.currentDocPath && fresh.current_doc_path && fresh.current_doc_path !== state.currentDocPath) {
-    const response = await fetch("/api/document", {
-      method: "POST", cache: "no-store",
-      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-      body: JSON.stringify({ path: state.currentDocPath }),
-    });
-    if (!response.ok) throw new Error("The server restarted and could not reopen this PDF; reload the page.");
-  }
   notify("Reconnected to the restarted labeling server.", "");
 }
 
 async function loadPage(page, force = false) {
-  if (state.busy || state.drag || page < 0 || (page >= state.pageCount && state.doc)) return;
+  if (state.busy || state.drag || page < 0 || (page >= state.pageCount && state.doc)) {
+    state.lastLoadError = state.busy || state.drag ? "the editor is busy; try again" : "no such page";
+    return false;
+  }
   // force means "take this page from disk". Never seed the cache with the
   // in-memory copy of that same page, and never read it back afterwards:
   // otherwise "Reload from disk" returns the stale revision that caused the
   // save conflict and the conflict can never be cleared.
   const reloadingCurrent = force && page === state.page;
-  if (state.doc && !reloadingCurrent) {
-    state.pageCache[state.page] = {
-      doc: JSON.parse(JSON.stringify(state.doc)),
-      dirty: Boolean(state.dirty),
-      revision: state.revision,
-      undo: [...state.undo],
-      redo: [...state.redo],
-      selectedIds: new Set(state.selectedIds),
-      selectedId: state.selectedId,
-    };
-  }
+  if (state.doc && !reloadingCurrent) cachePage(state.page);
   state.busy = true;
+  state.loadingPage = page;
+  if (state.pendingPage === page) state.pendingPage = null;
   refreshControls();
+  if (state.doc) notify(`Loading page ${page + 1} / ${state.pageCount}...`);
+  const docAtStart = state.currentDocPath;
   try {
-    const result = await api("/api/page?page=" + page);
+    const result = await api("/api/page?page=" + page + docQuery());
     const img = new Image();
     await new Promise((resolve, reject) => {
       img.onload = resolve;
@@ -3353,8 +3446,16 @@ async function loadPage(page, force = false) {
     state.siblingFiles = result.sibling_files || [];
     state.walls = Array.isArray(result.walls) ? result.walls : [];
 
-    const cached = force ? null : state.pageCache[page];
+    let cached = force ? null : state.pageCache[page];
     if (force) delete state.pageCache[page];
+    // The page was saved elsewhere (an agent, another tab) since this tab kept
+    // it: a copy without edits is simply replaced by the new one; edits are
+    // kept, and the conflict is shown now instead of at the next save.
+    const changedOnDisk = Boolean(cached) && cached.revision !== result.revision;
+    if (changedOnDisk && !cached.dirty) {
+      delete state.pageCache[page];
+      cached = null;
+    }
     if (cached) {
       state.doc = JSON.parse(JSON.stringify(cached.doc));
       state.dirty = Boolean(cached.dirty);
@@ -3379,16 +3480,37 @@ async function loadPage(page, force = false) {
     $("filter").value = "all";
     updateDirtyIndicator();
     $("conflictBanner").hidden = true;
-    checkLocalDraft();
+    if (changedOnDisk && cached) {
+      state.conflictPage = page;
+      $("conflictText").textContent =
+        `Page ${page + 1} changed on disk since you edited it. Reload it (your edits here are lost) or save to see the conflict.`;
+      $("conflictBanner").hidden = false;
+    }
+    // A page kept in memory already holds this tab's edits (the draft is a
+    // copy of them); only a page loaded from disk can have a draft to restore.
+    if (cached) $("draftBanner").hidden = true;
+    else checkLocalDraft();
     fit();
     refresh();
     notify(`Loaded ${state.jsonFilename || ("page " + (page + 1))}.`);
     prefetchAhead();
+    return true;
   } catch (error) {
-    notify(String(error.message || error), "error");
+    state.lastLoadError = String(error.message || error);
+    notify(state.lastLoadError, "error");
+    state.pendingPage = null;          // do not run on into more failing loads
+    return false;
   } finally {
     state.busy = false;
+    state.loadingPage = null;
     refreshControls();
+    const next = state.pendingPage;
+    if (next !== null && state.currentDocPath === docAtStart) {
+      state.pendingPage = null;
+      if (next !== state.page) setTimeout(() => goToPage(next), 0);
+    } else if (state.currentDocPath !== docAtStart) {
+      state.pendingPage = null;
+    }
   }
 }
 
@@ -3413,7 +3535,7 @@ async function loadDocumentsList() {
           if (doc.has_annotations) badge = "★ [Annotated] ";
           else if (doc.has_proposals) badge = "◆ [Proposals] ";
           opt.textContent = `${badge}${doc.name} (${doc.rel_path})`;
-          if (doc.is_current || doc.path === state.currentDocPath) {
+          if (isCurrentDoc(doc)) {
             opt.selected = true;
           }
           select.appendChild(opt);
@@ -3736,7 +3858,7 @@ function renderPdfGrid() {
   }
 
   for (const doc of filtered) {
-    const isCurrent = doc.is_current || doc.path === state.currentDocPath;
+    const isCurrent = isCurrentDoc(doc);
     const card = document.createElement("div");
     card.style.cssText = `
       background: ${isCurrent ? "#162836" : "var(--panel)"};
@@ -3826,10 +3948,11 @@ function prefetchAhead() {
   // The worker renders in request order: the next PDF first (a whole-document
   // switch is the slow one), then the next page of this PDF.
   const ordered = documentsInFolderOrder();
-  const cur = ordered.findIndex(d => d.path === state.currentDocPath || d.is_current);
+  const cur = ordered.findIndex(isCurrentDoc);
   const next = ordered.length > 1 ? ordered[(cur + 1) % ordered.length] : null;
   if (next && next.path !== state.currentDocPath) post({ path: next.path, pages: [0] });
-  if (state.page + 1 < state.pageCount) post({ pages: [state.page + 1] });
+  const ahead = [state.page + 1, state.page + 2].filter(p => p < state.pageCount);
+  if (ahead.length) post({ path: state.currentDocPath || undefined, pages: ahead });
 }
 
 async function nextDocument() {
@@ -3841,7 +3964,7 @@ async function nextDocument() {
     notify("No blueprints found to cycle.", "warning");
     return;
   }
-  const curIdx = ordered.findIndex(d => d.path === state.currentDocPath || d.is_current);
+  const curIdx = ordered.findIndex(isCurrentDoc);
   const nextIdx = (curIdx + 1) % ordered.length;
   const nextDoc = ordered[nextIdx];
   if (nextDoc && nextDoc.path !== state.currentDocPath) {
@@ -3854,6 +3977,10 @@ async function nextDocument() {
 
 async function switchDocument(path) {
   if (!path || path === state.currentDocPath) return;
+  if (state.busy || state.drag) {
+    notify("Finish the current action before switching documents.", "warning");
+    return;
+  }
   if (isAnyPageDirty()) {
     const saveFirst = await confirmAction(
       "You have unsaved annotations across this PDF. Save all pages before switching documents?",
@@ -3867,15 +3994,10 @@ async function switchDocument(path) {
       }
     }
   }
-  state.busy = true;
-  refreshControls();
+  const previous = { path: state.currentDocPath, page: state.page };
+  state.pendingPage = null;
   notify("Switching document...", "");
   try {
-    await api("/api/document", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-      body: JSON.stringify({ path }),
-    });
     state.pageCache = {};
     state.currentDocPath = path;
     state.page = 0;
@@ -3889,13 +4011,14 @@ async function switchDocument(path) {
     state.redo = [];
     state.selectedIds = new Set();
     state.selectedId = null;
-    state.busy = false;
-    await loadPage(0, true);
+    if (!(await loadPage(0, true))) throw new Error(state.lastLoadError || "the PDF could not be opened");
     loadDocumentsList();          // badges refresh in the background
   } catch (err) {
-    state.busy = false;
+    // Go back to the drawing this tab had open instead of an empty editor.
+    state.currentDocPath = previous.path;
+    if (previous.path) await loadPage(previous.page, true);
+    if ($("docSelect")) $("docSelect").value = state.currentDocPath;
     notify("Could not switch document: " + (err.message || err), "error");
-    refreshControls();
   }
 }
 
@@ -3934,17 +4057,7 @@ async function saveEntirePdf() {
   flushPendingInputs();
   if (!state.doc || state.busy) return true;
 
-  if (state.doc) {
-    state.pageCache[state.page] = {
-      doc: JSON.parse(JSON.stringify(state.doc)),
-      dirty: Boolean(state.dirty),
-      revision: state.revision,
-      undo: [...state.undo],
-      redo: [...state.redo],
-      selectedIds: new Set(state.selectedIds),
-      selectedId: state.selectedId,
-    };
-  }
+  if (state.doc) cachePage(state.page);
 
   const dirtyPages = [];
   for (const [pStr, c] of Object.entries(state.pageCache)) {
@@ -3971,7 +4084,7 @@ async function saveEntirePdf() {
       };
       let result;
       try {
-        result = await api("/api/save?page=" + p, {
+        result = await api("/api/save?page=" + p + docQuery(), {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
           body: JSON.stringify({
@@ -4120,8 +4233,18 @@ function wireEvents() {
 
   if ($("docSelect")) $("docSelect").addEventListener("change", (e) => switchDocument(e.target.value));
 
-  $("prevPage").addEventListener("click", () => loadPage(state.page - 1));
-  $("nextPage").addEventListener("click", () => loadPage(state.page + 1));
+  $("prevPage").addEventListener("click", () => stepPage(-1));
+  $("nextReviewPage").addEventListener("click", nextReviewPage);
+  $("nextPage").addEventListener("click", () => stepPage(1));
+  $("pageJump").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const wanted = Number.parseInt($("pageJump").value, 10);
+    if (!Number.isInteger(wanted)) { notify("Type a page number.", "warning"); return; }
+    $("pageJump").value = "";
+    $("pageJump").blur();
+    goToPage(wanted - 1);
+  });
   $("fileSwitcher").addEventListener("change", (e) => switchSiblingFile(e.target.value));
   $("selectTool").addEventListener("click", () => setMode("select"));
   $("drawTool").addEventListener("click", () => setMode("draw"));
@@ -4184,7 +4307,7 @@ function wireEvents() {
         return;
       }
       const source = { page: state.page, revision: state.revision, jsonPath: state.jsonPath };
-      await api("/api/validate?page=" + source.page, {
+      await api("/api/validate?page=" + source.page + docQuery(), {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
         body: JSON.stringify({
@@ -4286,7 +4409,7 @@ function wireEvents() {
   new ResizeObserver(draw).observe(elements.viewport);
 
   window.addEventListener("beforeunload", e => {
-    if (state.dirty) { e.preventDefault(); e.returnValue = ""; }
+    if (isAnyPageDirty()) { e.preventDefault(); e.returnValue = ""; }
   });
   window.addEventListener("keyup", event => {
     if (event.code === "Space") state.space = false;
@@ -4318,8 +4441,17 @@ function wireEvents() {
       event.preventDefault(); pasteAtCursor(); return;
     }
     if (event.code === "Space") { event.preventDefault(); state.space = true; return; }
-    if (event.repeat || state.busy) return;
+    if (event.repeat) return;
     const key = event.key.toLowerCase();
+    // Page keys work while a page loads: the request is queued (goToPage).
+    if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (key === "[") { stepPage(-1); return; }
+      if (key === "]") { stepPage(1); return; }
+      if (key === "home") { event.preventDefault(); goToPage(0); return; }
+      if (key === "n" && event.shiftKey) { nextReviewPage(); return; }
+      if (key === "end") { event.preventDefault(); goToPage(state.pageCount - 1); return; }
+    }
+    if (state.busy) return;
     if (key === "escape") {
       cancelDrag();
       setMode("select");
@@ -4368,8 +4500,6 @@ function wireEvents() {
     else if (key === "n") nextPending();
     else if (key === "l") { state.showLabels = !state.showLabels; refreshControls(); draw(); }
     else if (key === "delete" || key === "backspace") deleteSelected();
-    else if (key === "[") loadPage(state.page - 1);
-    else if (key === "]") loadPage(state.page + 1);
     else if (key === "0") fit();
     else if (key === "+" || key === "=") zoomAt(elements.canvas.clientWidth / 2, elements.canvas.clientHeight / 2, 1.3);
     else if (key === "-") zoomAt(elements.canvas.clientWidth / 2, elements.canvas.clientHeight / 2, 1 / 1.3);
@@ -4381,6 +4511,7 @@ async function init() {
   try {
     const response = await api("/api/session");
     state.token = response.token;
+    state.modeKind = response.mode || state.modeKind;
     state.currentDocName = response.current_doc_name || "";
     state.currentDocPath = response.current_doc_path || "";
     state.deviceCatalog = response.device_catalog || state.deviceCatalog;

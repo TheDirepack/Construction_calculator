@@ -1,19 +1,31 @@
 """The label store: one folder per source document, labeled straight from the PDF.
 
-Layout (``work/labels`` by default, or ``$BPS_LABELS_DIR``)::
+A drawing's labels live in the ``devices`` folder beside it, next to its
+extracted ``*_DEVICES.json``. The store is the ``1_blueprints`` folder::
 
-    <store>/<stem>_<sha12>/document.json       source, hash, page count, pages to label
-    <store>/<stem>_<sha12>/<prefix>_p0012.json annotation page (web annotator --pdf format)
-    <store>/<stem>_<sha12>/images/             pages rendered on demand from the PDF
-    <store>/<stem>_<sha12>/legend/             per-document legend crops (agents)
-    <store>/<stem>_<sha12>/marks/              numbered candidate cache (agents)
-    <store>/<stem>_<sha12>/survey.json         what an agent learned about the set
-    <store>/batches/batch_NN.txt               document folders, one per line
+    1_blueprints/X.pdf                                   training drawing
+    1_blueprints/devices/X_DEVICES.json                  its extracted device boxes
+    1_blueprints/devices/X_<sha12>/                      its labels (below)
+    1_blueprints/evaluation/Y.pdf                        evaluation drawing
+    1_blueprints/evaluation/devices/Y_<sha12>/           its labels
+    1_blueprints/devices/batches/batch_NN.txt            agent batches (document folders)
+    1_blueprints/devices/scanned_pdfs.json               PDFs triaged without electrical pages
 
-A folder name is the ``<stem>_<sha12>`` the web annotator uses for a PDF, so
-``BPS_LABELS_DIR=work/labels python -m annotator.web --pdf X.pdf`` opens the
-pages that agents and the model labeled. Page JSONs are named by 1-based PDF
-page number.
+Each document folder holds::
+
+    document.json          source, hash, page count, pages to label
+    <prefix>_p0012.json    annotation page (web annotator --pdf format)
+    images/                pages rendered on demand from the PDF
+    legend/                per-document legend crops (agents)
+    marks/                 numbered candidate cache (agents)
+    survey.json            what an agent learned about the set
+
+Sources outside the two drawing folders (pool photos) go to
+``1_blueprints/devices/``. ``$BPS_LABELS_DIR`` (or any ``--store`` that is not
+a ``1_blueprints`` folder) is a flat store instead: ``<store>/<stem>_<sha12>/``
+and ``<store>/batches``. The annotator, agents, model pre-labeling and
+training all resolve folders through this module, so they read and write the
+same page files. Page JSONs are named by 1-based PDF page number.
 
 Photos (no PDF) are ``kind: "image"`` documents: one page whose JSON points at
 the photo kept in the document's ``images/`` folder.
@@ -31,16 +43,79 @@ from blueprint_symbols.label_schema import COORDINATE_SYSTEM, page_header
 
 DOCUMENT_FILE = "document.json"
 BATCH_DIR = "batches"
+LABELS_DIR = "devices"                # beside each drawing, with its DEVICES.json
+EVALUATION_DIR = "evaluation"
 PAGE_NAME = re.compile(r"_p(\d{4,5})\.json$")
 SAFE = re.compile(r"[^a-zA-Z0-9_-]+")
 
 
 def default_store(project: Path | None = None) -> Path:
+    """``$BPS_LABELS_DIR`` if set, else the ``1_blueprints`` folder: the
+    training machine's ``data/blueprints_and_libraries/1_blueprints`` under the
+    working directory, or this checkout's ``blueprints_and_libraries/1_blueprints``."""
     env = os.environ.get("BPS_LABELS_DIR")
     if env:
         return Path(env).expanduser().resolve()
+    from annotator.web import DEFAULT_BLUEPRINTS_DIR
     base = Path(project) if project else Path.cwd()
-    return (base / "work" / "labels").resolve()
+    for candidate in (base / "data" / "blueprints_and_libraries" / "1_blueprints",
+                      DEFAULT_BLUEPRINTS_DIR):
+        if candidate.is_dir():
+            return candidate.resolve()
+    return DEFAULT_BLUEPRINTS_DIR.resolve()
+
+
+def is_blueprints_root(store: Path) -> bool:
+    """A ``1_blueprints`` folder (labels in its ``devices`` folders), as
+    opposed to a flat store of document folders."""
+    store = Path(store)
+    return (store.name == "1_blueprints" or (store / LABELS_DIR).is_dir()
+            or (store / EVALUATION_DIR).is_dir())
+
+
+def store_roots(store: Path) -> list[Path]:
+    """Folders whose subfolders are documents: both ``devices`` folders of a
+    ``1_blueprints`` store, or the flat store itself."""
+    store = Path(store).resolve()
+    if is_blueprints_root(store):
+        return [store / LABELS_DIR, store / EVALUATION_DIR / LABELS_DIR]
+    return [store]
+
+
+def state_dir(store: Path) -> Path:
+    """Where store-wide files (batches, scan memory) go."""
+    store = Path(store).resolve()
+    return store / LABELS_DIR if is_blueprints_root(store) else store
+
+
+def _drawing_label_dirs(source: Path) -> list[Path]:
+    """The ``devices`` folder beside a drawing first, then the other drawing
+    folder's (a PDF moved between training and evaluation keeps its labels)."""
+    parent = Path(source).resolve().parent
+    root = parent.parent if parent.name == EVALUATION_DIR else parent
+    dirs = [parent / LABELS_DIR, root / LABELS_DIR, root / EVALUATION_DIR / LABELS_DIR]
+    return list(dict.fromkeys(dirs))
+
+
+def labels_folder_beside(source: Path, sha256: str) -> Path:
+    """A drawing's label folder in the ``devices`` folder beside it, or its
+    existing folder in the other drawing folder's ``devices`` after a move."""
+    name = doc_folder_name(source, sha256)
+    dirs = _drawing_label_dirs(source)
+    for folder in (d / name for d in dirs):
+        if folder.is_dir():
+            return folder
+    return dirs[0] / name
+
+
+def document_folder(store: Path, source: Path, sha256: str) -> Path:
+    """Where a source's labels live in ``store`` (existing folder first)."""
+    store, source = Path(store).resolve(), Path(source).resolve()
+    if not is_blueprints_root(store):
+        return store / doc_folder_name(source, sha256)
+    if source.parent in (store, store / EVALUATION_DIR):
+        return labels_folder_beside(source, sha256)
+    return store / LABELS_DIR / doc_folder_name(source, sha256)
 
 
 def doc_folder_name(source: Path, sha256: str) -> str:
@@ -257,7 +332,8 @@ def page_status(doc: Document, page: int) -> dict:
 def iter_documents(store: Path, *, skip_missing: bool = False):
     """Documents of a store. ``skip_missing`` leaves out documents whose PDF
     is in neither blueprint folder any more (deleted or moved elsewhere)."""
-    for meta in sorted(Path(store).glob(f"*/{DOCUMENT_FILE}")):
+    metas = [m for root in store_roots(store) for m in root.glob(f"*/{DOCUMENT_FILE}")]
+    for meta in sorted(metas, key=lambda m: (m.parent.name, str(m))):
         try:
             yield load_document(meta.parent)
         except FileNotFoundError:
@@ -266,15 +342,19 @@ def iter_documents(store: Path, *, skip_missing: bool = False):
 
 
 def batch_documents(batch: Path) -> list[Path]:
-    """Document folders listed in a batch file; relative lines resolve against the store."""
+    """Document folders listed in a batch file. A relative line (a folder
+    name) is looked up in the store's document folders."""
     batch = Path(batch).resolve()
-    store = batch.parent.parent if batch.parent.name == BATCH_DIR else batch.parent
+    base = batch.parent.parent if batch.parent.name == BATCH_DIR else batch.parent
+    roots = store_roots(base.parent) if base.name == LABELS_DIR else [base]
     out = []
     for line in batch.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line and not line.startswith("#"):
             path = Path(line)
-            out.append(path if path.is_absolute() else (store / path).resolve())
+            if not path.is_absolute():
+                path = next((r / path for r in roots if (r / path).is_dir()), roots[0] / path)
+            out.append(path.resolve())
     return out
 
 
@@ -343,7 +423,7 @@ def create_document(store: Path, source: Path, *, targets: dict[int, str] | None
     store = Path(store).resolve()
     source = Path(source).resolve()
     sha = sha256 or sha256_file(source)
-    folder = store / doc_folder_name(source, sha)
+    folder = document_folder(store, source, sha)
     if (folder / DOCUMENT_FILE).is_file():
         doc = load_document(folder)
         for page, reason in (targets or {}).items():

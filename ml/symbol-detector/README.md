@@ -69,10 +69,11 @@ never calls an external annotation service:
 cd ml/symbol-detector
 python -m pip install -r requirements-test.txt
 
-# Label PDF pages directly. Pages go to the label store (work/labels, or
-# $BPS_LABELS_DIR / --store): one folder per PDF, shared with the labeling
-# agents and model pre-labeling. Extracted devices/*_DEVICES.json boxes and
-# SAM proposals for the PDF appear as pending boxes when a page is first opened.
+# Label PDF pages directly. Pages go to the devices/ folder beside the PDF
+# (1_blueprints/devices/<stem>_<sha12>/ or 1_blueprints/evaluation/devices/...),
+# shared with the labeling agents and model pre-labeling; $BPS_LABELS_DIR or
+# --store selects a flat store instead. Extracted devices/*_DEVICES.json boxes
+# and SAM proposals appear as pending boxes when a page is first opened.
 python -m annotator.web --pdf /path/to/electrical_plan.pdf --open-browser
 
 # Open a single existing annotation JSON and its paired image:
@@ -85,7 +86,13 @@ rotation, family/variant editing, spatial label list, pending/verified filter,
 individual verify/reject with audit history, undo/redo, and page navigation.
 Keyboard: `B` box, `V` select, hold Space to pan, `A` verify, `X` reject,
 `N` next pending, Ctrl+Z/Y undo/redo, Ctrl+S save, `[`/`]` pages, `0` fit.
-Leaving a page with unsaved edits requires explicit confirmation.
+Long documents: type a page number in the page box (Enter), Home/End for the
+first/last page, and `Shift+N` / **Review ›** for the next page with pending
+boxes (saved pages and unopened pages with proposals). Page steps pressed while
+a page is loading are queued, and the next two pages are pre-rendered. Unsaved
+pages stay in memory until saved (Ctrl+S saves every changed page); the 12
+most recent saved pages are kept as well. A kept page that was saved elsewhere
+meanwhile is reloaded, or, if it has edits here, flagged as changed on disk.
 
 **One label format, one source of truth.** `annotator/electrical_device_catalog.json`
 defines every device and what other sources call it (NECA 100 glyph names,
@@ -112,13 +119,20 @@ manifest):
 
 * A file name in both folders counts as evaluation.
 * Moving a PDF between the folders moves it, and its labelled pages, at the
-  next run; label-store documents follow a moved PDF by name and hash.
+  next run; label-store documents follow a moved PDF by name and hash (its
+  label folder can stay in the old `devices/` folder).
+* **Labels live beside the drawings**: `1_blueprints/devices/<stem>_<sha12>/`
+  and `1_blueprints/evaluation/devices/<stem>_<sha12>/` (`annotator/label_store.py`);
+  agent batches are in `1_blueprints/devices/batches/`. `remote/sync.sh` never
+  mirrors these folders (the remote's agents write there); `remote/push_labels.sh`
+  sends this machine's labels. `scripts_migrate_label_store.py` copies an old
+  flat store (`work/labels`) into them.
 * Labeling covers both sets: the store scan, the annotator, the agents and model
   pre-labeling all propose from the DEVICES file in the `devices/` folder
   beside each PDF.
-* Post-training (`scripts_prepare_training_data.py --label-store work/labels
-  --data-root <blueprints_and_libraries>`) trains on labelled pages of training
-  drawings.
+* Post-training (`scripts_prepare_training_data.py --label-store
+  <blueprints_and_libraries>/1_blueprints --data-root <blueprints_and_libraries>`)
+  trains on labelled pages of training drawings.
 * Validation and test are the **fully labelled** pages of evaluation drawings:
   pages marked "every symbol on this page is labeled" or "verified no target
   symbols". Their projects alternate between validation and test, and one
@@ -179,7 +193,10 @@ device (a variant other than `unspecified`). Rejected proposals move to
 Images remain at the original rendered-page pixel coordinates; SAM PDF-point
 boxes are converted from PDF bottom-left to image top-left coordinates.
 The service listens on the LAN by default (`--host 127.0.0.1` for this machine
-only), accepts only local/private Host headers, requires a session token for edits,
+only), opens only PDFs directly in `1_blueprints/` or `1_blueprints/evaluation/`,
+accepts only Host headers that are private IPs or LAN machine names (never a
+public DNS name, so other websites cannot reach it by DNS rebinding), requires
+a session token for edits,
 writes JSON atomically, and refuses stale revisions, mismatched PDF/image
 identities, invalid boxes or duplicate IDs. Rendered pages and JSON live in
 the PDF's label-store folder (or `--out-dir`, which puts every PDF's pages in

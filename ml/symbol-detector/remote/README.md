@@ -366,18 +366,23 @@ a smaller *fully reviewed* held-out set.
 
 ## Label store: labeling straight from the PDFs
 
-Labels live in the label store, `work/labels/`, with one folder per source
-document named `<stem>_<sha12>`. Each folder holds:
+Labels live in the `devices/` folder beside each drawing, next to its
+extracted `*_DEVICES.json`: `1_blueprints/devices/<stem>_<sha12>/` for training
+drawings and `1_blueprints/evaluation/devices/<stem>_<sha12>/` for evaluation
+drawings (`annotator/label_store.py`; the store is the `1_blueprints` folder).
+Agent batches are in `1_blueprints/devices/batches/`. Each folder holds:
 
 - `document.json`: the source PDF, its hash, page count and pages to label;
 - page JSONs `<name>_p0012.json`, numbered by 1-based PDF page;
 - `images/`: pages rendered from the PDF on demand;
 - `legend/`, `survey.json` and `outline.json`.
 
-Photos are one-page `image` documents, kept in the folder's `images/`. The
-page format is the web annotator's `--pdf` format. With
-`BPS_LABELS_DIR=work/labels`, `python -m annotator.web --pdf X.pdf` opens the
-same pages that agents and the model labeled.
+Photos are one-page `image` documents, kept in the folder's `images/` under
+`1_blueprints/devices/`. The page format is the web annotator's `--pdf` format,
+and `python -m annotator.web --pdf X.pdf` opens the same pages that agents and
+the model labeled. `remote/sync.sh --blueprints` never mirrors label folders,
+so it cannot delete the agents' work; `remote/push_labels.sh` sends the
+laptop's labels.
 
 Vision-model agents propose boxes through `annotator/agent_cli.py`, which
 they drive from the laptop with `remote/vlm_label.sh`. Their instructions are
@@ -391,8 +396,11 @@ code/remote/update_label_store.sh
 # one-time migration from the old page pool (done 2026-11-24)
 PYTHONPATH=code .venv/bin/python code/scripts_build_label_store.py --store work/labels \
   --data-root data/blueprints_and_libraries --from-pool work/pool
+# one-time move of the old flat store into the devices folders (copies only)
+PYTHONPATH=code .venv/bin/python code/scripts_migrate_label_store.py \
+  --from work/labels --to data/blueprints_and_libraries/1_blueprints --apply
 # from the laptop: progress
-remote/vlm_label.sh status work/labels
+remote/vlm_label.sh status data/blueprints_and_libraries/1_blueprints
 ```
 
 A backup of the pool queue JSONs from before the migration is in

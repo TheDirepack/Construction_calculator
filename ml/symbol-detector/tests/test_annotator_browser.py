@@ -482,7 +482,8 @@ def test_browser_next_pdf_starts_with_empty_page(tmp_path):
                     "() => document.querySelector('#pageIndicator').textContent === 'Page 1 / 2'"
                 )
                 assert "0 active" in page.locator("#count").inner_text()
-                assert session.page_state(0)["document"]["instances"] == []
+                b_session = session.for_document(str(docs_dir / "switch_b.pdf"))
+                assert b_session.page_state(0)["document"]["instances"] == []
                 # Accepting the switch prompt saved the first PDF's own page.
                 saved_a = json.loads((tmp_path / "labels" / "switch_a_p0001.json").read_text())
                 assert len(saved_a["instances"]) == 1
@@ -699,3 +700,76 @@ def test_browser_next_pdf_walks_every_document_in_order(tmp_path):
         server.shutdown()
         server.server_close()
         worker.join(timeout=10)
+
+
+def _serve(session, handler=None):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler or make_handler(session))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    return server, worker
+
+
+def _stop(server, worker):
+    server.shutdown()
+    server.server_close()
+    worker.join(timeout=10)
+
+
+def _two_page_pdf(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = fitz.open()
+    for _ in range(2):
+        page = document.new_page(width=400, height=300)
+        page.draw_rect(fitz.Rect(50, 50, 65, 65), color=(0, 0, 0))
+    document.save(path)
+    document.close()
+    return path
+
+
+def test_browser_two_tabs_on_different_pdfs_save_their_own_pages(tmp_path):
+    docs_dir = tmp_path / "blueprints"
+    a = _two_page_pdf(docs_dir / "tab_a.pdf")
+    _two_page_pdf(docs_dir / "tab_b.pdf")
+    session = LabelingSession(pdf=a, blueprints_dir=docs_dir, out_dir=tmp_path / "labels", dpi=144)
+    server, worker = _serve(session)
+    base = f"http://127.0.0.1:{server.server_port}/"
+    try:
+        with playwright.sync_playwright() as pw:
+            browser = _launch_browser(pw)
+            try:
+                context = browser.new_context(viewport={"width": 1420, "height": 900})
+                tab_a = context.new_page()
+                tab_a.goto(base)
+                tab_a.wait_for_function(
+                    "() => document.querySelector('#pageIndicator').textContent === 'Page 1 / 2'")
+
+                tab_a.locator("#drawTool").click()
+                box = tab_a.locator("#canvas").bounding_box()
+                sx, sy = box["x"] + 230, box["y"] + 190
+                tab_a.mouse.move(sx, sy)
+                tab_a.mouse.down()
+                tab_a.mouse.move(sx + 48, sy + 36, steps=4)
+                tab_a.mouse.up()
+                tab_a.wait_for_function(
+                    "() => document.querySelector('#count').textContent.includes('1 pending')")
+
+                # A second tab moves to the other PDF while tab A has unsaved work.
+                tab_b = context.new_page()
+                tab_b.goto(base)
+                tab_b.wait_for_function(
+                    "() => document.querySelector('#pageIndicator').textContent === 'Page 1 / 2'")
+                tab_b.locator("#nextPdfBtn").click()
+                tab_b.wait_for_function(
+                    "() => document.querySelector('#currentDocBadge').textContent.includes('tab_b.pdf')")
+
+                tab_a.bring_to_front()
+                tab_a.keyboard.press("Control+s")
+                tab_a.wait_for_function(
+                    "() => document.querySelector('#message').textContent.startsWith('Saved')")
+            finally:
+                browser.close()
+    finally:
+        _stop(server, worker)
+    saved_a = json.loads((tmp_path / "labels" / "tab_a_p0001.json").read_text())
+    assert len(saved_a["instances"]) == 1 and saved_a["source_id"] == "tab_a"
+    assert not (tmp_path / "labels" / "tab_b_p0001.json").exists()

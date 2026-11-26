@@ -35,6 +35,11 @@
   ],
   "rules": [
     {
+      "glob": "1_blueprints/devices/**",
+      "role": "skip",
+      "why": "extracted DEVICES.json files and the label store (pages rendered from PDFs already in the pool)"
+    },
+    {
       "glob": "field_panels_album_2/**",
       "role": "skip",
       "why": "photos of panelboards, not plan symbols"
