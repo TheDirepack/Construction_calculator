@@ -128,6 +128,93 @@ def device_for_raw_type(raw: str | None) -> tuple[str, str] | None:
     return ("unknown_symbol", "unspecified")
 
 
+def _key(text) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(text or "").strip().lower()).strip("_")
+
+
+def canonical_device(device_type: str | None = None, subtype: str | None = None, *,
+                     description: str | None = None) -> tuple[str, str] | None:
+    """The one class name for a device, from whatever a source calls it.
+
+    Every box (annotator, agents, model, DEVICES/SAM/CircuitNet/VLM-review
+    proposals, training) is named by this: a catalog device
+    (``receptacle.duplex``), or ``(family, "unspecified")`` while the exact
+    device is not known, or None for marks that are not devices (mechanical
+    equipment, home-run arrows). A source's own subtype is never used as a
+    class name, so one device never gets two names.
+
+    ``device_type``/``subtype`` may be a catalog family/variant, a v7
+    taxonomy pair (``fire_alarm``/``pull_station``) or an extractor's raw
+    type; ``description`` (a legend text) can pick the device within its family.
+    """
+    family_key, sub_key = _key(device_type), _key(subtype)
+    if (family_key, sub_key) in _CATALOG_SET:
+        return family_key, sub_key
+    if (family_key, sub_key) in NECA_DEVICE:
+        return NECA_DEVICE[(family_key, sub_key)]
+    if (family_key, sub_key) in _V7_IN_FAMILY:        # luminaire / 2x4: catalog family, v7 subtype
+        return _V7_IN_FAMILY[(family_key, sub_key)]
+    if family_key in ("unknown_symbol", "other_device", "") and sub_key in _V7_SUBTYPE:
+        return _V7_SUBTYPE[sub_key]                  # a subtype that names one device
+    if family_key in CATALOG_FAMILIES:
+        base: tuple[str, str] | None = (family_key, "unspecified")
+    else:
+        base = device_for_raw_type(family_key)
+        if base is None:
+            return None
+    if base[1] != "unspecified":
+        return base
+    family = base[0]
+    if sub_key and (family, sub_key) in _CATALOG_SET:          # same name in its family
+        return family, sub_key
+    if description:
+        found = device_for_legend_text(description)
+        if found and (family == "unknown_symbol" or found[0] == family):
+            return found
+    return base
+
+
+def _v7_indexes():
+    in_family: dict[tuple[str, str], tuple[str, str]] = {}
+    by_subtype: dict[str, set] = {}
+    for (raw_type, raw_sub), device in NECA_DEVICE.items():
+        base = device_for_raw_type(raw_type)
+        if base is not None:
+            in_family.setdefault((base[0], raw_sub), device)
+        by_subtype.setdefault(raw_sub, set()).add(device)
+    return in_family, {k: next(iter(v)) for k, v in by_subtype.items() if len(v) == 1}
+
+
+_V7_IN_FAMILY, _V7_SUBTYPE = _v7_indexes()
+
+_PERSON = ("human", "manual_draft")
+
+
+def canonical_instance(item: dict) -> dict:
+    """A box renamed to its canonical class (``canonical_device``); its
+    previous names are kept in ``raw_device_type``/``raw_subtype``. A verified
+    box that only maps to ``family.unspecified`` is no longer verified: its
+    exact device has to be picked again."""
+    family, variant = item.get("symbol_family"), item.get("symbol_variant")
+    if (family, variant or "unspecified") in _CATALOG_SET or (
+            family in CATALOG_FAMILIES and variant in (None, "", "unspecified")):
+        return item
+    device = canonical_device(family, variant)
+    if device is None or (device[0] == "unknown_symbol" and family != "unknown_symbol"):
+        if item.get("review_source") in _PERSON:
+            return item                    # a person's own name for it: shown for them to resolve
+        device = ("unknown_symbol", "unspecified")
+    if device == (family, variant):
+        return item
+    out = dict(item, symbol_family=device[0], symbol_variant=device[1])
+    out.setdefault("raw_device_type", family)
+    if variant and variant != device[1]:
+        out.setdefault("raw_subtype", variant)
+    if device[1] == "unspecified" and out.get("verified_ground_truth") is True:
+        out.update(verified_ground_truth=False, uncertain=True, review_status="unreviewed")
+    return out
+
+
 _LEGEND_SYNONYMS = tuple((re.compile(pattern), repl)
                          for pattern, repl in _NAMING.get("legend_synonyms", ()))
 # (device, [required word alternatives, ...], excluded words) per catalog legend phrase

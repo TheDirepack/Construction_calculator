@@ -11,6 +11,7 @@ on:
       - 'ml/symbol-detector/tests/test_annotator_long_documents.py'
       - 'ml/symbol-detector/tests/test_label_store_devices_layout.py'
       - 'ml/symbol-detector/tests/test_document_labels.py'
+      - 'ml/symbol-detector/tests/test_device_classes_unified.py'
       - 'ml/symbol-detector/scripts_unify_labels.py'
       - 'ml/symbol-detector/scripts_circuitnet_review_sheets.py'
       - 'ml/symbol-detector/scripts_prepare_training_data.py'
@@ -60,4 +61,4 @@ jobs:
           python -m pytest -q tests/test_annotator_browser.py tests/test_annotator_web.py
           tests/test_annotator_improvements.py tests/test_annotator_access_and_documents.py
           tests/test_annotator_long_documents.py tests/test_label_store_devices_layout.py
-          tests/test_document_labels.py
+          tests/test_document_labels.py tests/test_device_classes_unified.py

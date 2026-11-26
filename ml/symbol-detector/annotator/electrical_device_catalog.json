@@ -142,6 +142,9 @@
     ],
     "legend": [
      "gfci duplex|receptacle"
+    ],
+    "devices_json": [
+     "gfci_receptacle"
     ]
    }
   },
@@ -301,6 +304,9 @@
     ],
     "legend": [
      "threeway switch"
+    ],
+    "devices_json": [
+     "switch_3way"
     ]
    }
   },
@@ -957,6 +963,9 @@
     ],
     "legend": [
      "downlight"
+    ],
+    "devices_json": [
+     "downlight"
     ]
    }
   },
@@ -1062,6 +1071,9 @@
     ],
     "legend": [
      "strip luminaire|light"
+    ],
+    "devices_json": [
+     "strip_light"
     ]
    }
   },
@@ -2021,6 +2033,9 @@
     ],
     "legend": [
      "facp"
+    ],
+    "devices_json": [
+     "fire_alarm_control_panel"
     ]
    }
   },
@@ -2177,9 +2192,7 @@
     "neca_v7": [
      "fire_alarm/speaker_strobe"
     ],
-    "devices_json": [
-     "speaker"
-    ],
+    "devices_json": [],
     "legend": [
      "speakerstrobe",
      "speaker strobe"
@@ -2748,6 +2761,9 @@
     ],
     "legend": [
      "camera -outlet -box -cable -line -conduit -raceway"
+    ],
+    "devices_json": [
+     "security_camera"
     ]
    }
   },
@@ -3050,7 +3066,9 @@
    "non_electrical_types: extracted device types that are not electrical devices; never proposed.",
    "legacy_detector_classes: class names of older coarse detectors -> family their proposals start as.",
    "keyword_fallback: for unknown extracted device_type strings, first rule whose word occurs wins.",
-   "aliases.legend: how legend sheets describe the device. Each phrase lists words that must all occur in the description ('a|b' = either; '-word' = must not occur). The match covering the most description words wins; a tie between devices matches none. Words are compared after legend_synonyms rewrite the lowercased text (non-alphanumerics become spaces)."
+   "aliases.legend: how legend sheets describe the device. Each phrase lists words that must all occur in the description ('a|b' = either; '-word' = must not occur). The match covering the most description words wins; a tie between devices matches none. Words are compared after legend_synonyms rewrite the lowercased text (non-alphanumerics become spaces).",
+   "non_electrical_types also lists marks that are not devices at all (homerun_arrow: a circuit home-run annotation).",
+   "Every box anywhere (annotator, agents, model, DEVICES/SAM/CircuitNet/VLM proposals, training) is one of these devices, or '<family>.unspecified' while its exact device is not picked yet (label_schema.canonical_device)."
   ],
   "family_aliases": {
    "receptacle": "receptacle",
@@ -3058,7 +3076,14 @@
    "luminaire": "luminaire",
    "switch": "switch",
    "data_outlet": "data_outlet",
-   "fire_alarm": "fire_alarm_device"
+   "fire_alarm": "fire_alarm_device",
+   "troffer": "luminaire",
+   "ceiling_fixture": "luminaire",
+   "security_device": "security_device",
+   "speaker": "audio_visual_device",
+   "occupancy_sensor": "sensor",
+   "panelboard": "panelboard",
+   "junction_box": "junction_box"
   },
   "not_devices": [
    "circuit_breaker",
@@ -3081,7 +3106,24 @@
    "boiler",
    "exhaust_fan",
    "hvac_device",
-   "pump"
+   "pump",
+   "homerun_arrow",
+   "ceiling_fan",
+   "variable_air_volume_box",
+   "energy_recovery_ventilator",
+   "destratification_fan",
+   "fan_coil_unit",
+   "condensing_unit",
+   "combined_heat_power_unit",
+   "heat_pump",
+   "air_handling_unit",
+   "cabinet_unit_heater",
+   "unit_heater",
+   "electric_unit_heater",
+   "water_heater",
+   "makeup_air_unit",
+   "rooftop_unit",
+   "plumbing_fixture"
   ],
   "legacy_detector_classes": {
    "receptacle": "receptacle",

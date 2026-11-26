@@ -111,6 +111,19 @@ were left out) and the DEVICES legend and page findings. Training reads these
 files directly: a page is `<stem>_labels.json#p12`, and a glob of
 `devices/*/*_labels.json` works wherever page JSONs were accepted.
 
+One class name per device: the annotator's device list
+(`annotator/electrical_device_catalog.json`, 182 devices) is the set of classes
+everything uses. `label_schema.canonical_device` maps every source's names onto
+it: v7 taxonomy pairs (`fire_alarm/pull_station` ->
+`fire_alarm_device.manual_pull_station`), extractor types (`downlight`,
+`switch_3way`), legend descriptions. A name with no exact device becomes
+`<family>.unspecified` (pending until you pick the device); it is never turned
+into a new class, and two different devices are never merged. Mechanical
+equipment and non-devices (homerun arrows) are not boxes. Proposals, every save
+(annotator, agents, model, imports) and the unify script all go through it;
+the old names stay on the box as `raw_device_type`/`raw_subtype`. New source
+names are added as catalog aliases, not code.
+
 **One label format, one source of truth.** `annotator/electrical_device_catalog.json`
 defines every device and what other sources call it (NECA 100 glyph names,
 extracted `*_DEVICES.json` types, names that are not devices). The browser

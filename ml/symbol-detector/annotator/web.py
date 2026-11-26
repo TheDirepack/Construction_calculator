@@ -38,6 +38,8 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from annotator import agent_api
 from blueprint_symbols.label_schema import (
+    canonical_device,
+    canonical_instance,
     completeness,
     device_for_raw_type,
     devices_bbox_points,
@@ -245,7 +247,7 @@ def _find_proposals_for_pdf(pdf: Path, work_dir: Path | None = None) -> Path | N
 
 # Bump when proposal files are turned into boxes differently (fields kept,
 # anchors, which entries count): saved pages then get refreshed machine boxes.
-PROPOSAL_CONVERSION = 2
+PROPOSAL_CONVERSION = 3
 
 
 def _parse_proposals(raw: bytes, source_hash: str | None, pdf_name: str | None = None) -> dict | None:
@@ -1132,8 +1134,9 @@ class LabelingSession:
                 reason = (devices_skip_reason(device)
                           or ("page_outside_document" if type(number) is not int
                               or not 1 <= number <= self.page_count else None)
-                          or ("not_an_electrical_device" if device_for_raw_type(
-                              device.get("device_type") or device.get("broad_family")) is None else None)
+                          or ("not_an_electrical_device" if canonical_device(
+                              device.get("device_type") or device.get("broad_family"),
+                              device.get("subtype")) is None else None)
                           or ("no_box" if devices_bbox_points(device) is None
                               and not device.get("box_px_tl") else None))
                 if reason:
@@ -1153,6 +1156,14 @@ class LabelingSession:
                                         "extraction_status", "coverage_limit") if k in data},
             })
             if kind == "devices_json":
+                legend = []
+                for entry in data.get("legend_types") or []:
+                    if isinstance(entry, dict):
+                        device = canonical_device(entry.get("device_type"), entry.get("subtype"),
+                                                  description=entry.get("description"))
+                        entry = dict(entry, catalog_class=f"{device[0]}.{device[1]}" if device else None)
+                    legend.append(entry)
+                data = dict(data, legend_types=legend)
                 extracted[name] = {k: data[k] for k in (
                     "legend_types", "page_results", "plan_pages_processed", "unresolved_candidates",
                     "review_backlog", "source_profile", "classification_rules", "taxonomy_note",
@@ -1408,14 +1419,17 @@ class LabelingSession:
                     found.append({"bbox_xyxy": box})
                     continue
                 raw = proposal.get("device_type") or proposal.get("broad_family")
-                device = device_for_raw_type(raw)
-                if device is None:              # mechanical equipment: not an electrical label
+                subtype = proposal.get("subtype")
+                code = proposal.get("device_code")
+                description = proposal.get("description") or proposal.get("neca_name") or (
+                    f"{code} {str(raw).replace('_', ' ')}" if code else None)
+                # The catalog class (the annotator's device list), whatever the
+                # source calls it; None: not an electrical device.
+                device = canonical_device(raw, subtype, description=description)
+                if device is None:
                     continue
                 family, variant = device
-                subtype = proposal.get("subtype") or proposal.get("neca_name")
-                if subtype and variant == "unspecified":
-                    variant = str(subtype)
-                extra = {}
+                extra = {"raw_subtype": subtype} if subtype else {}
                 anchors = _proposal_anchors(proposal, page, width, height, rotated)
                 if anchors:
                     extra["anchors"] = anchors
@@ -1567,8 +1581,9 @@ class LabelingSession:
                 source_type="real_construction_pdf_manual", source_sha256=self.source_hash,
                 image_path=image, image_sha256=None, width=width, height=height)
             page["instances"] = self._proposal_instances(index, width, height)
-        instances = [dict(i) for i in page.get("instances", []) if isinstance(i, dict)]
-        rejected = [dict(r) for r in page.get("rejected_proposals") or [] if isinstance(r, dict)]
+        instances = [canonical_instance(dict(i)) for i in page.get("instances", []) if isinstance(i, dict)]
+        rejected = [canonical_instance(dict(r)) for r in page.get("rejected_proposals") or []
+                    if isinstance(r, dict)]
         negative = page.get("verified_no_symbols") is True
         complete = page.get("page_complete") is True
         for source in sources:
@@ -1578,7 +1593,7 @@ class LabelingSession:
             for item in source.get("rejected_proposals") or []:
                 if not isinstance(item, dict) or not item.get("bbox_xyxy"):
                     continue
-                item = _scaled(item, sx, sy)
+                item = canonical_instance(_scaled(item, sx, sy))
                 if any(_box_iou(item["bbox_xyxy"], r.get("bbox_xyxy")) >= 0.5 for r in rejected):
                     continue
                 rejected.append(item)
@@ -1586,7 +1601,7 @@ class LabelingSession:
             for item in source.get("instances") or []:
                 if not isinstance(item, dict) or not item.get("bbox_xyxy"):
                     continue
-                item = _scaled(item, sx, sy)
+                item = canonical_instance(_scaled(item, sx, sy))
                 twin = next((i for i in instances if _box_iou(item["bbox_xyxy"], i.get("bbox_xyxy")) >= 0.5), None)
                 if twin is None:
                     instances.append(item)
@@ -1671,8 +1686,9 @@ class LabelingSession:
                     number = device.get("pdf_page") or device.get("page")
                     if type(number) is not int or not 1 <= number <= self.page_count:
                         continue
-                    if devices_skip_reason(device) or device_for_raw_type(
-                            device.get("device_type") or device.get("broad_family")) is None:
+                    if devices_skip_reason(device) or canonical_device(
+                            device.get("device_type") or device.get("broad_family"),
+                            device.get("subtype")) is None:
                         continue
                     proposed[number] = proposed.get(number, 0) + 1
                 record_sha = (document_labels.proposals_record(self.out_dir, self.json_prefix)
@@ -2215,6 +2231,12 @@ class LabelingSession:
 
     def save(self, index: int, *, revision: str | None, instances: object,
              rejected: object, metadata: object = None) -> str:
+        # Every writer (annotator, agents, model pre-labeling, imports) saves
+        # catalog class names only (label_schema.canonical_device).
+        if isinstance(instances, list):
+            instances = [canonical_instance(i) if isinstance(i, dict) else i for i in instances]
+        if isinstance(rejected, list):
+            rejected = [canonical_instance(i) if isinstance(i, dict) else i for i in rejected]
         with self.lock:
             baseline, cleaned_rejected = self.validate_review_payload(
                 index, revision=revision, instances=instances, rejected=rejected, metadata=metadata
