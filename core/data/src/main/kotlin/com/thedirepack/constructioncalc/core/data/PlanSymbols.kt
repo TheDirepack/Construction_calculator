@@ -41,7 +41,7 @@ data class SymbolLibraryMeta(
     val isEmpty: Boolean get() = sets.isEmpty() && favorites.isEmpty() && recents.isEmpty()
 }
 
-/** Stores SVGs independently of projects. A placed symbol carries its own SVG. */
+/** Stores SVGs independently of projects. A drawing keeps a copy of each one placed on it (PlanDrawing.customSymbols). */
 class PlanSymbols internal constructor(
     private val directory: File,
     private val context: Context? = null,

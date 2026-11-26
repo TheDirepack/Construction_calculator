@@ -131,7 +131,7 @@ object ScheduleCsv {
     }
 
     /**
-     * RFC-4180 CSV of the project's material takeoff (wire and conduit quantities).
+     * RFC-4180 CSV of the project's material takeoff (wire and conduit quantities, plus devices counted on drawings; the last column lists runs or drawings).
      */
     fun materialTakeoff(
         project: Project,
@@ -149,6 +149,9 @@ object ScheduleCsv {
         takeoff.conduit.forEach { c ->
             val qty = if (units == UnitSystem.METRIC) c.feet * FEET_TO_METERS else c.feet
             out.append(row("Conduit", c.label(units), Decimals.trim(qty, 1), unitLabel, c.runNames.joinToString("; "))).append(CRLF)
+        }
+        takeoff.devices.forEach { d ->
+            out.append(row("Device", d.name, d.count.toString(), "ea", d.drawingNames.joinToString("; "))).append(CRLF)
         }
         return out.toString()
     }

@@ -23,7 +23,20 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.thedirepack.constructioncalc.core.ui.R as CoreR
 import com.thedirepack.constructioncalc.core.data.PlanSymbols
-import com.thedirepack.constructioncalc.core.data.PlanSymbol
+import com.thedirepack.constructioncalc.core.model.DeviceCatalog
+import com.thedirepack.constructioncalc.core.model.PlanReviewState
+import com.thedirepack.constructioncalc.core.model.PlanSymbolPlacement
+import com.thedirepack.constructioncalc.feature.drawings.recognition.DetectorStatus
+import com.thedirepack.constructioncalc.feature.drawings.recognition.PdfTileSource
+import com.thedirepack.constructioncalc.feature.drawings.recognition.RecognitionProgress
+import com.thedirepack.constructioncalc.feature.drawings.recognition.RecognitionStats
+import com.thedirepack.constructioncalc.feature.drawings.recognition.RecognitionTarget
+import com.thedirepack.constructioncalc.feature.drawings.recognition.SymbolDetectors
+import com.thedirepack.constructioncalc.feature.drawings.recognition.SymbolRecognizer
+import com.thedirepack.constructioncalc.feature.drawings.recognition.runRecognition
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.Job
 import com.thedirepack.constructioncalc.core.model.newId
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -132,6 +145,9 @@ internal fun DrawingEditor(
     returnLabel: String? = null,
     onReturnToSheet: (() -> Unit)? = null,
     onJumpToSheet: (targetDrawingId: String, targetPage: Int, fromPage: Int) -> Unit = { _, _, _ -> },
+    /** Changes another drawing of the project (symbol recognition over all drawings). */
+    onChangeDrawing: (drawingId: String, (PlanDrawing) -> PlanDrawing) -> Unit = { _, _ -> },
+    fileFor: (PlanDrawing) -> File = { file },
 ) {
     val context = LocalContext.current
     val settings = rememberAppSettings()
@@ -155,11 +171,23 @@ internal fun DrawingEditor(
     var selectedVertex by remember(drawing.id) { mutableStateOf<Int?>(null) }
     var selectedEdge by remember(drawing.id) { mutableStateOf<Int?>(null) }
     var selectedMeasurementId by remember(drawing.id) { mutableStateOf<String?>(null) }
-    var symbol by remember(drawing.id) { mutableStateOf<PlanSymbol?>(null) }
+    var symbol by remember(drawing.id) { mutableStateOf<SymbolChoice?>(null) }
+    var symbolSize by remember(drawing.id) {
+        mutableStateOf(views.getFloat("${drawing.id}/symbolSize", PlanSymbolPlacement.DEFAULT_SIZE.toFloat()).toDouble())
+    }
+    var symbolRotation by remember(drawing.id) { mutableStateOf(0.0) }
+    var reclassifying by remember(drawing.id) { mutableStateOf<String?>(null) }
+    var recognizeOpen by remember(drawing.id) { mutableStateOf(false) }
+    var reviewOpen by remember(drawing.id) { mutableStateOf(false) }
+    var recognition by remember(drawing.id) { mutableStateOf<RecognitionProgress?>(null) }
+    var recognitionJob by remember(drawing.id) { mutableStateOf<Job?>(null) }
+    val detector = remember(context) { SymbolDetectors.installed(context.applicationContext) }
     LaunchedEffect(drawing.id) {
+        // Read the catalog off the main thread before anything draws or counts symbols.
+        val catalog = withContext(Dispatchers.IO) { runCatching { DeviceCatalog.bundled }.getOrNull() } ?: return@LaunchedEffect
         val id = views.getString("${drawing.id}/symbol", null) ?: return@LaunchedEffect
-        val saved = starterSymbols.firstOrNull { it.id == id } ?: withContext(Dispatchers.IO) {
-            PlanSymbols(context.applicationContext).list().firstOrNull { it.id == id }
+        val saved = catalog.find(id)?.let(SymbolChoice::Device) ?: withContext(Dispatchers.IO) {
+            resolveSymbolChoice(id, catalog, PlanSymbols(context.applicationContext).list())
         }
         if (symbol == null) symbol = saved
     }
@@ -372,6 +400,7 @@ internal fun DrawingEditor(
     }
     val selectedPath = pagePaths.firstOrNull { it.path.id == selectedPathId }.takeIf { mode == DrawingMode.Adjust }
     val selectedMark = visibleMarks.firstOrNull { it.id == selectedMarkId }
+    val pagePending = remember(marks) { marks.count { it.symbol?.reviewState == PlanReviewState.PENDING } }
     val activeCalibrationDraft = calibrationDraft.takeIf { mode == DrawingMode.Reference }
     val draftDrawing = remember(drawing, activeCalibrationDraft) {
         activeCalibrationDraft?.let(::applyDraftToDrawing) ?: drawing
@@ -486,6 +515,60 @@ internal fun DrawingEditor(
         clearSelection()
     }
 
+    val latestDrawing by rememberUpdatedState(drawing)
+    val latestProject by rememberUpdatedState(project)
+
+    /**
+     * Recognizes symbols off the main thread. Each finished page's detections are added as pending
+     * marks right away, so Stop keeps what was found; one undo removes this drawing's results.
+     */
+    fun startRecognition(request: RecognitionRequest) {
+        recognizeOpen = false
+        if (detector.status !is DetectorStatus.Ready || recognitionJob != null) return
+        val targets = when (request) {
+            RecognitionRequest.ThisPage -> listOf(RecognitionTarget(drawing.id, drawing.name, listOf(page)))
+            is RecognitionRequest.Pages -> listOf(RecognitionTarget(drawing.id, drawing.name, request.pages))
+            RecognitionRequest.AllPages -> listOf(RecognitionTarget(drawing.id, drawing.name))
+            RecognitionRequest.AllDrawings -> project.drawings.map { RecognitionTarget(it.id, it.name) }
+        }
+        history = history.push(drawing)
+        recognition = null
+        recognitionJob = scope.launch {
+            var found = RecognitionStats()
+            var cancelled = false
+            try {
+                val catalog = withContext(Dispatchers.IO) { DeviceCatalog.bundled }
+                found = runRecognition(
+                    targets = targets,
+                    recognizer = SymbolRecognizer(detector, catalog),
+                    openSource = { id -> PdfTileSource(fileFor(latestProject.drawings.first { it.id == id })) },
+                    existing = { id ->
+                        if (id == latestDrawing.id) latestDrawing.marks
+                        else latestProject.drawings.firstOrNull { it.id == id }?.marks.orEmpty()
+                    },
+                    onProgress = { recognition = it },
+                    onPage = { id, result ->
+                        found += result.stats
+                        if (result.marks.isNotEmpty()) {
+                            val add: (PlanDrawing) -> PlanDrawing = { d -> d.copy(marks = d.marks + result.marks) }
+                            if (id == latestDrawing.id) onChange(add) else onChangeDrawing(id, add)
+                        }
+                    },
+                )
+            } catch (stopped: CancellationException) {
+                cancelled = true
+            } catch (error: Exception) {
+                host.showMessage(error.message ?: "Symbol recognition failed.")
+                return@launch
+            } finally {
+                recognitionJob = null
+                recognition = null
+            }
+            host.showMessage(recognitionSummary(found, cancelled))
+            if (found.proposed > 0) reviewOpen = true
+        }
+    }
+
     fun saveTrace(closed: Boolean) {
         val path = PlanPath.fromTrace(page, routePoints, closed)
         if (path == null) {
@@ -566,19 +649,9 @@ internal fun DrawingEditor(
             }
             DrawingMode.Symbol -> {
                 val current = symbol
+                // The tap is the symbol's center, so it lands where the finger or pen was.
                 if (current == null) session = session.open(EditorDialog.PickSymbol)
-                else addMark(
-                    PlanMark(
-                        page = page,
-                        kind = PlanMarkKind.SYMBOL,
-                        points = listOf(point),
-                        svg = current.svg,
-                        text = current.name.take(2_000),
-                        width = 36.0,
-                        circuitTag = circuitTag,
-                        areaTag = areaTag,
-                    ),
-                )
+                else editDrawing { d -> placeSymbol(d, current, page, point, symbolSize, symbolRotation, circuitTag, areaTag).first }
             }
             DrawingMode.Route -> if (!routeFinished) apply(EditorActions.tap(session, drawing, point, radius, activeToolStyle))
             else -> apply(EditorActions.tap(session, drawing, point, radius, activeToolStyle))
@@ -795,6 +868,9 @@ internal fun DrawingEditor(
                 onExportSheet = { sheetExportOpen = true },
                 onExportPdf = ::preparePdfExport,
                 onExportJson = { json.launch("$baseName.drawing.json") },
+                onRecognize = if (editable) ({ recognizeOpen = true }) else null,
+                pendingSymbols = pagePending,
+                onReview = { reviewOpen = true },
                 highlightsVisible = highlightsVisible,
                 onToggleHighlights = { highlightsVisible = !highlightsVisible; clearSelection() },
             )
@@ -975,6 +1051,7 @@ internal fun DrawingEditor(
                         selectedZone = zone?.id,
                         lines = displayedLines,
                         marks = visibleMarks,
+                        customSymbols = drawing.customSymbols,
                         pending = session.firstPoint,
                         lineMap = lineMap,
                         snapEnabled = snapEnabled,
@@ -1151,13 +1228,23 @@ internal fun DrawingEditor(
                                                 onClick = { editText = true },
                                             )
                                         }
-                                        if (selectedMark.kind == PlanMarkKind.SYMBOL) {
-                                            TextButton(onClick = { editMarkCircuit = true }) {
-                                                Text(selectedMark.circuitTag.ifBlank { "Circuit" })
-                                            }
-                                            TextButton(onClick = { editMarkArea = true }) {
-                                                Text(selectedMark.areaTag.ifBlank { "Area" })
-                                            }
+                                        val placed = selectedMark.symbol
+                                        if (placed != null) {
+                                            SelectedSymbolControls(
+                                                drawing = drawing,
+                                                mark = selectedMark,
+                                                placement = placed,
+                                                onReplace = { replaceMark(it) },
+                                                onChangeClass = { reclassifying = selectedMark.id },
+                                                onNext = {
+                                                    SymbolReview.nextPending(drawing, page, selectedMark.id)?.let { next ->
+                                                        clearSelection()
+                                                        selectedMarkId = next.id
+                                                    }
+                                                },
+                                                onCircuit = { editMarkCircuit = true },
+                                                onArea = { editMarkArea = true },
+                                            )
                                         }
                                         if (selectedMark.kind.supportsStyle()) {
                                             val markStyle = MarkupToolStyle.fromMark(selectedMark)
@@ -1219,16 +1306,30 @@ internal fun DrawingEditor(
                                     }
                                     mode == DrawingMode.Symbol && symbol != null -> {
                                         val active = checkNotNull(symbol)
-                                        val symbolMarks = marks.filter { it.kind == PlanMarkKind.SYMBOL && it.text == active.name }
+                                        val symbolMarks = marks.filter { it.symbol?.deviceId == active.deviceId && it.symbol?.counts == true }
                                         val groupTotal = when (countGrouping) {
                                             CountGrouping.DEVICE -> symbolMarks.size
                                             CountGrouping.CIRCUIT -> symbolMarks.count { it.circuitTag == circuitTag }
                                             CountGrouping.AREA -> symbolMarks.count { it.areaTag == areaTag }
                                         }
-                                        Row(Modifier.horizontalScroll(rememberScrollState())) {
+                                        Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
                                             TextButton(onClick = { session = session.open(EditorDialog.PickSymbol) }) {
-                                                Text("${active.name} · $groupTotal  ▾")
+                                                SymbolPreview(active, 20.dp)
+                                                Spacer(Modifier.width(6.dp))
+                                                Text("${active.name} · $groupTotal  ▾", maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.sizeIn(maxWidth = 200.dp))
                                             }
+                                            SymbolSizeButtons(
+                                                size = symbolSize,
+                                                onSize = {
+                                                    symbolSize = it
+                                                    views.edit().putFloat("${drawing.id}/symbolSize", it.toFloat()).apply()
+                                                },
+                                            )
+                                            TextButton(onClick = { symbolRotation = PlanSymbolPlacement.normalizeDegrees(symbolRotation + 90.0) }) {
+                                                Text("${symbolRotation.roundToInt()}°")
+                                            }
+                                            TextButton(onClick = { recognizeOpen = true }) { Text("Recognize") }
+                                            if (pagePending > 0) TextButton(onClick = { reviewOpen = true }) { Text("Review $pagePending") }
                                             TextButton(onClick = {
                                                 val nextIndex = (CountGrouping.entries.indexOf(countGrouping) + 1) % CountGrouping.entries.size
                                                 countGrouping = CountGrouping.entries[nextIndex]
@@ -1497,6 +1598,54 @@ internal fun DrawingEditor(
         }
     }
 
+    if (recognizeOpen) {
+        RecognizeDialog(
+            status = detector.status,
+            file = file,
+            page = page,
+            pageCount = pageCount ?: 1,
+            drawingCount = project.drawings.size,
+            labels = labels.toMap(),
+            onRun = ::startRecognition,
+            onDismiss = { recognizeOpen = false },
+        )
+    }
+    if (recognitionJob != null) {
+        RecognitionProgressDialog(recognition) { recognitionJob?.cancel() }
+    }
+    if (reviewOpen) {
+        SymbolReviewDialog(
+            drawing = drawing,
+            page = page,
+            editable = editable,
+            onEdit = { editDrawing(it) },
+            onChangeClass = { from -> reclassifying = "class:$from" },
+            onNext = {
+                reviewOpen = false
+                if (mode != DrawingMode.Adjust) switchMode(DrawingMode.Adjust)
+                SymbolReview.nextPending(drawing, page, null)?.let { selectedMarkId = it.id }
+            },
+            onDismiss = { reviewOpen = false },
+        )
+    }
+    reclassifying?.let { target ->
+        val classFrom = target.removePrefix("class:").takeIf { target.startsWith("class:") }
+        val mark = if (classFrom == null) drawing.marks.firstOrNull { it.id == target } else null
+        if (classFrom == null && mark?.symbol == null) {
+            reclassifying = null
+        } else {
+            SymbolDialog(
+                onDismiss = { reclassifying = null },
+                title = if (classFrom != null) "Change all to…" else "Change symbol to…",
+                currentDeviceId = classFrom ?: mark?.symbol?.deviceId,
+            ) { choice ->
+                reclassifying = null
+                if (classFrom != null) editDrawing { SymbolReview.reclassifyClass(it, page, classFrom, choice) }
+                else if (mark != null) editDrawing { reclassifySymbol(it, mark, choice) }
+            }
+        }
+    }
+
     if (settingsOpen) DrawingSettingsDialog { settingsOpen = false }
     if (customizeToolbarOpen) CustomizeToolbarDialog { customizeToolbarOpen = false }
     if (eraserSizeOpen) {
@@ -1672,7 +1821,7 @@ private fun EditorDialogs(
     addMark: (PlanMark) -> Unit,
     replaceMark: (PlanMark) -> Unit,
     deleteMark: (PlanMark) -> Unit,
-    onPickSymbol: (PlanSymbol) -> Unit,
+    onPickSymbol: (SymbolChoice) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenMark: (PlanMark) -> Unit,
     publish: (PlanMeasurement, Quantity) -> Unit,
@@ -1752,10 +1901,7 @@ private fun EditorDialogs(
             addMark(styleStore.read(DrawingMode.Text).applyTo(raw))
             close()
         }
-        EditorDialog.PickSymbol -> SymbolDialog(onDismiss = close, openSettings = {
-            close()
-            onOpenSettings()
-        }) { symbol ->
+        EditorDialog.PickSymbol -> SymbolDialog(onDismiss = close) { symbol ->
             onPickSymbol(symbol)
             close()
         }

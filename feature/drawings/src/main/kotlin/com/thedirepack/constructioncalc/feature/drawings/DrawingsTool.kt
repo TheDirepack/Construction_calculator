@@ -118,6 +118,8 @@ private fun DrawingsScreen(host: ToolHost) {
     val scope = rememberCoroutineScope()
     var importing by remember { mutableStateOf(false) }
     var pendingJsonImport by remember { mutableStateOf<PlanDrawing?>(null) }
+    // A picked PDF waiting on its page preview before it joins the project.
+    var pendingPdfImport by remember { mutableStateOf<PlanDrawing?>(null) }
 
     fun attachImportedDrawing(source: PlanDrawing, projectId: String, chosenName: String? = null, asJson: Boolean = false) {
         var attached: PlanDrawing? = null
@@ -161,6 +163,10 @@ private fun DrawingsScreen(host: ToolHost) {
                         pendingJsonImport = source
                         return@launch
                     }
+                    if (!asJson) {
+                        pendingPdfImport = source
+                        return@launch
+                    }
                     attachImportedDrawing(source, projectId, asJson = asJson)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -175,12 +181,16 @@ private fun DrawingsScreen(host: ToolHost) {
     val importPdf = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { importDrawing(it, false) }
     val importJson = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { importDrawing(it, true) }
 
-    fun updateDrawing(change: (PlanDrawing) -> PlanDrawing) {
-        if (project == null || drawing == null) return
+    fun updateDrawing(drawingId: String, change: (PlanDrawing) -> PlanDrawing) {
+        if (project == null) return
         val result = services.projects.edit(project.id) { current, now ->
-            current.copy(drawings = current.drawings.map { if (it.id == drawing.id) change(it) else it }, updatedAt = now)
+            current.copy(drawings = current.drawings.map { if (it.id == drawingId) change(it) else it }, updatedAt = now)
         }
         if (result == null || result.archived) host.showMessage("The project is unavailable for editing.")
+    }
+
+    fun updateDrawing(change: (PlanDrawing) -> PlanDrawing) {
+        if (drawing != null) updateDrawing(drawing.id, change)
     }
 
     fun renameDrawing(target: PlanDrawing, newName: String) {
@@ -296,6 +306,8 @@ private fun DrawingsScreen(host: ToolHost) {
                 jumpSerial++
             },
             onChange = { updateDrawing(it) },
+            onChangeDrawing = { id, change -> updateDrawing(id, change) },
+            fileFor = { files.file(it.sha256) },
             onSendRouteToRun = { id, name, segs, route -> sendRouteToRun(id, name, segs, route) },
             onPublish = { m, q, s -> publish(m, q, s) },
             host = host,
@@ -332,6 +344,30 @@ private fun DrawingsScreen(host: ToolHost) {
             )
 
         }
+    }
+
+    pendingPdfImport?.let { source ->
+        val pdf = remember(source.sha256) { files.file(source.sha256) }
+        PdfImportPreviewDialog(
+            file = pdf,
+            name = source.name,
+            onImport = { openPage ->
+                pendingPdfImport = null
+                val projectId = project?.id
+                if (projectId == null) {
+                    host.showMessage("The project is unavailable for editing.")
+                } else {
+                    context.getSharedPreferences("drawing-views", 0).edit().putInt("${source.id}/page", openPage).apply()
+                    attachImportedDrawing(source, projectId)
+                }
+            },
+            onCancel = {
+                pendingPdfImport = null
+                // Nothing references the copied PDF yet unless another drawing uses the same file.
+                val referenced = services.projects.projects.value.any { p -> p.drawings.any { it.sha256 == source.sha256 } }
+                if (!referenced) scope.launch(Dispatchers.IO) { runCatching { pdf.delete() } }
+            },
+        )
     }
 
     pendingJsonImport?.let { source ->

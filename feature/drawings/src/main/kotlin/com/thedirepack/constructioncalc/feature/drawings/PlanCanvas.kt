@@ -81,6 +81,7 @@ import com.thedirepack.constructioncalc.core.data.PlanExportCrop
 import com.thedirepack.constructioncalc.core.data.drawPlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
+import com.thedirepack.constructioncalc.core.model.PlanCustomSymbol
 import com.thedirepack.constructioncalc.core.model.PlanPoint
 import com.thedirepack.constructioncalc.core.model.PlanZone
 import com.thedirepack.constructioncalc.core.plans.LineMap
@@ -347,6 +348,8 @@ internal fun PlanCanvas(
     selectedZone: String?,
     lines: List<CanvasLine>,
     marks: List<PlanMark>,
+    /** Artwork for `custom:` symbol marks on this drawing. */
+    customSymbols: List<PlanCustomSymbol> = emptyList(),
     pending: PlanPoint?,
     lineMap: LineMap?,
     snapEnabled: Boolean,
@@ -1189,6 +1192,7 @@ internal fun PlanCanvas(
                                 markPaint,
                                 markPath,
                                 currentDimensionLabel,
+                                customSymbols,
                             )
                         }
                         (markPreview ?: selectedMark)?.let { mark ->
