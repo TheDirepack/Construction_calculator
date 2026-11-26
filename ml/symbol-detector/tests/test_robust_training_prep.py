@@ -103,7 +103,11 @@ def test_teacher_candidates_never_become_ground_truth_and_holdouts_blocked(tmp_p
             'confidence':.72,'source_scale':1.5},
            {'symbol_family':'valve','bbox_xyxy':[11,11,30,30],
             'confidence':.9,'source_scale':1.0}]
-    merged=consolidate_predictions(items)
+    # Same spot, two classes: the stronger class is kept, the other is an alternative.
+    [top]=consolidate_predictions(items)
+    assert top['symbol_family']=='valve'
+    assert top['alternative_labels']==[{'symbol_family':'receptacle','confidence':.8}]
+    merged=consolidate_predictions(items,cross_class_iou=None)
     assert len(merged)==2
     r=next(x for x in merged if x['symbol_family']=='receptacle')
     assert r['multiscale_agreement'] and r['uncertain'] and r['review_required']

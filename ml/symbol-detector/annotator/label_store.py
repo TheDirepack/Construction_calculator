@@ -170,8 +170,15 @@ def devices_json_for(pdf: Path) -> Path | None:
 def document_role(doc: "Document", data_root: Path | None = None) -> str | None:
     """``train``, ``evaluation`` or None for a stored document, decided by
     where its PDF is now: ``1_blueprints/*.pdf`` trains,
-    ``1_blueprints/evaluation/*.pdf`` evaluates, anything else neither."""
-    from blueprint_symbols.blueprint_sets import blueprint_sets
+    ``1_blueprints/evaluation/*.pdf`` evaluates, anything else neither.
+
+    A photo (``kind == "image"``) has no PDF in either folder; its copy lives
+    in the document's own ``images/`` folder. Evaluation is defined by the
+    evaluation PDFs only, so a labelled photo trains (it used to get None and
+    its verified boxes were silently dropped from training and from pushes)."""
+    from blueprint_symbols.blueprint_sets import TRAIN, blueprint_sets
+    if doc.kind == "image":
+        return TRAIN
     try:
         sets = blueprint_sets(data_root if data_root is not None else doc.source)
     except FileNotFoundError:
@@ -533,13 +540,33 @@ def stage_push(store: Path, stage: Path) -> tuple[list[Path], list[Path], int]:
     """Write each document's training-usable pages as
     ``<folder>/<prefix>_labels.pushed.json`` under ``stage`` (same relative
     folders as the store). Returns (staged files relative to ``stage``, page
-    images relative to ``store``, number of pages)."""
+    images relative to ``store``, number of pages).
+
+    A photo document (``kind == "image"``) has no PDF the receiver could
+    match, so it travels whole: its ``document.json`` (source made relative
+    to the folder) and page JSON are staged as they are, its photo is listed
+    with the images, and rsync puts them in place (``merge_pushed`` skips them).
+    """
     from blueprint_symbols.label_schema import training_usable
     store, stage = Path(store).resolve(), Path(stage)
     staged, images, count = [], [], 0
     for doc in iter_documents(store, skip_missing=True):
-        if doc.kind != "pdf":
+        if doc.kind == "image":
+            data = doc.read_page(1)
+            if data is None or not training_usable(data):
+                continue
+            rel = doc.folder.relative_to(store)
+            (stage / rel).mkdir(parents=True, exist_ok=True)
+            meta = dict(doc.meta, source=str(doc.source.relative_to(doc.folder)))
+            (stage / rel / DOCUMENT_FILE).write_text(json.dumps(meta, indent=1), encoding="utf-8")
+            page = doc.page_json(1)
+            (stage / rel / page.name).write_text(page.read_text(encoding="utf-8"), encoding="utf-8")
+            staged += [rel / DOCUMENT_FILE, rel / page.name]
+            images.append(doc.source.relative_to(store))
+            count += 1
             continue
+        if doc.kind != "pdf":
+            raise ValueError(f"{doc.folder.name}: unknown document kind {doc.kind!r}; not pushed")
         usable = {n: d for n, d in doc.saved_pages().items() if training_usable(d)}
         if not usable:
             continue

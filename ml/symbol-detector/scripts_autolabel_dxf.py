@@ -1,4 +1,7 @@
-"""Usage: python scripts_autolabel_dxf.py drawing.dxf paired.png mapping.json out.json
+"""Usage: python scripts_autolabel_dxf.py drawing.dxf paired.png mapping.json out_labels.json
+
+Writes one Format-2 labels file (``<stem>_labels.json``, page 1; see
+``label_schema.write_labels_file``): ``out.json`` becomes ``out_labels.json``.
 
 Do not use a transform inferred from unrelated raster/CAD extents: it will
 produce incorrect pixel labels. Confirm the image and DXF are precisely paired.
@@ -8,6 +11,7 @@ import json
 from pathlib import Path
 import cv2
 from blueprint_symbols.cad_labels import load_cad_mapping, labels_from_dxf
+from blueprint_symbols.label_schema import COORDINATE_SYSTEM, labels_file_for, write_labels_file
 
 p=argparse.ArgumentParser()
 p.add_argument('cad_dxf')
@@ -23,6 +27,8 @@ if image is None:
 block_map,transform=load_cad_mapping(args.mapping_json)
 res=labels_from_dxf(args.cad_dxf,block_map,transform,document_id=Path(args.cad_dxf).stem)
 output={'format_version':1,'source_type':'paired_dxf_raster',
+        'document_id':Path(args.cad_dxf).stem,'page_index':0,
+        'coordinate_system':COORDINATE_SYSTEM,
         'image_path':str(Path(args.paired_raster).resolve()),
         'image_width':image.shape[1],'image_height':image.shape[0],
         'project_family_id':args.group,'source_group_verified':True,
@@ -31,5 +37,6 @@ output={'format_version':1,'source_type':'paired_dxf_raster',
         'skipped_entities':res.skipped,
         'calibration_method':'explicit_cad_to_pixel_homography',
         'calibration_verified':args.aligned_verified}
-Path(args.output_json).write_text(json.dumps(output,indent=2))
-print(f"Wrote {len(res.instances)} metadata-derived instances to {args.output_json}. Unknown: {res.unknown_blocks}. Verify visual overlay before training.")
+out=write_labels_file(labels_file_for(args.output_json),{1:output},imported_by='dxf',
+                      info={'imported':{'cad_source_path':output['cad_source_path']}})
+print(f"Wrote {len(res.instances)} metadata-derived instances to {out}. Unknown: {res.unknown_blocks}. Verify visual overlay before training.")

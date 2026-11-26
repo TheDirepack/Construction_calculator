@@ -28,7 +28,7 @@ import re
 from pathlib import Path
 
 CATALOG_PATH = Path(__file__).resolve().parent.parent / "annotator" / "electrical_device_catalog.json"
-UNMAPPED = "__unmapped__"     # an excluded name: training skips tiles touching such a box
+UNMAPPED = "__unmapped__"     # an excluded name: the tile exporter paints such a box out (ignore region)
 
 # Everything below is read from the catalog, the single source of truth for
 # what each symbol is (devices, their aliases in other sources, and names
@@ -118,14 +118,34 @@ def instance_class(inst: dict) -> str | None:
     if not family:
         return None
     if "." in family and family.split(".", 1)[0] in CATALOG_FAMILIES:
-        # already a device id (CAD/SVG/COCO class maps may name devices directly)
-        return family if _parse_device(family) in _CATALOG_SET else UNMAPPED
+        # already a device id (CAD/SVG/COCO class maps may name devices directly);
+        # a former id merged into another device keeps its meaning (RENAMED)
+        device = _parse_device(family)
+        device = RENAMED.get(device, device)
+        return device_class(*device) or UNMAPPED
     if family in CATALOG_FAMILIES:
         renamed = RENAMED.get((family, inst.get("symbol_variant")))
         return device_class(*(renamed or (family, inst.get("symbol_variant")))) or UNMAPPED
     if family in _NOT_A_DEVICE:
         return UNMAPPED
     return family
+
+
+_AUGMENT = _CATALOG.get("augmentation", {})
+MIRROR_ALLOWED = bool(_AUGMENT.get("mirror", False))
+_DEFAULT_ROTATIONS = tuple(sorted({int(r) % 360 for r in _AUGMENT.get("default_rotations", (0,))} | {0}))
+_ROTATIONS = {key: tuple(sorted({int(r) % 360 for r in value} | {0}))
+              for key, value in (_AUGMENT.get("rotations") or {}).items()}
+
+
+def allowed_rotations(class_name: str | None) -> tuple[int, ...]:
+    """Training tile rotations (degrees CCW, multiples of 90) a device class
+    allows, from the catalog's ``augmentation`` section: the device's own
+    entry, else its family's, else the default. Always includes 0."""
+    name = str(class_name or "")
+    if name in _ROTATIONS:
+        return _ROTATIONS[name]
+    return _ROTATIONS.get(name.partition(".")[0], _DEFAULT_ROTATIONS)
 
 
 def device_for_raw_type(raw: str | None) -> tuple[str, str] | None:
@@ -429,6 +449,53 @@ def expand_page_paths(paths) -> list[Path]:
         else:
             out.append(path)
     return out
+
+
+LABELS_KIND = "document_labels"         # == annotator.document_labels.KIND
+LABELS_FORMAT_VERSION = 2               # == annotator.document_labels.FORMAT_VERSION
+
+
+def labels_file_for(output: str | Path) -> Path:
+    """The labels file an importer writes for ``output``: ``output`` itself
+    when it already ends in ``_labels.json``, else ``<stem>_labels.json``
+    beside it (``out/page.json`` -> ``out/page_labels.json``)."""
+    output = Path(output)
+    if output.name.endswith(LABELS_SUFFIX):
+        return output
+    return output.with_name(f"{output.stem}{LABELS_SUFFIX}")
+
+
+def write_labels_file(path: str | Path, pages: dict[int, dict], *, imported_by: str,
+                      training_ready: bool = True, info: dict | None = None) -> Path:
+    """Write imported pages as one Format-2 labels file (``<stem>_labels.json``,
+    the format of ``annotator.document_labels``) and return its path.
+
+    Importers of supplied dataset labels (DXF block exports, SVG instances,
+    COCO, FloorPlanCAD) use this instead of per-page JSONs. Their labels are
+    exact source metadata, not proposals, so the file is marked training-ready
+    by the importer (``training_ready.set_by = "importer:<name>"``); pass
+    ``training_ready=False`` to require a person's "PDF done" first. Pages are
+    1-based; an ``image_path`` relative to the labels file's folder stays
+    relative (``read_page`` resolves it)."""
+    import os
+    import time
+    path = Path(path)
+    if not path.name.endswith(LABELS_SUFFIX):
+        raise ValueError(f"a labels file must be named <stem>{LABELS_SUFFIX}: {path.name}")
+    if not pages or any(int(k) < 1 for k in pages):
+        raise ValueError("pages must be numbered from 1")
+    data = {"format_version": LABELS_FORMAT_VERSION, "kind": LABELS_KIND,
+            "json_prefix": path.name[:-len(LABELS_SUFFIX)], **(info or {}),
+            "training_ready": {"ready": bool(training_ready),
+                               "set_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                               "set_by": f"importer:{imported_by}"},
+            "pages": {str(int(k)): pages[k] for k in sorted(pages, key=int)}}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    _labels_cache.pop(str(path), None)
+    return path
 
 
 def load_training_page(path: str | Path) -> dict:

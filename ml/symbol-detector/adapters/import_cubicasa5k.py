@@ -1,4 +1,5 @@
-"""Convert the official CubiCasa5K release (model.svg per plan) into normalized page JSON.
+"""Convert the official CubiCasa5K release (model.svg per plan) into Format-2 labels files
+(one ``cc5k_<plan>_labels.json`` per plan, page 1; ``label_schema.write_labels_file``).
 
     python adapters/import_cubicasa5k.py DATA/5_datasets/cubicasa5k_official/cubicasa5k \
         OUT/normalized/cubicasa5k --class-map class_maps/cubicasa.json
@@ -27,7 +28,12 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
 
+import sys
+
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # run as `python -I adapters/...`
+from blueprint_symbols.label_schema import LABELS_SUFFIX, write_labels_file  # noqa: E402
 
 NUM = r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?'
 
@@ -172,7 +178,7 @@ def convert(root: Path, out: Path, cmap: dict) -> dict:
                'coordinate_system': 'original_page_pixels_top_left_y_down',
                'exhaustive_families': targets, 'instances': instances,
                'cubicasa': {'category': plan.parent.name, 'plan_id': plan.name}}
-        (out / f'cc5k_{pid}.json').write_text(json.dumps(doc, indent=1))
+        write_labels_file(out / f'cc5k_{pid}{LABELS_SUFFIX}', {1: doc}, imported_by='cubicasa5k')
         counts['pages'] += 1
         if counts['pages'] % 500 == 0:
             print(counts['pages'], 'plans', flush=True)

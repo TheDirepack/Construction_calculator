@@ -57,15 +57,59 @@ def _iou(a,b):
     return inter/(aa+bb-inter)
 
 
+def _containment(small,big):
+    """Fraction of ``small``'s area inside ``big``."""
+    x0=max(small[0],big[0]);y0=max(small[1],big[1]);x1=min(small[2],big[2]);y1=min(small[3],big[3])
+    inter=max(0.,x1-x0)*max(0.,y1-y0)
+    return inter/max(1e-8,(small[2]-small[0])*(small[3]-small[1]))
+
+
+def _suppress_across(output:list[dict], *, cross_class_iou:float, containment:float) -> list[dict]:
+    """Greedy class-agnostic pass over merged candidates (highest confidence first).
+
+    * Two device classes on the same spot (IoU >= ``cross_class_iou``): one
+      symbol read as ``switch.single_pole`` and ``switch.three_way``. The
+      stronger is kept, the other is recorded in ``alternative_labels``.
+    * A box mostly inside a stronger box of the same class (``containment``
+      of its area): a partial detection of a symbol cut by a tile edge.
+    """
+    kept:list[dict]=[]
+    for cand in sorted(output,key=lambda x:float(x['confidence']),reverse=True):
+        absorbed=False
+        for k in kept:
+            same=k['symbol_family']==cand['symbol_family']
+            overlap=_iou(cand['bbox_xyxy'],k['bbox_xyxy'])
+            if (not same and overlap>=cross_class_iou) or (
+                    same and _containment(cand['bbox_xyxy'],k['bbox_xyxy'])>=containment):
+                if not same:
+                    alts=k.setdefault('alternative_labels',[])
+                    if all(a['symbol_family']!=cand['symbol_family'] for a in alts):
+                        alts.append({'symbol_family':cand['symbol_family'],
+                                     'confidence':float(cand['confidence'])})
+                k['supporting_detections']+=0 if not same else cand['supporting_detections']
+                absorbed=True
+                break
+        if not absorbed:
+            kept.append(cand)
+    return kept
+
+
 def consolidate_predictions(candidates:list[dict], *, min_confidence:float = .2,
-                            match_iou:float=.35) -> list[dict]:
-    """Merge per-tile and per-scale detections by class and geometry.
+                            match_iou:float=.35, cross_class_iou:float | None=.6,
+                            containment:float | None=.8) -> list[dict]:
+    """Merge per-tile and per-scale detections by class and geometry, then
+    suppress across classes and partial (tile-edge) boxes (``_suppress_across``;
+    pass None to disable either).
 
     Confidence is the *maximum teacher prediction*; not calibrated likelihood.
     Results are review candidates, even with multi-scale agreement.
     """
     if not 0 <= min_confidence <= 1 or not 0 < match_iou <= 1:
         raise ValueError('bad confidence or IOU threshold')
+    if cross_class_iou is not None and not 0 < cross_class_iou <= 1:
+        raise ValueError('bad cross-class IOU threshold')
+    if containment is not None and not 0 < containment <= 1:
+        raise ValueError('bad containment threshold')
     remaining=sorted((x for x in candidates if x['confidence']>=min_confidence),
                      key=lambda x:float(x['confidence']),reverse=True)
     groups=[]
@@ -93,4 +137,7 @@ def consolidate_predictions(candidates:list[dict], *, min_confidence:float = .2,
                        'uncertain':True,'review_required':True,
                        'source':{'kind':'teacher_pseudo_label','label_method':'model_prediction',
                                  'not_ground_truth':True}})
-    return output
+    if cross_class_iou is None and containment is None:
+        return output
+    return _suppress_across(output,cross_class_iou=cross_class_iou if cross_class_iou is not None else 2.,
+                            containment=containment if containment is not None else 2.)

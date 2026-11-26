@@ -407,6 +407,45 @@ def cached_sha256(path: Path) -> str:
     return _SHA_CACHE[key]
 
 
+def proposal_device(proposal: dict) -> tuple[str, str] | None:
+    """The catalog device a proposal (DEVICES.json / SAM / CircuitNet entry)
+    becomes, named exactly as the annotator names its box: device type,
+    subtype, legend description (or NECA name, or device code) and the
+    weatherproof attribute. ``document_record`` and the proposal counts use
+    this too, so a box counted there is the box shown."""
+    raw = proposal.get("device_type") or proposal.get("broad_family")
+    code = proposal.get("device_code")
+    description = proposal.get("description") or proposal.get("neca_name") or (
+        f"{code} {str(raw).replace('_', ' ')}" if code else None)
+    return canonical_device(raw, proposal.get("subtype"), description=description,
+                            weatherproof=weatherproof_attribute(proposal.get("attributes")))
+
+
+PROPOSER_MAX_PIXELS = 20_000_000     # --max-pixels default of the SAM / CircuitNet PDF scanners
+
+
+def render_scale(page_width_pt: float, page_height_pt: float, dpi: float, max_pixels: int) -> float:
+    """Pixels per PDF point of a page rendered at ``dpi`` under a pixel-count cap
+    (the rule of ``render_pdf_page`` and of the PDF proposal scanners)."""
+    factor = dpi / 72.0
+    if page_width_pt * factor * page_height_pt * factor > max_pixels:
+        factor = math.sqrt(max_pixels / max(1.0, page_width_pt * page_height_pt))
+    return factor
+
+
+def proposal_pixel_factor(page, dpi: float, render_dpi: float, max_pixels=None) -> float:
+    """Scale from a proposal file's pixel boxes (``box_px_tl``, rendered by its
+    scanner at ``render_dpi`` with that scanner's own pixel cap) to this page
+    image (rendered at ``dpi`` under ``MAX_PDF_PIXELS``). Either render may be
+    clamped (large sheets), so the plain DPI ratio is wrong for them: compare
+    the pixels-per-point of the two renders."""
+    pw, ph = float(page.rect.width), float(page.rect.height)
+    if render_dpi <= 0 or pw <= 0 or ph <= 0:
+        return 1.0
+    theirs = render_scale(pw, ph, render_dpi, int(max_pixels or PROPOSER_MAX_PIXELS))
+    return render_scale(pw, ph, dpi, MAX_PDF_PIXELS) / theirs
+
+
 def render_pdf_page(pdf: Path, index: int, dpi: int, images_dir: Path, source_hash: str) -> tuple[Path, int, int]:
     """Render one PDF page to ``images_dir`` (the annotator's page-image cache).
 
@@ -563,10 +602,36 @@ def _image_mime(path: Path) -> str:
     return "image/png"
 
 
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff")
+_IMAGE_MAGIC = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"RIFF", b"GIF87a", b"GIF89a", b"BM",
+                b"II*\x00", b"MM\x00*")
+
+
+def _is_image_file(path: Path) -> bool:
+    """An image by name and by its first bytes (not just any file renamed)."""
+    if path.suffix.lower() not in IMAGE_SUFFIXES or not path.is_file():
+        return False
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(12)
+    except OSError:
+        return False
+    if head.startswith(b"RIFF"):
+        return head[8:12] == b"WEBP"
+    return any(head.startswith(magic) for magic in _IMAGE_MAGIC)
+
+
 def _resolve_edit_image(json_path: Path, raw_image_path: str) -> Path:
-    """Resolve an annotation JSON's image_path relative to JSON parent, CWD, or absolute."""
+    """Resolve an annotation JSON's image_path relative to JSON parent, CWD, or absolute.
+
+    The path comes from a file's contents and ``/api/image`` serves its bytes,
+    so only an actual image file is accepted (image suffix and image header):
+    a crafted ``image_path`` such as ``../../.ssh/id_ed25519`` is refused.
+    """
     if not raw_image_path:
         raise LabelingError(f"annotation JSON {json_path.name} is missing image_path")
+    if "\x00" in str(raw_image_path):
+        raise LabelingError("invalid image_path")
     candidate = Path(raw_image_path)
     attempts = []
     if candidate.is_absolute():
@@ -577,6 +642,8 @@ def _resolve_edit_image(json_path: Path, raw_image_path: str) -> Path:
         attempts.append((Path.cwd() / candidate).resolve())
     for path in attempts:
         if path.is_file():
+            if not _is_image_file(path):
+                raise LabelingError(f"annotation image_path is not an image file: {path.name}")
             return path
     raise LabelingError(f"annotation image unavailable: {attempts[0]}")
 
@@ -1135,9 +1202,7 @@ class LabelingSession:
                 reason = (devices_skip_reason(device)
                           or ("page_outside_document" if type(number) is not int
                               or not 1 <= number <= self.page_count else None)
-                          or ("not_an_electrical_device" if canonical_device(
-                              device.get("device_type") or device.get("broad_family"),
-                              device.get("subtype")) is None else None)
+                          or ("not_an_electrical_device" if proposal_device(device) is None else None)
                           or ("no_box" if devices_bbox_points(device) is None
                               and not device.get("box_px_tl") else None))
                 if reason:
@@ -1404,7 +1469,8 @@ class LabelingSession:
                 try:
                     pixels = proposal.get("box_px_tl")
                     if isinstance(pixels, list) and len(pixels) == 4:
-                        factor = (self.dpi / render_dpi) if render_dpi > 0 else 1.0
+                        factor = proposal_pixel_factor(page, self.dpi, render_dpi,
+                                                       proposals.get("max_pixels"))
                         x0, y0, x1, y1 = (float(v) * factor for v in pixels)
                         box = [max(0., min(float(width), x0)), max(0., min(float(height), y0)),
                                max(0., min(float(width), x1)), max(0., min(float(height), y1))]
@@ -1421,13 +1487,9 @@ class LabelingSession:
                     continue
                 raw = proposal.get("device_type") or proposal.get("broad_family")
                 subtype = proposal.get("subtype")
-                code = proposal.get("device_code")
-                description = proposal.get("description") or proposal.get("neca_name") or (
-                    f"{code} {str(raw).replace('_', ' ')}" if code else None)
                 # The catalog class (the annotator's device list), whatever the
                 # source calls it; None: not an electrical device.
-                device = canonical_device(raw, subtype, description=description,
-                                          weatherproof=weatherproof_attribute(proposal.get("attributes")))
+                device = proposal_device(proposal)
                 if device is None:
                     continue
                 family, variant = device
@@ -1707,9 +1769,7 @@ class LabelingSession:
                     number = device.get("pdf_page") or device.get("page")
                     if type(number) is not int or not 1 <= number <= self.page_count:
                         continue
-                    if devices_skip_reason(device) or canonical_device(
-                            device.get("device_type") or device.get("broad_family"),
-                            device.get("subtype")) is None:
+                    if devices_skip_reason(device) or proposal_device(device) is None:
                         continue
                     proposed[number] = proposed.get(number, 0) + 1
                 record_sha = (document_labels.proposals_record(self.out_dir, self.json_prefix)
@@ -2386,6 +2446,10 @@ def make_handler(session: LabelingSession):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
             self.send_header(
                 "Content-Security-Policy",
                 "default-src 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "

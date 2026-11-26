@@ -270,6 +270,7 @@ def main() -> None:
             'model': 'constructelligence/electrical-circuit-connectivity (circuits.onnx)',
             'status': 'provisional_detections_for_refinement',
             'render_dpi': args.dpi,
+            'max_pixels': args.max_pixels,
             'score_threshold': args.score_thr,
             'excluded_routing_annotations': dict(excluded_routing),
             'annotations_are_exhaustive': False,

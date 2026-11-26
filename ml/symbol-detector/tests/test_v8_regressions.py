@@ -53,16 +53,22 @@ def test_early_rejection_of_invalid_source_coordinates_and_dimensions(tmp_path):
 def test_heldout_clipped_or_unknown_symbols_cannot_silently_disappear(tmp_path):
     files=draw_sources(tmp_path,3)
     m=build_manifest(files)
-    # Source groups are already split. Add unknown geometry to a test source:
-    # because page fits one tile, the entire tile becomes invalid.
+    # Source groups are already split. Add unknown geometry to a test source.
+    # The page fits one tile: the unknown box is painted out of that tile
+    # (never taught as background) and the tile, with its verified symbol,
+    # is kept, so no held-out symbol disappears. (Dropping the whole tile, as
+    # before, silently lost the verified symbol beside it.)
     held=Path(m['splits']['test'][0]);data=json.loads(held.read_text())
     data['instances'].append({'instance_id':'unknown','symbol_family':'__unmapped__',
                               'uncertain':True,'bbox_xyxy':[90,90,130,130]})
     held.write_text(json.dumps(data))
     m=build_manifest(files) # Rebuilt because every input change invalidates an existing manifest.
     mf=tmp_path/'manifest.json';mf.write_text(json.dumps(m))
-    with pytest.raises(ValueError,match='held-out tile set does not cover'):
-        run(mf,tmp_path/'prepared',samples=2)
+    report=run(mf,tmp_path/'prepared',samples=2)
+    assert report['counts']['test_tiles_with_masked_regions']>=1
+    image=str((held.parent/data['image_path']).resolve())
+    coverage=report['evaluation_source_instance_coverage'][image]
+    assert coverage['missing']==0 and coverage['represented_in_tiles']==coverage['annotated_instances']==1
 
 
 def test_export_checker_detects_extras_and_wrong_canvas(tmp_path):

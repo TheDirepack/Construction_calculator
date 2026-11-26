@@ -16,6 +16,8 @@ import numpy as np
 from .multiscale import ScaleTile, sample_tile
 from .variants import make_variant
 from .pseudolabel import verify_unlabeled_sources
+from .label_schema import load_training_page
+from .dataset_manifest import trusted_training_instance
 
 
 def build_ssl_sources(manifest: dict, unlabeled: list[dict] | None = None) -> dict:
@@ -105,9 +107,10 @@ class SSLViewDataset:
         target=None
         if source['annotation'] and rng.random()<.65:
             if source['annotation'] not in self._cached_annotation:
-                self._cached_annotation[source['annotation']]=json.loads(Path(source['annotation']).read_text())
+                # a page JSON or a page of a PDF's labels file (<stem>_labels.json#p12)
+                self._cached_annotation[source['annotation']]=load_training_page(source['annotation'])
             possible=[v for v in self._cached_annotation[source['annotation']]['instances']
-                      if not v.get('uncertain',False) and 'bbox_xyxy' in v]
+                      if trusted_training_instance(v) and 'bbox_xyxy' in v]
             if possible:
                 item=possible[int(rng.integers(len(possible)))]
                 a,b,c,d=map(float,item['bbox_xyxy'])

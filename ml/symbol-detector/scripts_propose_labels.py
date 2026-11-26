@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from blueprint_symbols.pseudolabel import verify_unlabeled_sources, consolidate_predictions
-from blueprint_symbols.multiscale import plan_pyramid_tiles,sample_tile
+from blueprint_symbols.multiscale import plan_pyramid_tiles,sample_tile,touches_inner_edge
 
 
 def propose(model, image:np.ndarray, class_ids:dict[str,int], *, scales=(.75,1.,1.5),
@@ -51,6 +51,8 @@ def propose(model, image:np.ndarray, class_ids:dict[str,int], *, scales=(.75,1.,
         for b,c,s in zip(xyxy,classes,scores):
             if int(c) not in recognized:
                 continue  # Never convert an unrelated specialist category to background.
+            if touches_inner_edge(tile,tuple(float(v) for v in b)):
+                continue  # cut by this tile's edge; an overlapping tile sees it whole
             bb=list(tile.to_page_box(tuple(float(v) for v in b)))
             bb=[max(0.,min(w,bb[0])),max(0.,min(h,bb[1])),max(0.,min(w,bb[2])),max(0.,min(h,bb[3]))]
             if bb[2]<=bb[0] or bb[3]<=bb[1]:continue

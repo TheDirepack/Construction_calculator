@@ -84,16 +84,43 @@ def to_page(detections: list[Detection], tile: Tile, tile_id: int = -1) -> list[
     return [replace(d, box=tile.to_page_box(d.box), tile_id=tile_id) for d in detections]
 
 
-def merge_tiles(detections: list[Detection], iou_threshold: float = 0.45) -> list[Detection]:
-    """Class-specific greedy NMS; avoids most duplicate overlapping-tile hits.
+def containment(small: tuple[float, float, float, float],
+                big: tuple[float, float, float, float]) -> float:
+    """Fraction of ``small``'s area inside ``big``."""
+    x0, y0 = max(small[0], big[0]), max(small[1], big[1])
+    x1, y1 = min(small[2], big[2]), min(small[3], big[3])
+    area = max(0., small[2]-small[0]) * max(0., small[3]-small[1])
+    return max(0., x1-x0) * max(0., y1-y0) / area if area else 0.0
 
-    This is NOT sufficient to merge truncated detections on tile edges; use
-    ample overlap + a border-rejection policy in the full inference system.
+
+def merge_tiles(detections: list[Detection], iou_threshold: float = 0.45, *,
+                cross_class_iou: float | None = 0.6,
+                containment_threshold: float | None = 0.8) -> list[Detection]:
+    """Greedy NMS over detections from overlapping tiles (page coordinates).
+
+    * same class, IoU > ``iou_threshold``: the same symbol seen twice;
+    * any class, IoU >= ``cross_class_iou``: one symbol given two device
+      classes (fine-grained catalog classes look alike); the stronger wins;
+    * same class, a box ``containment_threshold`` inside a stronger one: a
+      partial detection of a symbol cut by a tile edge.
+    Also reject edge-touching detections per tile before merging
+    (``multiscale.touches_inner_edge``) with overlap > the largest symbol.
     """
     if not 0 <= iou_threshold <= 1:
         raise ValueError('iou_threshold must be within [0,1]')
     kept: list[Detection] = []
     for d in sorted(detections, key=lambda v: v.confidence, reverse=True):
-        if all(d.class_id != k.class_id or iou(d.box, k.box) <= iou_threshold for k in kept):
+        duplicate = False
+        for k in kept:
+            overlap = iou(d.box, k.box)
+            if d.class_id == k.class_id:
+                duplicate = overlap > iou_threshold or (
+                    containment_threshold is not None
+                    and containment(d.box, k.box) >= containment_threshold)
+            else:
+                duplicate = cross_class_iou is not None and overlap >= cross_class_iou
+            if duplicate:
+                break
+        if not duplicate:
             kept.append(d)
     return kept

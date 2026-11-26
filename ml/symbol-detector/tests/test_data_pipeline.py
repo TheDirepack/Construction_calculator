@@ -93,7 +93,7 @@ def test_coco_import_labels_preserves_unmapped_as_ignore_and_group(tmp_path):
     counts=convert_coco(ann,tmp_path,tmp_path/'converted',{'switch':'switch'},
                         project_groups={'page.png':'family1'})
     assert counts['mapped_instances']==1 and counts['unmapped_instances']==1
-    recs=read_records([tmp_path/'converted/image_00000001.json'])
+    recs=read_records([Path(str(tmp_path/'converted/image_00000001_labels.json')+'#p1')])
     assert recs[0].group=='family1'
     assert len(recs[0].instances)==2
     assert recs[0].instances[0]['bbox_xyxy']==[3,4,10,12]

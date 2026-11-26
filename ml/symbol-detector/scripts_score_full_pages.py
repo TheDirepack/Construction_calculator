@@ -23,7 +23,8 @@ from pathlib import Path
 import math
 import statistics
 from blueprint_symbols.detection_eval import _iou, _center
-from blueprint_symbols.dataset_manifest import validate_manifest_sources
+from blueprint_symbols.dataset_manifest import trusted_training_instance, validate_manifest_sources
+from blueprint_symbols.label_schema import load_training_page
 
 
 def score_full_pages(manifest_path:Path, predictions_path:Path, *, split='test',
@@ -46,14 +47,14 @@ def score_full_pages(manifest_path:Path, predictions_path:Path, *, split='test',
     count=Counter();per_class=defaultdict(Counter);per_group=defaultdict(Counter)
     centers=[];center_relative=[]
     for page in pages:
-        data=json.loads(page.read_text())
+        data=load_training_page(page)   # page JSON or <stem>_labels.json#p12, device classes
         if not classes.issubset(set(data.get('exhaustive_families',[]))):
             raise ValueError(f'page not annotated exhaustively for all trained classes: {page}')
         group=data.get('project_family_id')
         if group not in manifest['split_groups'][split]:
             raise ValueError('project group inconsistent with manifest')
         truths=[x for x in data['instances'] if x.get('symbol_family') in classes
-                and not x.get('uncertain',False)]
+                and trusted_training_instance(x)]
         pitems=sorted((x for x in pred_by_page.get(page,[]) if float(x.get('confidence',0))>=confidence),
                       key=lambda v:-float(v['confidence']))
         matched=set()

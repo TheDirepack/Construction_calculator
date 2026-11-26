@@ -9,7 +9,8 @@ import cv2
 
 def render_preview(annotation:Path,out:Path,max_side:int=1800):
     if max_side<128:raise ValueError('max_side must be >=128')
-    data=json.loads(annotation.read_text())
+    from blueprint_symbols.label_schema import read_page
+    data=read_page(annotation)   # page JSON or a page of a labels file (<stem>_labels.json#p12)
     image=(annotation.parent/data['image_path']).resolve()
     img=cv2.imread(str(image),cv2.IMREAD_COLOR)
     if img is None:raise FileNotFoundError(image)

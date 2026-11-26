@@ -9,6 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 import json
 import math
+from .label_schema import COORDINATE_SYSTEM, LABELS_SUFFIX, write_labels_file
 
 
 def convert_coco(json_path: str | Path, images_root: str | Path,
@@ -16,6 +17,9 @@ def convert_coco(json_path: str | Path, images_root: str | Path,
                  *, project_groups: dict[str,str] | None = None,
                  include_unmapped_as_ignore: bool = True) -> dict[str,int]:
     """Convert COCO bbox xywh to per-image xyxy, retain image-level provenance.
+
+    Writes one Format-2 labels file per image, ``image_<id:08d>_labels.json``
+    (page 1; training names it ``image_00000001_labels.json#p1``).
 
     `class_map` is an explicit dataset class name -> requested symbol family.
     Labels not in `class_map` are retained as known-unmapped *ignore* objects
@@ -76,14 +80,16 @@ def convert_coco(json_path: str | Path, images_root: str | Path,
         if not fpath.is_file():
             raise FileNotFoundError(fpath)
         group=(project_groups or {}).get(name,f'unknown_group_{image_id}')
-        path=out/f'image_{image_id:08d}.json'
-        path.write_text(json.dumps({
+        # one Format-2 labels file per image (page 1): image_00000001_labels.json
+        write_labels_file(out/f'image_{image_id:08d}{LABELS_SUFFIX}',{1:{
             'format_version':1,'image_path':str(fpath),
             'image_width':int(im['width']),'image_height':int(im['height']),
             'project_family_id':group,'source_type':'coco_public_dataset',
             'source_dataset_annotation':str(src.resolve()),
             'source_image_name':name,
             'source_group_verified':bool(project_groups and name in project_groups),
-            'instances':instances[image_id]},indent=2))
+            'document_id':Path(name).stem,'page_index':0,
+            'coordinate_system':COORDINATE_SYSTEM,
+            'instances':instances[image_id]}},imported_by='coco')
         counters['exported_images']+=1
     return counters

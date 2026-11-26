@@ -55,7 +55,10 @@ def test_decode_known_logits_and_tile_deduplication():
     p2 = Detection(1,.8,p1.box, tile_id=2)
     assert len(merge_tiles([p1,p2])) == 1
     assert iou((0,0,10,10),(5,5,15,15)) == 25/175
-    assert len(merge_tiles([p1,Detection(0,.8,p1.box)])) == 2
+    # One symbol given two device classes keeps only the stronger class
+    # (class-agnostic suppression); class-specific NMS alone keeps both.
+    assert len(merge_tiles([p1,Detection(0,.8,p1.box)])) == 1
+    assert len(merge_tiles([p1,Detection(0,.8,p1.box)],cross_class_iou=None)) == 2
 
 
 def test_crop_transform_and_boundary_padding():
