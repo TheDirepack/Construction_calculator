@@ -185,4 +185,27 @@ class CalcInputTest {
         ).fold(CalcState()) { s, k -> CalcInput.reduce(s, k).state }
         assertEquals(Quantity.inches(Rational.of(13)), metricPlusImperial.answer)
     }
+
+    @Test fun tagsCarriedPreviousAnswerTokens() {
+        val answered = press("5'=")
+        // Chaining with an operator tags the carried value as the previous answer
+        val plus = CalcInput.reduce(answered, Key.Op(Operator.ADD)).state
+        assertTrue((plus.tokens.first() as Token.Value).fromPreviousAnswer)
+
+        // Chaining with x² or √ tags it too
+        val squared = CalcInput.reduce(answered, Key.Square).state
+        assertTrue((squared.tokens.first() as Token.Value).fromPreviousAnswer)
+        val rooted = CalcInput.reduce(answered, Key.Sqrt).state
+        assertTrue((rooted.tokens.last() as Token.Value).fromPreviousAnswer)
+
+        // An explicit Ans recall carries the flag when asked to
+        val recalledAns = CalcInput.reduce(answered, Key.Recall(answered.answer!!, false, fromPreviousAnswer = true)).state
+        assertTrue((recalledAns.tokens.single() as Token.Value).fromPreviousAnswer)
+
+        // Memory/history recall and fresh digits do not
+        val recalledNormal = CalcInput.reduce(answered, Key.Recall(answered.answer!!, false)).state
+        assertFalse((recalledNormal.tokens.single() as Token.Value).fromPreviousAnswer)
+        val fresh = press("3", answered)
+        assertEquals(listOf(Token.Literal("3")), fresh.tokens)
+    }
 }

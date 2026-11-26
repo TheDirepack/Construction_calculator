@@ -95,19 +95,27 @@ class FootInchDataTest {
     }
 
     @Test
-    fun footInchHistoryBackupSerialization() {
-        val entry = HistoryEntry(
-            expression = "5' 3 1/2\" + 2' 8 1/2\"",
-            result = Quantity.inches(Rational.of(96)).stored(),
-            preferInches = false,
+    fun footInchBackupRoundTripsGroupsAndMemory() {
+        val eightFeet = Quantity.inches(Rational.of(96)).stored()
+        val group = CalcGroup(
+            id = 1L,
+            label = "Header layout",
+            favorite = true,
+            steps = listOf(
+                CalcStep(id = 1L, tokens = listOf(SavedToken.Literal("5'")), result = Quantity.feet(Rational.of(5)).stored(), preferInches = false),
+                CalcStep(id = 2L, tokens = listOf(SavedToken.PrevAnswer, SavedToken.Op(Operator.ADD), SavedToken.Literal("3'")), result = eightFeet, preferInches = false),
+            ),
+            updatedAt = 1234L,
         )
-        val backup = FootInchBackup(listOf(entry))
-        val encoded = ToolInputs.encode(backup)
-        val decoded = ToolInputs.decode<FootInchBackup>(encoded)
-        assertNotNull(decoded)
-        assertEquals(1, decoded!!.history.size)
-        assertEquals(entry.expression, decoded.history.first().expression)
-        assertEquals(entry.result, decoded.history.first().result)
+        val backup = FootInchBackup(groups = listOf(group), memory = listOf(MemoryEntry(id = 1L, value = eightFeet, preferInches = false, label = "Beam")))
+        val decoded = ToolInputs.decode<FootInchBackup>(ToolInputs.encode(backup))
+        assertEquals(backup, decoded)
+
+        // Merging a restore keeps one copy of identical groups and names unnamed memory
+        val merged = CalculationTapeOps.mergeGroups(listOf(group), decoded!!.groups, replace = false)
+        assertEquals(1, merged.size)
+        val unnamed = MemoryOps.merge(emptyList(), listOf(MemoryEntry(value = eightFeet)), replace = true)
+        assertEquals("M1", unnamed.single().label)
     }
 
     @Test
@@ -182,41 +190,22 @@ class FootInchDataTest {
     }
 
     @Test
-    fun historyTapeSupportsLabelsDeletionCapAndBackupRoundTrip() {
-        val q1 = Quantity.inches(Rational.of(96)).stored()
-        val q2 = Quantity.inches(Rational.of(48)).stored()
-
-        // Add assigns unique ids and puts newest first
-        var tape = emptyList<HistoryEntry>()
-        tape = HistoryTapeOps.add(tape, HistoryEntry(expression = "4' + 4'", result = q1, preferInches = false))
-        tape = HistoryTapeOps.add(tape, HistoryEntry(expression = "2' + 2'", result = q2, preferInches = false))
-        assertEquals(2, tape.size)
-        assertTrue(tape[0].id != tape[1].id)
-
-        // Label an individual entry
-        val targetId = tape[0].id
-        tape = HistoryTapeOps.setLabel(tape, targetId, "  Panel feeder  ")
-        assertEquals("Panel feeder", tape.first { it.id == targetId }.label)
-
-        // Backup round-trip preserves labels and ids
-        val backup = FootInchBackup(tape)
-        val decoded = ToolInputs.decode<FootInchBackup>(ToolInputs.encode(backup))
+    fun prevAnswerTokenSerializesAndResolvesToTheStepBefore() {
+        val withPrev = FootInchInputs(
+            tokens = listOf(SavedToken.PrevAnswer, SavedToken.Op(Operator.ADD), SavedToken.Literal("2'")),
+            answer = Quantity.feet(Rational.of(7)).stored(),
+            preferInches = false,
+        )
+        val decoded = ToolInputs.decode<FootInchInputs>(ToolInputs.encode(withPrev))
         assertNotNull(decoded)
-        assertEquals(2, decoded!!.history.size)
-        assertEquals("Panel feeder", decoded.history[0].label)
-        assertEquals("", decoded.history[1].label)
+        assertEquals(SavedToken.PrevAnswer, decoded!!.tokens.first())
+        val resolved = decoded.tokens.map { it.toToken(Quantity.feet(Rational.of(5)), false) }
+        assertEquals(Quantity.feet(Rational.of(5)), (resolved[0] as Token.Value).quantity)
+        assertTrue((resolved[0] as Token.Value).fromPreviousAnswer)
 
-        // Delete an individual entry
-        tape = HistoryTapeOps.remove(tape, targetId)
-        assertEquals(1, tape.size)
-        assertEquals("4' + 4'", tape.single().expression)
-
-        // Cap at 500 entries
-        var large = emptyList<HistoryEntry>()
-        repeat(520) { i ->
-            large = HistoryTapeOps.add(large, HistoryEntry(expression = "$i\"", result = q2))
-        }
-        assertEquals(HistoryTapeOps.MAX, large.size)
-        assertEquals("519\"", large.first().expression)
+        // Plain saved tokens keep a carried answer as its value; tape tokens keep the link
+        val carried = Token.Value(Quantity.feet(Rational.of(5)), false, fromPreviousAnswer = true)
+        assertEquals(SavedToken.Value(Quantity.feet(Rational.of(5)).stored(), false), SavedToken.of(carried))
+        assertEquals(SavedToken.PrevAnswer, SavedToken.ofForTape(carried))
     }
 }

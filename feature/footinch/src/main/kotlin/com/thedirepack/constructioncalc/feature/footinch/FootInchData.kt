@@ -4,8 +4,10 @@ import android.content.Context
 import androidx.core.content.edit
 import com.thedirepack.constructioncalc.core.data.ModuleSettings
 import com.thedirepack.constructioncalc.core.data.ToolBackup
+import com.thedirepack.constructioncalc.core.measure.CalcException
 import com.thedirepack.constructioncalc.core.measure.Operator
 import com.thedirepack.constructioncalc.core.measure.Precision
+import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.measure.Token
 import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import com.thedirepack.constructioncalc.core.model.StoredQuantity
@@ -13,13 +15,12 @@ import com.thedirepack.constructioncalc.core.model.stored
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonElement
 
-/** A calculator token in saved form (project items keep the whole expression, not just the answer). */
+/** A calculator token in saved form (project items and tape steps keep exact expressions). */
 @Serializable
 sealed interface SavedToken {
     @Serializable @SerialName("literal")
@@ -30,6 +31,10 @@ sealed interface SavedToken {
 
     @Serializable @SerialName("value")
     data class Value(val quantity: StoredQuantity, val preferInches: Boolean? = null) : SavedToken
+
+    /** In a tape step: the result of the step before it. */
+    @Serializable @SerialName("prev_answer")
+    data object PrevAnswer : SavedToken
 
     @Serializable @SerialName("open_paren")
     data object OpenParen : SavedToken
@@ -43,10 +48,15 @@ sealed interface SavedToken {
     @Serializable @SerialName("square")
     data object Square : SavedToken
 
-    fun toToken(): Token = when (this) {
+    /** The calculator token; [PrevAnswer] becomes [prevAnswer], and fails without one. */
+    fun toToken(prevAnswer: Quantity? = null, prevPreferInches: Boolean? = null): Token = when (this) {
         is Literal -> Token.Literal(text)
         is Op -> Token.Op(operator)
         is Value -> Token.Value(quantity.toQuantity(), preferInches)
+        PrevAnswer -> {
+            val prev = prevAnswer ?: throw CalcException.Syntax("Needs a step before it")
+            Token.Value(prev, prevPreferInches, fromPreviousAnswer = true)
+        }
         OpenParen -> Token.OpenParen
         CloseParen -> Token.CloseParen
         Sqrt -> Token.Sqrt
@@ -54,6 +64,7 @@ sealed interface SavedToken {
     }
 
     companion object {
+        /** Saved form of [token]; a carried previous answer is kept as its value. */
         fun of(token: Token): SavedToken = when (token) {
             is Token.Literal -> Literal(token.text)
             is Token.Op -> Op(token.operator)
@@ -63,6 +74,10 @@ sealed interface SavedToken {
             Token.Sqrt -> Sqrt
             Token.Square -> Square
         }
+
+        /** Saved form of [token] in a tape step: a carried previous answer becomes [PrevAnswer]. */
+        fun ofForTape(token: Token): SavedToken =
+            if (token is Token.Value && token.fromPreviousAnswer) PrevAnswer else of(token)
     }
 }
 
@@ -74,108 +89,136 @@ data class FootInchInputs(
     val preferInches: Boolean? = null,
 )
 
+/** Foot-Inch's section of a full backup: the calculation tape and named memory. */
 @Serializable
-data class HistoryEntry(
-    val expression: String,
-    val result: StoredQuantity,
-    val preferInches: Boolean? = null,
-    val label: String = "",
-    val id: Long = 0L,
+data class FootInchBackup(
+    val groups: List<CalcGroup> = emptyList(),
+    val memory: List<MemoryEntry> = emptyList(),
 )
 
-/** Foot-Inch's section of a full backup. Add fields with defaults; never rename. */
-@Serializable
-data class FootInchBackup(val history: List<HistoryEntry> = emptyList())
-
-/** Pure list operations for the calculation tape (unit-tested without Android SharedPreferences). */
-internal object HistoryTapeOps {
-    const val MAX = 500
-
-    fun ensureUniqueIds(entries: List<HistoryEntry>): List<HistoryEntry> {
-        val used = HashSet<Long>(entries.size)
-        var nextId = (entries.maxOfOrNull { it.id } ?: 0L).coerceAtLeast(0L) + 1L
-        return entries.map { entry ->
-            if (entry.id > 0L && used.add(entry.id)) {
-                entry
-            } else {
-                while (!used.add(nextId)) nextId++
-                entry.copy(id = nextId++)
-            }
-        }
-    }
-
-    fun add(current: List<HistoryEntry>, entry: HistoryEntry): List<HistoryEntry> {
-        val nextId = ((current.maxOfOrNull { it.id } ?: 0L).coerceAtLeast(0L)) + 1L
-        val assigned = if (entry.id > 0L && current.none { it.id == entry.id }) entry else entry.copy(id = nextId)
-        return (listOf(assigned) + current).take(MAX)
-    }
-
-    fun remove(current: List<HistoryEntry>, id: Long): List<HistoryEntry> =
-        current.filterNot { it.id == id }
-
-    fun setLabel(current: List<HistoryEntry>, id: Long, label: String): List<HistoryEntry> {
-        val clean = label.trim()
-        return current.map { if (it.id == id) it.copy(label = clean) else it }
-    }
-
-    fun merge(current: List<HistoryEntry>, restored: List<HistoryEntry>, replace: Boolean): List<HistoryEntry> {
-        val combined = if (replace) {
-            restored
-        } else {
-            (restored + current).distinctBy { Triple(it.expression, it.result, it.label) }
-        }
-        return ensureUniqueIds(combined.take(MAX))
-    }
-}
-
-/** This tool's calculation history / tape (separate from projects). One instance per process. */
+/**
+ * This tool's calculation tape (grouped, editable steps) and named memory, kept across launches
+ * and separate from projects. One instance per process.
+ */
 class FootInchHistory private constructor(context: Context) {
     private val prefs = context.getSharedPreferences("foot_inch_history", Context.MODE_PRIVATE)
-    private val serializer = ListSerializer(HistoryEntry.serializer())
-    private val state = MutableStateFlow(load())
-    val entries: StateFlow<List<HistoryEntry>> = state.asStateFlow()
+    private val groupsSerializer = ListSerializer(CalcGroup.serializer())
+    private val memorySerializer = ListSerializer(MemoryEntry.serializer())
 
-    fun add(entry: HistoryEntry) {
-        state.update { HistoryTapeOps.add(it, entry) }
-        persist()
+    private val groupState = MutableStateFlow(loadGroups())
+    val groups: StateFlow<List<CalcGroup>> = groupState.asStateFlow()
+
+    private val memoryState = MutableStateFlow(loadMemory())
+    val memory: StateFlow<List<MemoryEntry>> = memoryState.asStateFlow()
+
+    // --- Calculation tape ---
+
+    fun startNewGroup(expressionTokens: List<Token>): CalcGroup {
+        val (updated, group) = CalculationTapeOps.startNewGroup(groupState.value, expressionTokens)
+        setGroups(updated)
+        return group
     }
 
-    fun remove(id: Long) {
-        state.update { HistoryTapeOps.remove(it, id) }
-        persist()
+    /** Returns how many steps were added (0 when the group is gone). */
+    fun appendToGroup(groupId: Long, expressionTokens: List<Token>): Int {
+        val outcome = CalculationTapeOps.appendToGroup(groupState.value, groupId, expressionTokens) ?: return 0
+        setGroups(outcome.groups)
+        return outcome.appendedCount
     }
 
-    fun setLabel(id: Long, label: String) {
-        state.update { HistoryTapeOps.setLabel(it, id, label) }
-        persist()
+    /** Returns how many steps replaced the old ones (0 when the group is gone). */
+    fun replaceLastSteps(groupId: Long, replaceCount: Int, expressionTokens: List<Token>): Int {
+        val outcome = CalculationTapeOps.replaceLastSteps(groupState.value, groupId, replaceCount, expressionTokens) ?: return 0
+        setGroups(outcome.groups)
+        return outcome.appendedCount
     }
 
-    fun clear() {
-        state.value = emptyList()
-        persist()
+    fun editStep(groupId: Long, stepId: Long, newTokens: List<SavedToken>): TapeEditResult =
+        CalculationTapeOps.editStep(groupState.value, groupId, stepId, newTokens).also {
+            if (it is TapeEditResult.Updated) setGroups(it.groups)
+        }
+
+    fun deleteStep(groupId: Long, stepId: Long): TapeEditResult =
+        CalculationTapeOps.deleteStep(groupState.value, groupId, stepId).also {
+            if (it is TapeEditResult.Updated) setGroups(it.groups)
+        }
+
+    fun toggleFavorite(groupId: Long) = setGroups(CalculationTapeOps.toggleFavorite(groupState.value, groupId))
+
+    fun setGroupLabel(groupId: Long, label: String) = setGroups(CalculationTapeOps.setGroupLabel(groupState.value, groupId, label))
+
+    fun setStepLabel(groupId: Long, stepId: Long, label: String) =
+        setGroups(CalculationTapeOps.setStepLabel(groupState.value, groupId, stepId, label))
+
+    fun removeGroup(groupId: Long) = setGroups(CalculationTapeOps.removeGroup(groupState.value, groupId))
+
+    /** Clears the tape except starred calculations. */
+    fun clearRecent() = setGroups(CalculationTapeOps.clearRecent(groupState.value))
+
+    fun clear() = setGroups(emptyList())
+
+    // --- Named memory ---
+
+    /** Saves [value] as [label] (blank: next free `M1`, `M2`…); returns the slot id. */
+    fun storeMemory(value: Quantity, preferInches: Boolean?, label: String = ""): Long {
+        val (updated, id) = MemoryOps.store(memoryState.value, value, preferInches, label)
+        setMemory(updated)
+        return id
     }
 
-    /** Backup hook: history goes into full backups and comes back on restore. */
+    fun applyMemoryOp(op: Operator, operand: Quantity, operandPreferInches: Boolean?): MemoryOpResult =
+        MemoryOps.applyOperator(memoryState.value, op, operand, operandPreferInches).also {
+            if (it is MemoryOpResult.Success) setMemory(it.entries)
+        }
+
+    fun touchMemory(id: Long) = setMemory(MemoryOps.touch(memoryState.value, id))
+
+    fun renameMemory(id: Long, label: String) = setMemory(MemoryOps.rename(memoryState.value, id, label))
+
+    fun removeMemory(id: Long) = setMemory(MemoryOps.remove(memoryState.value, id))
+
+    fun clearMemory() = setMemory(emptyList())
+
+    /** Backup hook: the tape and memory go into full backups and come back on restore. */
     val backup: ToolBackup = object : ToolBackup {
-        override fun export(): JsonElement? =
-            if (state.value.isEmpty()) null else ProjectCodec.json.encodeToJsonElement(FootInchBackup.serializer(), FootInchBackup(state.value))
+        override fun export(): JsonElement? {
+            if (groupState.value.isEmpty() && memoryState.value.isEmpty()) return null
+            return ProjectCodec.json.encodeToJsonElement(
+                FootInchBackup.serializer(),
+                FootInchBackup(groups = groupState.value, memory = memoryState.value),
+            )
+        }
 
         override fun import(data: JsonElement, replace: Boolean) {
-            val restored = ProjectCodec.json.decodeFromJsonElement(FootInchBackup.serializer(), data).history
-            state.update { current -> HistoryTapeOps.merge(current, restored, replace) }
-            persist()
+            val doc = ProjectCodec.json.decodeFromJsonElement(FootInchBackup.serializer(), data)
+            setGroups(CalculationTapeOps.mergeGroups(groupState.value, doc.groups, replace))
+            setMemory(MemoryOps.merge(memoryState.value, doc.memory, replace))
         }
     }
 
-    private fun persist() = prefs.edit { putString(KEY, ProjectCodec.json.encodeToString(serializer, state.value)) }
+    private fun setGroups(groups: List<CalcGroup>) {
+        groupState.value = groups
+        prefs.edit { putString(KEY_GROUPS, ProjectCodec.json.encodeToString(groupsSerializer, groups)) }
+    }
 
-    private fun load(): List<HistoryEntry> = prefs.getString(KEY, null)
-        ?.let { runCatching { ProjectCodec.json.decodeFromString(serializer, it) }.getOrNull() }
-        ?.let(HistoryTapeOps::ensureUniqueIds)
+    private fun setMemory(entries: List<MemoryEntry>) {
+        memoryState.value = entries
+        prefs.edit { putString(KEY_MEMORY, ProjectCodec.json.encodeToString(memorySerializer, entries)) }
+    }
+
+    private fun loadGroups(): List<CalcGroup> = prefs.getString(KEY_GROUPS, null)
+        ?.let { runCatching { ProjectCodec.json.decodeFromString(groupsSerializer, it) }.getOrNull() }
+        ?.let(CalculationTapeOps::ensureUniqueIds)
+        .orEmpty()
+
+    private fun loadMemory(): List<MemoryEntry> = prefs.getString(KEY_MEMORY, null)
+        ?.let { runCatching { ProjectCodec.json.decodeFromString(memorySerializer, it) }.getOrNull() }
+        ?.let(MemoryOps::ensureUniqueIds)
         .orEmpty()
 
     companion object {
-        private const val KEY = "entries"
+        private const val KEY_GROUPS = "groups"
+        private const val KEY_MEMORY = "memory"
 
         @Volatile private var instance: FootInchHistory? = null
 
