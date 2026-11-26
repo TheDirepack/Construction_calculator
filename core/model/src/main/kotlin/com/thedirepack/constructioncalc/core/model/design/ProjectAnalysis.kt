@@ -76,6 +76,8 @@ data class CircuitDesign(
     val voltageDropVolts: Double?,
     val voltageDropPercent: Double?,
     val notes: List<DesignNote>,
+    /** True when Table 9 has no row for [size] and the drop fell back to Table 8 DC resistance (a warning note says so). */
+    val voltageDropUsesDcResistance: Boolean = false,
 )
 
 /** One conductor line in a run's fill: e.g. 3 × 12 AWG THHN. */
@@ -142,7 +144,7 @@ data class ProjectDesign(
  * - each circuit is sized for its breaker and load at the worst conditions along its runs:
  *   most conductors, hottest ambient, rooftop adder ([ConductorSizing]);
  * - voltage drop over the circuit's length (NEC Table 9 effective Z at 0.85 PF), upsizing to
- *   the project's target if enabled, with the EGC increased per 250.122(B);
+ *   the project's target if enabled for the circuit (its own override, else the project setting), with the EGC increased per 250.122(B);
  * - each run's fill from the resulting conductors (Chapter 9 Tables 1, 4, 5).
  * Pure function of the project: call it whenever the project changes.
  */
@@ -317,8 +319,18 @@ object ProjectAnalysis {
         }
         val runs = c.runIds.mapNotNull { runsById[it] }
         val ownCcc = CurrentCarryingConductors.count(c.poles, c.neutral, panel.system.supply, c.nonlinear)
-        // Nipples (≤ 24") aren't subject to count adjustment (310.15(C)(1)(b)).
-        val ccc = (runs.filter { it.raceway?.nipple != true }.mapNotNull { runCcc[it.id] } + ownCcc).max()
+        // Nipples (≤ 24") aren't subject to count adjustment (310.15(C)(1)(b)). When every assigned
+        // run is a nipple, the circuit is exempt, exactly as each RunDesign reports (factor 1.0).
+        val countedRuns = runs.filter { it.raceway?.nipple != true }
+        val onlyNipples = runs.isNotEmpty() && runs.size == c.runIds.size && countedRuns.isEmpty()
+        val ccc = if (onlyNipples) {
+            runs.mapNotNull { runCcc[it.id] }.plus(ownCcc).max()
+        } else {
+            (countedRuns.mapNotNull { runCcc[it.id] } + ownCcc).max()
+        }
+        if (onlyNipples && c.kind == CircuitKind.LOAD && ConductorCountAdjustment.factor(ccc) < 1.0) {
+            notes += info("Every assigned run is a nipple: no adjustment for conductor count (${CodeRule.SHORT_RACEWAY_ADJUSTMENT.cite}).")
+        }
         // Each run's own ambient (or the project default) plus its own rooftop adder; the hottest run governs.
         val xhhw2 = AmbientCorrection.isRooftopExempt(spec.insulation)
         val ambient = if (runs.isEmpty()) project.design.ambientC else runs.maxOf { runAmbient(project, it, xhhw2) }
@@ -376,6 +388,7 @@ object ProjectAnalysis {
                 rooftopUnder3_4In = false,
                 xhhw2 = xhhw2,
                 currentCarrying = ccc,
+                countAdjustmentExempt = onlyNipples,
                 multipleCordReceptacles = c.multipleCordReceptacles,
             ),
             units,
@@ -383,13 +396,13 @@ object ProjectAnalysis {
         notes += sizing.notes.map { if (sizing.size == null) warn(it) else info(it) }
         val minimum = sizing.size
         var size = minimum
-        var vd: Pair<Double, Double>? = null
+        var vd: Drop? = null
         if (minimum != null && amps != null && dropSegments.isNotEmpty()) {
             val target = project.design.voltageDropTargetPercent
             var current = voltageDrop(panel, c, amps, dropSegments, minimum, spec)
             var candidate: ConductorSize = minimum
             var steps = 0
-            while (project.design.upsizeForVoltageDrop && current != null && current.second > target && steps < MAX_VD_UPSIZE_STEPS) {
+            while (c.upsizesForVoltageDrop(project.design) && current != null && current.percent > target && steps < MAX_VD_UPSIZE_STEPS) {
                 val next = ConductorSize.entries.getOrNull(candidate.ordinal + 1) ?: break
                 val nextVd = voltageDrop(panel, c, amps, dropSegments, next, spec) ?: break
                 candidate = next
@@ -401,7 +414,13 @@ object ProjectAnalysis {
                 size = candidate
             }
             vd = current
-            if (current != null && current.second > target) notes += warn("Voltage drop ${fmt(current.second)}% exceeds the ${fmt(target)}% target.")
+            if (current != null && current.percent > target) notes += warn("Voltage drop ${fmt(current.percent)}% exceeds the ${fmt(target)}% target.")
+            if (current?.dcResistance == true) {
+                notes += warn(
+                    "${CodeRule.AC_IMPEDANCE.cite} has no ${candidate.label} row: voltage drop uses DC resistance from " +
+                        "${CodeRule.CONDUCTOR_PROPERTIES.cite}, which ignores reactance and may read low.",
+                )
+            }
         } else if (amps == null) {
             notes += info("Enter the load (VA) to check voltage drop.")
         }
@@ -431,14 +450,19 @@ object ProjectAnalysis {
                 }
             }
         }
-        return CircuitDesign(panel, c, spec, load?.va, fromFed, amps, ccc, sizing, minimum, size, ground, length, vd?.first, vd?.second, notes)
+        return CircuitDesign(panel, c, spec, load?.va, fromFed, amps, ccc, sizing, minimum, size, ground, length, vd?.volts, vd?.percent, notes,
+            voltageDropUsesDcResistance = vd?.dcResistance == true,
+        )
     }
 
     /** A run's effective ambient: its own temperature or the project default, plus its rooftop adder. */
     fun runAmbient(project: Project, run: Run, xhhw2: Boolean): Double =
         AmbientCorrection.effectiveAmbient(run.raceway?.ambientC ?: project.design.ambientC, run.raceway?.rooftop == true, xhhw2)
 
-    /** (volts, percent) for the one-way path. */
+    /** A one-way voltage drop; [dcResistance] when Table 9 has no row for the size and Table 8's DC resistance was used. */
+    private data class Drop(val volts: Double, val percent: Double, val dcResistance: Boolean)
+
+    /** The drop over the one-way path, or null when neither table lists the size. */
     private fun voltageDrop(
         panel: Panel,
         c: Circuit,
@@ -446,7 +470,7 @@ object ProjectAnalysis {
         segments: List<DropSegment>,
         size: ConductorSize,
         spec: ConductorSpec,
-    ): Pair<Double, Double>? {
+    ): Drop? {
         val row = ConductorImpedance.row(size, spec.material)
         val pathOhms = segments.sumOf { segment ->
             val impedance = row?.effectiveZ(segment.conduit, POWER_FACTOR)
@@ -458,7 +482,7 @@ object ProjectAnalysis {
         val factor = if (threePhase) sqrt(3.0) else 2.0
         val volts = if (c.poles == 1) (panel.system.lineToNeutral ?: panel.system.lineToLine) else panel.system.lineToLine
         val drop = factor * amps * pathOhms
-        return drop to 100.0 * drop / volts
+        return Drop(drop, 100.0 * drop / volts, dcResistance = row == null)
     }
 
     /** Steel-type raceways use Table 9's steel columns; nonmetallic ones use PVC. */

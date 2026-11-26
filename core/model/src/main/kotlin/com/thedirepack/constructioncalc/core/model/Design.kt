@@ -76,7 +76,15 @@ data class Circuit(
     val conduitSize: TradeSize? = null,
     val conductor: ConductorSpec? = null,
     val note: String = "",
+    /**
+     * This circuit's own choice to upsize its conductors for voltage drop; null follows the
+     * project-wide [DesignDefaults.upsizeForVoltageDrop].
+     */
+    val upsizeForVoltageDrop: Boolean? = null,
 ) {
+    /** Whether voltage-drop upsizing applies to this circuit in a project with [defaults]. */
+    fun upsizesForVoltageDrop(defaults: DesignDefaults): Boolean = upsizeForVoltageDrop ?: defaults.upsizeForVoltageDrop
+
     init {
         // A circuit may extend past its current panel after a resize.
         require(slot in 1..Panel.MAX_SPACES) { "Invalid circuit position: $slot" }

@@ -531,10 +531,25 @@ private fun ItemSheet(project: Project, run: Run, item: ProjectItem, host: ToolH
 }
 
 private fun copyToClipboard(context: Context, host: ToolHost, label: String, text: String) {
-    context.getSystemService(ClipboardManager::class.java)
-        ?.setPrimaryClip(ClipData.newPlainText(label, text))
-    // Android 13+ (API 33) shows a system clipboard confirmation; on older versions show a snackbar.
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-        host.showMessage("Copied")
+    val message = clipboardMessage(Build.VERSION.SDK_INT) {
+        val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return@clipboardMessage false
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+        true
+    }
+    message?.let(host::showMessage)
+}
+
+/**
+ * The snackbar text after trying [copy], or null when the system shows its own confirmation.
+ * A large project's text can exceed the binder limit (setPrimaryClip throws) and the clipboard
+ * service can be missing: say so instead of crashing or claiming it was copied.
+ */
+internal fun clipboardMessage(sdkInt: Int, copy: () -> Boolean): String? {
+    val copied = runCatching(copy).getOrDefault(false)
+    return when {
+        !copied -> "Couldn't copy. Try Share as text instead."
+        // Android 13+ (API 33) shows a system clipboard confirmation; older versions need a snackbar.
+        sdkInt < Build.VERSION_CODES.TIRAMISU -> "Copied"
+        else -> null
     }
 }

@@ -8,6 +8,7 @@ import com.thedirepack.constructioncalc.core.model.RecentResult
 import com.thedirepack.constructioncalc.core.model.ResultValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -170,5 +171,45 @@ class BackupServiceTest {
         runBlocking { service.restore(backup, BackupSections.PROJECTS_ONLY, ProjectMergeMode.REPLACE) }
         assertEquals(listOf(restored), projects.projects.value)
         assertEquals(mapOf(restored.id to restored), store.map)
+    }
+
+    @Test fun toolDataSettingsAndRecentsAreRestoredOnTheIoDispatcher() {
+        val io = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "backup-io-test") }
+        try {
+            val threads = mutableMapOf<String, String>()
+            val tool = object : ToolBackup {
+                override fun export(): JsonElement? = null
+                override fun import(data: JsonElement, replace: Boolean) {
+                    threads["tool"] = Thread.currentThread().name.substringBefore(" @")
+                }
+            }
+            val settings = object : BackupSettingsPort by FakeSettingsPort() {
+                override fun importSettings(json: JsonObject) { threads["settings"] = Thread.currentThread().name.substringBefore(" @") }
+            }
+            val recents = object : BackupRecentsPort by FakeRecentsPort() {
+                override fun importAll(results: List<RecentResult>, replace: Boolean) {
+                    threads["recents"] = Thread.currentThread().name.substringBefore(" @")
+                }
+            }
+            val projects = ProjectRepository(MemoryProjectStore(), CoroutineScope(Dispatchers.Unconfined), clock = { 1L })
+            val service = BackupService(
+                settings, projects, recents, mapOf("plan-symbols" to tool), clock = { 1L },
+                io = io.asCoroutineDispatcher(),
+            )
+            val backup = BackupDocument(
+                settings = buildJsonObject { put("theme", "DARK") },
+                toolData = mapOf("plan-symbols" to JsonPrimitive("x")),
+                recents = listOf(RecentResult(ResultValue.text("k", "L", "1'"), "foot-inch", "Foot-Inch", at = 1L)),
+            )
+
+            runBlocking { service.restore(backup, BackupSections.ALL, ProjectMergeMode.MERGE) }
+
+            assertEquals(
+                mapOf("tool" to "backup-io-test", "settings" to "backup-io-test", "recents" to "backup-io-test"),
+                threads,
+            )
+        } finally {
+            io.shutdown()
+        }
     }
 }

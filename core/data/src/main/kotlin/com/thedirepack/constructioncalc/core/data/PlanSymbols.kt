@@ -192,21 +192,8 @@ class PlanSymbols internal constructor(
         atomicWrite(target, "sym-", payload)
     }
 
-    private fun atomicWrite(target: File, prefix: String, payload: ByteArray) {
-        val temp = File.createTempFile(prefix, ".tmp", directory)
-        try {
-            temp.outputStream().use { it.write(payload) }
-            if (!temp.renameTo(target)) {
-                target.delete()
-                if (!temp.renameTo(target)) {
-                    throw IOException("Couldn't save the symbol.")
-                }
-            }
-        } catch (error: Exception) {
-            temp.delete()
-            throw error
-        }
-    }
+    private fun atomicWrite(target: File, prefix: String, payload: ByteArray) =
+        AtomicFiles.write(target, payload, prefix)
 
     private fun isValidUuid(id: String): Boolean =
         runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false)

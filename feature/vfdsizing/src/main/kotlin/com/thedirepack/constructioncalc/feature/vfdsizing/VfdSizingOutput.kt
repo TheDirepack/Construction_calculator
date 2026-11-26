@@ -63,6 +63,10 @@ internal fun vfdSizingOutput(inputs: VfdSizingInputs, settings: AppSettings = Ap
 
     val results = buildList {
         add(currentResult("min_drive_output", "Min. drive output current ($duty)", result.minDriveOutputAmps))
+        add(currentResult("drive_overload_output", "Drive overload current, 1 min (${request.loadType.overloadPercent} %, $duty)", result.overloadOutputAmps))
+        if (result.normalDutyRatingAmps > result.minDriveOutputAmps + 1e-9) {
+            add(currentResult("normal_duty_equivalent", "Or a normal-duty rating of at least", result.normalDutyRatingAmps))
+        }
         add(currentResult("table_flc", "Motor FLC, ${CodeRule.MOTOR_FLC_THREE_PHASE.cite}", result.tableFlc))
         result.nameplatePercentOfTable?.let { add(percentResult("nameplate_pct_of_table", "Nameplate FLA vs. table FLC", it)) }
         result.overloadMaxAmps?.let { add(currentResult("overload_max", "Overload setting, max (${codePercent(Code.book.values.motorOverloadFactor)} of FLA)", it)) }
@@ -122,11 +126,20 @@ private fun notices(
     } else if (result.minDriveOutputAmps > result.tableFlc) {
         add(Notice("Nameplate FLA is above the table FLC. Check the motor's rating; the drive is sized on the nameplate.", NoticeLevel.WARNING))
     }
+    val nd = LoadType.VARIABLE_TORQUE.overloadPercent
+    val hd = LoadType.CONSTANT_TORQUE.overloadPercent
     add(
         Notice(
-            "Guidance: choose a drive whose continuous output current in ${request.loadType.dutyLabel.lowercase()} " +
-                "(${if (request.loadType == LoadType.VARIABLE_TORQUE) "variable torque" else "constant torque"}) mode is at least " +
-                "${amps(result.minDriveOutputAmps)}. Drive ratings, overload capacity, altitude and ambient derating come from the manufacturer.",
+            if (request.loadType == LoadType.VARIABLE_TORQUE) {
+                "Guidance (drive duty ratings, not NEC): variable-torque loads (fans, centrifugal pumps) use the drive's normal-duty rating, " +
+                    "about $nd % overload for 1 minute. Choose a drive whose normal-duty continuous output is at least ${amps(result.minDriveOutputAmps)} " +
+                    "(${amps(result.overloadOutputAmps)} for 1 minute)."
+            } else {
+                "Guidance (drive duty ratings, not NEC): constant-torque loads (conveyors, compressors, mixers) use the drive's heavy-duty rating, " +
+                    "about $hd % overload for 1 minute, so the drive must deliver ${amps(result.overloadOutputAmps)} for 1 minute. " +
+                    "Choose a heavy-duty continuous output of at least ${amps(result.minDriveOutputAmps)}; if the drive lists only a normal-duty rating " +
+                    "($nd % overload), it must be at least ${amps(result.normalDutyRatingAmps)}, usually one frame larger."
+            } + " Exact overload capacity, altitude and ambient derating come from the manufacturer.",
         ),
     )
     if (request.loadType == LoadType.CONSTANT_TORQUE) {
@@ -201,7 +214,7 @@ private fun notices(
 private fun summary(request: VfdRequest, result: VfdResult): String = buildString {
     append(MotorFullLoadCurrent.label(request.hp)).append(" HP ").append(request.volts).append(" V, ")
     append(if (request.supplyPhase == AcPhases.SINGLE) "1-phase" else "3-phase").append(" input: drive ")
-    append(amps(result.minDriveOutputAmps)).append(", ")
+    append(amps(result.minDriveOutputAmps)).append(" ").append(request.loadType.dutyLabel.lowercase()).append(", ")
     append(result.inputConductor?.text(request.material) ?: "oversize").append(" in, ")
     append(result.outputConductor?.text(request.material) ?: "oversize").append(" out")
 }

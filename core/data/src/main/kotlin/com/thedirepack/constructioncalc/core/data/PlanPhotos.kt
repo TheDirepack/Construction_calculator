@@ -114,6 +114,7 @@ class PlanPhotos internal constructor(
             val digest = MessageDigest.getInstance("SHA-256")
             temp.outputStream().use { output ->
                 input.copyBounded(output, MAX_PHOTO_BYTES, digest)
+                output.fd.sync() // committed by rename; make sure the bytes are on disk first
             }
             val sha = digest.digest().joinToString("") { "%02x".format(it) }
             if (expectedHash != null && sha != expectedHash) {

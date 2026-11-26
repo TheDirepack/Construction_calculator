@@ -20,6 +20,8 @@ import com.thedirepack.constructioncalc.core.measure.UnitSystem
  * @property termination lowest terminal rating (usually 60 °C ≤ 100 A, 75 °C above, per 110.14(C)):
  *   the conductor's ampacity may not be used beyond this column.
  * @property currentCarrying conductors in the same raceway/cable counted per 310.15(E)/(F).
+ * @property countAdjustmentExempt the conductors share raceways only in nipples (310.15(C)(1)(b)):
+ *   no Table 310.15(C)(1) adjustment, whatever [currentCarrying] is.
  * @property multipleCordReceptacles 240.4(B)(1): no next-size-up rule for branch circuits with
  *   more than one receptacle for cord-and-plug loads.
  */
@@ -36,6 +38,7 @@ data class WireSizingRequest(
     val currentCarrying: Int = 3,
     val multipleCordReceptacles: Boolean = false,
     val terminalLoadAmps: Double? = null,
+    val countAdjustmentExempt: Boolean = false,
 )
 
 /** The chosen size and every number that went into it, so the app can show its work. */
@@ -76,7 +79,7 @@ object ConductorSizing {
         val ambient = AmbientCorrection.effectiveAmbient(r.ambientC, r.rooftopUnder3_4In, r.xhhw2)
         if (ambient != r.ambientC) notes += "Rooftop: ${AmbientCorrection.rooftopAdderText(units)} adder (${CodeRule.ROOFTOP_ADDER.cite})."
         val ambientFactor = AmbientCorrection.factor(ambient, r.insulation)
-        val adjustment = ConductorCountAdjustment.factor(r.currentCarrying)
+        val adjustment = if (r.countAdjustmentExempt) 1.0 else ConductorCountAdjustment.factor(r.currentCarrying)
         val terminationColumn = if (r.termination.celsius < r.insulation.celsius) r.termination else r.insulation
 
         if (ambientFactor == null) {

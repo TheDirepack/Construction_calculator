@@ -147,4 +147,19 @@ class VfdSizingTest {
         assertEquals("10 AWG Cu coated", choice.text(com.thedirepack.constructioncalc.core.electrical.ConductorMaterial.COATED_COPPER))
         assertEquals("10 AWG CCA", choice.text(com.thedirepack.constructioncalc.core.electrical.ConductorMaterial.COPPER_CLAD_ALUMINUM))
     }
+
+    @Test fun loadTypeChangesTheDriveRecommendation() {
+        val vt = calc(VfdRequest(hp = 10.0, volts = 460, nameplateFla = 13.0, loadType = LoadType.VARIABLE_TORQUE))
+        val ct = calc(VfdRequest(hp = 10.0, volts = 460, nameplateFla = 13.0, loadType = LoadType.CONSTANT_TORQUE))
+        // Normal duty: 110 % for a minute; the continuous rating is all that's needed.
+        assertEquals(13.0 * 1.10, vt.overloadOutputAmps, 1e-9)
+        assertEquals(13.0, vt.normalDutyRatingAmps, 1e-9)
+        // Heavy duty: 150 % for a minute; a normal-duty-only drive must be larger to cover it.
+        assertEquals(13.0 * 1.50, ct.overloadOutputAmps, 1e-9)
+        assertEquals(13.0 * 1.50 / 1.10, ct.normalDutyRatingAmps, 1e-9)
+        assertEquals(LoadType.CONSTANT_TORQUE, ct.loadType)
+        // Code values don't depend on the drive duty.
+        assertEquals(vt.inputConductor, ct.inputConductor)
+        assertEquals(vt.breakerMax, ct.breakerMax)
+    }
 }

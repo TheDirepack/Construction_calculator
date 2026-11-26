@@ -3,6 +3,9 @@ package com.thedirepack.constructioncalc.core.data
 import com.thedirepack.constructioncalc.core.model.BackupDocument
 import com.thedirepack.constructioncalc.core.model.ProjectMergeMode
 import com.thedirepack.constructioncalc.core.model.RecentResult
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 
 /** Which sections go into, or come out of, a backup. */
@@ -42,6 +45,8 @@ class BackupService internal constructor(
     private val recents: BackupRecentsPort,
     private val toolBackups: Map<String, ToolBackup>,
     private val clock: () -> Long,
+    /** Tool imports parse SVGs, delete and write files: never on the caller's (usually Main) thread. */
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     constructor(
         settings: SettingsRepository,
@@ -92,7 +97,10 @@ class BackupService internal constructor(
     }
 
     /** Applies the chosen [sections] of [backup]. Projects merge or replace per [mode]. */
-    suspend fun restore(backup: BackupDocument, sections: BackupSections, mode: ProjectMergeMode): Report {
+    suspend fun restore(backup: BackupDocument, sections: BackupSections, mode: ProjectMergeMode): Report =
+        withContext(io) { restoreOffMain(backup, sections, mode) }
+
+    private suspend fun restoreOffMain(backup: BackupDocument, sections: BackupSections, mode: ProjectMergeMode): Report {
         if (sections.settings) SettingsRepository.validateBackup(backup.settings, backup.toolSettings)
         val lines = mutableListOf<String>()
         if (sections.projects && backup.projects.isNotEmpty()) {
