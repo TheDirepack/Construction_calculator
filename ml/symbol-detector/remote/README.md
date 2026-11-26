@@ -375,9 +375,10 @@ Agent batches are in `1_blueprints/devices/batches/`. Each folder holds:
 - `document.json`: the source PDF, its hash, page count and pages to label;
 - `<name>_labels.json`: every saved page of the PDF in one file, keyed by
   1-based PDF page (human, agent, model and imported boxes, and the pending
-  DEVICES/SAM/CircuitNet proposals). `scripts_merge_labels.py` merges older
-  page files and other machines' labels into it; training reads generated
-  per-page views of it under `work/label_pages/`;
+  DEVICES/SAM/CircuitNet/VLM-reviewed proposals, with what each source said
+  about the device), plus a record of its sources. `scripts_unify_labels.py`
+  builds it from every device JSON, older page files and other machines'
+  labels; training reads pages from it directly (`<name>_labels.json#p12`);
 - `images/`: pages rendered from the PDF on demand;
 - `legend/`, `survey.json` and `outline.json`.
 

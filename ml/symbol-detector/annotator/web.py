@@ -243,6 +243,11 @@ def _find_proposals_for_pdf(pdf: Path, work_dir: Path | None = None) -> Path | N
     return found[0] if found else None
 
 
+# Bump when proposal files are turned into boxes differently (fields kept,
+# anchors, which entries count): saved pages then get refreshed machine boxes.
+PROPOSAL_CONVERSION = 2
+
+
 def _parse_proposals(raw: bytes, source_hash: str | None, pdf_name: str | None = None) -> dict | None:
     """A proposal file's content, if it is one and matches this PDF revision
     (and, when the file names its PDF, this PDF)."""
@@ -1096,7 +1101,10 @@ class LabelingSession:
             return
         self.proposals = sets[0][1] if len(sets) == 1 else {
             "devices": [d for _, data in sets for d in data.get("devices", [])]}
-        self.proposals_sha = hashlib.sha256("\n".join(hashes).encode()).hexdigest()
+        # The conversion version is part of it: a better conversion refreshes
+        # pending machine boxes once, like an edited proposal file does.
+        self.proposals_sha = hashlib.sha256(
+            "\n".join([f"conversion:{PROPOSAL_CONVERSION}", *hashes]).encode()).hexdigest()
 
     def _proposals_record(self) -> dict:
         return {"paths": [path for path, _ in self.proposal_sets], "sha256": self.proposals_sha}
@@ -1528,7 +1536,7 @@ class LabelingSession:
             pages = set(incoming)
             if with_proposals:
                 for _, data in self.proposal_sets:
-                    for device in data.get("devices", []):
+                    for device in [*data.get("devices", []), *(data.get("unresolved_candidates") or [])]:
                         number = device.get("pdf_page") or device.get("page") if isinstance(device, dict) else None
                         if type(number) is int and 1 <= number <= self.page_count:
                             pages.add(number - 1)

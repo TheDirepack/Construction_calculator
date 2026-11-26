@@ -33,7 +33,9 @@ forwards it to the training machine. Pages are named by remote paths of the form
 evaluation drawings use `1_blueprints/evaluation/devices/`); copy them
 exactly as `next` and `doc` print them. These are page addresses, not files:
 every page of a PDF is stored in that folder's one `<name>_labels.json`,
-which your `act` updates. You can view any page before your first `act`.
+which your `act` updates (the same file the annotator, model pre-labeling and
+training use). Review sheets you fill in for `scripts_circuitnet_review_sheets.py`
+go into it too: `apply` writes the reviewed boxes into each PDF's labels file. You can view any page before your first `act`.
 
 ```
 W=remote/vlm_label.sh

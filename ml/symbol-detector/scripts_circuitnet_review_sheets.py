@@ -914,8 +914,9 @@ def merge_into_labels(refined: dict[str, Any], blueprints: Path) -> str:
 def cmd_apply(args: argparse.Namespace) -> None:
     from annotator.web import DEFAULT_WORK_DIR
     review_dir = args.review_dir.resolve()
-    out_dir = (args.out or DEFAULT_WORK_DIR / 'circuitnet_refined_devices').resolve()
-    if args.no_labels:
+    out_dir = (getattr(args, 'out', None) or DEFAULT_WORK_DIR / 'circuitnet_refined_devices').resolve()
+    args.blueprints = getattr(args, 'blueprints', None)
+    if getattr(args, 'no_labels', False):
         args.blueprints = None
     elif args.blueprints is None:
         from annotator import label_store

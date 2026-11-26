@@ -100,9 +100,16 @@ One file per PDF: every label of a drawing is in
 and the DEVICES/SAM/CircuitNet proposals as pending boxes. Editing the
 drawing's `*_DEVICES.json` shows up on the next page load: pending machine
 boxes are replaced by the file's current ones, while accepted, verified,
-hand-drawn and rejected boxes stay. `scripts_merge_labels.py --apply` merges
-older page files (`work/annotator_labels`, `work/labels`) and labels pulled
-from the training machine (`work/remote_labels`) into these files.
+hand-drawn and rejected boxes stay. `scripts_unify_labels.py --apply` brings
+everything into these files (format 2): every valid device of the DEVICES
+(LLM extraction), VLM-reviewed, SAM and CircuitNet JSONs, with each box keeping
+what its source said about it (`proposal_details`) and its centre / wall point
+as anchors; older page files (`work/annotator_labels`, `work/labels`); and
+labels pulled from the training machine (`work/remote_labels`). The file also
+records each source (hash, model, how many devices were used and why others
+were left out) and the DEVICES legend and page findings. Training reads these
+files directly: a page is `<stem>_labels.json#p12`, and a glob of
+`devices/*/*_labels.json` works wherever page JSONs were accepted.
 
 **One label format, one source of truth.** `annotator/electrical_device_catalog.json`
 defines every device and what other sources call it (NECA 100 glyph names,

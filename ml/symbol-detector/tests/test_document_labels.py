@@ -299,7 +299,7 @@ def test_training_reads_pages_straight_from_the_labels_file(drawing, tmp_path):
 
 
 def test_merged_pages_get_their_image_recorded_when_training_lists_them(drawing, tmp_path):
-    import scripts_merge_labels as merge_script
+    import scripts_unify_labels as merge_script
     bp, pdf, _ = drawing
     session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
     width, height = session.page_pixel_size(0)
@@ -389,7 +389,7 @@ def test_browser_shows_a_devices_edit_when_returning_to_a_page(drawing):
 # ------------------------------------------------------------------ merging everything into one file
 
 def test_merge_puts_every_source_for_a_pdf_into_its_one_labels_file(drawing, tmp_path):
-    import scripts_merge_labels as merge_script
+    import scripts_unify_labels as merge_script
     bp, pdf, _ = drawing
     sha = web.sha256_file(pdf)
     width, height = LabelingSession(pdf=pdf, blueprints_dir=bp).page_pixel_size(0)
@@ -452,7 +452,7 @@ def test_merge_puts_every_source_for_a_pdf_into_its_one_labels_file(drawing, tmp
 
 
 def test_merge_writes_proposal_pages_of_drawings_never_opened(drawing, tmp_path):
-    import scripts_merge_labels as merge_script
+    import scripts_unify_labels as merge_script
     bp, pdf, _ = drawing
     done = merge_script.merge(bp, [tmp_path / "nothing"], apply=True, backup_root=tmp_path / "b")
     [row] = done["documents"]
@@ -464,7 +464,7 @@ def test_merge_writes_proposal_pages_of_drawings_never_opened(drawing, tmp_path)
 
 
 def test_merge_prefers_an_agent_box_over_the_machine_proposal_under_it(drawing, tmp_path):
-    import scripts_merge_labels as merge_script
+    import scripts_unify_labels as merge_script
     bp, pdf, _ = drawing
     session = LabelingSession(pdf=pdf, blueprints_dir=bp)
     width, height = session.page_pixel_size(0)
@@ -480,3 +480,115 @@ def test_merge_prefers_an_agent_box_over_the_machine_proposal_under_it(drawing, 
     items = LabelingSession(pdf=pdf, blueprints_dir=bp).page_state(0)["document"]["instances"]
     assert sorted((round(i["bbox_xyxy"][0]), i["review_source"]) for i in items) == \
         [(101, "vlm_agent"), (300, "devices_json"), (500, "devices_json")]
+
+
+# ------------------------------------------------------------------ unifying device JSONs (format 2)
+
+def test_unify_keeps_what_the_devices_json_says_and_records_its_sources(tmp_path):
+    import scripts_unify_labels as unify
+    bp = tmp_path / "blueprints_and_libraries" / "1_blueprints"
+    pdf = _pdf(bp / "rich.pdf", pages=2)
+    (bp / "devices").mkdir(parents=True, exist_ok=True)
+    (bp / "devices" / "rich_DEVICES.json").write_text(json.dumps({
+        "schema_version": "3.1.0", "source_file": "rich.pdf", "extraction_revision": "v7",
+        "legend_types": [{"code": "D", "description": "duplex receptacle"}],
+        "page_results": [{"pdf_page": 1, "sheet": "E1.1", "devices": 2}],
+        "devices": [
+            {"id": "E1-001", "pdf_page": 1, "sheet": "E1.1", "device_code": "D",
+             "device_type": "receptacle", "subtype": "duplex", "attributes": {"weatherproof": True},
+             "symbol_bbox": [100, 200, 112, 212], "symbol_center": [106, 206],
+             "on_wall": True, "wall_connection_point": [106, 214], "confidence": "high",
+             "verification": "vector glyph", "vector_path_ids": list(range(40))},
+            {"id": "E1-002", "pdf_page": 1, "device_type": "exhaust_fan",
+             "symbol_bbox": [200, 200, 220, 220]},                       # mechanical: left out
+            {"id": "E1-003", "pdf_page": 1, "device_type": "switch", "placement": "text_label_proxy",
+             "symbol_bbox": [10, 10, 20, 20]},                           # a text label: left out
+            {"id": "E1-004", "pdf_page": 9, "device_type": "switch",
+             "symbol_bbox": [10, 10, 20, 20]}],                          # no page 9
+        "unresolved_candidates": [
+            {"pdf_page": 2, "inferred_type": "switch", "inferred_subtype": "single_pole",
+             "symbol_bbox": [50, 50, 60, 60], "reason": "no legend entry"},
+            {"pdf_page": 2, "inferred_type": "switch", "label_bbox": [70, 70, 80, 80],
+             "reason": "label only"}]}))
+    report = unify.merge(bp, [], apply=True, backup_root=tmp_path / "b", review_roots=[])
+    assert report["documents"][0]["pages_written"] == 2
+    session = LabelingSession(pdf=pdf, blueprints_dir=bp)
+    data = json.loads(document_labels.labels_path(session.out_dir, "rich").read_text())
+    assert data["format_version"] == 2
+    assert data["document"]["file"] == "rich.pdf" and data["document"]["page_count"] == 2
+    [source] = data["sources"]
+    assert source["kind"] == "devices_json" and source["devices_used"] == 1
+    assert source["devices_left_out"] == {"not_an_electrical_device": 1, "text_proxy": 1,
+                                          "page_outside_document": 1}
+    assert data["extracted"]["rich_DEVICES.json"]["legend_types"][0]["code"] == "D"
+    assert len(data["extracted"]["rich_DEVICES.json"]["unresolved_candidates"]) == 2
+
+    [box] = session.page_state(0)["document"]["instances"]
+    details = box["proposal_details"]
+    assert (details["id"], details["sheet"], details["device_code"]) == ("E1-001", "E1.1", "D")
+    assert details["attributes"] == {"weatherproof": True} and "vector_path_ids" not in details
+    assert set(box["anchors"]) == {"centre", "wall_attachment"}
+    assert box["anchors"]["wall_attachment"]["annotated"] is False
+    cx = (box["bbox_xyxy"][0] + box["bbox_xyxy"][2]) / 2
+    assert abs(box["anchors"]["centre"]["xy"][0] - cx) < 1
+    assert box["anchors"]["wall_attachment"]["xy"][1] < box["bbox_xyxy"][1]      # above, in pixels
+    # The unresolved candidate with a symbol box is a box to review; the label-only one is not.
+    [unresolved] = session.page_state(1)["document"]["instances"]
+    assert unresolved["review_source"] == "devices_json_unresolved"
+    assert unresolved["proposal_details"]["reason"] == "no legend entry"
+    # Reviewing the box keeps its details through a save.
+    state = session.page_state(0)
+    session.save(0, revision=state["revision"], instances=state["document"]["instances"], rejected=[])
+    assert session.page_state(0)["document"]["instances"][0]["proposal_details"]["id"] == "E1-001"
+
+
+def test_vlm_reviewed_detections_replace_the_raw_ones_in_the_labels_file(tmp_path, monkeypatch):
+    import scripts_unify_labels as unify
+    bp = tmp_path / "blueprints_and_libraries" / "1_blueprints"
+    pdf = _pdf(bp / "net.pdf", pages=1)
+    work = tmp_path / "work"
+    monkeypatch.setattr(web, "DEFAULT_WORK_DIR", work)
+    monkeypatch.setattr(unify, "DEFAULT_WORK_DIR", work)
+    (work / "circuitnet_proposals").mkdir(parents=True)
+    (work / "circuitnet_proposals" / "net_ab12_CIRCUITNET.json").write_text(json.dumps({
+        "source_file": "net.pdf", "render_dpi": 150, "model": "circuits.onnx",
+        "devices": [_device(1, (200, 200, 230, 230), "receptacle"),
+                    _device(1, (600, 400, 630, 430), "receptacle")]}))
+    review = work / "circuitnet_review_zips" / "net_ab12"
+    review.mkdir(parents=True)
+    base = {"pdf_page": 1, "provisional_device_type": "receptacle", "score": 0.9}
+    (review / "net_ab12_batch_001.json").write_text(json.dumps({
+        "schema": "blueprint_device_refinement_batch_v2", "source_file": "net.pdf", "batch_index": 1,
+        "items": [
+            dict(base, device_index=0, review_status="accepted", keep=True,
+                 crop_pdf_rect_bl=[96, 189.6, 110.4, 204], refined_bbox_cell=[0, 0, 1000, 1000],
+                 refined_device_type="receptacle", refined_subtype="duplex", on_wall=False,
+                 wall_contact_cell=[500, 500], attributes={}, review_source="vlm_reviewer"),
+            dict(base, device_index=1, review_status="rejected", keep=False,
+                 provisional_bbox_pdf_bl=[288, 93.6, 302.4, 108])]}))
+
+    dry = unify.merge(bp, [], apply=False, backup_root=tmp_path / "b",
+                      review_roots=[work / "circuitnet_review_zips"])
+    assert dry["vlm_reviews"]["reviewed_pdfs"] == 1 and not (work / "circuitnet_refined_devices").exists()
+    done = unify.merge(bp, [], apply=True, backup_root=tmp_path / "b",
+                       review_roots=[work / "circuitnet_review_zips"])
+    assert done["vlm_reviews"] == {"reviewed_pdfs": 1, "kept": 1, "removed": 1, "unreadable": {},
+                                   "written": ["net_ab12_REFINED_DEVICES.json"]}
+    session = LabelingSession(pdf=pdf, blueprints_dir=bp)
+    [box] = session.page_state(0)["document"]["instances"]
+    assert box["review_source"] == "reviewed_provisional" and box["symbol_variant"] == "duplex"
+    assert box["proposal_reviewer"] == "vlm_reviewer" and box["verified_ground_truth"] is False
+    kinds = {s["kind"]: s for s in json.loads(session._json_path(0).read_text())["sources"]}
+    assert kinds["vlm_reviewed"]["vlm_rejected"] == 1 and kinds["circuitnet"]["model"] == "circuits.onnx"
+
+
+def test_training_finds_pages_by_globbing_the_labels_files(drawing, tmp_path):
+    import scripts_prepare_training_data as prep
+    bp, pdf, _ = drawing
+    session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
+    session.save(0, revision=None, instances=[_verified("a")], rejected=[])
+    session.save(2, revision=None, instances=[_verified("c")], rejected=[])
+    found = prep.discover([str(bp / "devices" / "*" / "*_labels.json")])
+    labels = session.out_dir / "plans_labels.json"
+    assert found == [Path(f"{labels}#p1"), Path(f"{labels}#p3")]
+    assert prep.complete_pages([str(p) for p in found]) == []
