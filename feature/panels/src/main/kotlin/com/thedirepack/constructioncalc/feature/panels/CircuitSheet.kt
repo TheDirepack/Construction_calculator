@@ -93,7 +93,6 @@ import com.thedirepack.constructioncalc.feature.panels.domain.freeSlots
 import com.thedirepack.constructioncalc.feature.panels.domain.newGroup
 import com.thedirepack.constructioncalc.feature.panels.domain.supportedPoles
 import com.thedirepack.constructioncalc.feature.panels.domain.upsertCircuit
-import com.thedirepack.constructioncalc.feature.panels.domain.withUpsizeForVoltageDrop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -170,10 +169,11 @@ internal fun CircuitSheet(
                 effective.kind == CircuitKind.LOAD &&
                 vd != null &&
                 vd > target + 1e-9 &&
-                !ctx.project.design.upsizeForVoltageDrop
+                !effective.upsizesForVoltageDrop(ctx.project.design)
             ) {
+                // Preview upsizing this circuit only: the project-wide setting stays as it is.
                 ProjectAnalysis.analyze(
-                    ctx.project.withUpsizeForVoltageDrop(true, 0L).upsertCircuit(panelId, effective, 0L),
+                    ctx.project.upsertCircuit(panelId, effective.copy(upsizeForVoltageDrop = true), 0L),
                     settings.unitSystem,
                 ).circuits[effective.id]
             } else {
@@ -231,6 +231,13 @@ internal fun CircuitSheet(
         add("Pos ${draft.slots.joinToString(",")}")
         if (draft.kind == CircuitKind.LOAD && draft.continuous) add("Continuous")
         if (draft.kind == CircuitKind.LOAD && draft.nonlinear) add("Nonlinear")
+        if (draft.kind == CircuitKind.LOAD) {
+            when (draft.upsizeForVoltageDrop) {
+                true -> add("VD upsize on")
+                false -> add("VD upsize off")
+                null -> Unit
+            }
+        }
         val runNames = draft.runIds.mapNotNull { ctx.project.run(it)?.name }
         if (runNames.isNotEmpty()) {
             add(runNames.joinToString(", "))
@@ -260,12 +267,11 @@ internal fun CircuitSheet(
                     vdPercent = vdWarn,
                     targetPercent = targetVd,
                     currentSizeLabel = design?.size?.label,
-                    upsizeEnabled = ctx.project.design.upsizeForVoltageDrop,
+                    upsizeEnabled = effective.upsizesForVoltageDrop(ctx.project.design),
                     upsizePreview = upsizePreview,
                     readOnly = ctx.readOnly,
-                    onUpsize = {
-                        ctx.edit { p, now -> p.withUpsizeForVoltageDrop(true, now) }
-                    },
+                    // Upsizes this circuit only (saved with the circuit); the project-wide setting is on the Design tab.
+                    onUpsize = { draft = draft.copy(upsizeForVoltageDrop = true) },
                     onOpenVoltageDrop = {
                         if (!ctx.readOnly && canSave) {
                             ctx.edit { p, now -> p.upsertCircuit(panelId, normalizedForSave(), now) }
@@ -452,6 +458,16 @@ internal fun CircuitSheet(
                                 draft.multipleCordReceptacles,
                                 { draft = draft.copy(multipleCordReceptacles = it) },
                                 "Affects the minimum wire size (NEC ${CodeRule.BRANCH_CONDUCTOR_SIZE.cite}).",
+                            )
+                            ToggleRow(
+                                "Upsize for voltage drop",
+                                draft.upsizesForVoltageDrop(ctx.project.design),
+                                { draft = draft.copy(upsizeForVoltageDrop = it) },
+                                if (draft.upsizeForVoltageDrop == null) {
+                                    "Following the project setting. Changing it affects this circuit only."
+                                } else {
+                                    "Set for this circuit only; the project setting is on the Design tab."
+                                },
                             )
                         }
                     }

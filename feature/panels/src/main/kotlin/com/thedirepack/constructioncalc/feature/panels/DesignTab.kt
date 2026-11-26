@@ -185,10 +185,10 @@ internal fun DesignTab(ctx: PanelsContext, modifier: Modifier = Modifier) {
                     supportingText = vdSupportText,
                 )
                 ToggleRow(
-                    "Upsize wire for voltage drop",
+                    "Upsize wire for voltage drop (all circuits)",
                     design.upsizeForVoltageDrop,
                     { v -> update { it.copy(upsizeForVoltageDrop = v) } },
-                    "Steps the wire (and the ground with it) up until the target is met.",
+                    "Project default: steps the wire (and the ground with it) up until the target is met. A circuit can set its own.",
                 )
             }
         }

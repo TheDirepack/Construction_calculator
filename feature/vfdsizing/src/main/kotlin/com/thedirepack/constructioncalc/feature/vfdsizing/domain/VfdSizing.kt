@@ -19,12 +19,15 @@ enum class RatingUnit(val label: String) { HP("HP"), KW("kW") }
 
 /**
  * Which drive current rating applies. Drives are often rated twice: a higher continuous current for
- * variable-torque (normal-duty) loads that need ~110 % overload for a minute, and a lower one for
- * constant-torque (heavy-duty) loads that need ~150 %.
+ * variable-torque (normal-duty) loads that need 110 % overload for a minute, and a lower one for
+ * constant-torque (heavy-duty) loads that need 150 %.
+ *
+ * [overloadPercent] is the drive industry's duty-rating convention (manufacturers' normal-duty and
+ * heavy-duty ratings), not an NEC value: the NEC sizes conductors and protection, not the drive.
  */
-enum class LoadType(val label: String, val dutyLabel: String) {
-    VARIABLE_TORQUE("Variable torque (fans, pumps)", "Normal duty"),
-    CONSTANT_TORQUE("Constant torque (conveyors, compressors)", "Heavy duty"),
+enum class LoadType(val label: String, val dutyLabel: String, val overloadPercent: Int) {
+    VARIABLE_TORQUE("Variable torque (fans, pumps)", "Normal duty", 110),
+    CONSTANT_TORQUE("Constant torque (conveyors, compressors)", "Heavy duty", 150),
 }
 
 /** What the drive's minimum output current is based on. */
@@ -60,6 +63,16 @@ data class VfdResult(
     /** The motor's rated current the drive must be able to deliver continuously. */
     val minDriveOutputAmps: Double,
     val outputBasis: OutputBasis,
+    /** The duty the drive must be selected in, from the load type. */
+    val loadType: LoadType,
+    /** Short-time (one minute) output current the drive must deliver: [minDriveOutputAmps] × the duty's overload percent. */
+    val overloadOutputAmps: Double,
+    /**
+     * The smallest *normal-duty* continuous rating that still covers [overloadOutputAmps] within a
+     * normal-duty drive's own overload capacity. Equal to [minDriveOutputAmps] for variable torque; for
+     * constant torque it is the larger normal-duty rating to look for when a drive lists only that.
+     */
+    val normalDutyRatingAmps: Double,
     /** Rule-of-thumb drive output rating when fed from single-phase; null for three-phase supply. */
     val singlePhaseDriveGuidanceAmps: Double?,
     /** Nameplate FLA × 125 %, the usual maximum overload-device setting (430.32(A)(1)). */
@@ -148,6 +161,8 @@ object VfdSizing {
         val flc = MotorFullLoadCurrent.threePhase(request.hp, request.volts) ?: return null
         val fla = request.nameplateFla
         val minOutput = fla ?: flc
+        val overloadOutput = minOutput * request.loadType.overloadPercent / 100.0
+        val normalDutyRating = maxOf(minOutput, overloadOutput * 100.0 / LoadType.VARIABLE_TORQUE.overloadPercent)
         val inputEstimate = request.driveInputAmps == null
         val inputBasis = request.driveInputAmps
             ?: if (request.supplyPhase == AcPhases.SINGLE) flc * SINGLE_PHASE_INPUT_ESTIMATE_FACTOR else flc
@@ -159,6 +174,9 @@ object VfdSizing {
             tableFlc = flc,
             minDriveOutputAmps = minOutput,
             outputBasis = if (fla != null) OutputBasis.NAMEPLATE_FLA else OutputBasis.TABLE_FLC,
+            loadType = request.loadType,
+            overloadOutputAmps = overloadOutput,
+            normalDutyRatingAmps = normalDutyRating,
             singlePhaseDriveGuidanceAmps = if (request.supplyPhase == AcPhases.SINGLE) minOutput * SINGLE_PHASE_DRIVE_MULTIPLIER else null,
             overloadMaxAmps = fla?.let { it * OVERLOAD_FACTOR },
             nameplatePercentOfTable = fla?.let { 100.0 * it / flc },

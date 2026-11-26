@@ -97,4 +97,18 @@ class VfdSizingInputsTest {
         assertEquals("40 °C", riseLabel(40, AppSettings(unitSystem = UnitSystem.METRIC)))
         assertEquals("72 °F", riseLabel(40, AppSettings()))
     }
+
+    @Test fun constantTorqueOutputShowsHeavyDutyOverloadAndNormalDutyEquivalent() {
+        val vt = vfdSizingOutput(VfdSizingInputs(hp = 10.0, volts = 460, nameplateFla = "13", loadType = LoadType.VARIABLE_TORQUE))
+        val ct = vfdSizingOutput(VfdSizingInputs(hp = 10.0, volts = 460, nameplateFla = "13", loadType = LoadType.CONSTANT_TORQUE))
+        val vtKeys = vt.results.associateBy { it.key }
+        val ctKeys = ct.results.associateBy { it.key }
+        assertEquals("14.3 A", vtKeys.getValue("drive_overload_output").text)
+        assertEquals("19.5 A", ctKeys.getValue("drive_overload_output").text)
+        assertNull(vtKeys["normal_duty_equivalent"])
+        assertEquals("17.7 A", ctKeys.getValue("normal_duty_equivalent").text)
+        assertTrue(ct.notices.any { it.text.contains("heavy-duty") && it.text.contains("150 %") && it.text.contains("not NEC") })
+        assertTrue(vt.notices.any { it.text.contains("normal-duty") && it.text.contains("110 %") })
+        assertTrue(ct.summary.contains("heavy duty"))
+    }
 }

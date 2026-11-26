@@ -4,12 +4,9 @@ import android.content.Context
 import com.thedirepack.constructioncalc.core.model.Project
 import com.thedirepack.constructioncalc.core.model.ProjectCodec
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
-import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -93,7 +90,7 @@ class FileProjectStore(private val dir: File) : ProjectStore {
             }
         }
         try {
-            upserts.forEach { writeProject(it, durable = true) }
+            upserts.forEach { writeProject(it) }
             (removals - writtenIds).forEach { Files.deleteIfExists(fileFor(it).toPath()) }
             Files.delete(restoreJournal.toPath())
         } catch (error: Exception) {
@@ -123,36 +120,17 @@ class FileProjectStore(private val dir: File) : ProjectStore {
         Files.delete(restoreJournal.toPath())
     }
 
-    private fun writeProject(project: Project, durable: Boolean = false) {
+    private fun writeProject(project: Project) {
         ensureDirectory()
-        writeAtomically(fileFor(project.id), durable) { it.write(ProjectCodec.encode(project).encodeToByteArray()) }
+        writeAtomically(fileFor(project.id)) { it.write(ProjectCodec.encode(project).encodeToByteArray()) }
     }
 
     private fun ensureDirectory() {
         if (!dir.isDirectory && !dir.mkdirs() && !dir.isDirectory) throw IOException("Could not open project storage.")
     }
 
-    private fun writeAtomically(target: File, durable: Boolean = true, write: (OutputStream) -> Unit) {
-        val temp = File.createTempFile(".project-", ".tmp", dir)
-        try {
-            // Writers such as ZipOutputStream may close their wrapper before we sync the file.
-            FileOutputStream(temp).use { output ->
-                write(object : OutputStream() {
-                    override fun write(b: Int) = output.write(b)
-                    override fun write(bytes: ByteArray, offset: Int, length: Int) = output.write(bytes, offset, length)
-                    override fun flush() = output.flush()
-                })
-                if (durable) output.fd.sync()
-            }
-            try {
-                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
-        } finally {
-            temp.delete()
-        }
-    }
+    private fun writeAtomically(target: File, write: (OutputStream) -> Unit) =
+        AtomicFiles.write(target, ".project-", write)
 
     private fun fileFor(id: String): File {
         require(id.length in 1..64 && id.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' }) {
