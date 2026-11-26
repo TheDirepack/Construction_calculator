@@ -33,7 +33,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 KIND = "document_labels"
 SUFFIX = "_labels.json"
 CONVERTED_DIR = "page_files_converted"
@@ -187,6 +187,7 @@ def write_page(folder: Path, prefix: str, page: int, entry: dict, *,
         if expected_revision is not ... and page_revision(current) != expected_revision:
             raise StaleRevision(f"page {page} changed since it was read")
         data["pages"][str(page)] = entry
+        data["format_version"] = FORMAT_VERSION
         if proposals is not None:
             data["proposals"] = proposals
         _write_file(path, data)
@@ -221,6 +222,20 @@ def write_page_view(folder: Path, prefix: str, page: int, entry: dict, dest_dir:
         tmp.write_bytes(encoded)
         os.replace(tmp, path)
     return path
+
+
+def set_document_info(folder: Path, prefix: str, info: dict) -> None:
+    """Set document-level sections (``document``, ``sources``, ``extracted``,
+    ...) of the labels file; pages are untouched."""
+    folder = Path(folder)
+    with _locked(folder):
+        _convert_locked(folder, prefix)
+        path = labels_path(folder, prefix)
+        data = copy.deepcopy(_read_file(path, prefix))
+        updated = dict(data, **{k: v for k, v in info.items() if k != "pages"},
+                       format_version=FORMAT_VERSION)
+        if updated != data:
+            _write_file(path, updated)
 
 
 def has_labels(folder: Path) -> bool:

@@ -3296,6 +3296,7 @@ function cachePage(page) {
     doc: JSON.parse(JSON.stringify(state.doc)),
     dirty: Boolean(state.dirty),
     revision: state.revision,
+    proposalsVersion: state.proposalsVersion ?? null,
     undo: [...state.undo],
     redo: [...state.redo],
     selectedIds: new Set(state.selectedIds),
@@ -3451,7 +3452,11 @@ async function loadPage(page, force = false) {
     // The page was saved elsewhere (an agent, another tab) since this tab kept
     // it: a copy without edits is simply replaced by the new one; edits are
     // kept, and the conflict is shown now instead of at the next save.
-    const changedOnDisk = Boolean(cached) && cached.revision !== result.revision;
+    // An unsaved page changes when its machine proposals do (an edited
+    // DEVICES.json), so that version is compared too.
+    const changedOnDisk = Boolean(cached) && (cached.revision !== result.revision ||
+      (cached.proposalsVersion ?? null) !== (result.proposals_version ?? null));
+    state.proposalsVersion = result.proposals_version ?? null;
     if (changedOnDisk && !cached.dirty) {
       delete state.pageCache[page];
       cached = null;

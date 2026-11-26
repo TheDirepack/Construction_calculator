@@ -36,9 +36,10 @@ import sys
 from pathlib import Path
 from annotator import label_store
 pages = label_store.labeled_pages(Path(sys.argv[1]), data_root=Path(sys.argv[2]))
+from blueprint_symbols.label_schema import read_page
 complete = [p for p in pages["evaluation"]
-            if json.loads(p.read_text()).get("annotation_completeness_verified") is True
-            or json.loads(p.read_text()).get("verified_no_symbols") is True]
+            if read_page(p).get("annotation_completeness_verified") is True
+            or read_page(p).get("verified_no_symbols") is True]
 print(f"{len(pages['train'])} training pages (1_blueprints/*.pdf); "
       f"{len(pages['evaluation'])} evaluation pages (1_blueprints/evaluation), "
       f"{len(complete)} fully labelled -> validation/test")

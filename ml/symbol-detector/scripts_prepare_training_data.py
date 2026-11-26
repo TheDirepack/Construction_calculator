@@ -22,16 +22,19 @@ from scripts_verify_yolo_export import verify_export
 
 
 def discover(patterns: list[str]) -> list[Path]:
+    """Annotation pages matching the patterns: page JSONs, labels files (one
+    per PDF, every saved page; see annotator.document_labels) and references
+    to a page of one (``X_labels.json#p12``)."""
+    from blueprint_symbols.label_schema import expand_page_paths, parse_page_ref, read_page
     results = []
     for pattern in patterns:
         path = Path(pattern)
         found = glob.glob(pattern, recursive=True) if any(k in pattern for k in '*?[') else [str(path)]
-        for name in found:
-            f = Path(name)
-            if not f.is_file() or f.suffix.lower() != '.json':
+        for f in expand_page_paths(found):
+            if parse_page_ref(f) is None and (not f.is_file() or f.suffix.lower() != '.json'):
                 continue
             try:
-                doc = json.loads(f.read_text())
+                doc = read_page(f)
             except (OSError, ValueError):
                 continue
             if isinstance(doc, dict) and isinstance(doc.get('instances'), list) and 'image_path' in doc:
@@ -53,10 +56,11 @@ def label_store_pages(stores: list[Path], *, data_root: Path | None = None) -> d
 
 
 def complete_pages(paths: list[str]) -> list[str]:
+    from blueprint_symbols.label_schema import read_page
     """Pages fully labelled (every symbol, or verified empty): only these can evaluate."""
     out = []
     for path in paths:
-        data = json.loads(Path(path).read_text())
+        data = read_page(path)
         if data.get('annotation_completeness_verified') is True or data.get('verified_no_symbols') is True:
             out.append(path)
     return out

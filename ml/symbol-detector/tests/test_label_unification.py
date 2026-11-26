@@ -130,8 +130,8 @@ def test_browser_and_agents_open_the_same_page_with_the_same_proposals(tmp_path)
                review_source="human", verified_ground_truth=True, uncertain=False)
     web.save(0, revision=revision, instances=[box], rejected=[])
     [view] = label_store.training_pages(store)
-    assert label_store.view_source(view)[0].folder == doc.folder
-    assert label_store.view_source(view)[1] == 1
+    assert label_store.page_source(view)[0].folder == doc.folder
+    assert label_store.page_source(view)[1] == 1
     trained = label_schema.load_training_page(view)["instances"][0]
     assert trained["symbol_family"] == "receptacle.duplex"
     assert (trained["device_family"], trained["device_variant"]) == ("receptacle", "duplex")

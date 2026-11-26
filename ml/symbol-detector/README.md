@@ -94,6 +94,16 @@ pages stay in memory until saved (Ctrl+S saves every changed page); the 12
 most recent saved pages are kept as well. A kept page that was saved elsewhere
 meanwhile is reloaded, or, if it has edits here, flagged as changed on disk.
 
+One file per PDF: every label of a drawing is in
+`1_blueprints/devices/<stem>_<sha12>/<stem>_labels.json` (evaluation drawings:
+`1_blueprints/evaluation/devices/`): human, agent, model and imported boxes,
+and the DEVICES/SAM/CircuitNet proposals as pending boxes. Editing the
+drawing's `*_DEVICES.json` shows up on the next page load: pending machine
+boxes are replaced by the file's current ones, while accepted, verified,
+hand-drawn and rejected boxes stay. `scripts_merge_labels.py --apply` merges
+older page files (`work/annotator_labels`, `work/labels`) and labels pulled
+from the training machine (`work/remote_labels`) into these files.
+
 **One label format, one source of truth.** `annotator/electrical_device_catalog.json`
 defines every device and what other sources call it (NECA 100 glyph names,
 extracted `*_DEVICES.json` types, names that are not devices). The browser

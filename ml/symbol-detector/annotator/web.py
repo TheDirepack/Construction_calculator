@@ -214,28 +214,38 @@ def _devices_json_for(pdf: Path) -> Path | None:
     return label_store.devices_json_for(pdf)
 
 
-def _find_proposals_for_pdf(pdf: Path, work_dir: Path | None = None) -> Path | None:
-    """The machine-proposal file for a PDF: its extracted ``*_DEVICES.json``
-    (the file people and agents edit) first, else a SAM/CircuitNet run."""
+def _find_proposal_sources(pdf: Path, work_dir: Path | None = None) -> list[Path]:
+    """Every machine-proposal file for a PDF, strongest first: its extracted
+    ``*_DEVICES.json`` (the file people and agents edit), VLM-reviewed
+    detections, then cleaned SAM runs, CircuitNet runs, and raw SAM runs that
+    were never cleaned."""
     work = work_dir or DEFAULT_WORK_DIR
     stem = pdf.stem
+    found: list[Path] = []
     devices = _devices_json_for(pdf)
     if devices is not None:
-        return devices
-    found = sorted(pdf.parent.glob(f"{stem}_devices.json")) + sorted(pdf.parent.glob(f"{stem}_DEVICES.json"))
-    if found:
-        return found[0]
-    for folder, pattern in (("sam3_cleaned", f"{stem}*_CLEANED.json"),
-                            ("circuitnet_proposals", f"{stem}*.json"),
-                            ("sam3_proposals", f"{stem}*.json")):
-        found = sorted((work / folder).glob(pattern))
-        if found:
-            return found[0]
-    return None
+        found.append(devices)
+    found += sorted(pdf.parent.glob(f"{stem}_devices.json")) + sorted(pdf.parent.glob(f"{stem}_DEVICES.json"))
+    # VLM-reviewed CircuitNet/SAM detections (scripts_circuitnet_review_sheets.py apply).
+    found += sorted((work / "circuitnet_refined_devices").glob(f"{stem}_*_REFINED_DEVICES.json"))
+    cleaned = sorted((work / "sam3_cleaned").glob(f"{stem}_*_CLEANED.json"))
+    found += cleaned
+    found += sorted((work / "circuitnet_proposals").glob(f"{stem}_*.json"))
+    cleaned_runs = {p.name[:-len("_CLEANED.json")] for p in cleaned}
+    found += [p for p in sorted((work / "sam3_proposals").glob(f"{stem}_*.json"))
+              if p.name.rsplit("_", 1)[0] not in cleaned_runs]
+    return list(dict.fromkeys(p.resolve() for p in found if p.is_file()))
 
 
-def _parse_proposals(raw: bytes, source_hash: str | None) -> dict | None:
-    """A proposal file's content, if it is one and matches this PDF revision."""
+def _find_proposals_for_pdf(pdf: Path, work_dir: Path | None = None) -> Path | None:
+    """The strongest machine-proposal file for a PDF (``_find_proposal_sources``)."""
+    found = _find_proposal_sources(pdf, work_dir)
+    return found[0] if found else None
+
+
+def _parse_proposals(raw: bytes, source_hash: str | None, pdf_name: str | None = None) -> dict | None:
+    """A proposal file's content, if it is one and matches this PDF revision
+    (and, when the file names its PDF, this PDF)."""
     try:
         loaded = json.loads(raw)
     except ValueError:
@@ -243,6 +253,9 @@ def _parse_proposals(raw: bytes, source_hash: str | None) -> dict | None:
     if not isinstance(loaded, dict) or not isinstance(loaded.get("devices"), list):
         return None
     if loaded.get("source_pdf_sha256") and loaded["source_pdf_sha256"] != source_hash:
+        return None
+    named = loaded.get("source_file")
+    if pdf_name and isinstance(named, str) and named and Path(named).name.casefold() != pdf_name.casefold():
         return None
     return loaded
 
@@ -256,6 +269,48 @@ def _load_proposals(pdf: Path, source_hash: str | None) -> dict | None:
         return _parse_proposals(path.read_bytes(), source_hash)
     except OSError:
         return None
+
+
+# Fields of a proposal that are geometry (converted to the box and anchors) or
+# bulky vector ids; everything else it says about the device is kept.
+_PROPOSAL_GEOMETRY = {"box_px_tl", "symbol_bbox", "symbol_bbox_pts", "symbol_bbox_bl",
+                      "symbol_graphic_bbox", "bounding_box", "bbox_pts", "bbox", "vector_path_ids",
+                      "wall_vector_path_ids", "target_vector_pts", "verify_detail", "pdf_page", "page"}
+
+
+def _proposal_details(proposal: dict) -> dict:
+    out = {}
+    for key, value in proposal.items():
+        if key in _PROPOSAL_GEOMETRY or value in (None, "", [], {}):
+            continue
+        if isinstance(value, (list, dict)) and len(json.dumps(value, default=str)) > 2000:
+            continue
+        out[key] = value
+    return out
+
+
+def _proposal_anchors(proposal: dict, page, width: int, height: int, rotated: bool) -> dict:
+    """The device's centre and, for a wall-mounted device, its wall
+    connection point (PDF points) as annotator anchors (not human-placed)."""
+    anchors = {}
+    for name, keys, needs_wall in (("centre", ("device_center", "symbol_center"), False),
+                                   ("wall_attachment", ("wall_connection_point",), True)):
+        if needs_wall and proposal.get("on_wall") is not True:
+            continue
+        for key in keys:
+            value = proposal.get(key)
+            if isinstance(value, dict):
+                value = [value.get("x"), value.get("y")]
+            try:
+                x, y = (float(v) for v in value)
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(x) and math.isfinite(y)):
+                continue
+            px, py, _, _ = points_to_pixels([x, y, x, y], page, width, height, already_rotated=rotated)
+            anchors[name] = {"xy": [round(px, 2), round(py, 2)], "visible": True, "annotated": False}
+            break
+    return anchors
 
 
 def _box_iou(a, b) -> float:
@@ -963,6 +1018,7 @@ class LabelingSession:
         self.proposals_sha: str | None = None
         self._proposals_fixed = Path(proposals).resolve() if proposals is not None else None
         self._proposals_sig: tuple | None = None
+        self.proposal_sets: list[tuple[str, dict]] = []
         self._proposals_found_at = 0.0
         self._stored_revisions: dict[int, str | None] = {}
         if proposals is not None:
@@ -997,37 +1053,106 @@ class LabelingSession:
         if not self.pdf:
             return
         now = time.monotonic()
-        path = self._proposals_fixed
-        if path is None and self.auto_proposals:
-            known = Path(self._proposals_sig[0]) if self._proposals_sig else None
-            if (force or known is None or not known.is_file()
-                    or now - self._proposals_found_at > self.PROPOSALS_REDISCOVER_SECONDS):
-                path = _find_proposals_for_pdf(self.pdf)
-                self._proposals_found_at = now
-            else:
-                path = known
-        try:
-            stat = path.stat() if path is not None else None
-        except OSError:
-            stat = None
-        if stat is None:
-            if self._proposals_sig is not None:      # the file it came from is gone
-                self.proposals, self.proposals_sha, self._proposals_sig = None, None, None
+        if self._proposals_fixed is not None:
+            paths = [self._proposals_fixed]
+        elif not self.auto_proposals:
+            paths = []
+        elif (force or self._proposals_sig is None
+              or now - self._proposals_found_at > self.PROPOSALS_REDISCOVER_SECONDS):
+            paths = _find_proposal_sources(self.pdf)
+            self._proposals_found_at = now
+        else:
+            paths = [Path(entry[0]) for entry in self._proposals_sig]
+        signature = []
+        for path in paths:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            signature.append((str(path), stat.st_size, stat.st_mtime_ns))
+        signature = tuple(signature)
+        if not signature:
+            if self._proposals_sig:                  # the files they came from are gone
+                self.proposals, self.proposals_sha, self.proposal_sets = None, None, []
+            self._proposals_sig = ()                 # looked: none (checked again in a few seconds)
             return
-        signature = (str(path), stat.st_size, stat.st_mtime_ns)
         if signature == self._proposals_sig:
             return
-        try:
-            raw = path.read_bytes()
-        except OSError:
-            return
+        sets, hashes = [], []
+        for path_text, _, _ in signature:
+            try:
+                raw = Path(path_text).read_bytes()
+            except OSError:
+                continue
+            loaded = _parse_proposals(raw, self.source_hash,
+                                      None if self._proposals_fixed else self.pdf.name)
+            if loaded is not None:
+                sets.append((path_text, loaded))
+                hashes.append(f"{Path(path_text).name}:{hashlib.sha256(raw).hexdigest()}")
         self._proposals_sig = signature
-        self.proposals = _parse_proposals(raw, self.source_hash)
-        self.proposals_sha = hashlib.sha256(raw).hexdigest() if self.proposals is not None else None
+        self.proposal_sets = sets
+        if not sets:
+            self.proposals, self.proposals_sha = None, None
+            return
+        self.proposals = sets[0][1] if len(sets) == 1 else {
+            "devices": [d for _, data in sets for d in data.get("devices", [])]}
+        self.proposals_sha = hashlib.sha256("\n".join(hashes).encode()).hexdigest()
 
     def _proposals_record(self) -> dict:
-        return {"path": self._proposals_sig[0] if self._proposals_sig and self.proposals is not None
-                else None, "sha256": self.proposals_sha}
+        return {"paths": [path for path, _ in self.proposal_sets], "sha256": self.proposals_sha}
+
+    def document_record(self) -> dict:
+        """What the labels file records about the document and every source
+        merged into it: per proposal file its kind, hash, model/extraction
+        metadata, how many devices became boxes and why the others did not;
+        and the DEVICES files' non-box findings (legend, page results,
+        unresolved candidates, coverage notes)."""
+        sources, extracted = [], {}
+        for path_text, data in self.proposal_sets:
+            path = Path(path_text)
+            name = path.name
+            kind = ("devices_json" if name.upper().endswith("_DEVICES.JSON") and "REFINED" not in name.upper()
+                    else "vlm_reviewed" if "REFINED_DEVICES" in name.upper()
+                    else "sam3_cleaned" if name.endswith("_CLEANED.json")
+                    else "circuitnet" if "CIRCUITNET" in name.upper() else "sam3")
+            why: dict[str, int] = {}
+            usable = 0
+            for device in data.get("devices", []):
+                if not isinstance(device, dict):
+                    continue
+                number = device.get("pdf_page") or device.get("page")
+                reason = (devices_skip_reason(device)
+                          or ("page_outside_document" if type(number) is not int
+                              or not 1 <= number <= self.page_count else None)
+                          or ("not_an_electrical_device" if device_for_raw_type(
+                              device.get("device_type") or device.get("broad_family")) is None else None)
+                          or ("no_box" if devices_bbox_points(device) is None
+                              and not device.get("box_px_tl") else None))
+                if reason:
+                    why[reason] = why.get(reason, 0) + 1
+                else:
+                    usable += 1
+            try:
+                digest = sha256_file(path)
+            except OSError:
+                digest = None
+            sources.append({
+                "file": str(path), "kind": kind, "sha256": digest,
+                "devices": len(data.get("devices", [])), "devices_used": usable, "devices_left_out": why,
+                "vlm_rejected": len(data.get("rejected_devices") or []),
+                **{k: data[k] for k in ("schema_version", "model", "status", "extraction_revision",
+                                        "render_dpi", "score_threshold", "verify_status",
+                                        "extraction_status", "coverage_limit") if k in data},
+            })
+            if kind == "devices_json":
+                extracted[name] = {k: data[k] for k in (
+                    "legend_types", "page_results", "plan_pages_processed", "unresolved_candidates",
+                    "review_backlog", "source_profile", "classification_rules", "taxonomy_note",
+                    "summary", "extraction_status", "coverage_limit", "exit_sign_schema_ref")
+                    if k in data}
+        return {"document": {"file": self.pdf.name, "path": str(self.pdf), "sha256": self.source_hash,
+                             "page_count": self.page_count},
+                "sources": sources, "extracted": extracted}
 
     def _init_proposals_record(self) -> None:
         """Pages saved before the proposal source was recorded count as
@@ -1199,21 +1324,57 @@ class LabelingSession:
         self._render_cache[index] = result
         return result
 
-    def _proposal_instances(self, index: int, width: int, height: int) -> list[dict]:
-        """Pending boxes for a page opened for the first time: extracted
-        DEVICES.json devices or SAM/CircuitNet proposals for this PDF."""
-        if self.proposals is None:
-            return []
+    def _proposal_instances(self, index: int, width: int, height: int,
+                            sets: list[tuple[str, dict]] | None = None) -> list[dict]:
+        """Pending boxes for a page: the extracted DEVICES.json devices and the
+        SAM/CircuitNet proposals for this PDF, strongest source first. A box
+        from a later source on top of one already found (IoU >= 0.5) is left out."""
+        if sets is None:
+            sets = self.proposal_sets or ([("", self.proposals)] if self.proposals else [])
+        found: list[dict] = []
+        # Boxes a VLM review dropped as false positives hide that box from
+        # every other source (the raw run it reviewed included).
+        dropped = [d["bbox_xyxy"] for _, proposals in sets if proposals.get("rejected_devices")
+                   for d in self._proposal_set_instances(proposals, index, width, height, "",
+                                                         rejected=True)]
+        for order, (path_text, proposals) in enumerate(sets):
+            tag = "" if order == 0 else f"s{order}_"
+            for item in self._proposal_set_instances(proposals, index, width, height, tag):
+                if order and any(_box_iou(item["bbox_xyxy"], f["bbox_xyxy"]) >= 0.5 for f in found):
+                    continue
+                if any(_box_iou(item["bbox_xyxy"], box) >= 0.5 for box in dropped):
+                    continue
+                if path_text:
+                    item["proposal_file"] = Path(path_text).name
+                found.append(item)
+        return found
+
+    def _proposal_set_instances(self, proposals: dict, index: int, width: int, height: int,
+                                tag: str, *, rejected: bool = False) -> list[dict]:
+        """Boxes of one proposal file on one page, with everything else the
+        file says about each device kept on the box (``proposal_details``)
+        and its centre / wall point as anchors. ``rejected``: the devices a
+        reviewer (a VLM review sheet) dropped as false positives instead."""
         fitz = _import_fitz()
         found = []
-        rotated = devices_rotated_coordinates(self.proposals)
-        render_dpi = float(self.proposals.get("render_dpi") or 150)
+        rotated = devices_rotated_coordinates(proposals)
+        render_dpi = float(proposals.get("render_dpi") or 150)
         # Extracted drawing-set devices carry the PDF name; SAM/CircuitNet runs do not.
-        default_source = "devices_json" if self.proposals.get("source_file") and not \
-            self.proposals.get("render_dpi") else "sam3"
+        default_source = "devices_json" if proposals.get("source_file") and not \
+            proposals.get("render_dpi") else "sam3"
+        if rejected:
+            entries = [(f"x{n}", d) for n, d in enumerate(proposals.get("rejected_devices") or [])]
+        else:
+            entries = [(str(n), d) for n, d in enumerate(proposals.get("devices", []))]
+            # Unresolved candidates that do have a symbol box are boxes to review too.
+            entries += [(f"u{n}", dict(d, device_type=d.get("device_type") or d.get("inferred_type"),
+                                       subtype=d.get("subtype") or d.get("inferred_subtype"),
+                                       status="devices_json_unresolved"))
+                        for n, d in enumerate(proposals.get("unresolved_candidates") or [])
+                        if isinstance(d, dict) and devices_bbox_points(d) is not None]
         with fitz.open(self.pdf) as doc:
             page = doc[index]
-            for number, proposal in enumerate(self.proposals.get("devices", [])):
+            for number, proposal in entries:
                 if not isinstance(proposal, dict):
                     continue
                 if (proposal.get("pdf_page") or proposal.get("page")) != index + 1:
@@ -1235,6 +1396,9 @@ class LabelingSession:
                     _valid_box(box, width, height)
                 except (ValueError, TypeError, ZeroDivisionError):
                     continue
+                if rejected:
+                    found.append({"bbox_xyxy": box})
+                    continue
                 raw = proposal.get("device_type") or proposal.get("broad_family")
                 device = device_for_raw_type(raw)
                 if device is None:              # mechanical equipment: not an electrical label
@@ -1243,14 +1407,23 @@ class LabelingSession:
                 subtype = proposal.get("subtype") or proposal.get("neca_name")
                 if subtype and variant == "unspecified":
                     variant = str(subtype)
+                extra = {}
+                anchors = _proposal_anchors(proposal, page, width, height, rotated)
+                if anchors:
+                    extra["anchors"] = anchors
+                details = _proposal_details(proposal)
+                if details:
+                    extra["proposal_details"] = details
+                if proposal.get("review_source"):
+                    extra["proposal_reviewer"] = proposal["review_source"]
                 found.append(pending_instance(
-                    f"proposal_p{index + 1}_{number}", family, variant, box,
+                    f"proposal_p{index + 1}_{tag}{number}", family, variant, box,
                     review_source=str(proposal.get("status") or default_source),
                     discipline=discipline_for(family), device_type=family,
                     raw_device_type=raw, proposal_score=proposal.get("score"),
                     proposal_visual_group=proposal.get("visual_group"),
                     proposal_neca_symbol_id=proposal.get("neca_symbol_id"),
-                    proposal_alternative_labels=proposal.get("alternative_labels", [])))
+                    proposal_alternative_labels=proposal.get("alternative_labels", []), **extra))
         return found
 
     def _new_sheet(self, index: int, image: Path, width: int, height: int, image_hash: str) -> dict:
@@ -1309,8 +1482,7 @@ class LabelingSession:
                 # name: training reads image_path, so it must name this file.
                 data["image_path"] = str(image.relative_to(base))
             data = _normalize_loaded_document(data)
-            if self.pdf and self.proposals is not None and \
-                    self._baseline_proposals_sha(data) != self.proposals_sha:
+            if self.pdf and self._baseline_proposals_sha(data) != self.proposals_sha:
                 data = self._refresh_proposals(data, index, width, height)
                 revision = hashlib.sha256(f"{revision}:{self.proposals_sha}".encode()).hexdigest()
         else:
@@ -1319,6 +1491,156 @@ class LabelingSession:
         if data.get("coordinate_system") != "original_page_pixels_top_left_y_down":
             raise LabelingError("unsupported annotation coordinate system")
         return data, revision, image
+
+    def page_pixel_size(self, index: int) -> tuple[int, int]:
+        """The rendered size of a page without rendering it (same scale and
+        pixel-count cap as ``render_pdf_page``)."""
+        found = _find_rendered(self.out_dir / "images", index, self.dpi, self.source_hash)
+        if found:
+            return found[1], found[2]
+        fitz = _import_fitz()
+        with fitz.open(self.pdf) as doc:
+            sheet = doc[index]
+            factor = self.dpi / 72.0
+            if sheet.rect.width * factor * sheet.rect.height * factor > MAX_PDF_PIXELS:
+                factor = math.sqrt(MAX_PDF_PIXELS / (sheet.rect.width * sheet.rect.height))
+            rect = (sheet.rect * fitz.Matrix(factor, factor)).irect
+            return rect.width, rect.height
+
+    def merge_pages(self, incoming: dict[int, list[dict]], *, with_proposals: bool = True) -> dict:
+        """Merge labels from elsewhere (older page files, other machines,
+        agents, models) into this PDF's labels file, without rendering.
+
+        ``incoming`` maps page index -> page JSONs of this PDF. Per page, every
+        box is kept once: where two overlap (IoU >= 0.5) the more settled one
+        stays (verified > accepted > drawn by a person > machine proposal). A
+        box a person rejected anywhere is not proposed again. A page a person
+        verified as having no symbols keeps no machine boxes. With
+        ``with_proposals``, pages with machine proposals (DEVICES, SAM,
+        CircuitNet) are written too, so every box is in the one file.
+        Boxes that fail the annotator's checks are left out and counted.
+        """
+        from annotator import document_labels
+        report = {"pages_written": 0, "boxes_added": 0, "boxes_upgraded": 0,
+                  "rejected_added": 0, "invalid_dropped": 0}
+        with self.lock:
+            self._sync_proposals()
+            pages = set(incoming)
+            if with_proposals:
+                for _, data in self.proposal_sets:
+                    for device in data.get("devices", []):
+                        number = device.get("pdf_page") or device.get("page") if isinstance(device, dict) else None
+                        if type(number) is int and 1 <= number <= self.page_count:
+                            pages.add(number - 1)
+            for index in sorted(pages):
+                if not 0 <= index < self.page_count:
+                    continue
+                if self._merge_page(index, incoming.get(index, []), report):
+                    report["pages_written"] += 1
+            if report["pages_written"] or document_labels.pages(self.out_dir, self.json_prefix):
+                record = self.document_record()
+                record["page_sources"] = sorted({str(p.get("_merged_from")) for pages_ in incoming.values()
+                                                 for p in pages_ if p.get("_merged_from")})
+                document_labels.set_document_info(self.out_dir, self.json_prefix, record)
+        return report
+
+    def _merge_page(self, index: int, sources: list[dict], report: dict) -> bool:
+        from annotator import document_labels
+        width, height = self.page_pixel_size(index)
+        stored, stored_revision = document_labels.get_page(self.out_dir, self.json_prefix, index + 1)
+        if stored is not None:
+            page = _normalize_loaded_document(stored)
+            if self._baseline_proposals_sha(page) != self.proposals_sha:
+                page = self._refresh_proposals(page, index, width, height)
+        else:
+            image = f"images/page_{index + 1:04d}_{self.source_hash[:12]}_d{self.dpi}_{width}x{height}.png"
+            page = page_header(
+                source=self.pdf, document_id=self.pdf.name, page_index=index,
+                source_type="real_construction_pdf_manual", source_sha256=self.source_hash,
+                image_path=image, image_sha256=None, width=width, height=height)
+            page["instances"] = self._proposal_instances(index, width, height)
+        instances = [dict(i) for i in page.get("instances", []) if isinstance(i, dict)]
+        rejected = [dict(r) for r in page.get("rejected_proposals") or [] if isinstance(r, dict)]
+        negative = page.get("verified_no_symbols") is True
+        complete = page.get("page_complete") is True
+        for source in sources:
+            sw, sh = source.get("image_width"), source.get("image_height")
+            sx = width / float(sw) if sw else 1.0
+            sy = height / float(sh) if sh else 1.0
+            for item in source.get("rejected_proposals") or []:
+                if not isinstance(item, dict) or not item.get("bbox_xyxy"):
+                    continue
+                item = _scaled(item, sx, sy)
+                if any(_box_iou(item["bbox_xyxy"], r.get("bbox_xyxy")) >= 0.5 for r in rejected):
+                    continue
+                rejected.append(item)
+                report["rejected_added"] += 1
+            for item in source.get("instances") or []:
+                if not isinstance(item, dict) or not item.get("bbox_xyxy"):
+                    continue
+                item = _scaled(item, sx, sy)
+                twin = next((i for i in instances if _box_iou(item["bbox_xyxy"], i.get("bbox_xyxy")) >= 0.5), None)
+                if twin is None:
+                    instances.append(item)
+                    report["boxes_added"] += 1
+                elif _review_rank(item) > _review_rank(twin):
+                    instances[instances.index(twin)] = item
+                    report["boxes_upgraded"] += 1
+            negative = negative or source.get("verified_no_symbols") is True
+            complete = complete or source.get("page_complete") is True
+            for key in ("vlm_assessment", "notes"):
+                if source.get(key) and not page.get(key):
+                    page[key] = source[key]
+        # A box a person rejected is not kept as a pending machine proposal.
+        instances = [i for i in instances if _review_rank(i) > 0 or not any(
+            _box_iou(i.get("bbox_xyxy"), r.get("bbox_xyxy")) >= 0.5 for r in rejected)]
+        if negative and not any(_review_rank(i) > 0 for i in instances):
+            instances = []
+        negative = negative and not instances
+        # Ids unique across boxes and rejected boxes; each box checked on its own.
+        taken: set[str] = set()
+        clean = []
+        for item in instances:
+            if item.get("verified_ground_truth") is True and incomplete_reason(item):
+                item.update(verified_ground_truth=False, uncertain=True, review_status="unreviewed")
+            ident, n = str(item.get("instance_id") or "merged"), 1
+            while ident in taken or not ID_PATTERN.fullmatch(ident):
+                ident, n = f"merged_p{index + 1}_{n}", n + 1
+            item["instance_id"] = ident
+            try:
+                validate_instances([item], width, height)
+            except (LabelingError, ValueError, TypeError):
+                report["invalid_dropped"] += 1
+                continue
+            taken.add(ident)
+            clean.append(_normalize_instance_for_save(item))
+        clean_rejected = []
+        for item in rejected:
+            item.update(review_status="rejected", review_source="human", verified_ground_truth=False,
+                        uncertain=True)
+            ident, n = str(item.get("instance_id") or "rejected"), 1
+            while ident in taken or not ID_PATTERN.fullmatch(ident):
+                ident, n = f"rejected_p{index + 1}_{n}", n + 1
+            item["instance_id"] = ident
+            try:
+                _valid_box(item.get("bbox_xyxy"), width, height)
+            except (LabelingError, ValueError, TypeError):
+                report["invalid_dropped"] += 1
+                continue
+            taken.add(ident)
+            clean_rejected.append(_normalize_instance_for_save(item))
+        complete = complete and not negative and all(i.get("verified_ground_truth") is True for i in clean)
+        page.update(instances=clean, rejected_proposals=clean_rejected, page_complete=complete,
+                    proposals_sha256=self.proposals_sha, image_width=width, image_height=height)
+        page.update(group_fields(self.pdf))
+        page.update(completeness(verified_no_symbols=negative, page_complete=complete))
+        if stored is not None and page == stored:
+            return False
+        if stored is None and not clean and not clean_rejected and not negative and not sources:
+            return False
+        document_labels.write_page(self.out_dir, self.json_prefix, index + 1, page,
+                                   expected_revision=stored_revision)
+        return True
 
     def page_overview(self) -> dict:
         """Which pages need review, without opening them: counts from every
@@ -1448,6 +1770,7 @@ class LabelingSession:
                 "variants_by_family": self.variants_by_family,
                 "attribute_schema": _attribute_schema_payload(),
                 "proposals_enabled": self.proposals is not None,
+                "proposals_version": self.proposals_sha,
                 "page_presence_suggestion": self.page_presence.get(index),
                 "mode": "edit" if self.edit else "pdf",
                 "json_filename": json_path.name if self.edit else f"{json_path.name} (page {index + 1})",
@@ -1756,13 +2079,9 @@ class LabelingSession:
             negatives: dict[int, bool] = {}
             if isinstance(raw, dict) and isinstance(raw.get("devices"), list):
                 baseline, _, _ = self._load(page_index)
-                saved_proposals = self.proposals
-                self.proposals = raw              # this file only, for this page only
-                try:
-                    incoming[page_index] = self._proposal_instances(
-                        page_index, int(baseline["image_width"]), int(baseline["image_height"]))
-                finally:
-                    self.proposals = saved_proposals
+                incoming[page_index] = self._proposal_instances(          # this file, this page
+                    page_index, int(baseline["image_width"]), int(baseline["image_height"]),
+                    sets=[("", raw)])
             elif isinstance(raw, dict) and isinstance(raw.get("pages"), list):
                 # Review decisions carry over only from an export of this exact PDF.
                 same_pdf = bool(self.source_hash) and raw.get("source_pdf_sha256") == self.source_hash
@@ -1941,6 +2260,36 @@ def _page_counts(data: dict) -> dict:
         "complete": data.get("page_complete") is True,
         "no_symbols": data.get("verified_no_symbols") is True,
     }
+
+
+def _review_rank(item: dict) -> int:
+    """How settled a box is: verified > accepted > drawn or edited by a person >
+    an agent's or model's box on a labeled page > raw machine proposal."""
+    if item.get("verified_ground_truth") is True:
+        return 4
+    if item.get("review_status") == "accepted":
+        return 3
+    if item.get("review_source") in ("human", "manual_draft"):
+        return 2
+    return 0 if _machine_pending(item) else 1
+
+
+def _scaled(item: dict, sx: float, sy: float) -> dict:
+    out = dict(item)
+    if sx == 1.0 and sy == 1.0:
+        return out
+    box = item.get("bbox_xyxy")
+    if isinstance(box, list) and len(box) == 4:
+        out["bbox_xyxy"] = [round(float(box[0]) * sx, 3), round(float(box[1]) * sy, 3),
+                            round(float(box[2]) * sx, 3), round(float(box[3]) * sy, 3)]
+    corners = item.get("obb_corners") or item.get("oriented_corners")
+    if isinstance(corners, list):
+        key = "obb_corners" if "obb_corners" in item else "oriented_corners"
+        try:
+            out[key] = [[round(float(x) * sx, 3), round(float(y) * sy, 3)] for x, y in corners]
+        except (TypeError, ValueError):
+            out.pop(key, None)
+    return out
 
 
 def _as_pending_import(item: dict) -> dict:

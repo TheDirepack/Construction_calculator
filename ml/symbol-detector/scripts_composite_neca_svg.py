@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+from blueprint_symbols.label_schema import read_page
 import argparse
 import glob
 import hashlib
@@ -199,7 +200,7 @@ def main() -> None:
 
     total = wall_total = free_total = pages_written = 0
     for n, path in enumerate(paths):
-        doc = json.loads(path.read_text())
+        doc = read_page(path)
         # Validate source attestations before creating derivative files. A
         # partial/unknown background may still produce synthetic positives,
         # but can NEVER produce class-wide background-negative labels.

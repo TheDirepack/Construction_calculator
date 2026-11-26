@@ -419,9 +419,10 @@ def build_pretrain_manifests(
     # unannotated regions into supervised detection negatives.
     labeled_tr: dict[str, list[dict[str, Any]]] = defaultdict(list)
     labeled_va: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for jpath in sorted(set(labeled_annotations or [])):
+    from blueprint_symbols.label_schema import expand_page_paths, read_page
+    for jpath in sorted(set(expand_page_paths(labeled_annotations or []))):
         try:
-            doc = json.loads(jpath.read_text())
+            doc = read_page(jpath)
         except (OSError, ValueError):
             audit['excluded_counts']['invalid_labeled_json'] += 1
             continue

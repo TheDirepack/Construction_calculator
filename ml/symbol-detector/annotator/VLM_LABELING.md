@@ -28,11 +28,12 @@ To make each image count, the tools pack a lot into one picture:
 ## Commands
 
 Run every command from `ml/symbol-detector/` on the laptop. The wrapper
-forwards it to the training machine. Page paths are remote paths of the form
+forwards it to the training machine. Pages are named by remote paths of the form
 `data/blueprints_and_libraries/1_blueprints/devices/<document>/<name>_p0012.json` (`p0012` = PDF page 12;
 evaluation drawings use `1_blueprints/evaluation/devices/`); copy them
-exactly as `next` and `doc` print them. A page's file appears on your first
-`act`; you can view any page before that.
+exactly as `next` and `doc` print them. These are page addresses, not files:
+every page of a PDF is stored in that folder's one `<name>_labels.json`,
+which your `act` updates. You can view any page before your first `act`.
 
 ```
 W=remote/vlm_label.sh

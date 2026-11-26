@@ -201,8 +201,81 @@ def training_view(data: dict) -> dict:
     return out
 
 
+# One labels file per PDF (annotator.document_labels) holds every page; training
+# names a page in it as "<folder>/<stem>_labels.json#p12".
+LABELS_SUFFIX = "_labels.json"
+_PAGE_REF = re.compile(r"^(?P<file>.+_labels\.json)#p(?P<page>\d+)$")
+_labels_cache: dict[str, tuple[int, int, dict]] = {}
+
+
+def page_ref(labels_file: str | Path, page: int) -> Path:
+    """The reference to 1-based ``page`` of a labels file."""
+    return Path(f"{Path(labels_file)}#p{int(page)}")
+
+
+def parse_page_ref(path: str | Path) -> tuple[Path, int] | None:
+    match = _PAGE_REF.match(str(path))
+    return (Path(match["file"]), int(match["page"])) if match else None
+
+
+def _labels_file(path: Path) -> dict:
+    stat = path.stat()
+    known = _labels_cache.get(str(path))
+    if known and known[:2] == (stat.st_size, stat.st_mtime_ns):
+        return known[2]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("pages"), dict):
+        raise ValueError(f"{path} is not a labels file")
+    _labels_cache[str(path)] = (stat.st_size, stat.st_mtime_ns, data)
+    return data
+
+
+def read_page(path: str | Path) -> dict:
+    """A saved page: from a page JSON, or from a PDF's labels file by
+    reference (``X_labels.json#p12``, with ``image_path`` made absolute so
+    ``Path(ref).parent / image_path`` still finds the image)."""
+    ref = parse_page_ref(path)
+    if ref is None:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    labels, page = ref
+    entry = _labels_file(labels)["pages"].get(str(page))
+    if entry is None:
+        raise FileNotFoundError(f"page {page} is not saved in {labels}")
+    entry = json.loads(json.dumps(entry))
+    if entry.get("image_path"):
+        entry["image_path"] = str((labels.parent / entry["image_path"]).resolve())
+    return entry
+
+
+def annotation_sha256(path: str | Path) -> str:
+    """Content hash of one annotation page: the file's bytes, or for a page of
+    a labels file, that page's own entry (other pages do not change it)."""
+    import hashlib
+    ref = parse_page_ref(path)
+    if ref is None:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    entry = _labels_file(ref[0])["pages"].get(str(ref[1]))
+    if entry is None:
+        raise FileNotFoundError(f"page {ref[1]} is not saved in {ref[0]}")
+    canonical = json.dumps(entry, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def expand_page_paths(paths) -> list[Path]:
+    """Page JSONs and page references, with every labels file expanded into
+    references to each of its saved pages."""
+    out: list[Path] = []
+    for path in paths:
+        path = Path(path)
+        if parse_page_ref(path) is None and path.name.endswith(LABELS_SUFFIX) and path.is_file():
+            out += [page_ref(path, int(k)) for k in sorted(_labels_file(path)["pages"], key=int)]
+        else:
+            out.append(path)
+    return out
+
+
 def load_training_page(path: str | Path) -> dict:
-    return training_view(json.loads(Path(path).read_text(encoding="utf-8")))
+    return training_view(read_page(path))
 
 
 def training_usable(data: dict) -> bool:

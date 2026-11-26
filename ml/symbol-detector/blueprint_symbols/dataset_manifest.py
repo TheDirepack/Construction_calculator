@@ -8,7 +8,7 @@ from pathlib import Path
 from collections import Counter,defaultdict
 import hashlib, json, math
 import cv2
-from .label_schema import PageFingerprints, load_training_page, page_fingerprint
+from .label_schema import PageFingerprints, annotation_sha256, load_training_page, page_fingerprint, read_page
 
 EXCLUDED={'__unmapped__','unmapped','ignore','unknown_symbol','__ignore__'}
 
@@ -74,7 +74,7 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     negative_pages=PageFingerprints(); negative_digests={}; duplicate_negatives=[]
     warnings=[]; counts=Counter(); group_counts=defaultdict(Counter)
     for path in sorted(set(Path(f).resolve() for f in files)):
-        raw=json.loads(path.read_text())
+        raw=read_page(path)             # a page JSON, or a page of a PDF's labels file
         if not isinstance(raw,dict) or 'instances' not in raw:
             continue
         data=load_training_page(path)   # saved devices -> detector classes
@@ -139,7 +139,7 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
             cls=inst.get('symbol_family')
             if cls not in EXCLUDED and cls and trusted_training_instance(inst):
                 counts[cls]+=1;group_counts[g][cls]+=1;seen.add(cls)
-        docs.append({'annotation':str(path),'annotation_sha256':_sha(path),
+        docs.append({'annotation':str(path),'annotation_sha256':annotation_sha256(path),
                      'image':str(img),'image_sha256':digest,
                      'project_group':g,'source_type':data.get('source_type','unknown'),
                      'image_width':data['image_width'],'image_height':data['image_height'],
@@ -296,7 +296,7 @@ def validate_manifest_sources(manifest: dict) -> None:
     for annotation,row in sources.items():
         if 'annotation_sha256' not in row:
             raise ValueError('manifest predates annotation hash validation; rebuild source manifest')
-        if _sha(Path(annotation)) != row['annotation_sha256']:
+        if annotation_sha256(annotation) != row['annotation_sha256']:
             raise ValueError(f'source annotation changed after manifest creation: {annotation}')
         image=Path(row['image'])
         if _sha(image) != row['image_sha256']:

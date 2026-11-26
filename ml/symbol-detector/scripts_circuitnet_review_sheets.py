@@ -799,6 +799,7 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
 
     first = batch_payloads[0]
     kept_devices: list[dict[str, Any]] = []
+    rejected_devices: list[dict[str, Any]] = []
     removed_count = 0
     unreviewed_count = 0
     wall_count = 0
@@ -813,6 +814,15 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
             )
             if decision == 'rejected':
                 removed_count += 1
+                # Recorded so the raw detection under it is not proposed again.
+                if item.get('provisional_bbox_pdf_bl') and item.get('pdf_page') is not None:
+                    rejected_devices.append({
+                        'pdf_page': int(item['pdf_page']),
+                        'device_index': item.get('device_index'),
+                        'device_type': item.get('provisional_device_type'),
+                        'symbol_bbox': item['provisional_bbox_pdf_bl'],
+                        'review_source': item.get('review_source') or 'unattributed',
+                    })
                 continue
             if decision == 'pending':
                 unreviewed_count += 1
@@ -882,12 +892,34 @@ def apply_batch_updates_to_devices(batch_payloads: list[dict[str, Any]]) -> dict
             'free_space_center': center_count,
         },
         'devices': kept_devices,
+        'rejected_devices': rejected_devices,
     }
 
 
+def merge_into_labels(refined: dict[str, Any], blueprints: Path) -> str:
+    """Put a PDF's reviewed detections into its one labels file (the
+    annotator's ``devices/<stem>_<sha12>/<stem>_labels.json``), as pending
+    boxes for a person to approve; the refined file is one of that PDF's
+    proposal sources, so the annotator shows its later edits too."""
+    from annotator.web import LabelingSession, openable_pdfs
+    name = str(refined.get('source_file') or '').casefold()
+    pdf = next((p for p in openable_pdfs(Path(blueprints)) if p.name.casefold() == name), None)
+    if pdf is None:
+        return f'not written: {refined.get("source_file")} is not in {blueprints} or its evaluation folder'
+    session = LabelingSession(pdf=pdf, blueprints_dir=Path(blueprints))
+    report = session.merge_pages({}, with_proposals=True)
+    return f'{session.out_dir.name}: {report["pages_written"]} pages written'
+
+
 def cmd_apply(args: argparse.Namespace) -> None:
+    from annotator.web import DEFAULT_WORK_DIR
     review_dir = args.review_dir.resolve()
-    out_dir = args.out.resolve()
+    out_dir = (args.out or DEFAULT_WORK_DIR / 'circuitnet_refined_devices').resolve()
+    if args.no_labels:
+        args.blueprints = None
+    elif args.blueprints is None:
+        from annotator import label_store
+        args.blueprints = label_store.default_store()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     pdf_dirs = sorted(p for p in review_dir.iterdir() if p.is_dir())
@@ -903,6 +935,9 @@ def cmd_apply(args: argparse.Namespace) -> None:
         refined = apply_batch_updates_to_devices(batches)
         out_path = out_dir / f'{pdir.name}_REFINED_DEVICES.json'
         out_path.write_text(json.dumps(refined, indent=2))
+        if args.blueprints is not None:
+            merged = merge_into_labels(refined, args.blueprints)
+            print(f'{pdir.name}: labels file {merged}', flush=True)
         s = refined['summary']
         print(
             f'{pdir.name}: kept={s["kept_devices"]} removed={s["removed_false_positives"]} '
@@ -938,7 +973,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     a = sub.add_parser('apply', help='Convert model-refined batch JSONs back into PDF-point device JSONs')
     a.add_argument('--review-dir', type=Path, required=True, help='Output folder from `render` with updated batch JSONs')
-    a.add_argument('--out', type=Path, required=True, help='Output folder for *_REFINED_DEVICES.json files')
+    a.add_argument('--blueprints', type=Path, default=None,
+                   help='1_blueprints folder whose per-PDF labels files receive the reviewed boxes '
+                        '(default: the label store, annotator.label_store.default_store)')
+    a.add_argument('--no-labels', action='store_true', help='only write the *_REFINED_DEVICES.json files')
+    a.add_argument('--out', type=Path, default=None,
+                   help='Output folder for *_REFINED_DEVICES.json files (default: '
+                        'work/circuitnet_refined_devices, where the annotator reads them)')
     a.set_defaults(func=cmd_apply)
 
     return ap

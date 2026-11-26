@@ -373,7 +373,11 @@ drawings (`annotator/label_store.py`; the store is the `1_blueprints` folder).
 Agent batches are in `1_blueprints/devices/batches/`. Each folder holds:
 
 - `document.json`: the source PDF, its hash, page count and pages to label;
-- page JSONs `<name>_p0012.json`, numbered by 1-based PDF page;
+- `<name>_labels.json`: every saved page of the PDF in one file, keyed by
+  1-based PDF page (human, agent, model and imported boxes, and the pending
+  DEVICES/SAM/CircuitNet proposals). `scripts_merge_labels.py` merges older
+  page files and other machines' labels into it; training reads generated
+  per-page views of it under `work/label_pages/`;
 - `images/`: pages rendered from the PDF on demand;
 - `legend/`, `survey.json` and `outline.json`.
 
@@ -382,7 +386,7 @@ Photos are one-page `image` documents, kept in the folder's `images/` under
 and `python -m annotator.web --pdf X.pdf` opens the same pages that agents and
 the model labeled. `remote/sync.sh --blueprints` never mirrors label folders,
 so it cannot delete the agents' work; `remote/push_labels.sh` sends the
-laptop's labels.
+laptop's verified pages, which replace the same pages on the training machine.
 
 Vision-model agents propose boxes through `annotator/agent_cli.py`, which
 they drive from the laptop with `remote/vlm_label.sh`. Their instructions are

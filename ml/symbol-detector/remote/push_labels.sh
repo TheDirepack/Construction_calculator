@@ -8,9 +8,8 @@
 #
 # Sends every page training can use (a verified box, "every symbol on this
 # page is labeled", or "verified no target symbols") with its page image. The
-# remote merges them page by page into its own labels file, so pages labelled
-# there (agents, model) are kept; a remote page it replaces is saved in
-# <prefix>_labels.remote_backup.json. Safe to re-run. Override the target with
+# remote merges them page by page into its own labels file: a pushed page
+# replaces that page there, other pages (agents, model) are kept. Safe to re-run. Override the target with
 # REMOTE=user@host and REMOTE_STORE=path. The remote needs this code synced
 # (remote/sync.sh) first.
 set -euo pipefail

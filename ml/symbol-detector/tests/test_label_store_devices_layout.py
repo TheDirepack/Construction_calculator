@@ -79,7 +79,7 @@ def test_annotator_saves_into_the_devices_folder(blueprints):
         assert [p.name for p in session.out_dir.glob("*.json")] and \
             {p.name for p in session.out_dir.glob("*.json")} == {"document.json", f"{pdf.stem}_labels.json"}
     pages = label_store.labeled_pages(bp)
-    folder = lambda view: label_store.view_source(view)[0].folder.parent  # noqa: E731
+    folder = lambda view: label_store.page_source(view)[0].folder.parent  # noqa: E731
     assert [folder(p) for p in pages["train"]] == [bp / "devices"]
     assert [folder(p) for p in pages["evaluation"]] == [bp / "evaluation" / "devices"]
     listed = {d["name"]: d for d in LabelingSession(pdf=train, blueprints_dir=bp).list_documents()}

@@ -10,6 +10,8 @@ on:
       - 'ml/symbol-detector/tests/test_annotator_access_and_documents.py'
       - 'ml/symbol-detector/tests/test_annotator_long_documents.py'
       - 'ml/symbol-detector/tests/test_label_store_devices_layout.py'
+      - 'ml/symbol-detector/tests/test_document_labels.py'
+      - 'ml/symbol-detector/scripts_merge_labels.py'
       - 'ml/symbol-detector/annotator/label_store.py'
       - 'ml/symbol-detector/remote/sync.sh'
       - 'ml/symbol-detector/scripts_migrate_label_store.py'
@@ -54,3 +56,4 @@ jobs:
           python -m pytest -q tests/test_annotator_browser.py tests/test_annotator_web.py
           tests/test_annotator_improvements.py tests/test_annotator_access_and_documents.py
           tests/test_annotator_long_documents.py tests/test_label_store_devices_layout.py
+          tests/test_document_labels.py
