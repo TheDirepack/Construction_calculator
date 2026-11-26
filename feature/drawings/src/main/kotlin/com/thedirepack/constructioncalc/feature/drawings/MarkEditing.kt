@@ -3,8 +3,15 @@ package com.thedirepack.constructioncalc.feature.drawings
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanPoint
+import com.thedirepack.constructioncalc.core.model.PlanSymbolPlacement
 import com.thedirepack.constructioncalc.core.model.newId
+import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.ceil
+import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.hypot
 import kotlin.math.min
 
@@ -16,7 +23,10 @@ internal fun markAt(marks: List<PlanMark>, point: PlanPoint, radius: Double): Pl
         val last = mark.points.last()
         when (mark.kind) {
             PlanMarkKind.RECTANGLE, PlanMarkKind.CLOUD -> contains(point, first, last, radius)
-            PlanMarkKind.SYMBOL -> contains(point, first, first.offset(mark.width, mark.width), radius)
+            PlanMarkKind.SYMBOL -> mark.symbol?.let { symbol ->
+                val (lx, ly) = symbolLocal(first, symbol.rotationDegrees, point)
+                abs(lx) <= symbol.size / 2 + radius && abs(ly) <= symbol.size / 2 + radius
+            } ?: false
             PlanMarkKind.TEXT, PlanMarkKind.CALLOUT -> {
                 val box = if (mark.kind == PlanMarkKind.CALLOUT) last else first
                 val lines = mark.text.lines()
@@ -55,7 +65,35 @@ private fun contains(point: PlanPoint, a: PlanPoint, b: PlanPoint, margin: Doubl
     point.x >= minOf(a.x, b.x) - margin && point.x <= maxOf(a.x, b.x) + margin &&
         point.y >= minOf(a.y, b.y) - margin && point.y <= maxOf(a.y, b.y) + margin
 
+/** [point] in a symbol's own frame: origin at its center, axes turned with it. */
+private fun symbolLocal(center: PlanPoint, rotationDegrees: Double, point: PlanPoint): Pair<Double, Double> {
+    val a = Math.toRadians(rotationDegrees)
+    val dx = point.x - center.x
+    val dy = point.y - center.y
+    return (dx * cos(a) + dy * sin(a)) to (-dx * sin(a) + dy * cos(a))
+}
+
+private fun symbolPoint(center: PlanPoint, rotationDegrees: Double, lx: Double, ly: Double): PlanPoint {
+    val a = Math.toRadians(rotationDegrees)
+    return center.offset(lx * cos(a) - ly * sin(a), lx * sin(a) + ly * cos(a))
+}
+
+/** Gap between a symbol's top edge and its rotate handle, as a share of its size. */
+private const val ROTATE_HANDLE_GAP = 0.45
+
+/**
+ * Edit handles. A symbol has two: 0 resizes from its corner (it stays square and centered),
+ * 1 turns it from above its top edge.
+ */
 internal fun PlanMark.editHandles(): List<PlanPoint> {
+    symbol?.let { s ->
+        val center = points.first()
+        val half = s.size / 2
+        return listOf(
+            symbolPoint(center, s.rotationDegrees, half, half),
+            symbolPoint(center, s.rotationDegrees, 0.0, -half - s.size * ROTATE_HANDLE_GAP),
+        )
+    }
     if (points.size < 2) return emptyList()
     val first = points.first()
     val p1 = points[1]
@@ -69,6 +107,16 @@ internal fun PlanMark.editHandles(): List<PlanPoint> {
 }
 
 internal fun PlanMark.resize(handle: Int, point: PlanPoint): PlanMark {
+    symbol?.let { s ->
+        val center = points.first()
+        return if (handle == 0) {
+            val (lx, ly) = symbolLocal(center, s.rotationDegrees, point)
+            val size = (2 * max(abs(lx), abs(ly))).coerceIn(PlanSymbolPlacement.MIN_SIZE, PlanSymbolPlacement.MAX_SIZE)
+            copy(symbol = s.copy(size = size))
+        } else {
+            copy(symbol = s.copy(rotationDegrees = rotationToward(center, point)))
+        }
+    }
     val first = points.first()
     val p1 = points.getOrElse(1) { first }
     val end = points.last()
@@ -90,6 +138,19 @@ internal fun PlanMark.resize(handle: Int, point: PlanPoint): PlanMark {
             else -> listOf(PlanPoint(first.x, point.y), PlanPoint(point.x, end.y))
         },
     )
+}
+
+/**
+ * The rotation that points a symbol's top at [point], in whole 5° steps, snapping to the nearest
+ * right angle within 4° so plans' usual orientations are easy to hit.
+ */
+internal fun rotationToward(center: PlanPoint, point: PlanPoint): Double {
+    if (point == center) return 0.0
+    val degrees = Math.toDegrees(atan2(point.y - center.y, point.x - center.x)) + 90.0
+    val normalized = PlanSymbolPlacement.normalizeDegrees(degrees)
+    val right = (normalized / 90.0).roundToInt() * 90.0
+    val snapped = if (abs(normalized - right) <= 4.0) right else (normalized / 5.0).roundToInt() * 5.0
+    return PlanSymbolPlacement.normalizeDegrees(snapped)
 }
 
 internal fun PlanMark.move(dx: Double, dy: Double): PlanMark =

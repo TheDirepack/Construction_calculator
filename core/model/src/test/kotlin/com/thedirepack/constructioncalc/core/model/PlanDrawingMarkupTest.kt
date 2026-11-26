@@ -94,7 +94,14 @@ class PlanDrawingMarkupTest {
                 page = 0,
                 kind = PlanMarkKind.SYMBOL,
                 points = listOf(p(20.0, 20.0)),
-                text = "Duplex receptacle",
+                symbol = PlanSymbolPlacement(
+                    deviceId = "receptacle.duplex_gfci",
+                    size = 18.0,
+                    rotationDegrees = 90.0,
+                    source = PlanSymbolSource.DETECTED,
+                    confidence = 0.82f,
+                    reviewState = PlanReviewState.PENDING,
+                ),
                 circuitTag = "5R4-B-36",
                 areaTag = "Room 104",
             ),
@@ -144,8 +151,18 @@ class PlanDrawingMarkupTest {
             PlanMark(page = 0, kind = PlanMarkKind.DETAIL_LINK, points = listOf(p(0.0, 0.0)), targetDrawingId = "  ")
         }
         assertThrows(IllegalArgumentException::class.java) {
-            PlanMark(page = 0, kind = PlanMarkKind.SYMBOL, points = listOf(p(0.0, 0.0)), areaTag = "x".repeat(81))
+            PlanMark(page = 0, kind = PlanMarkKind.SYMBOL, points = listOf(p(0.0, 0.0)), symbol = PlanSymbolPlacement("switch.dimmer"), areaTag = "x".repeat(81))
         }
+        // A symbol mark always carries its placement, and nothing else does.
+        assertThrows(IllegalArgumentException::class.java) {
+            PlanMark(page = 0, kind = PlanMarkKind.SYMBOL, points = listOf(p(0.0, 0.0)))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PlanMark(page = 0, kind = PlanMarkKind.TEXT, points = listOf(p(0.0, 0.0)), symbol = PlanSymbolPlacement("switch.dimmer"))
+        }
+        assertThrows(IllegalArgumentException::class.java) { PlanSymbolPlacement("switch.dimmer", rotationDegrees = 360.0) }
+        assertThrows(IllegalArgumentException::class.java) { PlanSymbolPlacement("switch.dimmer", confidence = 1.5f) }
+        assertThrows(IllegalArgumentException::class.java) { PlanSymbolPlacement("switch.dimmer", size = 0.0) }
     }
 
     @Test fun dimensionLengthUsesCalibrationAndRejectsBoundaryCrossings() {

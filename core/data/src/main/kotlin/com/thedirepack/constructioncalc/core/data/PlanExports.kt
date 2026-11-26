@@ -15,6 +15,7 @@ import android.os.ParcelFileDescriptor
 import android.util.LruCache
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.PlanArrowStyle
+import com.thedirepack.constructioncalc.core.model.PlanCustomSymbol
 import com.thedirepack.constructioncalc.core.model.PlanDashStyle
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
 import com.thedirepack.constructioncalc.core.model.PlanMark
@@ -240,8 +241,9 @@ object PlanExports {
             val measured = drawing.dimensionLength(mark)?.let { "≈ ${format(it)}" } ?: "Uncalibrated"
             if (mark.text.isBlank()) measured else "${mark.text}: $measured"
         }
-        drawing.marks.filter { it.page == pageNumber }.forEach {
-            drawPlanMark(canvas, it, dimensionLabel = dimensionFormatter)
+        // Exports show what counts: pending and rejected detections stay in the app.
+        drawing.marks.filter { it.page == pageNumber && it.symbol?.counts != false }.forEach {
+            drawPlanMark(canvas, it, dimensionLabel = dimensionFormatter, customSymbols = drawing.customSymbols, showReview = false)
         }
         drawing.paths.filter { it.page == pageNumber }.forEach { savedPath ->
             val androidPath = Path().apply {
@@ -736,7 +738,7 @@ object PlanExports {
     }
 
     private fun hasPageAnnotations(drawing: PlanDrawing, page: Int): Boolean =
-        drawing.marks.any { it.page == page } ||
+        drawing.marks.any { it.page == page && it.symbol?.counts != false } ||
             drawing.paths.any { it.page == page } ||
             drawing.routes.any { it.page == page } ||
             drawing.measurements.any { it.page == page }
@@ -834,6 +836,10 @@ fun drawPlanMark(
     paint: Paint = Paint(),
     path: Path = Path(),
     dimensionLabel: ((PlanMark) -> String?)? = null,
+    /** Artwork for `custom:` symbol marks (the drawing's [PlanDrawing.customSymbols]). */
+    customSymbols: List<PlanCustomSymbol> = emptyList(),
+    /** Draw pending and rejected symbols in their review styles (false: draw only accepted ones). */
+    showReview: Boolean = true,
 ) {
     val points = mark.points
     val first = points.first()
@@ -1105,7 +1111,7 @@ fun drawPlanMark(
             val label = mark.text.ifBlank { "Detail" }
             drawBadgeCaption(canvas, paint, x + r + 4f, y, label, maxOf(10f, badge * 0.45f), baseColor, effectiveAlpha)
         }
-        PlanMarkKind.SYMBOL -> mark.svg?.let { drawPlanSymbol(canvas, it, x, y, x + width, y + width) }
+        PlanMarkKind.SYMBOL -> DeviceGlyphs.drawSymbolMark(canvas, mark, paint, customSymbols, showReview)
     }
 }
 

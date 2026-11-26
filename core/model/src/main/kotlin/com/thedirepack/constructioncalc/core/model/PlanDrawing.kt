@@ -495,6 +495,66 @@ enum class PlanDashStyle { SOLID, DASHED, DOTTED }
 @Serializable
 enum class PlanArrowStyle { NONE, END, BOTH, FILLED_END, FILLED_BOTH }
 
+/** Where a symbol mark came from. */
+@Serializable
+enum class PlanSymbolSource { MANUAL, DETECTED }
+
+/** Review of a symbol mark. Only [ACCEPTED] symbols count toward takeoffs and the material list. */
+@Serializable
+enum class PlanReviewState { PENDING, ACCEPTED, REJECTED }
+
+/**
+ * A placed device symbol. The artwork is looked up by [deviceId], never stored on the mark: a
+ * catalog id (`receptacle.duplex`, see [DeviceCatalog]) or `custom:<uuid>` for an imported SVG
+ * kept once per drawing in [PlanDrawing.customSymbols]. The mark's single point is the symbol's
+ * center; [size] is the side of its square in page points, turned by [rotationDegrees] clockwise.
+ */
+@Serializable
+data class PlanSymbolPlacement(
+    val deviceId: String,
+    val size: Double = DEFAULT_SIZE,
+    val rotationDegrees: Double = 0.0,
+    val source: PlanSymbolSource = PlanSymbolSource.MANUAL,
+    /** Detector confidence (0–1) for a detected symbol. */
+    val confidence: Float? = null,
+    val reviewState: PlanReviewState = PlanReviewState.ACCEPTED,
+) {
+    init {
+        require(deviceId.isNotBlank() && deviceId.length <= 120 && deviceId.none(Char::isISOControl))
+        require(size.isFinite() && size in MIN_SIZE..MAX_SIZE)
+        require(rotationDegrees.isFinite() && rotationDegrees >= 0.0 && rotationDegrees < 360.0)
+        require(confidence == null || confidence.isFinite() && confidence in 0f..1f)
+    }
+
+    val counts: Boolean get() = reviewState == PlanReviewState.ACCEPTED
+    val isCustom: Boolean get() = deviceId.startsWith(CUSTOM_PREFIX)
+
+    fun rotatedBy(degrees: Double): PlanSymbolPlacement = copy(rotationDegrees = normalizeDegrees(rotationDegrees + degrees))
+
+    companion object {
+        const val CUSTOM_PREFIX = "custom:"
+        const val DEFAULT_SIZE = 24.0
+        const val MIN_SIZE = 2.0
+        const val MAX_SIZE = 2_000.0
+
+        fun normalizeDegrees(degrees: Double): Double {
+            val r = degrees % 360.0
+            val n = if (r < 0) r + 360.0 else r
+            return if (n >= 360.0) 0.0 else n
+        }
+    }
+}
+
+/** An imported SVG used by symbol marks on one drawing, stored once however many marks use it. */
+@Serializable
+data class PlanCustomSymbol(val id: String, val name: String, val svg: String) {
+    init {
+        require(id.startsWith(PlanSymbolPlacement.CUSTOM_PREFIX) && id.length <= 120)
+        require(name.isNotBlank() && name.length <= 240)
+        require(svg.isNotBlank() && svg.length <= 256 * 1024)
+    }
+}
+
 @Serializable
 data class PlanMark(
     val id: String = newId(),
@@ -502,7 +562,8 @@ data class PlanMark(
     val kind: PlanMarkKind,
     val points: List<PlanPoint>,
     val text: String = "",
-    val svg: String? = null,
+    /** Set exactly for [PlanMarkKind.SYMBOL] marks. */
+    val symbol: PlanSymbolPlacement? = null,
     val pressures: List<Float> = emptyList(),
     val width: Double = 2.0,
     val color: Long? = null,
@@ -521,7 +582,7 @@ data class PlanMark(
         require(page >= 0 && points.size in 1..20_000 && text.length <= 2_000)
         require(circuitTag.length <= 80)
         require(areaTag.length <= 80)
-        require(svg == null || svg.length <= 256 * 1024)
+        require((kind == PlanMarkKind.SYMBOL) == (symbol != null)) { "A symbol mark needs its placement, and only symbol marks have one." }
         require(pressures.isEmpty() || pressures.size == points.size && pressures.all { it.isFinite() && it >= 0f })
         require(width.isFinite() && width > 0 && width <= 1_000)
         require(color == null || color in 0..0xffff_ffffL)
@@ -589,9 +650,12 @@ data class PlanDrawing(
     val paths: List<PlanPath> = emptyList(),
     val sheetRevisions: Map<Int, SheetRevision> = emptyMap(),
     val scaleLocked: Boolean = false,
+    /** Imported SVG artwork referenced by `custom:` symbol marks. */
+    val customSymbols: List<PlanCustomSymbol> = emptyList(),
 ) {
     init {
         require(name.isNotBlank() && name.length <= 240)
+        require(customSymbols.map { it.id }.toSet().size == customSymbols.size)
         require(sheetRevisions.keys.all { it >= 0 })
         require(sha256.length == 64 && sha256.all { it in '0'..'9' || it in 'a'..'f' })
     }
@@ -637,6 +701,10 @@ data class PlanDrawing(
         if (first == second) return null
         return calibrationFor(mark.page, first, second)?.distance(first, second)
     }
+
+    /** Adds [symbol] to [customSymbols] unless one with its id is already there. */
+    fun withCustomSymbol(symbol: PlanCustomSymbol): PlanDrawing =
+        if (customSymbols.any { it.id == symbol.id }) this else copy(customSymbols = customSymbols + symbol)
 
     fun referencedPhotoHashes(): Set<String> = marks.mapNotNullTo(mutableSetOf()) { it.photoSha256 }
 }

@@ -4,6 +4,9 @@ import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Dimension
 import com.thedirepack.constructioncalc.core.measure.Quantity
 import com.thedirepack.constructioncalc.core.model.PlanCalibrationLayer
+import com.thedirepack.constructioncalc.core.model.PlanCustomSymbol
+import com.thedirepack.constructioncalc.core.model.PlanReviewState
+import com.thedirepack.constructioncalc.core.model.PlanSymbolPlacement
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
@@ -21,11 +24,16 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+private const val DUPLEX = "receptacle.duplex"
+
 class PlanTakeoffTest {
     private fun p(x: Double, y: Double) = PlanPoint(x, y)
     private fun inches(n: Long) = Quantity.inches(Rational.of(n)).stored()
     private fun line(page: Int, length: Double, label: String = "") =
         PlanMeasurement(page = page, first = p(0.0, 10.0 * page), second = p(length, 10.0 * page), label = label)
+
+    private fun symbol(page: Int, at: PlanPoint, deviceId: String = DUPLEX, state: PlanReviewState = PlanReviewState.ACCEPTED, circuit: String = "", area: String = "") =
+        PlanMark(page = page, kind = PlanMarkKind.SYMBOL, points = listOf(at), symbol = PlanSymbolPlacement(deviceId, reviewState = state), circuitTag = circuit, areaTag = area)
 
     private val base = PlanDrawing(
         name = "E1.pdf",
@@ -58,7 +66,7 @@ class PlanTakeoffTest {
     @Test fun takeoffCarriesSourcesForBothMeasuredAndCountOnlySheets() {
         val drawing = base.copy(
             measurements = listOf(line(0, 25.0), line(0, 10.0)),
-            marks = listOf(PlanMark(page = 3, kind = PlanMarkKind.SYMBOL, points = listOf(p(1.0, 2.0)))),
+            marks = listOf(symbol(3, p(1.0, 2.0))),
             sheetRevisions = mapOf(0 to SheetRevision("E101", "C", 3), 3 to SheetRevision("E501", "A", 1)),
         )
         assertEquals(listOf(drawing.sheetSource(0), drawing.sheetSource(3)), PlanTakeoff.summarize(drawing).sources)
@@ -76,29 +84,38 @@ class PlanTakeoffTest {
         assertEquals(Rational.of(10), takeoff.measuredTotal.value)
     }
 
-    @Test fun countsSymbolsByName() {
-        fun symbol(name: String) = PlanMark(page = 0, kind = PlanMarkKind.SYMBOL, points = listOf(p(1.0, 1.0)), svg = "<svg/>", text = name)
+    @Test fun countsAcceptedSymbolsByCatalogDevice() {
+        val custom = PlanCustomSymbol("custom:x", "Floor box", "<svg viewBox=\"0 0 1 1\"><rect width=\"1\" height=\"1\"/></svg>")
         val drawing = base.copy(
+            customSymbols = listOf(custom),
             marks = listOf(
-                symbol("Duplex"), symbol("Duplex"), symbol("2x4 troffer"), symbol(""),
+                symbol(0, p(1.0, 1.0)), symbol(0, p(2.0, 1.0)), symbol(0, p(3.0, 1.0), "luminaire.troffer_2x4"), symbol(0, p(4.0, 1.0), "custom:x"),
+                // Detections waiting for review and rejected ones never count.
+                symbol(0, p(5.0, 1.0), state = PlanReviewState.PENDING),
+                symbol(0, p(6.0, 1.0), state = PlanReviewState.REJECTED),
                 PlanMark(page = 0, kind = PlanMarkKind.TEXT, points = listOf(p(1.0, 1.0)), text = "5R4-B-36"),
                 PlanMark(page = 0, kind = PlanMarkKind.LINE, points = listOf(p(1.0, 1.0), p(2.0, 2.0))),
             ),
         )
         val takeoff = PlanTakeoff.summarize(drawing)
-        assertEquals(listOf("2x4 troffer" to 1, "Duplex" to 2, "Symbol" to 1), takeoff.symbols.map { it.name to it.count })
+        assertEquals(
+            listOf("Floor box" to 1, "Light Fixture - Troffer 2x4" to 1, "Receptacle - Duplex" to 2),
+            takeoff.symbols.map { it.name to it.count },
+        )
+        assertEquals(1, takeoff.pendingSymbols)
         assertEquals(1, takeoff.textNotes)
         assertFalse(takeoff.isEmpty)
         assertTrue(PlanTakeoff.summarize(base).isEmpty)
     }
 
     @Test fun circuitCountsPreserveOverallDeviceTotals() {
-        val mark = PlanMark(page = 0, kind = PlanMarkKind.SYMBOL, points = listOf(p(1.0, 1.0)), text = "Duplex")
+        val mark = symbol(0, p(1.0, 1.0))
         val takeoff = PlanTakeoff.summarize(base.copy(marks = listOf(
             mark, mark.copy(circuitTag = "E-36"), mark.copy(circuitTag = "e-36"), mark.copy(circuitTag = "E-38"),
         )))
-        assertEquals(listOf(SymbolCount("Duplex", 4)), takeoff.symbols)
-        assertEquals(listOf(SymbolCount("Duplex", 2, "E-36"), SymbolCount("Duplex", 1, "E-38")), takeoff.symbolsByCircuit)
+        val name = "Receptacle - Duplex"
+        assertEquals(listOf(SymbolCount(name, 4, deviceId = DUPLEX)), takeoff.symbols)
+        assertEquals(listOf(SymbolCount(name, 2, "E-36", deviceId = DUPLEX), SymbolCount(name, 1, "E-38", deviceId = DUPLEX)), takeoff.symbolsByCircuit)
     }
 
     @Test fun flagsRoutesWhosePlanLengthMovedSinceTheyWereSent() {
@@ -130,8 +147,8 @@ class PlanTakeoffTest {
                 zones = listOf(zone),
                 paths = listOf(openPath, rectArea, crossingPath),
                 marks = listOf(
-                    PlanMark(page = 0, kind = PlanMarkKind.SYMBOL, points = listOf(p(1.0, 1.0)), text = "Duplex", circuitTag = "e-36", areaTag = "Kitchen"),
-                    PlanMark(page = 0, kind = PlanMarkKind.SYMBOL, points = listOf(p(2.0, 2.0)), text = "Duplex", circuitTag = "E-36", areaTag = "Kitchen"),
+                    symbol(0, p(1.0, 1.0), circuit = "e-36", area = "Kitchen"),
+                    symbol(0, p(2.0, 2.0), circuit = "E-36", area = "Kitchen"),
                     PlanMark(page = 2, kind = PlanMarkKind.CLOUD_CALLOUT, points = listOf(p(5.0, 5.0), p(25.0, 25.0), p(35.0, 5.0)), text = "Note"),
                 ),
                 routes = listOf(
@@ -148,7 +165,7 @@ class PlanTakeoffTest {
         assertEquals(1, takeoff.multiScalePathCount)
         assertEquals(0, takeoff.uncalibratedPathCount)
         assertEquals(1, takeoff.textNotes)
-        assertEquals(listOf(SymbolCount("Duplex", 2, area = "Kitchen")), takeoff.symbolsByArea)
+        assertEquals(listOf(SymbolCount("Receptacle - Duplex", 2, area = "Kitchen", deviceId = DUPLEX)), takeoff.symbolsByArea)
         val circuitGroup = takeoff.byCircuitCombined.single()
         assertEquals("E-36", circuitGroup.circuit)
         assertEquals(2, circuitGroup.symbols.single().count)

@@ -103,6 +103,13 @@ internal fun TakeoffDialog(
                     takeoff.symbols.forEach { TotalRow(it.name, it.count.toString()) }
                     if (takeoff.textNotes > 0) TotalRow("Text notes", takeoff.textNotes.toString())
                 }
+                if (takeoff.pendingSymbols > 0) {
+                    Text(
+                        "${takeoff.pendingSymbols} recognized symbol(s) are waiting for review and aren't counted.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 if (takeoff.symbolsByArea.isNotEmpty()) {
                     Section("Counts by area")
                     takeoff.symbolsByArea.forEach { TotalRow("${it.area} · ${it.name}", it.count.toString()) }

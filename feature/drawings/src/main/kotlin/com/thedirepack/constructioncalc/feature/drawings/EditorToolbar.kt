@@ -585,6 +585,9 @@ internal fun EditorOptions(
     onExportSheet: () -> Unit,
     onExportPdf: () -> Unit,
     onExportJson: () -> Unit,
+    onRecognize: (() -> Unit)? = null,
+    pendingSymbols: Int = 0,
+    onReview: (() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -622,6 +625,10 @@ internal fun EditorOptions(
                 action = onToggleHighlights,
             )
             MenuItem("Rotate view", close, R.drawable.ic_plan_rotate, action = onRotate)
+            if (onRecognize != null) MenuItem("Recognize symbols…", close, R.drawable.ic_plan_tool_symbol, action = onRecognize)
+            if (onReview != null && pendingSymbols > 0) {
+                MenuItem("Review recognized symbols ($pendingSymbols)", close, R.drawable.ic_plan_tool_symbol, action = onReview)
+            }
             MenuItem("Takeoff totals", close, R.drawable.ic_plan_takeoff, action = onTakeoff)
             MenuItem("Page measurements and markups", close, R.drawable.ic_plan_layers, action = onPageItems)
             HorizontalDivider()

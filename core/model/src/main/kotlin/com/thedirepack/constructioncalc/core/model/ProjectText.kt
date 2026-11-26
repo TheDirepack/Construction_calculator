@@ -105,6 +105,7 @@ object ProjectText {
         appendLine("MATERIAL TAKEOFF")
         takeoff.wire.forEach { appendLine("  Wire ${it.label}: ${runLength(it.feet, units)}") }
         takeoff.conduit.forEach { appendLine("  Conduit ${it.label(units)}: ${runLength(it.feet, units)}") }
+        takeoff.devices.forEach { appendLine("  Device ${it.name}: ${it.count}") }
         takeoff.notes.forEach { appendLine("  ⚠ ${it.text}") }
     }
 

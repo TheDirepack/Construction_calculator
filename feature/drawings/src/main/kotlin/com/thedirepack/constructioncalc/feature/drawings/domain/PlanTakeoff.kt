@@ -3,7 +3,9 @@ package com.thedirepack.constructioncalc.feature.drawings.domain
 import com.thedirepack.constructioncalc.core.math.Rational
 import com.thedirepack.constructioncalc.core.measure.Dimension
 import com.thedirepack.constructioncalc.core.measure.Quantity
+import com.thedirepack.constructioncalc.core.model.DeviceCatalog
 import com.thedirepack.constructioncalc.core.model.PlanDrawing
+import com.thedirepack.constructioncalc.core.model.PlanSymbolCounts
 import com.thedirepack.constructioncalc.core.model.PlanMark
 import com.thedirepack.constructioncalc.core.model.PlanMarkKind
 import com.thedirepack.constructioncalc.core.model.PlanPathMeasurement
@@ -20,6 +22,8 @@ data class SymbolCount(
     val count: Int,
     val circuit: String = "",
     val area: String = "",
+    /** Catalog device id or `custom:` id the count is for. */
+    val deviceId: String = "",
 )
 
 /** A route sent to a run, measured with the drawing's current calibration. */
@@ -64,11 +68,13 @@ data class TakeoffSummary(
     val pathPolygonArea: Quantity = Quantity(Rational.ZERO, Dimension.AREA),
     val uncalibratedPathCount: Int = 0,
     val multiScalePathCount: Int = 0,
+    /** Detected symbols still waiting for review; they don't count until accepted. */
+    val pendingSymbols: Int = 0,
 ) {
     val isEmpty: Boolean
         get() = measuredCount == 0 && uncalibratedCount == 0 && symbols.isEmpty() && textNotes == 0 &&
             routes.isEmpty() && pathPolylineCount == 0 && pathPolygonCount == 0 &&
-            uncalibratedPathCount == 0 && multiScalePathCount == 0
+            uncalibratedPathCount == 0 && multiScalePathCount == 0 && pendingSymbols == 0
 }
 
 /**
@@ -76,7 +82,7 @@ data class TakeoffSummary(
  * each measurement's full value; rounding happens only where they're shown.
  */
 object PlanTakeoff {
-    fun summarize(drawing: PlanDrawing): TakeoffSummary {
+    fun summarize(drawing: PlanDrawing, catalog: () -> DeviceCatalog = { DeviceCatalog.bundled }): TakeoffSummary {
         val lengths = drawing.measurements.map { it to drawing.length(it) }
         val measured = lengths.filter { it.second != null }
         fun total(items: List<Pair<*, Quantity?>>) =
@@ -89,11 +95,12 @@ object PlanTakeoff {
             .groupBy { it.first.label.trim().lowercase() }
             .map { (_, items) -> LengthGroup(items.first().first.label.trim(), items.size, total(items)) }
             .sortedBy { it.name.lowercase() }
-        val symbolMarks = drawing.marks.filter { it.kind == PlanMarkKind.SYMBOL }
+        // Only accepted symbols count; pending detections wait for review.
+        val symbolMarks = PlanSymbolCounts.accepted(drawing)
         fun counts(marks: List<PlanMark>, circuit: String = "", area: String = "") =
-            marks.groupingBy { it.text.trim().ifBlank { "Symbol" } }
+            marks.groupingBy { it.symbol!!.deviceId }
                 .eachCount()
-                .map { (name, count) -> SymbolCount(name, count, circuit = circuit, area = area) }
+                .map { (id, count) -> SymbolCount(PlanSymbolCounts.name(drawing, id, catalog), count, circuit = circuit, area = area, deviceId = id) }
                 .sortedBy { it.name.lowercase() }
         val byCircuit = symbolMarks.filter { it.circuitTag.isNotBlank() }
             .groupBy { it.circuitTag.trim().uppercase() }
@@ -174,6 +181,7 @@ object PlanTakeoff {
             pathPolygonArea = Quantity(polygonArea, Dimension.AREA),
             uncalibratedPathCount = uncalibratedPaths,
             multiScalePathCount = multiScalePaths,
+            pendingSymbols = PlanSymbolCounts.pending(drawing).size,
         )
     }
 }

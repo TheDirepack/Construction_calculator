@@ -6,6 +6,8 @@ import com.thedirepack.constructioncalc.core.electrical.ConduitType
 import com.thedirepack.constructioncalc.core.electrical.InsulationType
 import com.thedirepack.constructioncalc.core.electrical.TradeSize
 import com.thedirepack.constructioncalc.core.measure.UnitSystem
+import com.thedirepack.constructioncalc.core.model.DeviceCount
+import com.thedirepack.constructioncalc.core.model.PlanSymbolCounts
 import com.thedirepack.constructioncalc.core.model.Project
 
 /** Wire of one size, insulation and metal across the project, in feet. */
@@ -29,8 +31,14 @@ data class ConduitTakeoff(val type: ConduitType, val size: TradeSize?, val feet:
         listOfNotNull(size?.let { if (units == UnitSystem.METRIC) "${it.display} (${it.metricDesignator})" else it.display }, type.displayName).joinToString(" ")
 }
 
-data class MaterialTakeoff(val wire: List<WireTakeoff>, val conduit: List<ConduitTakeoff>, val notes: List<DesignNote>) {
-    val isEmpty: Boolean get() = wire.isEmpty() && conduit.isEmpty()
+data class MaterialTakeoff(
+    val wire: List<WireTakeoff>,
+    val conduit: List<ConduitTakeoff>,
+    val notes: List<DesignNote>,
+    /** Devices counted on the project's drawings (accepted symbols only). */
+    val devices: List<DeviceCount> = emptyList(),
+) {
+    val isEmpty: Boolean get() = wire.isEmpty() && conduit.isEmpty() && devices.isEmpty()
 }
 
 /**
@@ -41,6 +49,8 @@ data class MaterialTakeoff(val wire: List<WireTakeoff>, val conduit: List<Condui
  * - conduit: the routed length, by conduit type and size (chosen, or the size the design picked).
  * Runs with no length are left out, with a note. A circuit through several runs is counted run by
  * run, so slack is added at each run's ends.
+ * - devices: accepted symbols on every drawing, by catalog device (see [PlanSymbolCounts]); pending
+ *   detections are left out until they are reviewed.
  */
 object MaterialTakeoffs {
     fun of(project: Project, design: ProjectDesign = ProjectAnalysis.analyze(project)): MaterialTakeoff {
@@ -71,6 +81,7 @@ object MaterialTakeoffs {
             conduit = conduit.map { (k, v) -> ConduitTakeoff(k.first, k.second, v.first, v.second) }
                 .sortedWith(compareBy<ConduitTakeoff>({ it.type.ordinal }, { it.size?.ordinal ?: -1 })),
             notes = notes,
+            devices = PlanSymbolCounts.of(project),
         )
     }
 }
