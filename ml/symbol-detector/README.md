@@ -123,11 +123,20 @@ equipment and non-devices (homerun arrows) are not boxes. Proposals, every save
 (annotator, agents, model, imports) and the unify script all go through it;
 the old names stay on the box as `raw_device_type`/`raw_subtype`. New source
 names are added as catalog aliases, not code. There are no separate wall- or
-ceiling-mounted versions of a device; former ones are listed in the catalog's
-`naming.renamed` and old labels, model classes and legend reviews map onto the
-merged class. A receptacle with no subtype is a duplex (plain GFCI = GFCI
-duplex, weatherproof = weatherproof duplex: `naming.subtype_aliases`); every
+ceiling-mounted versions of a device, except occupancy sensors (ceiling / wall,
+each wired or wireless, plus one for an unknown mount); former ones are listed
+in the catalog's `naming.renamed` and old labels, model classes and legend
+reviews map onto the merged class. A receptacle with no subtype is a duplex
+(plain GFCI = GFCI duplex: `naming.subtype_aliases`). Weatherproof is added on
+top of a receptacle (`duplex_weatherproof`, `duplex_gfci_weatherproof`,
+`single_`/`quad_`/`special_purpose_weatherproof`) when a source says so. Every
 light has an `_emergency` version.
+
+Training uses only PDFs marked done: tick **PDF done → training** next to the
+PDF name in the labeler (the PDF list shows them as ✔ Done). The flag is kept
+in the labels file (`training_ready`), travels with `remote/push_labels.sh`,
+and every training path (`label_store.labeled_pages`, globbing
+`*_labels.json`, the dataset manifest) leaves unflagged PDFs out.
 
 **One label format, one source of truth.** `annotator/electrical_device_catalog.json`
 defines every device and what other sources call it (NECA 100 glyph names,
