@@ -1,12 +1,12 @@
 {
  "format_version": 1,
  "summary": {
-  "total_devices": 173,
+  "total_devices": 180,
   "categories_count": 13,
   "total_pdfs_scanned": 1001,
   "total_legend_sheets_found": 831,
   "min_sources_threshold": 2,
-  "curated_additions": 78
+  "curated_additions": 85
  },
  "categories": [
   "Power Receptacles & Wiring Devices",
@@ -227,8 +227,10 @@
    ],
    "aliases": {
     "legend": [
-     "floor duplex|receptacle|box",
-     "pedestal receptacle|duplex"
+     "floor duplex receptacle|outlet",
+     "floor quad receptacle|outlet",
+     "floor duplex|quad|receptacle|box|outlet",
+     "pedestal receptacle|duplex|outlet"
     ]
    }
   },
@@ -316,6 +318,27 @@
    "aliases": {
     "legend": [
      "tamperresistant receptacle|duplex"
+    ]
+   }
+  },
+  {
+   "label": "Receptacle - GFCI Quadruplex",
+   "category": "Power Receptacles & Wiring Devices",
+   "symbol_family": "receptacle",
+   "symbol_variant": "quad_gfci",
+   "source_count": 3,
+   "sample_legend_texts": [
+    "20A, 120V QUAD GFCI RECEPTACLE",
+    "DOUBLE DUPLEX GFCI RECEPTACLE"
+   ],
+   "curated": true,
+   "aliases": {
+    "neca_v7": [
+     "receptacle/gfci_quad"
+    ],
+    "legend": [
+     "gfci quad receptacle|outlet -weatherproof",
+     "gfci quad -weatherproof"
     ]
    }
   },
@@ -415,8 +438,8 @@
      "switch/dimmer"
     ],
     "legend": [
-     "dimmer switch",
-     "dimmer"
+     "dimmer switch -lowvoltage",
+     "dimmer -lowvoltage"
     ]
    }
   },
@@ -545,7 +568,10 @@
      "switch/occupancy_sensor_switch"
     ],
     "legend": [
-     "occupancy|vacancy switch"
+     "occupancy|vacancy switch",
+     "occupancy|vacancy sensor switch",
+     "pir wall switch",
+     "passive pir|infrared|inrared wall switch"
     ]
    }
   },
@@ -559,7 +585,8 @@
    "curated": true,
    "aliases": {
     "legend": [
-     "occupancy switch dimmer"
+     "occupancy|vacancy switch dimmer",
+     "occupancy|vacancy sensor dimmer"
     ]
    }
   },
@@ -604,7 +631,8 @@
    "curated": true,
    "aliases": {
     "legend": [
-     "powerpack dimmer"
+     "powerpack dimmer",
+     "powerpack 010v"
     ]
    }
   },
@@ -663,6 +691,7 @@
    "curated": true,
    "aliases": {
     "legend": [
+     "lowvoltage dimmer switch",
      "lowvoltage dimmer"
     ]
    }
@@ -728,7 +757,7 @@
      "occupancy_sensor"
     ],
     "legend": [
-     "occupancy sensor|detector -relay -video -osr -power -pack -wireless -ceiling -wall -corner"
+     "occupancy sensor|detector -relay -video -osr -power -pack -wireless -ceiling -wall -corner -switch -dualtech"
     ]
    }
   },
@@ -745,8 +774,8 @@
    ],
    "aliases": {
     "legend": [
-     "occupancy sensor|detector wall -wireless",
-     "occupancy sensor|detector corner -wireless"
+     "occupancy sensor|detector wall -wireless -switch -dualtech",
+     "occupancy sensor|detector corner -wireless -switch -dualtech"
     ]
    },
    "merged_from": [
@@ -766,7 +795,7 @@
    ],
    "aliases": {
     "legend": [
-     "occupancy sensor|detector ceiling -relay -video -wireless"
+     "occupancy sensor|detector ceiling -relay -video -wireless -switch -dualtech"
     ]
    }
   },
@@ -775,12 +804,16 @@
    "category": "Lighting Controls (Power Packs, Sensors, Low Voltage & Wireless)",
    "symbol_family": "sensor",
    "symbol_variant": "occupancy_sensor_dual_technology",
-   "source_count": 0,
-   "sample_legend_texts": [],
+   "source_count": 3,
+   "sample_legend_texts": [
+    "CEILING MOUNTED DUAL TECHNOLOGY MOTION SENSOR",
+    "DUAL TECHNOLOGY OCCUPANCY SENSOR"
+   ],
    "curated": true,
    "aliases": {
     "legend": [
-     "dualtech sensor|detector|occupancy"
+     "dualtech occupancy sensor|detector",
+     "dualtech sensor|detector"
     ]
    }
   },
@@ -986,8 +1019,8 @@
      "light_fixture/wall_light"
     ],
     "legend": [
-     "wall mounted|mount luminaire",
-     "wall luminaire"
+     "wall mounted|mount luminaire -emergency",
+     "wall luminaire -emergency"
     ]
    }
   },
@@ -1094,8 +1127,8 @@
    "curated": true,
    "aliases": {
     "legend": [
-     "pole luminaire|light",
-     "site|area|parking luminaire|light pole"
+     "pole luminaire|light -emergency",
+     "site|area|parking luminaire|light|lighting -wall -ceiling -emergency"
     ]
    }
   },
@@ -1179,7 +1212,8 @@
    "curated": true,
    "aliases": {
     "legend": [
-     "1x4|4x1 luminaire|troffer"
+     "1x4|4x1 luminaire|troffer -linear",
+     "1x4|4x1 troffer"
     ]
    }
   },
@@ -1283,9 +1317,7 @@
      "exit_sign"
     ],
     "legend": [
-     "exit",
-     "exit wall",
-     "exit ceiling"
+     "exit -entrance -stabilized"
     ]
    },
    "merged_from": [
@@ -1418,7 +1450,8 @@
    "curated": true,
    "aliases": {
     "legend": [
-     "pole luminaire emergency"
+     "pole luminaire|light emergency",
+     "site|area|parking luminaire|light|lighting emergency"
     ]
    }
   },
@@ -1548,6 +1581,7 @@
    "curated": true,
    "aliases": {
     "legend": [
+     "vanity|mirror luminaire|light emergency",
      "vanity|mirror emergency"
     ]
    }
@@ -1562,6 +1596,7 @@
    "curated": true,
    "aliases": {
     "legend": [
+     "wall mounted|mount luminaire emergency",
      "wall luminaire emergency"
     ]
    }
@@ -1623,72 +1658,115 @@
    }
   },
   {
-   "label": "Exit Sign - Double Arrow",
-   "category": "Emergency Lighting & Exit Signs",
-   "symbol_family": "luminaire",
-   "symbol_variant": "exit_sign_double_arrow",
-   "source_count": 0,
-   "sample_legend_texts": [],
-   "curated": true,
-   "aliases": {
-    "legend": [
-     "exit doublearrow"
-    ]
-   }
-  },
-  {
-   "label": "Exit Sign - Double Face",
-   "category": "Emergency Lighting & Exit Signs",
-   "symbol_family": "luminaire",
-   "symbol_variant": "exit_sign_double_face",
-   "source_count": 0,
-   "sample_legend_texts": [],
-   "curated": true,
-   "aliases": {
-    "legend": [
-     "exit doubleface"
-    ]
-   }
-  },
-  {
-   "label": "Exit Sign - Double Face with Arrows",
-   "category": "Emergency Lighting & Exit Signs",
-   "symbol_family": "luminaire",
-   "symbol_variant": "exit_sign_double_face_arrow",
-   "source_count": 0,
-   "sample_legend_texts": [],
-   "curated": true,
-   "aliases": {
-    "legend": [
-     "exit doubleface arrow|arrows|doublearrow|singlearrow"
-    ]
-   }
-  },
-  {
-   "label": "Exit Sign - Single Arrow",
-   "category": "Emergency Lighting & Exit Signs",
-   "symbol_family": "luminaire",
-   "symbol_variant": "exit_sign_single_arrow",
-   "source_count": 0,
-   "sample_legend_texts": [],
-   "curated": true,
-   "aliases": {
-    "legend": [
-     "exit singlearrow"
-    ]
-   }
-  },
-  {
-   "label": "Exit Sign - Single Face",
+   "label": "Exit Sign - Single Face (No Arrow)",
    "category": "Emergency Lighting & Exit Signs",
    "symbol_family": "luminaire",
    "symbol_variant": "exit_sign_single_face",
-   "source_count": 0,
-   "sample_legend_texts": [],
+   "source_count": 2,
+   "sample_legend_texts": [
+    "EXIT SIGN (SINGLE FACE)",
+    "SINGLE FACE EXIT SIGN, SHADED WEDGE INDICATES FACE"
+   ],
    "curated": true,
    "aliases": {
     "legend": [
-     "exit singleface"
+     "exit singleface -singlearrow -doublearrow -fourarrow -batteryunit -combo -combination"
+    ]
+   }
+  },
+  {
+   "label": "Exit Sign - Single Face, Single Arrow",
+   "category": "Emergency Lighting & Exit Signs",
+   "symbol_family": "luminaire",
+   "symbol_variant": "exit_sign_single_face_single_arrow",
+   "source_count": 2,
+   "sample_legend_texts": [
+    "EXIT SIGN W/ INTEGRATED DIRECTIONAL ARROW WHERE OCCURS",
+    "SINGLE FACE EXIT SIGN WITH SINGLE DIRECTIONAL ARROW"
+   ],
+   "curated": true,
+   "aliases": {
+    "legend": [
+     "exit singleface singlearrow -doublearrow -fourarrow -batteryunit -combo -combination",
+     "exit singlearrow -doubleface -doublearrow -fourarrow -batteryunit -combo -combination"
+    ]
+   },
+   "merged_from": [
+    "luminaire.exit_sign_single_arrow"
+   ]
+  },
+  {
+   "label": "Exit Sign - Single Face, Double Arrow",
+   "category": "Emergency Lighting & Exit Signs",
+   "symbol_family": "luminaire",
+   "symbol_variant": "exit_sign_single_face_double_arrow",
+   "source_count": 2,
+   "sample_legend_texts": [
+    "SINGLE FACE EXIT SIGN WITH DOUBLE ARROWS",
+    "EXIT SIGN - SINGLE FACE, ARROWS AS INDICATED"
+   ],
+   "curated": true,
+   "aliases": {
+    "legend": [
+     "exit singleface doublearrow -fourarrow -batteryunit -combo -combination",
+     "exit doublearrow -doubleface -fourarrow -batteryunit -combo -combination"
+    ]
+   },
+   "merged_from": [
+    "luminaire.exit_sign_double_arrow"
+   ]
+  },
+  {
+   "label": "Exit Sign - Double Face (No Arrow)",
+   "category": "Emergency Lighting & Exit Signs",
+   "symbol_family": "luminaire",
+   "symbol_variant": "exit_sign_double_face",
+   "source_count": 2,
+   "sample_legend_texts": [
+    "CEILING MOUNTED EXIT LIGHT (DUAL FACED)",
+    "DOUBLE FACE EXIT SIGN"
+   ],
+   "curated": true,
+   "aliases": {
+    "legend": [
+     "exit doubleface -singlearrow -doublearrow -fourarrow -arrow -arrows -batteryunit -combo -combination"
+    ]
+   }
+  },
+  {
+   "label": "Exit Sign - Double Face, Double Arrow",
+   "category": "Emergency Lighting & Exit Signs",
+   "symbol_family": "luminaire",
+   "symbol_variant": "exit_sign_double_face_double_arrow",
+   "source_count": 2,
+   "sample_legend_texts": [
+    "DOUBLE FACE EXIT SIGN WITH ARROWS",
+    "DOUBLE FACE EXIT SIGN (TWO ARROWS)"
+   ],
+   "curated": true,
+   "aliases": {
+    "legend": [
+     "exit doubleface arrow|arrows|doublearrow|singlearrow -fourarrow -batteryunit -combo -combination"
+    ]
+   },
+   "merged_from": [
+    "luminaire.exit_sign_double_face_arrow"
+   ]
+  },
+  {
+   "label": "Exit Sign - Double Face, Four Arrow",
+   "category": "Emergency Lighting & Exit Signs",
+   "symbol_family": "luminaire",
+   "symbol_variant": "exit_sign_double_face_four_arrow",
+   "source_count": 0,
+   "sample_legend_texts": [
+    "DOUBLE FACE EXIT SIGN WITH ARROWS BOTH SIDES (FOUR ARROWS)"
+   ],
+   "curated": true,
+   "aliases": {
+    "legend": [
+     "exit doubleface fourarrow -batteryunit -combo -combination",
+     "exit fourarrow -batteryunit -combo -combination"
     ]
    }
   },
@@ -1890,7 +1968,7 @@
    ],
    "aliases": {
     "legend": [
-     "disconnect"
+     "disconnect -remove -demolish -reinstall -relocate -circuit -wiring"
     ]
    }
   },
@@ -2301,6 +2379,70 @@
    }
   },
   {
+   "label": "Fire Alarm Horn",
+   "category": "Fire Alarm",
+   "symbol_family": "fire_alarm_device",
+   "symbol_variant": "fire_alarm_horn",
+   "source_count": 3,
+   "sample_legend_texts": [
+    "FIRE ALARM HORN (CEILING OR WALL MOUNTED)",
+    "AUDIBLE HORN"
+   ],
+   "curated": true,
+   "aliases": {
+    "neca_v7": [
+     "fire_alarm/horn"
+    ],
+    "legend": [
+     "fire alarm horn -strobe -speaker -hornstrobe -speakerstrobe",
+     "horn -strobe -speaker -hornstrobe -speakerstrobe -vehicle -car -air"
+    ]
+   }
+  },
+  {
+   "label": "Fire Alarm / Sprinkler Bell",
+   "category": "Fire Alarm",
+   "symbol_family": "fire_alarm_device",
+   "symbol_variant": "fire_alarm_bell",
+   "source_count": 2,
+   "sample_legend_texts": [
+    "FIRE ALARM BELL",
+    "SPRINKLER ALARM BELL"
+   ],
+   "curated": true,
+   "aliases": {
+    "neca_v7": [
+     "fire_alarm/sprinkler_bell"
+    ],
+    "legend": [
+     "fire|sprinkler|alarm bell -strobe"
+    ]
+   }
+  },
+  {
+   "label": "Fire Alarm Control / Monitor Module",
+   "category": "Fire Alarm",
+   "symbol_family": "fire_alarm_device",
+   "symbol_variant": "fire_alarm_module",
+   "source_count": 3,
+   "sample_legend_texts": [
+    "ADDRESSABLE MONITOR MODULE",
+    "CONTROL / RELAY MODULE",
+    "ADDRESSABLE INPUT MODULE"
+   ],
+   "curated": true,
+   "aliases": {
+    "neca_v7": [
+     "fire_alarm/module",
+     "fire_alarm/relay_module"
+    ],
+    "legend": [
+     "monitor|control|relay|input module -switch -phone",
+     "addressable module"
+    ]
+   }
+  },
+  {
    "label": "Sprinkler Tamper Switch",
    "category": "Life Safety",
    "symbol_family": "fire_alarm_device",
@@ -2666,6 +2808,29 @@
    }
   },
   {
+   "label": "Access Control Panel",
+   "category": "Access Control & Physical Security",
+   "symbol_family": "security_device",
+   "symbol_variant": "access_control_panel",
+   "source_count": 9,
+   "sample_legend_texts": [
+    "ACCESS CONTROL PANEL",
+    "SWH CCURE ULTRA SE CONTROLLER",
+    "SECURITY CONTROL PANEL"
+   ],
+   "curated": true,
+   "aliases": {
+    "neca_v7": [
+     "security_device/access_control_panel"
+    ],
+    "legend": [
+     "access control panel|controller",
+     "security panel|controller -camera",
+     "ccure panel|controller"
+    ]
+   }
+  },
+  {
    "label": "Digital Video Recorder (DVR / NVR)",
    "category": "Video Surveillance (CCTV)",
    "symbol_family": "cctv_device",
@@ -2852,7 +3017,8 @@
      "data_outlet/data_telephone"
     ],
     "legend": [
-     "phone data outlet|jack|combination|combo"
+     "phone data outlet|jack|combination|combo",
+     "phone data -two -gang -2gang"
     ]
    }
   },
@@ -2918,7 +3084,12 @@
     "WALL MOUNTED SPEAKER-STROBE"
    ],
    "aliases": {
+    "neca_v7": [
+     "speaker/speaker",
+     "fire_alarm/speaker"
+    ],
     "legend": [
+     "speaker -strobe -speakerstrobe -clock",
      "speaker ceiling",
      "speaker wall"
     ]
@@ -2992,6 +3163,23 @@
    "aliases": {
     "legend": [
      "masterstation"
+    ]
+   }
+  },
+  {
+   "label": "Intercom",
+   "category": "Audio / Visual, Paging & Intercom",
+   "symbol_family": "audio_visual_device",
+   "symbol_variant": "intercom",
+   "source_count": 6,
+   "sample_legend_texts": [
+    "INTERCOM",
+    "AUDIO/VIDEO INTERCOM"
+   ],
+   "curated": true,
+   "aliases": {
+    "legend": [
+     "intercom -weatherproof -substation -masterstation -refuge -pushbutton -button"
     ]
    }
   }
@@ -3152,6 +3340,18 @@
     "\\1x\\2"
    ],
    [
+    "\\b12x48\\b",
+    "1x4"
+   ],
+   [
+    "\\b24x48\\b",
+    "2x4"
+   ],
+   [
+    "\\b24x24\\b",
+    "2x2"
+   ],
+   [
     "\\bground fault( circuit)?( interrupter)?\\b|\\bgfi\\b|\\bgfci\\b|\\bgf\\b",
     "gfci"
    ],
@@ -3240,7 +3440,7 @@
     "luminaire"
    ],
    [
-    "\\b(down ?light|can light)\\b",
+    "\\b(down ?light|can light|recessed can)\\b",
     "downlight"
    ],
    [
@@ -3268,23 +3468,27 @@
     "exit"
    ],
    [
-    "\\b(double faced|double face|two faced|two face|2 face|dual face|double sided|two sided|2 sided)\\b",
+    "\\b(double faced|double face|two faced|two face|2 faced|2 face|dual faced|dual face|double sided|two sided|2 sided)\\b",
     "doubleface"
    ],
    [
-    "\\b(single faced|single face|one face|single sided|one sided|1 sided)\\b",
+    "\\b(single faced|single face|one faced|one face|1 faced|1 face|single sided|one sided|1 sided)\\b",
     "singleface"
    ],
    [
-    "\\b(double arrow|two arrows|2 arrows|bi directional arrow|double chevron)\\b",
+    "\\b(four arrows?|4 arrows?|quad arrows?|arrows? both sides)\\b",
+    "fourarrow"
+   ],
+   [
+    "\\b(double arrows?|two arrows?|2 arrows?|bi directional arrows?|double chevron)\\b",
     "doublearrow"
    ],
    [
-    "\\b(single arrow|one arrow|directional arrow)\\b",
+    "\\b(single arrow|one arrow|1 arrow|directional arrow)\\b",
     "singlearrow"
    ],
    [
-    "\\b(remote heads?|remote lamp heads?|remote emergency heads?)\\b",
+    "\\b(remote heads?|remote lamp heads?|remote emergency heads?|bugeye|bug eye)\\b",
     "remotehead"
    ],
    [
@@ -3332,7 +3536,7 @@
     "tamper"
    ],
    [
-    "\\b(water ?flow switch|flow switch|waterflow)\\b",
+    "\\b(water ?flow switch|water ?flow detector|flow switch|waterflow)\\b",
     "waterflow"
    ],
    [
@@ -3424,12 +3628,16 @@
     "fiber"
    ],
    [
-    "\\b(telephone|phone|voice|tel)\\b",
+    "\\b(telephone|phone|voice|tele|tel)\\b",
     "phone"
    ],
    [
-    "\\b(power pack|powerpack)\\b",
+    "\\b(power pack|powerpack|switch ?pack)\\b",
     "powerpack"
+   ],
+   [
+    "\\b0 10 ?v(olts?)?\\b",
+    "010v"
    ],
    [
     "\\b(room controller|room control)\\b",
@@ -3480,7 +3688,7 @@
     "isolatedground"
    ],
    [
-    "\\b(tamper resistant|tr)\\b",
+    "\\b(tamper resistant|tamper ?proof|tr)\\b",
     "tamperresistant"
    ],
    [
@@ -3490,6 +3698,10 @@
    [
     "\\b(special purpose|dedicated)\\b",
     "specialpurpose"
+   ],
+   [
+    "\\b(loud ?speaker|speakers)\\b",
+    "speaker"
    ],
    [
     "\\b(clock)\\b",
@@ -3507,6 +3719,9 @@
   "renamed": {
    "luminaire.exit_sign_wall": "luminaire.exit_sign",
    "luminaire.exit_sign_ceiling": "luminaire.exit_sign",
+   "luminaire.exit_sign_single_arrow": "luminaire.exit_sign_single_face_single_arrow",
+   "luminaire.exit_sign_double_arrow": "luminaire.exit_sign_single_face_double_arrow",
+   "luminaire.exit_sign_double_face_arrow": "luminaire.exit_sign_double_face_double_arrow",
    "luminaire.linear_strip": "luminaire.strip_luminaire",
    "luminaire.linear_strip_emergency": "luminaire.strip_luminaire_emergency",
    "fire_alarm_device.smoke_detector_ceiling": "fire_alarm_device.smoke_detector",
@@ -3561,7 +3776,17 @@
     90,
     270
    ],
-   "luminaire.exit_sign_double_arrow": [
+   "luminaire.exit_sign_single_face": [
+    0,
+    90,
+    270
+   ],
+   "luminaire.exit_sign_single_face_single_arrow": [
+    0,
+    90,
+    270
+   ],
+   "luminaire.exit_sign_single_face_double_arrow": [
     0,
     90,
     270
@@ -3571,17 +3796,12 @@
     90,
     270
    ],
-   "luminaire.exit_sign_double_face_arrow": [
+   "luminaire.exit_sign_double_face_double_arrow": [
     0,
     90,
     270
    ],
-   "luminaire.exit_sign_single_arrow": [
-    0,
-    90,
-    270
-   ],
-   "luminaire.exit_sign_single_face": [
+   "luminaire.exit_sign_double_face_four_arrow": [
     0,
     90,
     270

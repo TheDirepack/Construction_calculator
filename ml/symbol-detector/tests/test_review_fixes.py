@@ -270,7 +270,7 @@ def test_rotate90_moves_boxes_with_the_ink():
 def test_rotation_policy_comes_from_the_catalog_and_never_mirrors():
     assert label_schema.MIRROR_ALLOWED is False
     assert label_schema.allowed_rotations("luminaire.troffer_2x4") == (0, 90, 180, 270)
-    assert label_schema.allowed_rotations("luminaire.exit_sign_single_arrow") == (0, 90, 270)
+    assert label_schema.allowed_rotations("luminaire.exit_sign_single_face_single_arrow") == (0, 90, 270)
     assert label_schema.allowed_rotations("switch.three_way") == (0, 90, 270)    # "S3": not upside down
     assert label_schema.allowed_rotations("receptacle.duplex") == (0, 90, 180, 270)
 

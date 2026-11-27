@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import threading
+from pathlib import Path
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -400,8 +401,10 @@ def test_browser_electrical_device_catalog_search_modal_and_save(tmp_path):
             try:
                 page = browser.new_page(viewport={"width": 1420, "height": 900})
                 page.goto(f"http://127.0.0.1:{server.server_port}/")
+                n_devices = len(json.loads(
+                    (Path(__file__).resolve().parents[1] / "annotator/electrical_device_catalog.json").read_text())["devices"])
                 page.wait_for_function(
-                    "() => document.querySelector('#deviceCatalogCount')?.textContent === '173'"
+                    f"() => document.querySelector('#deviceCatalogCount')?.textContent === '{n_devices}'"
                     " && document.querySelector('#pageIndicator')?.textContent === 'Page 1 / 1'"
                 )
                 page.locator("#drawTool").click()

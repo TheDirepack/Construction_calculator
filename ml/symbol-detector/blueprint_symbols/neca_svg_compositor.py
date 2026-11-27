@@ -13,9 +13,9 @@ BEFORE any noise, blur, resolution loss, or JPEG compression is added:
 """
 from __future__ import annotations
 
-import io
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,7 +27,8 @@ import numpy as np
 # only balance which kinds of glyph get placed; every placed symbol is labeled
 # with its exact catalog device (label_schema.NECA_DEVICE), which is what the
 # detector learns. Non-device sections (Raceways, Schematic/One-Line,
-# Switchboard Meters) are excluded.
+# Switchboard Meters) are excluded unless explicitly overridden in
+# class_maps/neca_symbol_overrides.json.
 NECA_SECTION_TO_CLASS: dict[str, str] = {
     'Outlets and Receptacles': 'receptacle',
     'Switches and Sensors': 'switch_sensor',
@@ -50,7 +51,17 @@ NECA_SECTION_TO_CLASS: dict[str, str] = {
     'Motorized and HVAC Equipment': 'other_device',
 }
 
-from .label_schema import NECA_DEVICE  # noqa: E402
+from .label_schema import NECA_DEVICE, device_class  # noqa: E402
+
+DEFAULT_NECA_OVERRIDES_PATH = (
+    Path(__file__).resolve().parent.parent / 'class_maps' / 'neca_symbol_overrides.json'
+)
+
+ANNOTATION_SECTIONS = frozenset({
+    'Luminaires - Orientation Modifiers',
+    'Luminaires - Extended Modifiers',
+    'Luminaires - Emergency Modifiers',
+})
 
 SAMPLING_GROUPS = (
     'fire_alarm',
@@ -61,6 +72,11 @@ SAMPLING_GROUPS = (
     'switch_sensor',
 )
 
+# Libraries of generated (not real-drawing) symbols, and the most a device's
+# placements may use them when real drawings of that device exist.
+SYNTHETIC_SOURCES = frozenset({'synthetic_catalog_symbols'})
+SYNTHETIC_SHARE = 0.35
+
 CLASS_SAMPLING_WEIGHTS = {
     'receptacle': 0.28,
     'luminaire': 0.22,
@@ -69,6 +85,20 @@ CLASS_SAMPLING_WEIGHTS = {
     'junction_box': 0.08,
     'other_device': 0.10,
 }
+
+_FAMILY_TO_SAMPLING_GROUP: dict[str, str] = {
+    'receptacle': 'receptacle',
+    'switch': 'switch_sensor',
+    'sensor': 'switch_sensor',
+    'control_relay': 'switch_sensor',
+    'luminaire': 'luminaire',
+    'fire_alarm_device': 'fire_alarm',
+    'junction_box': 'junction_box',
+}
+
+_DEVICE_TO_V7: dict[tuple[str, str], tuple[str, str]] = {}
+for _v7_pair, _cat_dev in NECA_DEVICE.items():
+    _DEVICE_TO_V7.setdefault(_cat_dev, _v7_pair)
 
 
 @dataclass(frozen=True)
@@ -263,6 +293,98 @@ def map_neca_to_v7(section: str, name: str) -> tuple[str, str]:
     return 'other_device', 'unspecified'
 
 
+def _parse_override_target(sym_id: str, value: object) -> tuple[str, str] | None:
+    """Validate and normalize one NECA override target into ``(family, variant)`` or ``None``."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        family, sep, variant = value.strip().partition('.')
+        if not sep:
+            raise ValueError(f'Invalid NECA override device for {sym_id!r}: {value!r}')
+    elif isinstance(value, (tuple, list)) and len(value) == 2:
+        family, variant = str(value[0]).strip(), str(value[1]).strip()
+    else:
+        raise ValueError(f'Invalid NECA override value for {sym_id!r}: {value!r}')
+    if device_class(family, variant) is None:
+        raise ValueError(
+            f'NECA override for {sym_id!r} names unknown or inactive catalog device: '
+            f'{family}.{variant}'
+        )
+    return family, variant
+
+
+def _normalize_overrides(overrides: Mapping[str, object]) -> dict[str, tuple[str, str] | None]:
+    """Normalize either a raw overrides JSON payload or a flat ``sym_id -> target`` mapping."""
+    raw: Mapping[str, object] = overrides
+    if 'overrides' in overrides and isinstance(overrides['overrides'], Mapping):
+        raw = overrides['overrides']
+    return {str(sym_id): _parse_override_target(str(sym_id), val) for sym_id, val in raw.items()}
+
+
+def load_neca_overrides(path: Path | str | None = None) -> dict[str, tuple[str, str] | None]:
+    """Load and validate NECA symbol overrides from JSON.
+
+    When ``path`` is omitted, loads ``DEFAULT_NECA_OVERRIDES_PATH`` if present
+    (returning an empty mapping if the overrides file does not exist).
+    """
+    if path is None:
+        if not DEFAULT_NECA_OVERRIDES_PATH.is_file():
+            return {}
+        target_path = DEFAULT_NECA_OVERRIDES_PATH
+    else:
+        target_path = Path(path)
+        if not target_path.is_file():
+            raise FileNotFoundError(f'NECA overrides file not found at {target_path}')
+    payload = json.loads(target_path.read_text(encoding='utf-8'))
+    if not isinstance(payload, Mapping):
+        raise ValueError(f'Expected JSON object in {target_path}')
+    return _normalize_overrides(payload)
+
+
+def resolve_neca_device(
+    sym_id: str,
+    section: str,
+    name: str,
+    overrides: Mapping[str, object] | None = None,
+) -> tuple[str, str] | None:
+    """Resolve a NECA 100-2013 symbol to an active catalog ``(family, variant)`` or ``None``.
+
+    Entries in ``overrides`` (defaulting to ``class_maps/neca_symbol_overrides.json``)
+    take precedence over section filtering and ``map_neca_to_v7``, supporting both
+    explicit ``null`` exclusion and cross-section symbol mappings.
+    """
+    override_map = load_neca_overrides() if overrides is None else _normalize_overrides(overrides)
+    if sym_id in override_map:
+        return override_map[sym_id]
+
+    if section not in NECA_SECTION_TO_CLASS or section in ANNOTATION_SECTIONS:
+        return None
+    if section == 'Raceways - Boxes and Busways':
+        low_name = (name or '').lower()
+        if not any(k in low_name for k in ('box', 'handhole')):
+            return None
+    dev_type, subtype = map_neca_to_v7(section, name)
+    return NECA_DEVICE.get((dev_type, subtype))
+
+
+def _resolve_v7_pair(
+    section: str,
+    name: str,
+    device: tuple[str, str] | None,
+) -> tuple[str, str]:
+    """Return compatible ``(device_type, subtype)`` metadata/placement hints for a NECA symbol."""
+    dev_type, subtype = map_neca_to_v7(section, name)
+    if device is None:
+        return dev_type, subtype
+    if NECA_DEVICE.get((dev_type, subtype)) == device:
+        return dev_type, subtype
+    if device in _DEVICE_TO_V7:
+        return _DEVICE_TO_V7[device]
+    if dev_type == 'light_fixture' and device[0] == 'luminaire':
+        return dev_type, subtype
+    return device
+
+
 def _rasterize_svg_alpha(svg_path: Path, render_height: int = 128) -> np.ndarray | None:
     """Render an SVG to a tight-cropped uint8 alpha mask (255 = ink, 0 = transparent)."""
     import cairosvg
@@ -302,13 +424,15 @@ class NecaSymbolBank:
     """
 
     def __init__(self, library_root: Path, *, render_height: int = 128,
-                 include_modifiers: bool = True, devices_only: bool = False) -> None:
+                 include_modifiers: bool = True, devices_only: bool = False,
+                 overrides_path: Path | str | None = None) -> None:
         self.library_root = Path(library_root)
         meta_path = self.library_root / 'symbols.json'
         if not meta_path.is_file():
             raise FileNotFoundError(f'NECA symbols.json not found at {meta_path}')
         meta = json.loads(meta_path.read_text())
         self.by_class: dict[str, list[NecaGlyph]] = {c: [] for c in SAMPLING_GROUPS}
+        overrides = load_neca_overrides(overrides_path)
 
         entries = meta.get('symbols', [])
         # Many NECA numbered-row SVGs contain two or more *alternatives*
@@ -318,35 +442,44 @@ class NecaSymbolBank:
             (entry.get('section'), entry.get('code'))
             for entry in entries if entry.get('kind') == 'printed_alternative'
         }
-        annotation_sections = {
-            'Luminaires - Orientation Modifiers',
-            'Luminaires - Extended Modifiers',
-            'Luminaires - Emergency Modifiers',
-        }
         for entry in entries:
+            sym_id = entry['id']
             sec = entry.get('section', '')
-            cls = NECA_SECTION_TO_CLASS.get(sec)
-            if cls is None or sec in annotation_sections:
-                continue
+            name = entry.get('name', '')
+            kind = entry.get('kind', 'numbered_row')
             if not include_modifiers and 'modifier' in sec.lower():
                 continue
-            kind = entry.get('kind', 'numbered_row')
-            if kind == 'numbered_row' and (sec, entry.get('code')) in split_rows:
-                continue
-            # Mounting-row figures are arrays of different mountings/shapes;
-            # only the isolated round/rectangular figure variants are devices.
-            if sec == 'Luminaires - Mounting Modifiers' and kind != 'printed_alternative':
-                continue
-            # Diagram annotations, raceway poles and busways are not boxes.
-            if sec == 'Raceways - Boxes and Busways':
-                low_name = entry.get('name', '').lower()
-                if not any(k in low_name for k in ('box', 'handhole')):
+
+            if sym_id in overrides:
+                device = overrides[sym_id]
+                if device is None:
                     continue
-            dev_type, subtype = map_neca_to_v7(sec, entry.get('name', ''))
-            device = NECA_DEVICE.get((dev_type, subtype))
+            else:
+                cls = NECA_SECTION_TO_CLASS.get(sec)
+                if cls is None or sec in ANNOTATION_SECTIONS:
+                    continue
+                if kind == 'numbered_row' and (sec, entry.get('code')) in split_rows:
+                    continue
+                # Mounting-row figures are arrays of different mountings/shapes;
+                # only the isolated round/rectangular figure variants are devices.
+                if sec == 'Luminaires - Mounting Modifiers' and kind != 'printed_alternative':
+                    continue
+                # Diagram annotations, raceway poles and busways are not boxes.
+                if sec == 'Raceways - Boxes and Busways':
+                    low_name = name.lower()
+                    if not any(k in low_name for k in ('box', 'handhole')):
+                        continue
+                device = resolve_neca_device(sym_id, sec, name, overrides=overrides)
+
             if device is None and devices_only:     # names no specific device
                 continue
-            device = device or ('', '')
+            cls = (
+                _FAMILY_TO_SAMPLING_GROUP.get(device[0], 'other_device')
+                if device is not None
+                else NECA_SECTION_TO_CLASS.get(sec, 'other_device')
+            )
+            dev_type, subtype = _resolve_v7_pair(sec, name, device)
+            device_pair = device or ('', '')
             svg_path = self.library_root / entry['file']
             if not svg_path.is_file():
                 continue
@@ -354,16 +487,16 @@ class NecaSymbolBank:
             if alpha is None:
                 continue
             self.by_class[cls].append(NecaGlyph(
-                symbol_id=entry['id'],
+                symbol_id=sym_id,
                 code=entry.get('code', ''),
-                name=entry.get('name', ''),
+                name=name,
                 section=sec,
                 canonical_class=cls,
                 device_type=dev_type,
                 subtype=subtype,
                 alpha=alpha,
-                family=device[0],
-                variant=device[1],
+                family=device_pair[0],
+                variant=device_pair[1],
             ))
 
         self.active_classes = [c for c in SAMPLING_GROUPS if self.by_class[c]]
@@ -405,8 +538,14 @@ class NecaSymbolBank:
         if self.devices_only:
             # Detector training: every device equally often (then any of its
             # drawings), so rare devices are not drowned out by receptacles.
+            # Generated drawings fill devices with no real drawings, but
+            # where real ones exist they get at most SYNTHETIC_SHARE of picks.
             keys = sorted(self.by_device)
             pool = self.by_device[keys[int(rng.integers(len(keys)))]]
+            synthetic = [g.section.split(':', 1)[0] in SYNTHETIC_SOURCES for g in pool]
+            if any(synthetic) and not all(synthetic):
+                want = bool(rng.random() < SYNTHETIC_SHARE)
+                pool = [g for g, syn in zip(pool, synthetic) if syn == want]
             return pool[int(rng.integers(len(pool)))]
         if self.extra_by_source and rng.random() < self.library_share:
             sources = sorted(self.extra_by_source)

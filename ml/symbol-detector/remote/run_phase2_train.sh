@@ -82,6 +82,8 @@ if [[ ! -d "$WORK/composited_neca" ]]; then
     --label-store "$LABELS" --data-root "$DATA" \
     --symbol-library "$DATA/2_component_libraries/legend_symbol_crops" \
     --symbol-library "$DATA/2_component_libraries/harvested_symbols" \
+    --symbol-library "$DATA/2_component_libraries/blueprint_legend_crops" \
+    --symbol-library "$DATA/2_component_libraries/synthetic_catalog_symbols" \
     --background-pages "${PHASE2_BACKGROUND_PAGES:-120}" \
     --walls-only-pages "${PHASE2_WALLS_ONLY_PAGES:-150}" \
     --layouts-dir "$BASE/work/pool/background_layouts" \

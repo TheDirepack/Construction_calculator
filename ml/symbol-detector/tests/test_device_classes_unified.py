@@ -36,7 +36,7 @@ def _v7_taxonomy() -> dict[str, list[str]]:
 def test_ui_device_list_is_the_catalog():
     from annotator.web import _load_neca_subtypes, load_electrical_device_catalog
     ui = {(d["symbol_family"], d["symbol_variant"]) for d in load_electrical_device_catalog()["devices"]}
-    assert ui == CATALOG and len(ui) == 173
+    assert ui == CATALOG and len(ui) == 180
     variants = _load_neca_subtypes(None)
     for family in CATALOG_FAMILIES:
         assert set(variants[family]) == {v for f, v in CATALOG if f == family} | {"unspecified"}

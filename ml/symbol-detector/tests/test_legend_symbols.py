@@ -21,6 +21,17 @@ from blueprint_symbols.symbol_library import legend_symbol_glyphs, library_glyph
     ("DOUBLE DUPLEX RECEPTACLE", ("receptacle", "quad")),
     ("3-WAY TOGGLE SWITCH", ("switch", "three_way")),
     ("EXIT SIGN, CEILING MOUNTED", ("luminaire", "exit_sign")),          # no ceiling version
+    ("EXIT SIGN (SINGLE FACE)", ("luminaire", "exit_sign_single_face")),
+    ("SINGLE FACE EXIT SIGN WITH SINGLE ARROW", ("luminaire", "exit_sign_single_face_single_arrow")),
+    ("SINGLE FACE EXIT SIGN WITH DOUBLE ARROWS", ("luminaire", "exit_sign_single_face_double_arrow")),
+    ("CEILING MOUNTED EXIT LIGHT (DUAL FACED)", ("luminaire", "exit_sign_double_face")),
+    ("DOUBLE FACE EXIT SIGN WITH ARROWS", ("luminaire", "exit_sign_double_face_double_arrow")),
+    ("DOUBLE FACE EXIT SIGN WITH FOUR ARROWS", ("luminaire", "exit_sign_double_face_four_arrow")),
+    ("20A QUAD GFCI RECEPTACLE", ("receptacle", "quad_gfci")),
+    ("FIRE ALARM HORN", ("fire_alarm_device", "fire_alarm_horn")),
+    ("SPRINKLER ALARM BELL", ("fire_alarm_device", "fire_alarm_bell")),
+    ("ADDRESSABLE MONITOR MODULE", ("fire_alarm_device", "fire_alarm_module")),
+    ("ACCESS CONTROL PANEL", ("security_device", "access_control_panel")),
     ("NON-FUSIBLE DISCONNECT SWITCH", ("disconnect", "non_fused")),
     ("COMBINATION VOICE/DATA OUTLET", ("data_outlet", "voice_data_combo")),
     ("HEAT TRACE", None),                         # 'heat' alone is not a heat detector
