@@ -26,9 +26,10 @@ INIT_WEIGHTS="${PHASE2_INIT_WEIGHTS:-$PRETRAIN_WEIGHTS}"
 RUN_NAME="${PHASE2_RUN_NAME:-phase2_mixed_ssl_v4}"
 PHASE2_BATCH="${PHASE2_BATCH:-12}"
 PHASE2_EPOCHS="${PHASE2_EPOCHS:-200}"
-PHASE2_LR0="${PHASE2_LR0:-0.003}"
-PHASE2_REAL_BLANK_TILES="${PHASE2_REAL_BLANK_TILES:-32}"
+PHASE2_LR0="${PHASE2_LR0:-0.0015}"
+PHASE2_REAL_BLANK_TILES="${PHASE2_REAL_BLANK_TILES:-64}"
 PHASE2_REAL_COMPLETE_TILES="${PHASE2_REAL_COMPLETE_TILES:-64}"
+PHASE2_VERIFIED_BLANK_PAGES="${PHASE2_VERIFIED_BLANK_PAGES:-150}"
 PHASE2_REAL_EVAL_EVERY="${PHASE2_REAL_EVAL_EVERY:-5}"
 PHASE2_REAL_EVAL_BLANK_PAGES="${PHASE2_REAL_EVAL_BLANK_PAGES:-1000}"     # every held-out page
 PHASE2_REAL_EVAL_COMPLETE_PAGES="${PHASE2_REAL_EVAL_COMPLETE_PAGES:-1000}"
@@ -85,10 +86,11 @@ if [[ ! -d "$WORK/composited_neca" ]]; then
     --symbol-library "$DATA/2_component_libraries/harvested_symbols" \
     --symbol-library "$DATA/2_component_libraries/blueprint_legend_crops" \
     --symbol-library "$DATA/2_component_libraries/synthetic_catalog_symbols" \
-    --background-pages "${PHASE2_BACKGROUND_PAGES:-120}" \
-    --walls-only-pages "${PHASE2_WALLS_ONLY_PAGES:-150}" \
+    --verified-blank-pages "$PHASE2_VERIFIED_BLANK_PAGES" \
+    --background-pages "${PHASE2_BACKGROUND_PAGES:-30}" \
+    --walls-only-pages "${PHASE2_WALLS_ONLY_PAGES:-120}" \
     --layouts-dir "$BASE/work/pool/background_layouts" \
-    --dataset-pages "${PHASE2_DATASET_PAGES:-30}" \
+    --dataset-pages "${PHASE2_DATASET_PAGES:-0}" \
     --page-hash-cache "$BASE/work/pdf_page_hashes.sqlite" \
     --output "$WORK/composited_neca" \
     --copies 1 \

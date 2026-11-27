@@ -16,14 +16,15 @@ import json
 from pathlib import Path
 
 DEFAULT_PHASE2_LOSS_CFG = {
-    'real_blank_neg_weight': 6.0,
-    'real_complete_far_neg_weight': 6.0,
+    'real_blank_neg_weight': 10.0,
+    'real_complete_far_neg_weight': 7.0,
     'real_complete_near_neg_weight': 2.0,
-    'real_complete_wrong_cls_weight': 5.0,
+    'real_complete_wrong_cls_weight': 6.0,
     'real_complete_pos_weight': 1.0,
-    'synthetic_complete_neg_weight': 1.5,
-    'synthetic_complete_wrong_cls_weight': 2.0,
-    'fp_boost': 6.0,
+    'synthetic_complete_neg_weight': 2.5,
+    'synthetic_complete_wrong_cls_weight': 3.5,
+    'partial_wrong_cls_weight': 3.0,
+    'fp_boost': 8.0,
 }
 
 

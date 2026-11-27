@@ -124,6 +124,100 @@ def render_training_backgrounds(data_root: Path, out_dir: Path, count: int, *, s
     return written
 
 
+def verified_blank_training_backgrounds(
+    label_stores: list[Path],
+    out_dir: Path,
+    count: int,
+    *,
+    data_root: Path | None = None,
+    seed: int = 2026,
+) -> list[Path]:
+    """Build ``count`` verified-blank training background JSONs from ``label_store``
+    ``train`` pages ONLY (never ``holdout`` or ``evaluation``).
+
+    Each returned page carries ``verified_no_symbols=True`` and retains its
+    training drawing's ``project_family_id`` so composites placed onto it stay
+    in the ``train`` split while receiving complete 180-class supervision.
+    """
+    from annotator import label_store
+    from blueprint_symbols.label_schema import page_header, parse_page_ref
+
+    if count <= 0:
+        return []
+
+    candidates: list[tuple[str, Path, Path, dict]] = []
+    seen_sha: set[str] = set()
+    for store in label_stores:
+        train_refs = label_store.labeled_pages(store, data_root=data_root)["train"]
+        for ref in train_refs:
+            try:
+                doc = read_page(ref)
+            except (OSError, ValueError):
+                continue
+            if doc.get("verified_no_symbols") is not True or (doc.get("instances") or []):
+                continue
+            if doc.get("source_group_verified") is not True or not doc.get("project_family_id"):
+                continue
+            parsed = parse_page_ref(ref)
+            base_dir = parsed[0].parent if parsed is not None else Path(ref).resolve().parent
+            src_img = (base_dir / str(doc.get("image_path") or "")).resolve()
+            if not src_img.is_file():
+                continue
+            digest = str(doc.get("image_sha256") or hashlib.sha256(src_img.read_bytes()).hexdigest())
+            if digest in seen_sha:
+                continue
+            seen_sha.add(digest)
+            candidates.append((digest, Path(ref), src_img, doc))
+
+    if not candidates:
+        print("Verified-blank training backgrounds: 0 usable pages found", flush=True)
+        return []
+
+    candidates.sort(key=lambda item: (item[0], str(item[2])))
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(len(candidates))
+    shuffled = [candidates[int(idx)] for idx in order]
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for i in range(count):
+        digest, _ref, src_img, doc = shuffled[i % len(shuffled)]
+        stem = f"vblank_{i:04d}_{src_img.stem[:40]}"
+        payload = page_header(
+            source=str(doc.get("source_id") or src_img.stem),
+            document_id=str(doc.get("document_id") or src_img.stem),
+            page_index=int(doc.get("page_index") or 0),
+            source_type="real_verified_blank_background",
+            image_path=str(src_img),
+            image_sha256=digest,
+            width=int(doc["image_width"]),
+            height=int(doc["image_height"]),
+        )
+        payload.update({
+            "source_id": str(doc.get("source_id") or src_img.stem),
+            "source_license": str(doc.get("source_license") or "user-owned"),
+            "project_family_id": str(doc["project_family_id"]),
+            "source_group_verified": True,
+            "verified_no_symbols": True,
+            "exhaustive_families": [],
+            "annotation_completeness": "complete",
+            "annotation_completeness_verified": True,
+            "annotation_scope": "verified_negative",
+            "wall_only_background_verified": True,
+            "synthetic_targets_only": True,
+        })
+        json_path = out_dir / f"{stem}.json"
+        json_path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+        written.append(json_path)
+
+    print(
+        f"Verified-blank training backgrounds: {len(written)} pages "
+        f"from {len(candidates)} unique verified-blank training sheets",
+        flush=True,
+    )
+    return written
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--neca-dir', type=Path, required=True, help='Path to NECA_100_Vector_Library folder')
@@ -135,6 +229,9 @@ def main() -> None:
     p.add_argument('--background-pages', type=int, default=0,
                    help='also render this many random pages of the TRAINING drawings (1_blueprints/*.pdf '
                         'under --data-root, read at runtime) as backgrounds')
+    p.add_argument('--verified-blank-pages', type=int, default=0,
+                   help='also composite onto this many verified-blank TRAINING pages from --label-store '
+                        '(train split only, never holdout or evaluation) for complete real-sheet supervision')
     p.add_argument('--walls-only-pages', type=int, default=0,
                    help='also make this many proven symbol-free backgrounds (walls drawn from ArchCAD / '
                         'FloorPlanCAD line labels under --data-root, plus --layouts-dir); their '
@@ -205,6 +302,16 @@ def main() -> None:
                                              a.background_pages, seed=a.seed,
                                              page_hash_cache=a.page_hash_cache,
                                              exclude_pages=held_out)
+    if a.verified_blank_pages:
+        if not a.label_store:
+            raise SystemExit('--verified-blank-pages needs --label-store')
+        paths += verified_blank_training_backgrounds(
+            a.label_store,
+            a.output / '_backgrounds_verified_blank',
+            a.verified_blank_pages,
+            data_root=a.data_root,
+            seed=a.seed,
+        )
     if a.walls_only_pages or a.dataset_pages:
         if a.data_root is None:
             raise SystemExit('--walls-only-pages / --dataset-pages need --data-root')

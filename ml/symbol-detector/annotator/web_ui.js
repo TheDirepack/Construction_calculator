@@ -146,6 +146,7 @@ const state = {
   deviceModalQuery: "",
   deviceModalCategory: "all",
   detectorInfo: null,
+  evalConfidenceManual: false,
 };
 
 // Read by the browser tests (tests/test_annotator_long_documents.py).
@@ -3743,13 +3744,37 @@ async function api(path, options = {}, retried = false) {
   return data;
 }
 
+function applyRecommendedEvalConfidence(det) {
+  const sel = $("evalConfidence");
+  if (!sel || state.evalConfidenceManual) return;
+  const rec = det?.recommended_confidence;
+  if (typeof rec !== "number" || !Number.isFinite(rec)) return;
+  const opts = [...sel.options]
+    .map(opt => ({ value: opt.value, num: Number(opt.value) }))
+    .filter(opt => Number.isFinite(opt.num));
+  if (!opts.length) return;
+  let best = opts[0];
+  let bestDiff = Math.abs(opts[0].num - rec);
+  for (const opt of opts.slice(1)) {
+    const diff = Math.abs(opt.num - rec);
+    if (diff < bestDiff - 1e-9 || (Math.abs(diff - bestDiff) <= 1e-9 && opt.num > best.num)) {
+      best = opt;
+      bestDiff = diff;
+    }
+  }
+  sel.value = best.value;
+}
+
 async function reattachSession() {
   const fresh = await (await fetch("/api/session", { cache: "no-store" })).json();
   if (!fresh.token) throw new Error(fresh.error || "The labeling server did not accept this browser; reload the page.");
   // Requests name this tab's PDF (?doc=), so a restarted server that opened
   // another start-up PDF still reads and saves the right pages.
   state.token = fresh.token;
-  if ("detector" in fresh) state.detectorInfo = fresh.detector || null;
+  if ("detector" in fresh) {
+    state.detectorInfo = fresh.detector || null;
+    applyRecommendedEvalConfidence(state.detectorInfo);
+  }
   notify("Reconnected to the restarted labeling server.", "");
 }
 
@@ -4633,6 +4658,7 @@ function wireEvents() {
   $("redo").addEventListener("click", redo);
   $("save").addEventListener("click", savePage);
   if ($("evaluatePageBtn")) $("evaluatePageBtn").addEventListener("click", evaluateCurrentPage);
+  if ($("evalConfidence")) $("evalConfidence").addEventListener("change", () => { state.evalConfidenceManual = true; });
   $("verifiedNoSymbols").addEventListener("change", async (event) => {
     if (!state.doc || state.busy) return;
     const value = event.target.checked;
@@ -4879,6 +4905,7 @@ async function init() {
     const response = await api("/api/session");
     state.token = response.token;
     state.detectorInfo = response.detector || null;
+    applyRecommendedEvalConfidence(state.detectorInfo);
     state.modeKind = response.mode || state.modeKind;
     state.currentDocName = response.current_doc_name || "";
     state.currentDocPath = response.current_doc_path || "";

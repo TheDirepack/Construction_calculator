@@ -123,8 +123,10 @@ def predict_full_page_torch(
     confidence: float = 0.25,
     batch_size: int = 8,
     device=None,
+    max_raw: int | None = None,
 ) -> tuple[list[dict], int]:
-    """Deterministic scale-1.0 tiled inference over EVERY tile of a page image."""
+    """Deterministic scale-1.0 tiled inference over EVERY tile of a page image.
+    ``max_raw`` keeps only the most confident tile detections before merging."""
     import torch
 
     if image_bgr is None or image_bgr.ndim not in (2, 3):
@@ -200,6 +202,8 @@ def predict_full_page_torch(
                             "confidence": float(score),
                             "source_scale": 1.0,
                         })
+        if max_raw is not None and len(raw) > max_raw:      # a flooded page (untrained head)
+            raw = sorted(raw, key=lambda d: -d["confidence"])[:max_raw]
         consolidated = (
             consolidate_predictions(
                 raw, min_confidence=confidence, cross_class_iou=0.60, containment=0.80
@@ -355,7 +359,14 @@ def evaluate_real_pages(
     max_complete_pages: int = 24,
     device=None,
 ) -> dict:
-    """Evaluate ``model`` deterministically across real blank and fully-labeled sheets."""
+    """Evaluate ``model`` deterministically across real blank and fully-labeled sheets.
+
+    Every detection down to ``SWEEP_FLOOR`` is kept, and the pages are scored
+    at each cutoff in ``SWEEP_THRESHOLDS``. Precision weights blank-page false
+    positives by ``BLANK_FP_WEIGHT`` alongside labelled-page FPs. ``real_score``
+    is the best false-positive-first ``F0.25`` (``fp_score``, precision weighted
+    4x recall) across the cutoffs so checkpoints are compared at their own best
+    operating point with strong preference for minimal false detections."""
     selected = select_real_eval_pages(
         manifest_path,
         max_blank_pages=max_blank_pages,
@@ -365,14 +376,21 @@ def evaluate_real_pages(
     class_set = set(norm_names.values())
 
     blank_rows: list[dict] = []
+    blank_confs: list[list[float]] = []
+    blank_fp_classes: dict[str, int] = {}
     for row in selected["blank_pages"]:
         img = cv2.imread(row["image_path"], cv2.IMREAD_COLOR)
         if img is None:
             raise FileNotFoundError(row["image_path"])
         dets, n_tiles = predict_full_page_torch(
             model, img, names=norm_names, imgsz=imgsz, overlap=overlap,
-            confidence=0.25, batch_size=batch_size, device=device,
+            confidence=SWEEP_FLOOR, batch_size=batch_size, device=device, max_raw=MAX_RAW_PER_PAGE,
         )
+        blank_confs.append([float(d["confidence"]) for d in dets])
+        for d in dets:
+            if float(d["confidence"]) >= 0.50:
+                blank_fp_classes[str(d["symbol_family"])] = blank_fp_classes.get(str(d["symbol_family"]), 0) + 1
+        dets = [d for d in dets if float(d["confidence"]) >= 0.25]
         c25 = len(dets)
         c50 = sum(1 for d in dets if float(d["confidence"]) >= 0.50)
         c75 = sum(1 for d in dets if float(d["confidence"]) >= 0.75)
@@ -390,14 +408,16 @@ def evaluate_real_pages(
 
     comp_25_rows: list[dict] = []
     comp_50_rows: list[dict] = []
+    comp_dets: list[tuple[list[dict], list[dict]]] = []
     for row in selected["complete_pages"]:
         img = cv2.imread(row["image_path"], cv2.IMREAD_COLOR)
         if img is None:
             raise FileNotFoundError(row["image_path"])
         dets, _ = predict_full_page_torch(
             model, img, names=norm_names, imgsz=imgsz, overlap=overlap,
-            confidence=0.25, batch_size=batch_size, device=device,
+            confidence=SWEEP_FLOOR, batch_size=batch_size, device=device, max_raw=MAX_RAW_PER_PAGE,
         )
+        comp_dets.append((dets, row["instances"]))
         comp_25_rows.append(
             score_complete_page(dets, row["instances"], class_names=class_set, conf_threshold=0.25)
         )
@@ -417,15 +437,37 @@ def evaluate_real_pages(
     summary_50 = _aggregate_complete_scores(comp_50_rows)
 
     n_comp = len(comp_25_rows)
-    if summary_25["gt_total"] > 0:
-        real_score = summary_25["f05_exact"] / (
-            1.0
-            + 0.35 * fp_025_mean
-            + 0.25 * (summary_25["fp_off_label"] / max(1, n_comp))
-            + 0.15 * (summary_25["tp_wrong_class"] / max(1, n_comp))
+    sweep = threshold_sweep(blank_confs, comp_dets, class_set)
+    best = (
+        max(
+            sweep,
+            key=lambda r: (r["fp_score"], -r["blank_fp"], -r["labelled_fp"], r["threshold"]),
         )
-    else:
-        real_score = 1.0 / (1.0 + fp_025_mean)
+        if sweep
+        else None
+    )
+    if best is not None and best["gt_total"] > 0:
+        real_score = best["fp_score"]
+    else:                                   # no labelled pages: fewest blank-page detections at 0.5
+        real_score = 1.0 / (1.0 + fp_050_mean)
+    budget = [r for r in sweep if r["blank_fp_per_page"] <= BLANK_FP_BUDGET]
+    at_budget = (
+        max(
+            budget,
+            key=lambda r: (r["fp_score"], r["recall"], -r["blank_fp"], r["threshold"]),
+        )
+        if budget
+        else None
+    )
+    zero_blank = [r for r in sweep if r["blank_fp"] == 0]
+    at_zero_blank = (
+        max(
+            zero_blank,
+            key=lambda r: (r["fp_score"], r["recall"], -r["labelled_fp"], r["threshold"]),
+        )
+        if zero_blank
+        else None
+    )
 
     return {
         "blank_pages": n_blank,
@@ -444,8 +486,75 @@ def evaluate_real_pages(
         "available_complete_pages": selected["available_complete_pages"],
         **summary_25,
         "complete_050": summary_50,
+        "best_threshold": best,
+        "at_blank_fp_budget": at_budget,
+        "at_zero_blank_fp": at_zero_blank,
+        "blank_fp_budget_per_page": BLANK_FP_BUDGET,
+        "blank_fp_weight": BLANK_FP_WEIGHT,
+        "fp_score_beta": FP_SCORE_BETA,
+        "blank_fp_classes_050": dict(sorted(blank_fp_classes.items(), key=lambda kv: -kv[1])[:15]),
+        "sweep": sweep,
         "real_score": round(float(real_score), 6),
     }
+
+
+SWEEP_FLOOR = 0.10                      # lowest confidence kept for the sweep
+SWEEP_THRESHOLDS = tuple(round(0.10 + 0.05 * i, 2) for i in range(18)) + (0.97, 0.98, 0.99)
+BLANK_FP_BUDGET = 0.05                  # "at most 1 false detection per 20 blank pages"
+BLANK_FP_WEIGHT = 2.0                   # blank-page FPs count twice as heavily as labelled-page FPs
+FP_SCORE_BETA = 0.25                    # F0.25: precision weighted 4x recall
+MAX_RAW_PER_PAGE = 4000
+
+
+def threshold_sweep(blank_confs: list[list[float]],
+                    complete: list[tuple[list[dict], list[dict]]],
+                    class_set: set[str]) -> list[dict]:
+    """Pages scored at every cutoff in ``SWEEP_THRESHOLDS``: blank-page false
+    detections, labelled-page matches (``score_complete_page``), unweighted F0.5,
+    and false-positive-first weighted F0.25 (``fp_score``)."""
+    n_blank = len(blank_confs)
+    b2 = FP_SCORE_BETA * FP_SCORE_BETA
+    out = []
+    for t in SWEEP_THRESHOLDS:
+        blank_fp = sum(sum(1 for c in confs if c >= t) for confs in blank_confs)
+        agg = _aggregate_complete_scores([
+            score_complete_page(dets, gts, class_names=class_set, conf_threshold=t)
+            for dets, gts in complete])
+        fp_labelled = agg["detections"] - agg["tp_exact_class"]
+        all_dets = agg["detections"] + blank_fp
+        precision = agg["tp_exact_class"] / all_dets if all_dets else 0.0
+        recall = agg["recall_exact"]
+        f05 = (1.25 * precision * recall / (0.25 * precision + recall)) if (precision + recall) > 0 else 0.0
+        weighted_fp = BLANK_FP_WEIGHT * blank_fp + fp_labelled
+        denom = agg["tp_exact_class"] + weighted_fp
+        precision_weighted = (agg["tp_exact_class"] / denom) if denom > 0 else 0.0
+        fp_score = (
+            ((1.0 + b2) * precision_weighted * recall) / (b2 * precision_weighted + recall)
+            if (precision_weighted + recall) > 0
+            else 0.0
+        )
+        out.append({
+            "threshold": t,
+            "blank_fp": blank_fp,
+            "blank_fp_per_page": round(blank_fp / n_blank, 4) if n_blank else 0.0,
+            "gt_total": agg["gt_total"],
+            "found": agg["tp_exact_class"],
+            "wrong_class": agg["tp_wrong_class"],
+            "labelled_fp": fp_labelled,
+            "precision": round(precision, 5),
+            "precision_weighted": round(precision_weighted, 5),
+            "recall": round(recall, 5),
+            "f05": round(f05, 5),
+            "fp_score": round(fp_score, 5),
+        })
+    return out
+
+
+def _fmt_point(p: dict | None) -> str:
+    if not p:
+        return "none"
+    return (f"{p['threshold']:.2f}: P={p['precision']:.3f} R={p['recall']:.3f} "
+            f"found={p['found']}/{p['gt_total']} blankFP={p['blank_fp']} labelledFP={p['labelled_fp']}")
 
 
 def _names_dict(raw_names) -> dict[int, str]:
@@ -546,6 +655,9 @@ def build_real_eval_callback(
                 f"complete({metrics['complete_pages']}p, gt={metrics['gt_total']}): "
                 f"@0.25[exact={metrics['tp_exact_class']} wrong_cls={metrics['tp_wrong_class']} off_fp={metrics['fp_off_label']} F0.5={metrics['f05_exact']:.3f}] "
                 f"@0.50[exact={c50['tp_exact_class']} wrong_cls={c50['tp_wrong_class']} off_fp={c50['fp_off_label']} F0.5={c50['f05_exact']:.3f}] "
+                f"| best cutoff {_fmt_point(metrics.get('best_threshold'))}"
+                f" | <= {metrics['blank_fp_budget_per_page']} blank FP/page: {_fmt_point(metrics.get('at_blank_fp_budget'))}"
+                f" | 0 blank FP: {_fmt_point(metrics.get('at_zero_blank_fp'))} "
                 f"score={metrics['real_score']:.4f}{' *BEST_REAL*' if improved else ''}",
                 flush=True,
             )

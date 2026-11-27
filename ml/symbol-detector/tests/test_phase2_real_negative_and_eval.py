@@ -273,6 +273,7 @@ def test_role_aware_bce_and_partial_detection_loss(tmp_path):
     ])
     loss = bce(logits, scores)
     assert loss[0, 0, 0].item() == 0.0  # partial unverified bg stays zero
+    assert loss[0, 2, 0].item() > 0.0   # partial foreground anchor wrong class IS penalized
     assert loss[0, 2, 1].item() > 0.0   # partial positive active
     # Blank confident FP penalty >> synthetic bg penalty at identical logit=2.0:
     assert loss[3, 0, 0].item() > loss[1, 0, 0].item() * 4.0

@@ -121,6 +121,8 @@ def describe_detector_weights(
         "model_path": None,
         "epoch": None,
         "best_fitness": None,
+        "recommended_confidence": None,
+        "real_eval_summary": None,
         "classes": None,
     }
     try:
@@ -138,6 +140,8 @@ def describe_detector_weights(
         "model_path": str(resolved),
         "epoch": meta.get("epoch"),
         "best_fitness": meta.get("best_fitness"),
+        "recommended_confidence": meta.get("recommended_confidence"),
+        "real_eval_summary": meta.get("real_eval_summary"),
         "classes": len(names) if isinstance(names, dict) else None,
     }
 

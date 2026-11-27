@@ -134,6 +134,23 @@ def export_onnx_detector(
         raise
 
     epoch_0idx = payload.get("epoch")
+    real_eval = payload.get("real_eval") if isinstance(payload.get("real_eval"), dict) else None
+    rec_conf = None
+    real_eval_summary = None
+    if real_eval is not None:
+        best_th = real_eval.get("best_threshold") if isinstance(real_eval.get("best_threshold"), dict) else {}
+        raw_conf = best_th.get("threshold")
+        if isinstance(raw_conf, (int, float)) and not isinstance(raw_conf, bool) and 0.05 < float(raw_conf) < 0.999:
+            rec_conf = round(float(raw_conf), 4)
+        real_eval_summary = {
+            "epoch": real_eval.get("epoch"),
+            "real_score": real_eval.get("real_score"),
+            "blank_pages": real_eval.get("blank_pages"),
+            "complete_pages": real_eval.get("complete_pages"),
+            "best_threshold": real_eval.get("best_threshold"),
+            "at_blank_fp_budget": real_eval.get("at_blank_fp_budget"),
+            "at_zero_blank_fp": real_eval.get("at_zero_blank_fp"),
+        }
     meta = {
         "format_version": 1,
         "kind": "blueprint_only_detector_onnx_yolo26n_p2",
@@ -150,6 +167,8 @@ def export_onnx_detector(
         "epoch_0idx": epoch_0idx,
         "epoch": (int(epoch_0idx) + 1) if isinstance(epoch_0idx, int) else None,
         "best_fitness": payload.get("best_fitness"),
+        "recommended_confidence": rec_conf,
+        "real_eval_summary": real_eval_summary,
         "parity_max_abs_diff": max_diff,
     }
     tmp_meta = out_meta.with_name(f".{out_meta.name}.{os.getpid()}.tmp")

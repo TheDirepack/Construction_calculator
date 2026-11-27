@@ -46,6 +46,7 @@ class PositiveAwareBCE(nn.Module):
         real_complete_pos_weight: float = DEFAULT_PHASE2_LOSS_CFG['real_complete_pos_weight'],
         synthetic_complete_neg_weight: float = DEFAULT_PHASE2_LOSS_CFG['synthetic_complete_neg_weight'],
         synthetic_complete_wrong_cls_weight: float = DEFAULT_PHASE2_LOSS_CFG['synthetic_complete_wrong_cls_weight'],
+        partial_wrong_cls_weight: float = DEFAULT_PHASE2_LOSS_CFG['partial_wrong_cls_weight'],
         fp_boost: float = DEFAULT_PHASE2_LOSS_CFG['fp_boost'],
     ):
         super().__init__()
@@ -56,6 +57,7 @@ class PositiveAwareBCE(nn.Module):
         self.real_complete_pos_weight = float(real_complete_pos_weight)
         self.synthetic_complete_neg_weight = float(synthetic_complete_neg_weight)
         self.synthetic_complete_wrong_cls_weight = float(synthetic_complete_wrong_cls_weight)
+        self.partial_wrong_cls_weight = float(partial_wrong_cls_weight)
         self.fp_boost = float(fp_boost)
         self.verified_class_mask = None
         self.sample_role = None
@@ -68,10 +70,13 @@ class PositiveAwareBCE(nn.Module):
         if (coverage.ndim != 2 or coverage.shape[0] != logits.shape[0] or
                 coverage.shape[1] != logits.shape[-1]):
             raise ValueError('phase-two class mask mismatches YOLO output')
-        # Assigned known positives are always trainable; unverified target
-        # classes receive no background-negative gradient at other anchors.
+        # Assigned known positives are always trainable; at a verified
+        # foreground anchor every other class is an explicit wrong-class
+        # negative even on positive-only partial tiles, while unverified
+        # background anchors receive zero negative gradient.
         pos_mask = scores > 0
-        allowed = coverage[:, None, :] | pos_mask
+        fg_anchor = pos_mask.any(dim=-1, keepdim=True)  # (B, A, 1)
+        allowed = coverage[:, None, :] | pos_mask | fg_anchor
         base_loss = F.binary_cross_entropy_with_logits(logits, scores, reduction='none')
         weights = allowed.to(dtype=logits.dtype)
 
@@ -85,14 +90,18 @@ class PositiveAwareBCE(nn.Module):
         p_det = torch.sigmoid(logits.detach()).to(dtype=logits.dtype)
         fp_factor = 1.0 + self.fp_boost * p_det
         half_fp_factor = 1.0 + 0.5 * self.fp_boost * p_det
-        fg_anchor = pos_mask.any(dim=-1, keepdim=True)  # (B, A, 1)
+
+        is_partial = (role == ROLE_PARTIAL)[:, None, None]
+        if is_partial.any():
+            partial_wrong = is_partial & fg_anchor & (~pos_mask)
+            weights = torch.where(partial_wrong, self.partial_wrong_cls_weight * fp_factor, weights)
 
         is_syn_complete = (role == ROLE_SYNTHETIC_COMPLETE)[:, None, None]
         if is_syn_complete.any():
             syn_bg = is_syn_complete & neg_allowed & (~fg_anchor)
             syn_wrong = is_syn_complete & neg_allowed & fg_anchor
             weights = torch.where(syn_bg, self.synthetic_complete_neg_weight * half_fp_factor, weights)
-            weights = torch.where(syn_wrong, self.synthetic_complete_wrong_cls_weight * half_fp_factor, weights)
+            weights = torch.where(syn_wrong, self.synthetic_complete_wrong_cls_weight * fp_factor, weights)
 
         is_real_blank = (role == ROLE_REAL_BLANK)[:, None, None]
         if is_real_blank.any():

@@ -108,6 +108,7 @@ def main():
     parser.add_argument('--real-complete-pos-weight', type=float, default=DEFAULT_PHASE2_LOSS_CFG['real_complete_pos_weight'])
     parser.add_argument('--synthetic-complete-neg-weight', type=float, default=DEFAULT_PHASE2_LOSS_CFG['synthetic_complete_neg_weight'])
     parser.add_argument('--synthetic-complete-wrong-cls-weight', type=float, default=DEFAULT_PHASE2_LOSS_CFG['synthetic_complete_wrong_cls_weight'])
+    parser.add_argument('--partial-wrong-cls-weight', type=float, default=DEFAULT_PHASE2_LOSS_CFG['partial_wrong_cls_weight'])
     parser.add_argument('--fp-boost', type=float, default=DEFAULT_PHASE2_LOSS_CFG['fp_boost'])
     parser.add_argument('--run', action='store_true', help='Explicitly start training on your machine')
     args = parser.parse_args()
@@ -119,6 +120,7 @@ def main():
         'real_complete_pos_weight': args.real_complete_pos_weight,
         'synthetic_complete_neg_weight': args.synthetic_complete_neg_weight,
         'synthetic_complete_wrong_cls_weight': args.synthetic_complete_wrong_cls_weight,
+        'partial_wrong_cls_weight': args.partial_wrong_cls_weight,
         'fp_boost': args.fp_boost,
     }
     eval_manifest = args.real_eval_manifest

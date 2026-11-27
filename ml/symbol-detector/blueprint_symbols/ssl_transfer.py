@@ -125,6 +125,7 @@ def _read_phase2_detector_checkpoint(source: Path) -> dict:
         "names": names,
         "epoch": ckpt.get("epoch"),
         "best_fitness": ckpt.get("best_fitness"),
+        "real_eval": ckpt.get("real_eval") if isinstance(ckpt.get("real_eval"), dict) else None,
         "state_dict": state_dict,
         "backbone_neck_state_dict": {
             k: v for k, v in state_dict.items() if not k.startswith(head_prefix)
