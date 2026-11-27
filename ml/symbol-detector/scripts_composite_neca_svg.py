@@ -46,10 +46,13 @@ def draw_preview(image: np.ndarray, placed: list[dict], out_path: Path) -> None:
 
 def render_training_backgrounds(data_root: Path, out_dir: Path, count: int, *, seed: int,
                                 dpi: int = 150, max_pixels: int = 24_000_000,
-                                page_hash_cache: Path | None = None) -> list[Path]:
+                                page_hash_cache: Path | None = None,
+                                exclude_pages: list[tuple[Path, int]] = ()) -> list[Path]:
     """Render ``count`` random pages of the training drawings (``1_blueprints/*.pdf``,
     found at runtime) to page JSONs; positive-only, since their own devices
-    are unlabelled."""
+    are unlabelled. ``exclude_pages`` (PDF, 0-based page): pages held out for
+    the real-page test; with ``page_hash_cache`` their copies in other PDFs
+    are skipped too."""
     import pymupdf
     from blueprint_symbols.blueprint_sets import blueprint_sets, pdf_page_entries
     from blueprint_symbols.label_schema import page_header
@@ -63,6 +66,14 @@ def render_training_backgrounds(data_root: Path, out_dir: Path, count: int, *, s
     if page_hash_cache is not None:      # exact duplicate pages (and evaluation copies) once
         from blueprint_symbols.page_hash_cache import PageHashCache
         hashes = PageHashCache(page_hash_cache)
+    excluded = {(Path(pdf).resolve(), int(page)) for pdf, page in exclude_pages}
+    excluded_hashes = set()
+    if hashes is not None:
+        for pdf, page in sorted(excluded):
+            try:
+                excluded_hashes.add(hashes.page_hash(pdf, page))
+            except Exception:
+                pass
     written: list[Path] = []
     tries = 0
     seen = set()
@@ -80,7 +91,14 @@ def render_training_backgrounds(data_root: Path, out_dir: Path, count: int, *, s
         if key in seen:
             continue
         seen.add(key)
+        if (Path(pdf).resolve(), entry['pdf_page_index']) in excluded:
+            continue
         if hashes is not None:
+            try:
+                if hashes.page_hash(pdf, entry['pdf_page_index']) in excluded_hashes:
+                    continue
+            except Exception:
+                pass
             try:
                 if hashes.is_duplicate(pdf, entry['pdf_page_index']):
                     continue
@@ -177,9 +195,16 @@ def main() -> None:
     if a.background_pages:
         if a.data_root is None:
             raise SystemExit('--background-pages needs --data-root')
+        held_out = []
+        if a.label_store:
+            from annotator import label_store
+            held_out = [p for store in a.label_store
+                        for p in label_store.holdout_pdf_pages(store, data_root=a.data_root)]
+            print(f'{len(held_out)} pages held out for the real-page test are not backgrounds', flush=True)
         paths += render_training_backgrounds(a.data_root, a.output / '_backgrounds',
                                              a.background_pages, seed=a.seed,
-                                             page_hash_cache=a.page_hash_cache)
+                                             page_hash_cache=a.page_hash_cache,
+                                             exclude_pages=held_out)
     if a.walls_only_pages or a.dataset_pages:
         if a.data_root is None:
             raise SystemExit('--walls-only-pages / --dataset-pages need --data-root')

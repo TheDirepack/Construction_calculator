@@ -51,14 +51,20 @@ def select_real_eval_pages(
     max_blank_pages: int = 24,
     max_complete_pages: int = 24,
 ) -> dict[str, list[dict]]:
-    """Deterministically select real verified-blank and fully-labeled pages across splits/PDFs."""
+    """Deterministically select real verified-blank and fully-labeled pages.
+
+    A manifest with ``real_holdout`` (verified pages of training drawings that
+    never trained, ``label_store.labeled_pages``) is tested on those pages
+    only. Older manifests fall back to val/test, then training pages."""
     manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     splits = manifest.get("splits") or {}
+    if manifest.get("real_holdout"):
+        splits = {"holdout": [r["annotation"] for r in manifest["real_holdout"]]}
     blank_candidates: list[dict] = []
     complete_candidates: list[dict] = []
     seen_refs: set[str] = set()
 
-    for split in ("val", "test", "train"):
+    for split in ("holdout", "val", "test", "train"):
         for raw_ref in splits.get(split) or []:
             ref = str(raw_ref)
             if ref in seen_refs:
@@ -90,8 +96,9 @@ def select_real_eval_pages(
             else:
                 complete_candidates.append(row)
 
+    order = {"holdout": 0, "val": 1, "test": 2, "train": 3}
     sort_key = lambda r: (
-        0 if r["split"] == "val" else (1 if r["split"] == "test" else 2),
+        order[r["split"]],
         r["document_id"],
         r["page_index"],
         r["ref"],

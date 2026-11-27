@@ -78,7 +78,7 @@ def test_annotator_saves_into_the_devices_folder(blueprints):
         # One labels file per document, beside document.json.
         assert [p.name for p in session.out_dir.glob("*.json")] and \
             {p.name for p in session.out_dir.glob("*.json")} == {"document.json", f"{pdf.stem}_labels.json"}
-    assert label_store.labeled_pages(bp) == {"train": [], "evaluation": []}
+    assert label_store.labeled_pages(bp) == {"train": [], "holdout": [], "evaluation": []}
     for pdf in (train, exam):
         session = LabelingSession(pdf=pdf, blueprints_dir=bp)
         _, rev, _ = session.page_document(0)

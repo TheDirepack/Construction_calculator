@@ -30,8 +30,8 @@ PHASE2_LR0="${PHASE2_LR0:-0.003}"
 PHASE2_REAL_BLANK_TILES="${PHASE2_REAL_BLANK_TILES:-32}"
 PHASE2_REAL_COMPLETE_TILES="${PHASE2_REAL_COMPLETE_TILES:-64}"
 PHASE2_REAL_EVAL_EVERY="${PHASE2_REAL_EVAL_EVERY:-5}"
-PHASE2_REAL_EVAL_BLANK_PAGES="${PHASE2_REAL_EVAL_BLANK_PAGES:-24}"
-PHASE2_REAL_EVAL_COMPLETE_PAGES="${PHASE2_REAL_EVAL_COMPLETE_PAGES:-24}"
+PHASE2_REAL_EVAL_BLANK_PAGES="${PHASE2_REAL_EVAL_BLANK_PAGES:-1000}"     # every held-out page
+PHASE2_REAL_EVAL_COMPLETE_PAGES="${PHASE2_REAL_EVAL_COMPLETE_PAGES:-1000}"
 PY="$BASE/.venv/bin/python"
 
 export PYTHONPATH="$CODE"
@@ -63,6 +63,7 @@ complete = [p for p in pages["evaluation"]
             if read_page(p).get("annotation_completeness_verified") is True
             or read_page(p).get("verified_no_symbols") is True]
 print(f"{len(pages['train'])} training pages (1_blueprints/*.pdf); "
+      f"{len(pages['holdout'])} held out of training for the real-page test; "
       f"{len(pages['evaluation'])} evaluation pages (1_blueprints/evaluation), "
       f"{len(complete)} fully labelled -> validation/test")
 if len(complete) == 0:

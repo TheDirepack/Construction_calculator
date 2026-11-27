@@ -46,9 +46,10 @@ def label_store_pages(stores: list[Path], *, data_root: Path | None = None) -> d
     """Usable pages of label stores (annotator, agents, model review), split by
     where each drawing's PDF is now: ``1_blueprints/*.pdf`` -> ``train``,
     ``1_blueprints/evaluation/*.pdf`` -> ``evaluation`` (blueprint_sets).
-    Evaluation pages only ever become validation/test."""
+    Evaluation pages only ever become validation/test. 1 in 4 verified pages
+    of each training drawing is ``holdout``: the real-page test, never trained."""
     from annotator import label_store
-    out: dict[str, list[str]] = {"train": [], "evaluation": []}
+    out: dict[str, list[str]] = {"train": [], "holdout": [], "evaluation": []}
     for store in stores:
         for role, pages in label_store.labeled_pages(store, data_root=data_root).items():
             out[role] += [str(p) for p in pages]
@@ -80,7 +81,8 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
             real_complete_negative_fraction: float | None = None,
             eval_scales: tuple[float, ...] = (1.0,), eval_overlap: int = 128,
             evaluation_files: list[str] | None = None,
-            train_only_files: list[str] | None = None) -> dict:
+            train_only_files: list[str] | None = None,
+            holdout_files: list[str] | None = None) -> dict:
     if destination.exists() and any(destination.iterdir()):
         raise FileExistsError(f'refusing to overwrite existing directory: {destination}')
     paths = discover(list(patterns) + list(evaluation_files or []))
@@ -90,7 +92,8 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
     manifest = build_manifest(paths, val_fraction=val_fraction, test_fraction=test_fraction,
                               locked_manifest=lock, allow_partial_training=allow_partial_training,
                               evaluation_files=evaluation_files,
-                              train_only_files=train_only_files)
+                              train_only_files=train_only_files,
+                              holdout_files=holdout_files)
     destination.mkdir(parents=True, exist_ok=True)
     mpath = destination / 'source_manifest.json'
     mpath.write_text(json.dumps(manifest, indent=2))
@@ -113,6 +116,9 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
         'pretrained_general_models_used': False,
         'source_annotated_pages': len(paths),
         'source_groups': {k: len(v) for k, v in manifest['split_groups'].items()},
+        'real_holdout_pages': {
+            'blank': sum(r['verified_no_symbols'] for r in manifest['real_holdout']),
+            'fully_labelled': sum(not r['verified_no_symbols'] for r in manifest['real_holdout'])},
         'classes': manifest['class_ids'],
         'split_counts': export['counts'],
         'verification': audit,
@@ -197,7 +203,8 @@ def main():
                      eval_scales=tuple(float(v) for v in a.eval_scales.split(',')),
                      eval_overlap=a.eval_overlap,
                      evaluation_files=evaluation,
-                     train_only_files=store_pages['train'] if not evaluation else None)
+                     train_only_files=store_pages['train'] if not evaluation else None,
+                     holdout_files=store_pages['holdout'])
     print(json.dumps(result, indent=2))
 
 

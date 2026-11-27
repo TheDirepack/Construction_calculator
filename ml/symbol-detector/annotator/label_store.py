@@ -400,20 +400,80 @@ def batch_documents(batch: Path) -> list[Path]:
     return out
 
 
-def labeled_pages(store: Path, *, data_root: Path | None = None) -> dict[str, list[Path]]:
+HOLDOUT_EVERY = 4      # 1 in N verified training-drawing pages is held out (0: none)
+
+
+def holdout_every() -> int:
+    return int(os.environ.get("BPS_REAL_HOLDOUT_EVERY", HOLDOUT_EVERY))
+
+
+def _holdout_key(pdf_name: str, page: int) -> str:
+    import hashlib
+    return hashlib.sha256(f"{pdf_name}#{int(page)}".encode()).hexdigest()
+
+
+def split_holdout(pages: list[tuple[str, int, str, Path]], every: int) -> tuple[list[Path], list[Path]]:
+    """Hold out 1 in ``every`` of each (drawing, page kind) group, rounded
+    (a group smaller than ``every`` keeps all its pages for training), so each
+    drawing's blank and fully labelled pages are both represented. Pages are
+    ordered by a hash of PDF name and page number and the first ones are
+    held out. ``pages`` holds (pdf name, 1-based page, kind, reference).
+    Returns (train, holdout)."""
+    if every <= 0:
+        return [p[3] for p in pages], []
+    groups: dict[tuple[str, str], list[tuple[str, int, str, Path]]] = {}
+    for item in pages:
+        groups.setdefault((item[0], item[2]), []).append(item)
+    train, holdout = [], []
+    for key in sorted(groups):
+        ordered = sorted(groups[key], key=lambda it: _holdout_key(it[0], it[1]))
+        n_hold = int(len(ordered) / every + 0.5) if len(ordered) >= every else 0
+        holdout += [it[3] for it in ordered[:n_hold]]
+        train += [it[3] for it in ordered[n_hold:]]
+    return train, holdout
+
+
+def labeled_pages(store: Path, *, data_root: Path | None = None,
+                  holdout: int | None = None) -> dict[str, list[Path]]:
     """Usable saved pages split by where their PDF is now:
-    ``{"train": [...], "evaluation": [...]}`` (``document_role``).
+    ``{"train": [...], "holdout": [...], "evaluation": [...]}`` (``document_role``).
 
     Labeling covers every drawing; this is where evaluation drawings are kept
     out of training. Pages of PDFs in neither folder are left out of both.
+
+    ``holdout`` (default ``BPS_REAL_HOLDOUT_EVERY`` or 4): 1 in N verified
+    pages of each training PDF (``split_holdout``, per drawing, blank and
+    fully labelled pages separately) never train. They are the real-page test
+    (``real_page_eval``) and are kept out of composite backgrounds and symbol
+    crops too. Photos always train.
     """
-    out: dict[str, list[Path]] = {"train": [], "evaluation": []}
+    from blueprint_symbols.label_schema import parse_page_ref, read_page
+    out: dict[str, list[Path]] = {"train": [], "holdout": [], "evaluation": []}
     roles: dict[Path, str | None] = {}
+    candidates: list[tuple[str, int, str, Path]] = []
+    ordered: list[tuple[str, Path]] = []
     for doc, page in _usable_pages(store):
         if doc.folder not in roles:
             roles[doc.folder] = document_role(doc, data_root)
-        if roles[doc.folder]:
-            out[roles[doc.folder]].append(page)
+        role = roles[doc.folder]
+        if role == "train" and doc.kind == "pdf" and parse_page_ref(page) is not None:
+            kind = "blank" if read_page(page).get("verified_no_symbols") is True else "complete"
+            candidates.append((Path(doc.source).name, parse_page_ref(page)[1], kind, page))
+        if role:
+            ordered.append((role, page))
+    _, held = split_holdout(candidates, holdout_every() if holdout is None else holdout)
+    held_set = set(held)
+    for role, page in ordered:                       # store order, as before
+        out["holdout" if page in held_set else role].append(page)
+    return out
+
+
+def holdout_pdf_pages(store: Path, *, data_root: Path | None = None) -> list[tuple[Path, int]]:
+    """(PDF, 0-based page index) of every held-out page (``labeled_pages``)."""
+    out = []
+    for ref in labeled_pages(store, data_root=data_root)["holdout"]:
+        doc, page = page_source(ref)
+        out.append((Path(doc.source), page - 1))
     return out
 
 

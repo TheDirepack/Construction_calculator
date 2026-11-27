@@ -59,13 +59,19 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
                    allow_partial_training:bool=False,
                    locked_manifest: dict | None = None,
                    evaluation_files: list[Path] | None = None,
-                   train_only_files: list[Path] | None = None) -> dict:
+                   train_only_files: list[Path] | None = None,
+                   holdout_files: list[Path] | None = None) -> dict:
     """Stable group-aware partitions; same image in different groups is an error.
 
     ``evaluation_files``: pages of the evaluation drawings
     (``1_blueprints/evaluation``). When given, they alone form validation and
     test (their projects split between the two) and every other group trains;
     no training project is held out. Evaluation pages must be fully labelled.
+
+    ``holdout_files``: verified pages of training drawings held out for the
+    real-page test (``label_store.labeled_pages``). They never train; a page
+    that repeats a training page (same raster, or a symbol-free sheet with the
+    same fingerprint) is dropped. Listed as ``real_holdout``.
 
     Stratification cannot guarantee held-out coverage of all rare classes;
     distribution and coverage warnings are explicitly reported.
@@ -164,6 +170,51 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
         warnings.append(f'{len(duplicate_negatives)} verified symbol-free pages repeat an earlier '
                         'page (same fingerprint) and were left out')
     if not docs: raise ValueError('no training annotation files found')
+    holdout=_real_holdout(holdout_files or [], by_hash, negative_pages, negative_digests, warnings)
+    result=_split(docs, by_group, counts, group_counts, warnings, duplicate_negatives,
+                  val_fraction=val_fraction, test_fraction=test_fraction,
+                  require_verified_groups=require_verified_groups,
+                  allow_partial_training=allow_partial_training, locked_manifest=locked_manifest,
+                  evaluation_files=evaluation_files, train_only_files=train_only_files)
+    result['real_holdout']=holdout
+    return result
+
+
+def _real_holdout(files, by_hash, negative_pages, negative_digests, warnings) -> list[dict]:
+    """Held-out real pages (``build_manifest``), minus repeats of training pages."""
+    out=[]; repeats=0
+    for path in sorted(set(Path(f).resolve() for f in files)):
+        if not page_training_ready(path):
+            continue
+        data=load_training_page(path)
+        img=(path.parent/data['image_path']).resolve()
+        if not img.is_file():raise FileNotFoundError(img)
+        digest=_sha(img)
+        blank=data.get('verified_no_symbols') is True
+        if digest in by_hash or digest in negative_digests:
+            repeats+=1; continue
+        if blank:
+            image=cv2.imread(str(img),cv2.IMREAD_UNCHANGED)
+            if image is None:
+                raise ValueError(f'cannot decode source raster: {img}')
+            if negative_pages.match(page_fingerprint(image)) is not None:
+                repeats+=1; continue
+            negative_pages.name_last(str(path))
+            negative_digests[digest]=str(path)
+        by_hash[digest]='__real_holdout__'
+        out.append({'annotation':str(path),'image':str(img),'image_sha256':digest,
+                    'document_id':str(data.get('document_id') or ''),
+                    'page_index':int(data.get('page_index') or 0),
+                    'verified_no_symbols':blank,
+                    'instances':len(data.get('instances') or [])})
+    if repeats:
+        warnings.append(f'{repeats} held-out real pages repeat a training page and were left out of the real-page test')
+    return out
+
+
+def _split(docs, by_group, counts, group_counts, warnings, duplicate_negatives, *,
+           val_fraction, test_fraction, require_verified_groups, allow_partial_training,
+           locked_manifest, evaluation_files, train_only_files) -> dict:
     groups=sorted(by_group,key=lambda g:hashlib.sha256(g.encode()).hexdigest())
     if evaluation_files:
         return _evaluation_folder_split(docs, by_group, groups, counts, group_counts, warnings,
