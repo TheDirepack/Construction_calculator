@@ -114,7 +114,7 @@ def predict_full_page_torch(
     imgsz: int = 512,
     overlap: int = 192,
     confidence: float = 0.25,
-    batch_size: int = 16,
+    batch_size: int = 8,
     device=None,
 ) -> tuple[list[dict], int]:
     """Deterministic scale-1.0 tiled inference over EVERY tile of a page image."""
@@ -162,7 +162,11 @@ def predict_full_page_torch(
                 tensor = torch.from_numpy(np.ascontiguousarray(batch_np)).to(
                     device=target_device, dtype=target_dtype
                 ) / 255.0
-                out = model(tensor)
+                with torch.amp.autocast(
+                    device_type=target_device.type,
+                    enabled=target_device.type == "cuda",
+                ):
+                    out = model(tensor)
                 pred_tensor = out[0] if isinstance(out, (tuple, list)) else out
                 pred_np = pred_tensor.detach().float().cpu().numpy()
                 for idx, tile in enumerate(chunk_tiles):
@@ -339,7 +343,7 @@ def evaluate_real_pages(
     names: dict[int, str],
     imgsz: int = 512,
     overlap: int = 192,
-    batch_size: int = 16,
+    batch_size: int = 8,
     max_blank_pages: int = 24,
     max_complete_pages: int = 24,
     device=None,
@@ -453,7 +457,7 @@ def build_real_eval_callback(
     max_complete_pages: int = 24,
     imgsz: int = 512,
     overlap: int = 192,
-    batch_size: int = 16,
+    batch_size: int = 8,
 ):
     """Create an Ultralytics ``on_fit_epoch_end`` callback for periodic real-page evaluation."""
     if every_epochs < 1:
@@ -476,66 +480,70 @@ def build_real_eval_callback(
         eval_model = ema.ema if (ema is not None and getattr(ema, "ema", None) is not None) else trainer.model
         names = _names_dict(getattr(eval_model, "names", None) or trainer.data["names"])
 
-        metrics = evaluate_real_pages(
-            eval_model,
-            manifest_path,
-            names=names,
-            imgsz=imgsz,
-            overlap=overlap,
-            batch_size=batch_size,
-            max_blank_pages=max_blank_pages,
-            max_complete_pages=max_complete_pages,
-        )
-        metrics["epoch"] = epoch_0 + 1
-        metrics["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
+        try:
+            metrics = evaluate_real_pages(
+                eval_model,
+                manifest_path,
+                names=names,
+                imgsz=imgsz,
+                overlap=overlap,
+                batch_size=batch_size,
+                max_blank_pages=max_blank_pages,
+                max_complete_pages=max_complete_pages,
+            )
+            metrics["epoch"] = epoch_0 + 1
+            metrics["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
 
-        save_dir = Path(trainer.save_dir)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        jsonl_path = save_dir / "real_eval_metrics.jsonl"
-        with jsonl_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(metrics, ensure_ascii=False) + "\n")
-        latest_path = save_dir / "real_eval_latest.json"
-        tmp_latest = latest_path.with_name(f".{latest_path.name}.{os.getpid()}.tmp")
-        tmp_latest.write_text(json.dumps(metrics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp_latest, latest_path)
+            save_dir = Path(trainer.save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            jsonl_path = save_dir / "real_eval_metrics.jsonl"
+            with jsonl_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(metrics, ensure_ascii=False) + "\n")
+            latest_path = save_dir / "real_eval_latest.json"
+            tmp_latest = latest_path.with_name(f".{latest_path.name}.{os.getpid()}.tmp")
+            tmp_latest.write_text(json.dumps(metrics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            os.replace(tmp_latest, latest_path)
 
-        improved = metrics["real_score"] > state["best_score"]
-        if improved:
-            state["best_score"] = metrics["real_score"]
-            weights_dir = save_dir / "weights"
-            weights_dir.mkdir(parents=True, exist_ok=True)
-            best_real_path = weights_dir / "best_real.pt"
-            ckpt_model = copy.deepcopy(eval_model).half().cpu().eval()
-            if hasattr(ckpt_model, "criterion"):
-                ckpt_model.criterion = None
-            train_args = dict(vars(trainer.args)) if hasattr(trainer, "args") else {}
-            train_args.setdefault("model", "yolo26n-p2.yaml")
-            train_args.setdefault("pretrained", False)
-            ckpt = {
-                "epoch": epoch_0,
-                "best_fitness": float(metrics["real_score"]),
-                "model": ckpt_model,
-                "ema": None,
-                "updates": getattr(ema, "updates", None) if ema is not None else None,
-                "optimizer": None,
-                "train_args": train_args,
-                "date": metrics["timestamp_utc"],
-                "real_eval": metrics,
-            }
-            tmp_pt = best_real_path.with_name(f".{best_real_path.name}.{os.getpid()}.tmp")
-            torch.save(ckpt, tmp_pt)
-            os.replace(tmp_pt, best_real_path)
+            improved = metrics["real_score"] > state["best_score"]
+            if improved:
+                state["best_score"] = metrics["real_score"]
+                weights_dir = save_dir / "weights"
+                weights_dir.mkdir(parents=True, exist_ok=True)
+                best_real_path = weights_dir / "best_real.pt"
+                ckpt_model = copy.deepcopy(eval_model).half().cpu().eval()
+                if hasattr(ckpt_model, "criterion"):
+                    ckpt_model.criterion = None
+                train_args = dict(vars(trainer.args)) if hasattr(trainer, "args") else {}
+                train_args.setdefault("model", "yolo26n-p2.yaml")
+                train_args.setdefault("pretrained", False)
+                ckpt = {
+                    "epoch": epoch_0,
+                    "best_fitness": float(metrics["real_score"]),
+                    "model": ckpt_model,
+                    "ema": None,
+                    "updates": getattr(ema, "updates", None) if ema is not None else None,
+                    "optimizer": None,
+                    "train_args": train_args,
+                    "date": metrics["timestamp_utc"],
+                    "real_eval": metrics,
+                }
+                tmp_pt = best_real_path.with_name(f".{best_real_path.name}.{os.getpid()}.tmp")
+                torch.save(ckpt, tmp_pt)
+                os.replace(tmp_pt, best_real_path)
 
-        c50 = metrics["complete_050"]
-        print(
-            f"[RealPageEval ep {metrics['epoch']}] "
-            f"blank({metrics['blank_pages']}p): fp@0.25={metrics['blank_fp_025_total']} (mean {metrics['blank_fp_025_mean']:.2f}, 0fp={metrics['blank_zero_fp_pages_025']}), "
-            f"fp@0.50={metrics['blank_fp_050_total']} (mean {metrics['blank_fp_050_mean']:.2f}) | "
-            f"complete({metrics['complete_pages']}p, gt={metrics['gt_total']}): "
-            f"@0.25[exact={metrics['tp_exact_class']} wrong_cls={metrics['tp_wrong_class']} off_fp={metrics['fp_off_label']} F0.5={metrics['f05_exact']:.3f}] "
-            f"@0.50[exact={c50['tp_exact_class']} wrong_cls={c50['tp_wrong_class']} off_fp={c50['fp_off_label']} F0.5={c50['f05_exact']:.3f}] "
-            f"score={metrics['real_score']:.4f}{' *BEST_REAL*' if improved else ''}",
-            flush=True,
-        )
+            c50 = metrics["complete_050"]
+            print(
+                f"[RealPageEval ep {metrics['epoch']}] "
+                f"blank({metrics['blank_pages']}p): fp@0.25={metrics['blank_fp_025_total']} (mean {metrics['blank_fp_025_mean']:.2f}, 0fp={metrics['blank_zero_fp_pages_025']}), "
+                f"fp@0.50={metrics['blank_fp_050_total']} (mean {metrics['blank_fp_050_mean']:.2f}) | "
+                f"complete({metrics['complete_pages']}p, gt={metrics['gt_total']}): "
+                f"@0.25[exact={metrics['tp_exact_class']} wrong_cls={metrics['tp_wrong_class']} off_fp={metrics['fp_off_label']} F0.5={metrics['f05_exact']:.3f}] "
+                f"@0.50[exact={c50['tp_exact_class']} wrong_cls={c50['tp_wrong_class']} off_fp={c50['fp_off_label']} F0.5={c50['f05_exact']:.3f}] "
+                f"score={metrics['real_score']:.4f}{' *BEST_REAL*' if improved else ''}",
+                flush=True,
+            )
+        finally:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     return on_fit_epoch_end

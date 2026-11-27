@@ -180,28 +180,35 @@ def test_score_complete_page_and_deterministic_real_eval_selection(tmp_path):
     assert len({r["document_id"] for r in sel_a["blank_pages"]}) == 4
 
 
-def test_scripts_train_ultralytics_plan_only_without_torch(tmp_path, monkeypatch, capsys):
+def test_scripts_train_ultralytics_plan_only_without_torch(tmp_path):
+    import os
+    import subprocess
+
     mf_path, _ = _write_manifest(tmp_path)
     out = tmp_path / "yolo"
     export_yolo_tiles(mf_path, out, samples=2, train_variants=1, allow_partial_training=True)
-    import scripts_train_ultralytics as train_cli
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "scripts_train_ultralytics.py",
-            str(out / "data.yaml"),
-            "--real-eval-every", "5",
-            "--real-blank-neg-weight", "7.5",
-        ],
+    repo_root = str(Path(__file__).resolve().parents[1])
+    env = dict(os.environ)
+    env["PYTHONPATH"] = f"{repo_root}{os.pathsep}{env['PYTHONPATH']}" if env.get("PYTHONPATH") else repo_root
+    code = (
+        "import sys, scripts_train_ultralytics as train_cli; "
+        "sys.argv = ['scripts_train_ultralytics.py', sys.argv[1], "
+        "'--real-eval-every', '5', '--real-blank-neg-weight', '7.5']; "
+        "train_cli.main(); "
+        "assert 'torch' not in sys.modules, 'torch must not be imported in plan-only mode'"
     )
-    train_cli.main()
-    stdout = capsys.readouterr().out
+    proc = subprocess.run(
+        [sys.executable, "-c", code, str(out / "data.yaml")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    stdout = proc.stdout
     assert '"real_blank_neg_weight": 7.5' in stdout
     assert '"every_epochs": 5' in stdout
     assert "PLAN ONLY" in stdout
-    assert "torch" not in sys.modules
 
 
 def test_role_aware_bce_and_partial_detection_loss(tmp_path):
