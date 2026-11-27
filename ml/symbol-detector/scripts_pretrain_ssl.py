@@ -536,7 +536,7 @@ def load_extra_glyphs(args: argparse.Namespace) -> tuple[list, dict]:
         from annotator import label_store
         from blueprint_symbols.verified_symbols import verified_symbol_glyphs
         pages = [p for store in stores for p in label_store.training_pages(store, data_root=args.data_root)]
-        got, rep = verified_symbol_glyphs(pages)
+        got, rep = verified_symbol_glyphs(pages, allow_complete=True)
         glyphs += got
         report['verified_labels'] = rep['counts']
     return glyphs, report

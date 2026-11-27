@@ -39,8 +39,9 @@ that folder's one labels file, `<name>_labels.json` (`{"kind":
 pre-labeling and training use; training names a page in it as
 `<name>_labels.json#p12`). Never create or edit `*_pNNNN.json` files: old
 ones are folded into the labels file and moved to `page_files_converted/`.
-Training only uses a PDF once a person marks it done ("PDF done" in the
-annotator), and only boxes a person verified. Review sheets you fill in for `scripts_circuitnet_review_sheets.py`
+Training only uses pages marked "Every symbol on this page is labeled" or
+"No target symbols on this page" (not partial pages or unverified boxes), and
+every box must be verified by a person. Review sheets you fill in for `scripts_circuitnet_review_sheets.py`
 go into it too: `apply` writes the reviewed boxes into each PDF's labels file. You can view any page before your first `act`.
 
 ```
@@ -187,6 +188,7 @@ After each command that writes a PNG, open the PNG with your file-reading tool
   {"kind": "add_box", "family": "switch", "variant": "three_way", "box": [990, 402, 1012, 430]},
   {"kind": "update_box", "id": "a0_3", "mark": "m20"},
   {"kind": "delete_box", "id": "a0_4"},
+  {"kind": "set_page", "verified_no_symbols": true},
   {"kind": "assess_page", "page_kind": "electrical_plan", "symbols_present": "yes",
    "labeling_complete": true, "note": "E311 power and data, sector A"}
 ]
@@ -203,8 +205,13 @@ After each command that writes a PNG, open the PNG with your file-reading tool
   `title_or_text_sheet`, `photo_unreadable`, `other`), `symbols_present`
   (`yes`, `no`, `unsure`), `labeling_complete` (true only if you covered every
   region), `note` (one line for the reviewer).
-* You **cannot** mark a page as verified symbol-free; say
-  `symbols_present: "no"` and a human decides.
+* `set_page` with `{"kind": "set_page", "verified_no_symbols": true}` applies
+  the exact same `"No target symbols on this page"` tag as the web GUI
+  (`verified_no_symbols: true`, `annotation_completeness: "complete"`). It
+  requires zero active boxes on the page (delete false unverified proposals
+  first in the same `act` batch; never delete human-verified boxes) and should
+  be paired with `assess_page` (`symbols_present: "no"`,
+  `labeling_complete: true`).
 
 An `"error"` reply means nothing was written: fix the JSON and retry.
 

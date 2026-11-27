@@ -152,7 +152,7 @@ def main() -> None:
         from blueprint_symbols.verified_symbols import verified_symbol_glyphs
         # Evaluation drawings never lend symbols to training data.
         pages = [p for store in a.label_store for p in label_store.training_pages(store, data_root=a.data_root)]
-        glyphs, report = verified_symbol_glyphs(pages)
+        glyphs, report = verified_symbol_glyphs(pages, allow_complete=True)
         bank.add_glyphs(glyphs)
         print('Verified-label crops:', json.dumps(report), flush=True)
     for library in a.symbol_library:

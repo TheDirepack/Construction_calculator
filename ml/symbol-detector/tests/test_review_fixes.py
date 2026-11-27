@@ -184,9 +184,18 @@ def test_photo_documents_train_and_are_pushed(tmp_path):
     from annotator import label_store
     bp = tmp_path / "blueprints_and_libraries" / "1_blueprints"
     (bp / "devices").mkdir(parents=True)
+    photo_partial = tmp_path / "photo_partial.png"
+    cv2.imwrite(str(photo_partial), np.full((120, 160, 3), 255, np.uint8))
+    partial_doc = label_store.create_document(bp, photo_partial, image_page={
+        "instances": [_verified("receptacle.duplex", (10, 10, 40, 40))]})
+    assert partial_doc.kind == "image"
+    assert label_store.labeled_pages(bp)["train"] == []
+    assert label_store.stage_push(bp, tmp_path / "stage_empty")[2] == 0
+
     photo = tmp_path / "photo.png"
-    cv2.imwrite(str(photo), np.full((120, 160, 3), 255, np.uint8))
+    cv2.imwrite(str(photo), np.full((120, 160, 3), 240, np.uint8))
     doc = label_store.create_document(bp, photo, image_page={
+        **label_schema.completeness(page_complete=True),
         "instances": [_verified("receptacle.duplex", (10, 10, 40, 40))]})
     assert doc.kind == "image"
     assert label_store.document_role(doc) == "train"

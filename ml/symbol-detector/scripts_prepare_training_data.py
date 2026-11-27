@@ -74,8 +74,13 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
             locked_manifest: Path | None = None,
             verified_wall_negative_fraction: float = .65,
             verified_wall_blank_fraction: float = .12,
+            real_blank_tiles_per_page: int | None = None,
+            real_complete_tiles_per_page: int | None = None,
+            real_blank_negative_fraction: float | None = None,
+            real_complete_negative_fraction: float | None = None,
             eval_scales: tuple[float, ...] = (1.0,), eval_overlap: int = 128,
-            evaluation_files: list[str] | None = None) -> dict:
+            evaluation_files: list[str] | None = None,
+            train_only_files: list[str] | None = None) -> dict:
     if destination.exists() and any(destination.iterdir()):
         raise FileExistsError(f'refusing to overwrite existing directory: {destination}')
     paths = discover(list(patterns) + list(evaluation_files or []))
@@ -84,7 +89,8 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
     lock=json.loads(locked_manifest.read_text()) if locked_manifest is not None else None
     manifest = build_manifest(paths, val_fraction=val_fraction, test_fraction=test_fraction,
                               locked_manifest=lock, allow_partial_training=allow_partial_training,
-                              evaluation_files=evaluation_files)
+                              evaluation_files=evaluation_files,
+                              train_only_files=train_only_files)
     destination.mkdir(parents=True, exist_ok=True)
     mpath = destination / 'source_manifest.json'
     mpath.write_text(json.dumps(manifest, indent=2))
@@ -95,6 +101,10 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
                  allow_partial_training=allow_partial_training, seed=seed,
                  verified_wall_negative_fraction=verified_wall_negative_fraction,
                  verified_wall_blank_fraction=verified_wall_blank_fraction,
+                 real_blank_tiles_per_page=real_blank_tiles_per_page,
+                 real_complete_tiles_per_page=real_complete_tiles_per_page,
+                 real_blank_negative_fraction=real_blank_negative_fraction,
+                 real_complete_negative_fraction=real_complete_negative_fraction,
                  scales=tuple(eval_scales), overlap=eval_overlap)
     audit = verify_export(dataset)
     result = {
@@ -128,6 +138,10 @@ def main():
     p.add_argument('--train-variants', type=int, default=3)
     p.add_argument('--verified-wall-negative-fraction', type=float, default=.65)
     p.add_argument('--verified-wall-blank-fraction', type=float, default=.12)
+    p.add_argument('--real-blank-tiles-per-page', type=int, default=None)
+    p.add_argument('--real-complete-tiles-per-page', type=int, default=None)
+    p.add_argument('--real-blank-negative-fraction', type=float, default=None)
+    p.add_argument('--real-complete-negative-fraction', type=float, default=None)
     p.add_argument('--val-fraction', type=float, default=.15)
     p.add_argument('--test-fraction', type=float, default=.15)
     p.add_argument('--seed', type=int, default=2026)
@@ -144,6 +158,11 @@ def main():
                         '(2 = each 512px tile covers 1024 source px; use it when dense pages '
                         'leave symbols clipped in every native-scale tile)')
     p.add_argument('--eval-overlap', type=int, default=128)
+    p.add_argument('--allow-synthetic-eval', action='store_true',
+                   help='deprecated no-op: synthetic eval fallback is always enabled when '
+                        '--annotations provides complete synthetic groups')
+    p.add_argument('--require-real-eval', action='store_true',
+                   help='fail if 1_blueprints/evaluation has no complete real evaluation pages')
     a = p.parse_args()
     store_pages = label_store_pages(a.label_store, data_root=a.data_root)
     evaluation = complete_pages(store_pages['evaluation'])
@@ -151,9 +170,14 @@ def main():
         print(json.dumps({'evaluation_pages': len(store_pages['evaluation']),
                           'fully_labelled_evaluation_pages': len(evaluation)}), flush=True)
     if a.label_store and not evaluation:
-        p.error('no fully labelled evaluation pages: validation and test come from the drawings in '
-                '1_blueprints/evaluation; label some of their pages completely ("every symbol on this '
-                'page is labeled", or "verified no target symbols")')
+        if a.require_real_eval or not a.annotations:
+            p.error('no fully labelled evaluation pages: validation and test come from the drawings in '
+                    '1_blueprints/evaluation; label some of their pages completely ("every symbol on this '
+                    'page is labeled", or "verified no target symbols")')
+        print(json.dumps({
+            'note': 'no fully labelled evaluation pages in 1_blueprints/evaluation; '
+                    'val/test will use held-out complete synthetic/walls-only groups',
+        }), flush=True)
     patterns = list(a.annotations) + store_pages['train']
     if not patterns:
         p.error('give --annotations and/or --label-store')
@@ -165,10 +189,15 @@ def main():
                      allow_partial_training=a.allow_partial_training,
                      verified_wall_negative_fraction=a.verified_wall_negative_fraction,
                      verified_wall_blank_fraction=a.verified_wall_blank_fraction,
+                     real_blank_tiles_per_page=a.real_blank_tiles_per_page,
+                     real_complete_tiles_per_page=a.real_complete_tiles_per_page,
+                     real_blank_negative_fraction=a.real_blank_negative_fraction,
+                     real_complete_negative_fraction=a.real_complete_negative_fraction,
                      locked_manifest=a.locked_manifest,
                      eval_scales=tuple(float(v) for v in a.eval_scales.split(',')),
                      eval_overlap=a.eval_overlap,
-                     evaluation_files=evaluation)
+                     evaluation_files=evaluation,
+                     train_only_files=store_pages['train'] if not evaluation else None)
     print(json.dumps(result, indent=2))
 
 

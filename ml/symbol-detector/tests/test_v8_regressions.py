@@ -77,6 +77,14 @@ def test_export_checker_detects_extras_and_wrong_canvas(tmp_path):
     dest=tmp_path/'prepared'
     run(mf,dest,samples=3)
     assert verify_export(dest)['ok']
+    for cache_name in ('train.cache', 'val.cache'):
+        (dest/'labels'/cache_name).write_bytes(b'cache')
+    assert verify_export(dest)['ok']
+    nested_extra=dest/'labels'/'train'/'rogue.cache'
+    nested_extra.write_bytes(b'cache')
+    with pytest.raises(ValueError,match='untracked'):
+        verify_export(dest)
+    nested_extra.unlink()
     extra=dest/'images'/'train'/'rogue.png'
     assert cv2.imwrite(str(extra),np.zeros((512,512,3),np.uint8))
     with pytest.raises(ValueError,match='untracked'):

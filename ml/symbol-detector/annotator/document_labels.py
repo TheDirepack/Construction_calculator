@@ -30,6 +30,7 @@ import json
 import os
 import re
 import threading
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -38,8 +39,11 @@ KIND = "document_labels"
 SUFFIX = "_labels.json"
 CONVERTED_DIR = "page_files_converted"
 LOCK_FILE = ".labels.lock"
+_MAX_PARSED_CACHE = 8
 
-_cache: dict[str, tuple[int, int, dict]] = {}
+_cache: "OrderedDict[str, tuple[int, int, dict]]" = OrderedDict()
+_meta_cache: dict[str, tuple[int, int, bool, bool]] = {}
+_no_legacy_cache: dict[tuple[str, str], int] = {}
 _cache_lock = threading.Lock()
 
 
@@ -84,21 +88,36 @@ def _locked(folder: Path):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def _meta_from_data(data: dict) -> tuple[bool, bool]:
+    return bool(data["pages"]), bool((data.get("training_ready") or {}).get("ready"))
+
+
+def _store_parsed_locked(key: str, size: int, mtime_ns: int, data: dict) -> None:
+    has_pages, ready = _meta_from_data(data)
+    _meta_cache[key] = (size, mtime_ns, has_pages, ready)
+    _cache[key] = (size, mtime_ns, data)
+    _cache.move_to_end(key)
+    while len(_cache) > _MAX_PARSED_CACHE:
+        _cache.popitem(last=False)
+
+
 def _read_file(path: Path, prefix: str) -> dict:
     """The parsed labels file (shared, cached by size and mtime: do not mutate)."""
     try:
         stat = path.stat()
     except FileNotFoundError:
         return _empty(prefix)
+    key = str(path)
     with _cache_lock:
-        known = _cache.get(str(path))
+        known = _cache.get(key)
         if known and known[:2] == (stat.st_size, stat.st_mtime_ns):
+            _cache.move_to_end(key)
             return known[2]
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or data.get("kind") != KIND or not isinstance(data.get("pages"), dict):
         raise ValueError(f"{path} is not a document labels file")
     with _cache_lock:
-        _cache[str(path)] = (stat.st_size, stat.st_mtime_ns, data)
+        _store_parsed_locked(key, stat.st_size, stat.st_mtime_ns, data)
     return data
 
 
@@ -112,8 +131,77 @@ def _write_file(path: Path, data: dict) -> None:
         os.fsync(handle.fileno())
     os.replace(tmp, path)
     stat = path.stat()
+    key = str(path)
     with _cache_lock:
-        _cache[str(path)] = (stat.st_size, stat.st_mtime_ns, data)
+        _store_parsed_locked(key, stat.st_size, stat.st_mtime_ns, data)
+
+
+_FAST_SUMMARY_BYTES = 64 * 1024
+
+
+def _fast_summary_bytes(raw: bytes) -> tuple[bool, bool] | None:
+    """Extract ``(has_pages, is_training_ready)`` without decoding multi-MB page payloads."""
+    head = raw[:512]
+    if not head.lstrip().startswith(b"{") or not raw.rstrip().endswith(b"}"):
+        return None
+    if not re.search(rb'"kind"\s*:\s*"document_labels"', head):
+        return None
+    if re.search(rb'"pages"\s*:\s*\{\s*"\d+"\s*:', head):
+        has_pages = True
+    elif re.search(rb'"pages"\s*:\s*\{\s*\}', head):
+        has_pages = False
+    else:
+        return None
+    marker = b'\n "training_ready": '
+    idx = raw.rfind(marker)
+    if idx != -1:
+        try:
+            tail_text = raw[idx + len(marker):].decode("utf-8")
+            val, _ = json.JSONDecoder().raw_decode(tail_text)
+        except (UnicodeDecodeError, ValueError):
+            return None
+        if not isinstance(val, dict) or "ready" not in val:
+            return None
+        return has_pages, bool(val.get("ready"))
+    if b'"training_ready"' in raw:
+        return None
+    return has_pages, False
+
+
+def _file_summary(path: Path) -> tuple[bool, bool]:
+    """Return ``(has_pages, is_training_ready)`` for ``path`` without pinning large JSONs in ``_cache``."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return False, False
+    key = str(path)
+    with _cache_lock:
+        cached_meta = _meta_cache.get(key)
+        if cached_meta and cached_meta[:2] == (stat.st_size, stat.st_mtime_ns):
+            return cached_meta[2], cached_meta[3]
+        known = _cache.get(key)
+        if known and known[:2] == (stat.st_size, stat.st_mtime_ns):
+            has_pages, ready = _meta_from_data(known[2])
+            _meta_cache[key] = (stat.st_size, stat.st_mtime_ns, has_pages, ready)
+            return has_pages, ready
+    summary = None
+    if stat.st_size >= _FAST_SUMMARY_BYTES:
+        raw = path.read_bytes()
+        summary = _fast_summary_bytes(raw)
+        if summary is None:
+            data = json.loads(raw.decode("utf-8"))
+            if not isinstance(data, dict) or data.get("kind") != KIND or not isinstance(data.get("pages"), dict):
+                raise ValueError(f"{path} is not a document labels file")
+            summary = _meta_from_data(data)
+    else:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("kind") != KIND or not isinstance(data.get("pages"), dict):
+            raise ValueError(f"{path} is not a document labels file")
+        summary = _meta_from_data(data)
+    has_pages, ready = summary
+    with _cache_lock:
+        _meta_cache[key] = (stat.st_size, stat.st_mtime_ns, has_pages, ready)
+    return has_pages, ready
 
 
 def _convert_locked(folder: Path, prefix: str) -> None:
@@ -121,7 +209,9 @@ def _convert_locked(folder: Path, prefix: str) -> None:
     if not legacy:
         return
     path = labels_path(folder, prefix)
-    data = copy.deepcopy(_read_file(path, prefix))
+    existing = _read_file(path, prefix)
+    data = dict(existing)
+    data["pages"] = dict(existing["pages"])
     for page, file in sorted(legacy.items()):
         # A page already in the labels file is newer than its old page file.
         data["pages"].setdefault(str(page), json.loads(file.read_text(encoding="utf-8")))
@@ -133,16 +223,29 @@ def _convert_locked(folder: Path, prefix: str) -> None:
         if target.exists():
             target = backup / f"{file.stem}.{file.stat().st_mtime_ns}{file.suffix}"
         os.replace(file, target)
+    with _cache_lock:
+        _no_legacy_cache.pop((str(folder.resolve()), prefix), None)
 
 
 def convert(folder: Path, prefix: str) -> int:
     """Move old per-page files into the labels file; returns how many were converted."""
     folder = Path(folder)
+    try:
+        folder_mtime = folder.stat().st_mtime_ns
+    except OSError:
+        return 0
+    key = (str(folder.resolve()), prefix)
+    with _cache_lock:
+        if _no_legacy_cache.get(key) == folder_mtime:
+            return 0
     count = len(_legacy_pages(folder, prefix))
     if count:
         with _locked(folder):
             _convert_locked(folder, prefix)
-    return count
+        return count
+    with _cache_lock:
+        _no_legacy_cache[key] = folder_mtime
+    return 0
 
 
 def read(folder: Path, prefix: str) -> dict:
@@ -182,14 +285,16 @@ def write_page(folder: Path, prefix: str, page: int, entry: dict, *,
     with _locked(folder):
         _convert_locked(folder, prefix)
         path = labels_path(folder, prefix)
-        data = copy.deepcopy(_read_file(path, prefix))
+        existing = _read_file(path, prefix)
+        data = dict(existing)
+        data["pages"] = dict(existing["pages"])
         current = data["pages"].get(str(page))
         if expected_revision is not ... and page_revision(current) != expected_revision:
             raise StaleRevision(f"page {page} changed since it was read")
-        data["pages"][str(page)] = entry
+        data["pages"][str(page)] = copy.deepcopy(entry)
         data["format_version"] = FORMAT_VERSION
         if proposals is not None:
-            data["proposals"] = proposals
+            data["proposals"] = copy.deepcopy(proposals)
         _write_file(path, data)
     return page_revision(entry)
 
@@ -200,10 +305,12 @@ def set_proposals_record(folder: Path, prefix: str, record: dict) -> None:
     with _locked(folder):
         _convert_locked(folder, prefix)
         path = labels_path(folder, prefix)
-        data = copy.deepcopy(_read_file(path, prefix))
-        if data.get("proposals") == record:
+        existing = _read_file(path, prefix)
+        if existing.get("proposals") == record:
             return
-        data["proposals"] = record
+        data = dict(existing)
+        data["pages"] = dict(existing["pages"])
+        data["proposals"] = copy.deepcopy(record)
         _write_file(path, data)
 
 
@@ -231,18 +338,24 @@ def set_document_info(folder: Path, prefix: str, info: dict) -> None:
     with _locked(folder):
         _convert_locked(folder, prefix)
         path = labels_path(folder, prefix)
-        data = copy.deepcopy(_read_file(path, prefix))
-        updated = dict(data, **{k: v for k, v in info.items() if k != "pages"},
-                       format_version=FORMAT_VERSION)
-        if updated != data:
-            _write_file(path, updated)
+        existing = _read_file(path, prefix)
+        data = dict(existing)
+        for k, v in info.items():
+            if k != "pages":
+                data[k] = copy.deepcopy(v)
+        data["format_version"] = FORMAT_VERSION
+        if data != existing:
+            data["pages"] = dict(existing["pages"])
+            _write_file(path, data)
 
 
 def training_ready(folder: Path, prefix: str) -> bool:
     """Whether a person marked this PDF done for now: training uses only
     such PDFs (``label_store.labeled_pages``, ``label_schema.expand_page_paths``)."""
+    folder = Path(folder)
     try:
-        return bool((read(folder, prefix).get("training_ready") or {}).get("ready"))
+        convert(folder, prefix)
+        return _file_summary(labels_path(folder, prefix))[1]
     except (OSError, ValueError):
         return False
 
@@ -260,7 +373,7 @@ def has_labels(folder: Path) -> bool:
     folder = Path(folder)
     for path in folder.glob(f"*{SUFFIX}"):
         try:
-            if _read_file(path, path.name[:-len(SUFFIX)])["pages"]:
+            if _file_summary(path)[0]:
                 return True
         except (OSError, ValueError):
             continue

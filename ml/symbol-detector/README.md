@@ -132,11 +132,12 @@ top of a receptacle (`duplex_weatherproof`, `duplex_gfci_weatherproof`,
 `single_`/`quad_`/`special_purpose_weatherproof`) when a source says so. Every
 light has an `_emergency` version.
 
-Training uses only PDFs marked done: tick **PDF done → training** next to the
-PDF name in the labeler (the PDF list shows them as ✔ Done). The flag is kept
-in the labels file (`training_ready`), travels with `remote/push_labels.sh`,
-and every training path (`label_store.labeled_pages`, globbing
-`*_labels.json`, the dataset manifest) leaves unflagged PDFs out.
+Training and evaluation use **only pages marked "Every symbol on this page is labeled"**
+or **"No target symbols on this page"** (not partial/positive-only pages that
+merely have some verified boxes, and not gated by the PDF-level **PDF done**
+bookmark). The **PDF done** checkbox in the labeler is only a progress bookmark;
+every training path (`label_store.labeled_pages`, globbing `*_labels.json`, the
+dataset manifest) filters strictly by page completeness or verified empty.
 
 **One label format, one source of truth.** `annotator/electrical_device_catalog.json`
 defines every device and what other sources call it (NECA 100 glyph names,
@@ -176,16 +177,16 @@ manifest):
   beside each PDF.
 * Post-training (`scripts_prepare_training_data.py --label-store
   <blueprints_and_libraries>/1_blueprints --data-root <blueprints_and_libraries>`)
-  trains on labelled pages of training drawings.
-* Validation and test are the **fully labelled** pages of evaluation drawings:
-  pages marked "every symbol on this page is labeled" or "verified no target
-  symbols". Their projects alternate between validation and test, and one
-  project serves as both.
-* Prep fails until at least one such page exists. Verified symbol-free pages
-that repeat an earlier one (same image fingerprint, e.g. a DOT standard sheet
-bound into many sets) are kept once. Phase-2 compositing places NECA glyphs,
-symbols cut from published legend sheets (`--symbol-library`) and crops of your
-verified labels (`--label-store`), sampling devices evenly.
+  always enables synthetic composited data (NECA, legend crops, harvested CAD
+  crops, and crops of verified labels on real training pages) alongside real
+  pages marked "every symbol on this page is labeled" or "no target symbols on
+  this page".
+* Validation and test use the complete/empty pages of `1_blueprints/evaluation`
+  drawings when present; when `1_blueprints/evaluation` has no such pages yet,
+  Phase 2 automatically holds out complete walls-only synthetic composites for
+  validation and test while keeping all `1_blueprints/*.pdf` training drawings
+  in `train`. Verified symbol-free pages that repeat an earlier one (same image
+  fingerprint, e.g. a DOT standard sheet bound into many sets) are kept once.
 
 **Legend-sheet symbols:** `scripts_extract_legend_symbols.py` builds
 `2_component_libraries/legend_symbol_crops` from the downloaded legends in
@@ -229,10 +230,13 @@ human Verify promotes a box to a trusted positive, and Verify needs the exact
 device (a variant other than `unspecified`). Rejected proposals move to
 `rejected_proposals`. A page has three training states:
 
-* default: **positives only**; unlabeled symbols are unknown, never negatives;
+* default: **partial / positive-only** (kept for human review/proposals; **not**
+  used for detector training or evaluation);
 * **Every symbol on this page is labeled** (no pending boxes allowed): the page
-  is exhaustive for every detector class and can serve validation/test;
-* **Verified no target symbols** (no active boxes): a whole-page negative.
+  is exhaustive for every detector class and enters training (or validation/test
+  if in `1_blueprints/evaluation`);
+* **Verified no target symbols** (no active boxes): a whole-page negative that
+  enters training (or validation/test if in `1_blueprints/evaluation`).
 
 Images remain at the original rendered-page pixel coordinates; SAM PDF-point
 boxes are converted from PDF bottom-left to image top-left coordinates.

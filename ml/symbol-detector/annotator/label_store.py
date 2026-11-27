@@ -352,7 +352,8 @@ def open_page(page_json: Path) -> tuple[LabelingSession, int, Document]:
 def page_status(doc: Document, page: int) -> dict:
     path = doc.page_json(page)
     row = {"pdf_page": page, "page": str(path), "assessed": False, "boxes": 0, "agent_boxes": 0,
-           "model_boxes": 0, "human_verified": 0, "symbols_present": None, "page_kind": None}
+           "model_boxes": 0, "human_verified": 0, "verified_no_symbols": False,
+           "symbols_present": None, "page_kind": None}
     data = doc.read_page(page)
     if data is not None:
         assessment = data.get("vlm_assessment") or {}
@@ -363,6 +364,7 @@ def page_status(doc: Document, page: int) -> dict:
             "agent_boxes": sum(1 for i in instances if i.get("review_source") == "vlm_agent"),
             "model_boxes": sum(1 for i in instances if i.get("review_source") == "model"),
             "human_verified": sum(1 for i in instances if i.get("verified_ground_truth")),
+            "verified_no_symbols": bool(data.get("verified_no_symbols", False)),
             "symbols_present": assessment.get("symbols_present"),
             "page_kind": assessment.get("page_kind"),
         })
@@ -421,10 +423,10 @@ def training_pages(store: Path, *, data_root: Path | None = None) -> list[Path]:
 
 
 def _usable_pages(store: Path) -> list[tuple[Document, Path]]:
-    """Every saved page that training or evaluation can use (see
-    ``label_schema.training_usable``) of the PDFs a person marked done for
-    training (the labeler's "PDF done" flag), as a reference into its PDF's labels
-    file (``<stem>_labels.json#p12``, read with ``label_schema.read_page``),
+    """Every saved page marked 'every symbol on this page is labeled' or
+    'no target symbols on this page' (``label_schema.training_usable``),
+    independent of any PDF-level bookmark flag, as a reference into its PDF's
+    labels file (``<stem>_labels.json#p12``, read with ``label_schema.read_page``),
     with its page image on disk.
 
     A page image missing on this machine (labeled elsewhere, or merged without
@@ -440,8 +442,6 @@ def _usable_pages(store: Path) -> list[tuple[Document, Path]]:
             if data is not None and training_usable(data):
                 out.append((doc, path))
             continue
-        if not document_labels.training_ready(doc.folder, doc.json_prefix):
-            continue                        # not marked done for training yet
         for page, data in sorted(doc.saved_pages().items()):
             if not training_usable(data):
                 continue

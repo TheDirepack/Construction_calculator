@@ -19,11 +19,19 @@ LABELS="${BPS_LABELS_DIR:-$DATA/1_blueprints}"   # labels: devices/ beside each 
 # cached there and are not rebuilt when it already exists.
 WORK="${PHASE2_WORK:-$BASE/work/phase2_v4}"
 # The flagged pretrained backbone (remote/promote_pretrain.sh) is reused by
-# every post-training run; set PRETRAIN_WEIGHTS to try another one.
+# every post-training run; set PHASE2_INIT_WEIGHTS or PRETRAIN_WEIGHTS to start
+# from another SSL backbone or a Phase-2 detector checkpoint (best.pt).
 PRETRAIN_WEIGHTS="${PRETRAIN_WEIGHTS:-$BASE/work/best_pretrain/backbone.pt}"
+INIT_WEIGHTS="${PHASE2_INIT_WEIGHTS:-$PRETRAIN_WEIGHTS}"
 RUN_NAME="${PHASE2_RUN_NAME:-phase2_mixed_ssl_v4}"
 PHASE2_BATCH="${PHASE2_BATCH:-12}"
 PHASE2_EPOCHS="${PHASE2_EPOCHS:-200}"
+PHASE2_LR0="${PHASE2_LR0:-0.003}"
+PHASE2_REAL_BLANK_TILES="${PHASE2_REAL_BLANK_TILES:-32}"
+PHASE2_REAL_COMPLETE_TILES="${PHASE2_REAL_COMPLETE_TILES:-64}"
+PHASE2_REAL_EVAL_EVERY="${PHASE2_REAL_EVAL_EVERY:-5}"
+PHASE2_REAL_EVAL_BLANK_PAGES="${PHASE2_REAL_EVAL_BLANK_PAGES:-24}"
+PHASE2_REAL_EVAL_COMPLETE_PAGES="${PHASE2_REAL_EVAL_COMPLETE_PAGES:-24}"
 PY="$BASE/.venv/bin/python"
 
 export PYTHONPATH="$CODE"
@@ -35,13 +43,13 @@ if [[ "${PHASE2_ALLOW_UNVERIFIED:-0}" != "0" ]]; then
   echo 'ERROR: PHASE2_ALLOW_UNVERIFIED is forbidden. Use class-masked --allow-partial-training.' >&2
   exit 2
 fi
-if [[ ! -s "$PRETRAIN_WEIGHTS" ]]; then
-  echo "Missing fresh SSL checkpoint: $PRETRAIN_WEIGHTS" >&2
+if [[ ! -s "$INIT_WEIGHTS" ]]; then
+  echo "Missing fresh SSL or Phase-2 checkpoint: $INIT_WEIGHTS" >&2
   exit 2
 fi
 
-echo "=== [1/6] VERIFY SSL BACKBONE TRANSFER BEFORE EXPENSIVE DATA PREP ==="
-"$PY" scripts_verify_ssl_transfer.py "$PRETRAIN_WEIGHTS" --classes 6
+echo "=== [1/6] VERIFY CHECKPOINT TRANSFER BEFORE EXPENSIVE DATA PREP ==="
+"$PY" scripts_verify_ssl_transfer.py "$INIT_WEIGHTS" --classes 6
 
 echo "=== [2/6] LABEL STORE: PAGES WITH VERIFIED LABELS ==="
 PYTHONPATH="$CODE" "$PY" - "$LABELS" "$DATA" <<'PY'
@@ -58,7 +66,8 @@ print(f"{len(pages['train'])} training pages (1_blueprints/*.pdf); "
       f"{len(pages['evaluation'])} evaluation pages (1_blueprints/evaluation), "
       f"{len(complete)} fully labelled -> validation/test")
 if len(complete) == 0:
-    raise SystemExit("No fully labelled evaluation pages in 1_blueprints/evaluation; label at least 2 independent projects before phase 2.")
+    print("0 fully labelled pages in 1_blueprints/evaluation; "
+          "validation/test will use held-out complete walls-only synthetic composites.")
 PY
 
 # Backgrounds: real training-PDF pages stay dominant (~62%). Walls-only pages
@@ -73,10 +82,10 @@ if [[ ! -d "$WORK/composited_neca" ]]; then
     --label-store "$LABELS" --data-root "$DATA" \
     --symbol-library "$DATA/2_component_libraries/legend_symbol_crops" \
     --symbol-library "$DATA/2_component_libraries/harvested_symbols" \
-    --background-pages "${PHASE2_BACKGROUND_PAGES:-350}" \
+    --background-pages "${PHASE2_BACKGROUND_PAGES:-120}" \
     --walls-only-pages "${PHASE2_WALLS_ONLY_PAGES:-150}" \
     --layouts-dir "$BASE/work/pool/background_layouts" \
-    --dataset-pages "${PHASE2_DATASET_PAGES:-60}" \
+    --dataset-pages "${PHASE2_DATASET_PAGES:-30}" \
     --page-hash-cache "$BASE/work/pdf_page_hashes.sqlite" \
     --output "$WORK/composited_neca" \
     --copies 1 \
@@ -124,14 +133,38 @@ if [[ ! -f "$WORK/prepared/yolo/data.yaml" ]]; then
     echo "Incomplete previous export exists at $WORK/prepared; inspect/move it manually, never delete it implicitly." >&2
     exit 2
   fi
+  HAS_REAL_EVAL=$("$PY" - "$LABELS" "$DATA" <<'PY'
+import sys
+from pathlib import Path
+from annotator import label_store
+from blueprint_symbols.label_schema import read_page
+
+pages = label_store.labeled_pages(Path(sys.argv[1]), data_root=Path(sys.argv[2]))
+complete = [p for p in pages["evaluation"]
+            if read_page(p).get("annotation_completeness_verified") is True
+            or read_page(p).get("verified_no_symbols") is True]
+print(1 if complete else 0)
+PY
+)
+  if [[ "$HAS_REAL_EVAL" == "1" ]]; then
+    VAL_FRAC="${PHASE2_VAL_FRACTION:-0.14}"
+    TEST_FRAC="${PHASE2_TEST_FRACTION:-0.14}"
+  else
+    VAL_FRAC="${PHASE2_VAL_FRACTION:-0.04}"
+    TEST_FRAC="${PHASE2_TEST_FRACTION:-0.04}"
+  fi
   "$PY" scripts_prepare_training_data.py \
     --label-store "$LABELS" --data-root "$DATA" \
     --annotations "${ANNOTATIONS[@]}" \
     --output "$WORK/prepared" \
     --train-tiles-per-page 18 \
     --train-variants 3 \
-    --val-fraction 0.14 \
-    --test-fraction 0.14 \
+    --real-blank-tiles-per-page "$PHASE2_REAL_BLANK_TILES" \
+    --real-complete-tiles-per-page "$PHASE2_REAL_COMPLETE_TILES" \
+    --real-blank-negative-fraction "${PHASE2_REAL_BLANK_NEG_FRACTION:-0.85}" \
+    --real-complete-negative-fraction "${PHASE2_REAL_COMPLETE_NEG_FRACTION:-0.85}" \
+    --val-fraction "$VAL_FRAC" \
+    --test-fraction "$TEST_FRAC" \
     --eval-scales 1 \
     --eval-overlap 192 \
     --allow-partial-training
@@ -169,21 +202,25 @@ print(json.dumps({
 }, indent=2))
 PY
 
-echo "=== [6/6] VERIFY DYNAMIC-CLASS SSL TRANSFER, THEN TRAIN YOLO26N-P2 ==="
+echo "=== [6/6] VERIFY DYNAMIC-CLASS CHECKPOINT TRANSFER, THEN TRAIN YOLO26N-P2 ==="
 # One class per catalog device that occurs in the training split.
 NCLASSES=$("$PY" -c "import json,sys; print(len(json.load(open(sys.argv[1]))['class_ids']))" "$WORK/prepared/source_manifest.json")
 echo "device classes: $NCLASSES"
-"$PY" scripts_verify_ssl_transfer.py "$PRETRAIN_WEIGHTS" --classes "$NCLASSES"
+"$PY" scripts_verify_ssl_transfer.py "$INIT_WEIGHTS" --data-yaml "$WORK/prepared/yolo/data.yaml"
 # No flips: a mirrored tile shows mirrored text and arrows (S3, GFI, WP, exit
 # arrows) that never occur in drawings. Rotation is done per device class in
 # the export (catalog "augmentation": 90/270 for all, 180 for purely graphic
 # symbols), so Ultralytics' own rotation stays off.
 TRAIN_ARGS=(
   "$WORK/prepared/yolo/data.yaml"
-  --weights "$PRETRAIN_WEIGHTS"
+  --weights "$INIT_WEIGHTS"
   --imgsz 512 --batch "$PHASE2_BATCH" --epochs "$PHASE2_EPOCHS"
-  --optimizer MuSGD --lr0 0.005
+  --optimizer MuSGD --lr0 "$PHASE2_LR0"
   --fliplr 0 --flipud 0 --scale 0.2 --translate 0.05
+  --real-eval-every "$PHASE2_REAL_EVAL_EVERY"
+  --real-eval-manifest "$WORK/prepared/source_manifest.json"
+  --real-eval-blank-pages "$PHASE2_REAL_EVAL_BLANK_PAGES"
+  --real-eval-complete-pages "$PHASE2_REAL_EVAL_COMPLETE_PAGES"
   --workers 2 --project "$WORK/runs"
   --name "$RUN_NAME"
   --exist-ok

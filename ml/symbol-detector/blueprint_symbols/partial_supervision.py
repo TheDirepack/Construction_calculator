@@ -15,6 +15,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+DEFAULT_PHASE2_LOSS_CFG = {
+    'real_blank_neg_weight': 6.0,
+    'real_complete_far_neg_weight': 6.0,
+    'real_complete_near_neg_weight': 2.0,
+    'real_complete_wrong_cls_weight': 5.0,
+    'real_complete_pos_weight': 1.0,
+    'synthetic_complete_neg_weight': 1.5,
+    'synthetic_complete_wrong_cls_weight': 2.0,
+    'fp_boost': 6.0,
+}
+
 
 def read_supervision(data_yaml: Path) -> dict | None:
     """Read versioned sample masks and enforce exact on-disk coverage."""
@@ -62,11 +73,22 @@ def read_supervision(data_yaml: Path) -> dict | None:
     raw['has_partial'] = any(len(ids) != n for ids in samples.values())
     if raw['has_partial'] and raw.get('partial_training_enabled') is not True:
         raise ValueError('partial training masks require explicit partial_training_enabled=true')
+    roles = raw.get('sample_roles')
+    if roles is not None:
+        valid_roles = {'partial', 'synthetic_complete', 'real_complete', 'real_blank'}
+        if (not isinstance(roles, dict) or set(roles) != seen
+                or any(role not in valid_roles for role in roles.values())):
+            raise ValueError('invalid phase-two sample_roles metadata')
     return raw
 
 
 
-def build_masked_detection_trainer(data_yaml: Path, weights: Path | None = None):
+def build_masked_detection_trainer(
+    data_yaml: Path,
+    weights: Path | None = None,
+    *,
+    loss_cfg: dict | None = None,
+):
     """Real YOLO26 trainer using global (checkpoint-picklable) masked model/loss.
 
     Preserves the verified backbone transfer hook when an SSL checkpoint is
@@ -119,12 +141,15 @@ def build_masked_detection_trainer(data_yaml: Path, weights: Path | None = None)
                 classes=None, data=self.data, fraction=1.0,
                 tile=cfg.tile, coverage=supervision['samples'],
                 num_classes=nc,
+                sample_roles=supervision.get('sample_roles'),
             )
 
         def get_model(self, cfg=None, weights=None, verbose=True):
             model = super().get_model(cfg=cfg, weights=weights, verbose=verbose)
             if type(model).__name__ != 'DetectionModel':
                 raise TypeError('unrecognized model type for phase-two partial supervision')
+            if loss_cfg:
+                model.phase2_loss_cfg = {k: float(v) for k, v in loss_cfg.items()}
             # Replace the method through a globally importable subclass.
             # Avoid setting a locally defined bound init_criterion function:
             # torch.save()/Ultralytics checkpoints must pickle this model.

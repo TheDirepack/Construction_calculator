@@ -62,7 +62,7 @@ if [[ -n "$local_out" ]]; then
   if ssh -o BatchMode=yes "$REMOTE" "echo $encoded | base64 -d | bash" > "$tmp" 2> "$meta"; then
     if head -c 8 "$tmp" | grep -q PNG; then
       mv -f "$tmp" "$local_out"
-      extra="$(grep '^{' "$meta" | tail -n 1)"
+      extra="$(grep '^{' "$meta" | tail -n 1 || true)"
       rm -f "$meta"
       python3 - "$local_out" "$(stat -c %s "$local_out")" "$extra" <<'PY'
 import json, sys

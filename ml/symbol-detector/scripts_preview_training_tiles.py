@@ -27,8 +27,9 @@ import cv2
 import numpy as np
 
 from blueprint_symbols.dataset_manifest import trusted_training_instance
-from blueprint_symbols.label_schema import (UNMAPPED, labels_training_ready, load_training_page,
-                                            page_ref, parse_page_ref)
+from blueprint_symbols.label_schema import (UNMAPPED, _is_importer_labels, labels_training_ready,
+                                            load_training_page, page_ref, parse_page_ref,
+                                            training_usable)
 from blueprint_symbols.raster_training import RasterTileDataset, read_records
 from scripts_export_yolo_tiles import (MIN_SYMBOL_PIXELS, PIXEL_BANDS, TRAIN_RANDOM_SCALES,
                                        TRAIN_SCALE_LIMITS, mask_ignored, train_variant)
@@ -52,10 +53,17 @@ def find_pages(paths: list[Path], *, include_not_ready: bool) -> list[Path]:
     for f in dict.fromkeys(files):
         refs = [f] if parse_page_ref(f) else []
         if not refs:
-            if not include_not_ready and not labels_training_ready(f):
-                continue
             data = json.loads(Path(f).read_text(encoding="utf-8"))
-            refs = [page_ref(f, int(k)) for k in sorted(data.get("pages", {}), key=int)]
+            if _is_importer_labels(data):
+                if not include_not_ready and not labels_training_ready(f):
+                    continue
+                refs = [page_ref(f, int(k)) for k in sorted(data.get("pages", {}), key=int)]
+            else:
+                refs = [
+                    page_ref(f, int(k))
+                    for k, pg in sorted(data.get("pages", {}).items(), key=lambda kv: int(kv[0]))
+                    if include_not_ready or (isinstance(pg, dict) and training_usable(pg))
+                ]
         for ref in refs:
             page = load_training_page(ref)
             if not Path(page.get("image_path", "")).is_file():

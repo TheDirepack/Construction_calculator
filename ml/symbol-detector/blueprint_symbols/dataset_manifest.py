@@ -58,7 +58,8 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
                    require_verified_groups:bool=True,
                    allow_partial_training:bool=False,
                    locked_manifest: dict | None = None,
-                   evaluation_files: list[Path] | None = None) -> dict:
+                   evaluation_files: list[Path] | None = None,
+                   train_only_files: list[Path] | None = None) -> dict:
     """Stable group-aware partitions; same image in different groups is an error.
 
     ``evaluation_files``: pages of the evaluation drawings
@@ -158,7 +159,7 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
         if row['verified_no_symbols']:
             row['exhaustive_families']=sorted(counts)
     if not_ready:
-        warnings.append(f'{len(not_ready)} pages of PDFs not marked done for training were left out')
+        warnings.append(f'{len(not_ready)} pages not marked complete ("every symbol labeled" or "verified no symbols") were left out')
     if duplicate_negatives:
         warnings.append(f'{len(duplicate_negatives)} verified symbol-free pages repeat an earlier '
                         'page (same fingerprint) and were left out')
@@ -201,20 +202,22 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     # A partially annotated project cannot be used for standard validation or
     # test: missing truth would be counted as false positives.
     partial_groups=set()
+    train_only_set={str(Path(f).resolve()) for f in (train_only_files or [])}
+    train_only_groups={d['project_group'] for d in docs if d['annotation'] in train_only_set}
     if allow_partial_training:
         active=set(counts)
         partial_groups={g for g in groups if any(
             not active.issubset(set(row['exhaustive_families']))
             for row in by_group[g]
         )}
-        if len(groups)-len(partial_groups)<2 and locked_manifest is None:
+        if len(groups)-len(partial_groups | train_only_groups)<2 and locked_manifest is None:
             raise ValueError('partial-label training requires at least two fully '
                              'annotated independent source groups for val/test')
         if locked_manifest is not None and any(g in partial_groups for g in (
                 locked_manifest['split_groups']['val']+
                 locked_manifest['split_groups']['test'])):
             raise ValueError('locked evaluation includes a partially annotated group')
-    train_protected=sorted(partial_groups, key=groups.index)
+    train_protected=sorted(partial_groups | train_only_groups, key=groups.index)
     remaining_classes.difference_update({c for g in train_protected for c in group_counts[g]})
     class_group_frequency={c:sum(bool(group_counts[g][c]) for g in groups) for c in counts}
     while remaining_classes:
@@ -239,7 +242,7 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     for split,needed in ([('val',nval),('test',ntest)] if remaining else []):
         covered=set()
         for _ in range(needed):
-            eligible=[g for g in remaining if g not in partial_groups]
+            eligible=[g for g in remaining if g not in partial_groups and g not in train_only_groups]
             if not eligible:
                 raise ValueError('no fully annotated source group available for evaluation')
             selected=max(eligible,key=lambda g:(sum(1/class_group_frequency[c]

@@ -60,7 +60,9 @@ def test_manifest_states_coordinates_verbs_and_device_vocabulary(tmp_path):
     assert "top-left" in manifest["coordinates"]["units"]
     assert "[x0, y0, x1, y1]" in manifest["coordinates"]["box"]
     assert set(manifest["verbs"]) == {"describe", "read", "see", "act"}
-    assert set(manifest["actions"]) == {"add_box", "update_box", "delete_box", "snap_box", "assess_page"}
+    assert set(manifest["actions"]) == {
+        "add_box", "update_box", "delete_box", "snap_box", "set_page", "assess_page"
+    }
 
     families = manifest["vocabulary"]
     assert "receptacle" in families
@@ -260,12 +262,82 @@ def test_act_delegates_attribute_validation_to_the_session_gate(tmp_path):
     assert ok["boxes"][0]["attributes"] == {"voltage_v": 120, "gfci": True}
 
 
-def test_agents_cannot_attest_negatives(tmp_path):
+def test_set_page_verified_no_symbols_matches_web_gui(tmp_path):
     session = _session(tmp_path, pages=1)
-    with pytest.raises(ValueError, match="cannot attest pages as symbol-free"):
-        agent_api.apply_actions(session, 0, revision=None,
-                                actions=[{"kind": "set_page", "verified_no_symbols": True}])
+    assess = {"kind": "assess_page", "page_kind": "other_discipline_plan",
+              "symbols_present": "no", "labeling_complete": True, "note": "plumbing plan"}
+
+    # dry_run previews verified_no_symbols without writing.
+    preview = agent_api.apply_actions(
+        session, 0, revision=None,
+        actions=[{"kind": "set_page", "verified_no_symbols": True}, assess],
+        dry_run=True, agent="nemotron",
+    )
+    assert preview["written"] is False
+    assert preview["page_flags"]["verified_no_symbols"] is True
+    assert preview["page_flags"]["vlm_assessment"]["symbols_present"] == "no"
     assert agent_api.page_context(session, 0)["page_flags"]["verified_no_symbols"] is False
+
+    # Combining set_page + assess_page writes the exact same completeness fields as the web GUI.
+    marked = agent_api.apply_actions(
+        session, 0, revision=None,
+        actions=[{"kind": "set_page", "verified_no_symbols": True}, assess],
+        agent="nemotron",
+    )
+    assert marked["written"] is True
+    assert marked["page_flags"]["verified_no_symbols"] is True
+    assert marked["page_flags"]["vlm_assessment"]["symbols_present"] == "no"
+    saved = document_labels.pages(tmp_path / "labels", "plans")[1]
+    assert saved["verified_no_symbols"] is True
+    assert saved["page_complete"] is False
+    assert saved["annotation_completeness"] == "complete"
+    assert saved["annotation_completeness_verified"] is True
+    assert saved["annotation_scope"] == "verified_no_symbols"
+    assert saved["exhaustive_families"] == []
+    assert saved["vlm_assessment"]["page_kind"] == "other_discipline_plan"
+
+    # Clearing verified_no_symbols works.
+    cleared = agent_api.apply_actions(
+        session, 0, revision=marked["revision"],
+        actions=[{"kind": "set_page", "verified_no_symbols": False}],
+    )
+    assert cleared["page_flags"]["verified_no_symbols"] is False
+    saved_cleared = document_labels.pages(tmp_path / "labels", "plans")[1]
+    assert saved_cleared["verified_no_symbols"] is False
+    assert saved_cleared["annotation_completeness"] == "partial"
+
+    # Invalid arguments are rejected.
+    for bad_action, message in (
+        ({"kind": "set_page", "verified_no_symbols": "true"}, "must be a boolean"),
+        ({"kind": "set_page"}, "must be a boolean"),
+        ({"kind": "set_page", "verified_no_symbols": True, "extra": 1}, "unsupported set_page field"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            agent_api.apply_actions(session, 0, revision=cleared["revision"],
+                                    actions=[bad_action], dry_run=True)
+
+    # Fails when an unverified proposal exists, unless deleted in the same act batch.
+    with_prop = agent_api.apply_actions(session, 0, revision=cleared["revision"], actions=[_add()])
+    prop_id = with_prop["applied"][0]["id"]
+    with pytest.raises(ValueError, match="cannot contain active boxes"):
+        agent_api.apply_actions(session, 0, revision=with_prop["revision"],
+                                actions=[{"kind": "set_page", "verified_no_symbols": True}])
+    deleted_and_marked = agent_api.apply_actions(
+        session, 0, revision=with_prop["revision"],
+        actions=[{"kind": "delete_box", "id": prop_id},
+                 {"kind": "set_page", "verified_no_symbols": True}, assess],
+    )
+    assert deleted_and_marked["page_flags"]["verified_no_symbols"] is True
+    assert deleted_and_marked["counts"]["total"] == 0
+
+    # Fails when a human-verified box is present.
+    human_dir = tmp_path / "human"
+    human_dir.mkdir()
+    session_human = _session(human_dir, pages=1)
+    rev_human = session_human.save(0, revision=None, instances=[_verified()], rejected=[])
+    with pytest.raises(ValueError, match="human-verified boxes"):
+        agent_api.apply_actions(session_human, 0, revision=rev_human,
+                                actions=[{"kind": "set_page", "verified_no_symbols": True}])
 
 
 def test_assess_page_is_stored_as_advisory_metadata(tmp_path):

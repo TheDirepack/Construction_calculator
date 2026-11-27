@@ -140,3 +140,120 @@ def test_launch_script_has_no_unsafe_fallback_or_destructive_cleanup():
     assert "rm -rf" not in src
     assert "PHASE2_DRY_RUN" in src
     assert "scripts_phase2_readiness.py --prepared-manifest" in src
+
+
+def test_prepare_training_data_synthetic_eval_default_and_require_real_eval(tmp_path, monkeypatch):
+    import sys
+    import cv2
+    import numpy as np
+    import pytest
+    import scripts_prepare_training_data as prep
+    from annotator import label_store
+    from annotator.web import LabelingSession
+
+    monkeypatch.delenv("BPS_LABELS_DIR", raising=False)
+    data_root = tmp_path / "blueprints_and_libraries"
+    store = data_root / "1_blueprints"
+    store.mkdir(parents=True)
+    (store / "evaluation").mkdir()
+
+    fitz = pytest.importorskip("fitz")
+    train_pdf = store / "real_train.pdf"
+    pdf_doc = fitz.open()
+    page = pdf_doc.new_page(width=400, height=300)
+    page.draw_rect(fitz.Rect(20, 20, 60, 60), color=(0, 0, 0))
+    pdf_doc.save(train_pdf)
+    pdf_doc.close()
+    session = LabelingSession(pdf=train_pdf, blueprints_dir=store, auto_proposals=False)
+    session.save(0, revision=None, instances=[{
+        "instance_id": "real-1",
+        "symbol_family": "receptacle",
+        "symbol_variant": "duplex",
+        "bbox_xyxy": [20, 20, 60, 60],
+        "uncertain": False,
+        "review_status": "accepted",
+        "review_source": "human",
+        "verified_ground_truth": True,
+    }], rejected=[], metadata={"page_complete": True})
+
+    def _make_page(name: str, group: str, *, complete: bool) -> Path:
+        img = np.full((512, 512, 3), 245, np.uint8)
+        cv2.line(img, (40, 40), (470, 40), (20, 20, 20), 3)
+        cv2.putText(img, name, (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+        img_path = tmp_path / f"{name}.png"
+        assert cv2.imwrite(str(img_path), img)
+        page_json = {
+            "image_path": img_path.name,
+            "image_width": 512,
+            "image_height": 512,
+            "project_family_id": group,
+            "source_group_verified": True,
+            "exhaustive_families": ["receptacle"] if complete else [],
+            "annotation_completeness_verified": complete,
+            "verified_no_symbols": False,
+            "instances": [{
+                "instance_id": f"{name}-1",
+                "symbol_family": "receptacle",
+                "symbol_variant": "duplex",
+                "bbox_xyxy": [120, 120, 160, 160],
+                "uncertain": False,
+                "review_status": "accepted",
+                "review_source": "human",
+                "verified_ground_truth": True,
+            }],
+        }
+        ann = tmp_path / f"{name}.json"
+        ann.write_text(json.dumps(page_json))
+        return ann
+
+    anns = [
+        _make_page("comp0", "wall-0", complete=True),
+        _make_page("comp1", "wall-1", complete=True),
+        _make_page("comp2", "wall-2", complete=True),
+        _make_page("part0", "synth-partial-0", complete=False),
+    ]
+    base_argv = [
+        "scripts_prepare_training_data.py",
+        "--label-store", str(store),
+        "--data-root", str(data_root),
+        "--annotations", *(str(p) for p in anns),
+        "--train-tiles-per-page", "2",
+        "--train-variants", "1",
+        "--val-fraction", "0.2",
+        "--test-fraction", "0.2",
+        "--allow-partial-training",
+    ]
+    # Strict opt-in fails when 1_blueprints/evaluation has 0 complete pages.
+    monkeypatch.setattr(sys, "argv", base_argv + ["--output", str(tmp_path / "require_real"), "--require-real-eval"])
+    with pytest.raises(SystemExit) as exc:
+        prep.main()
+    assert exc.value.code != 0
+    assert not (tmp_path / "require_real").exists()
+
+    # Label-store-only without --annotations also fails when 1_blueprints/evaluation has 0 complete pages.
+    no_synth_argv = [
+        "scripts_prepare_training_data.py",
+        "--label-store", str(store),
+        "--data-root", str(data_root),
+        "--output", str(tmp_path / "no_synth"),
+        "--allow-partial-training",
+    ]
+    monkeypatch.setattr(sys, "argv", no_synth_argv)
+    with pytest.raises(SystemExit) as exc2:
+        prep.main()
+    assert exc2.value.code != 0
+    assert not (tmp_path / "no_synth").exists()
+
+    # Default with synthetic annotations succeeds without any special flag, and
+    # keeps 1_blueprints/*.pdf training drawings in train.
+    out_dir = tmp_path / "default_synth_ok"
+    monkeypatch.setattr(sys, "argv", base_argv + ["--output", str(out_dir)])
+    prep.main()
+    assert (out_dir / "yolo" / "data.yaml").is_file()
+    manifest = json.loads((out_dir / "source_manifest.json").read_text())
+    assert manifest["splits"]["train"]
+    assert manifest["splits"]["val"]
+    assert manifest["splits"]["test"]
+    assert "file_1_blueprints_real_train" in manifest["split_groups"]["train"]
+    assert "file_1_blueprints_real_train" not in manifest["split_groups"]["val"]
+    assert "file_1_blueprints_real_train" not in manifest["split_groups"]["test"]

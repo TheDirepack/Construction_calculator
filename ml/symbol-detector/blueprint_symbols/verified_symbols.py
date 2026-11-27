@@ -37,14 +37,17 @@ def ink_alpha(gray: np.ndarray) -> np.ndarray | None:
     return alpha if min(alpha.shape) >= 3 else None
 
 
-def verified_symbol_glyphs(pages: list[Path], *, pad: int = 1) -> tuple[list[NecaGlyph], dict]:
+def verified_symbol_glyphs(pages: list[Path], *, pad: int = 1,
+                           allow_complete: bool = False) -> tuple[list[NecaGlyph], dict]:
     """Glyphs for every trusted, catalog-device box on ``pages`` (saved page
     JSONs, e.g. ``label_store.training_pages``), skipping projects that could
-    be held out."""
+    be held out unless ``allow_complete`` is set."""
     views = [(Path(p), load_training_page(p)) for p in pages]
-    holdout_able = {v.get("project_family_id") for _, v in views
-                    if v.get("annotation_completeness_verified") is True
-                    and v.get("verified_no_symbols") is not True}
+    holdout_able = set() if allow_complete else {
+        v.get("project_family_id") for _, v in views
+        if v.get("annotation_completeness_verified") is True
+        and v.get("verified_no_symbols") is not True
+    }
     labels = {f"{f}.{v}" for f, v in CATALOG_DEVICES}
     glyphs: list[NecaGlyph] = []
     stats: Counter = Counter()

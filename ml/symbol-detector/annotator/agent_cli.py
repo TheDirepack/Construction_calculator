@@ -415,7 +415,12 @@ def cmd_survey(args) -> None:
 def _status_rows(docs) -> list[dict]:
     rows = []
     for doc in docs:
-        rows.extend(label_store.page_status(doc, p) for p in doc.pages_to_label())
+        for p in doc.pages_to_label():
+            row = label_store.page_status(doc, p)
+            if "verified_no_symbols" not in row:
+                data = doc.read_page(p)
+                row["verified_no_symbols"] = bool(data.get("verified_no_symbols", False)) if data else False
+            rows.append(row)
     return rows
 
 
@@ -435,6 +440,7 @@ def cmd_status(args) -> None:
         "surveyed": sum(1 for d in docs if not _survey_needed(d)),
         "pages": len(rows),
         "assessed": sum(r["assessed"] for r in rows),
+        "verified_no_symbols": sum(1 for r in rows if r.get("verified_no_symbols")),
         "agent_boxes": sum(r["agent_boxes"] for r in rows),
         "model_boxes": sum(r["model_boxes"] for r in rows),
         "symbols_present": dict(by_presence),

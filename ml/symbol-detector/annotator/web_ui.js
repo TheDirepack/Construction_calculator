@@ -107,7 +107,9 @@ const $ = (id) => document.getElementById(id);
 const state = {
   token: null, page: 0, pageCount: 1, revision: null, doc: null,
   loadingPage: null, pendingPage: null, lastLoadError: "",
-  image: null, mode: "pan", selectedId: null,
+  image: null, imageCache: new Map(), imagePreloads: new Map(),
+  preloadTimer: null, preloadRetryTimer: null, reviewLoading: false,
+  mode: "pan", selectedId: null,
   selectedIds: new Set(),
   pageCache: {},
   conflictPage: null,
@@ -143,6 +145,7 @@ const state = {
   deviceCatalogCategory: "all",
   deviceModalQuery: "",
   deviceModalCategory: "all",
+  detectorInfo: null,
 };
 
 // Read by the browser tests (tests/test_annotator_long_documents.py).
@@ -1611,6 +1614,21 @@ function refreshControls() {
   $("undo").disabled = state.undo.length === 0;
   $("redo").disabled = state.redo.length === 0;
   $("save").disabled = (!state.dirty && state.revision !== null) || state.busy;
+  const evalBtn = $("evaluatePageBtn");
+  const evalConf = $("evalConfidence");
+  if (evalBtn) {
+    const det = state.detectorInfo;
+    const avail = Boolean(det?.available);
+    evalBtn.disabled = !avail || !state.doc || state.busy;
+    if (evalConf) evalConf.disabled = !avail || !state.doc || state.busy;
+    if (!avail) {
+      evalBtn.title = "No trained model found under work/models/latest (run remote/pull_best_model.sh)";
+    } else {
+      const epochTxt = det.epoch != null ? ` (epoch ${det.epoch})` : "";
+      const fitTxt = typeof det.best_fitness === "number" ? `, fitness ${det.best_fitness.toFixed(3)}` : "";
+      evalBtn.title = `Evaluate current page deterministically with ${det.model_name || "detector"}${epochTxt}${fitTxt} and add pending bounding boxes`;
+    }
+  }
   $("verifiedNoSymbols").checked = state.doc?.verified_no_symbols === true;
   const pending = (state.doc?.instances || []).filter(x => x.review_status !== "accepted").length;
   $("pageComplete").checked = state.doc?.page_complete === true;
@@ -1752,7 +1770,9 @@ function refreshList() {
       tag.textContent = "Existing";
     } else {
       tag.className = "tag";
-      tag.textContent = "Pending";
+      tag.textContent = (item.review_source === "model" && typeof item.model_confidence === "number")
+        ? `Pending · ${Math.round(item.model_confidence * 100)}%`
+        : "Pending";
     }
     btn.append(txt, tag);
     btn.addEventListener("click", () => select(item.instance_id, true));
@@ -3314,6 +3334,177 @@ function trimPageCache(keep) {
   for (const [p] of clean.slice(CLEAN_PAGES_KEPT - (keepIsClean ? 1 : 0))) delete state.pageCache[p];
 }
 
+const MAX_IMAGE_CACHE = 4;
+
+function imageCacheKey(docPath, page) {
+  return `${docPath || ""}::${page}`;
+}
+
+function clearImageCache() {
+  if (state.preloadTimer) { clearTimeout(state.preloadTimer); state.preloadTimer = null; }
+  if (state.preloadRetryTimer) { clearTimeout(state.preloadRetryTimer); state.preloadRetryTimer = null; }
+  if (state.imageCache instanceof Map) {
+    for (const entry of state.imageCache.values()) {
+      if (entry?.objectUrl) {
+        try { URL.revokeObjectURL(entry.objectUrl); } catch (_) {}
+      }
+    }
+    state.imageCache.clear();
+  }
+  if (state.imagePreloads instanceof Map) state.imagePreloads.clear();
+}
+
+function putImageCache(key, entry) {
+  if (!(state.imageCache instanceof Map)) state.imageCache = new Map();
+  const prev = state.imageCache.get(key);
+  if (prev?.objectUrl && prev.objectUrl !== entry.objectUrl) {
+    try { URL.revokeObjectURL(prev.objectUrl); } catch (_) {}
+  }
+  state.imageCache.delete(key);
+  state.imageCache.set(key, entry);
+  const currentKey = imageCacheKey(state.currentDocPath, state.page);
+  while (state.imageCache.size > MAX_IMAGE_CACHE) {
+    let evictKey = null;
+    for (const candidate of state.imageCache.keys()) {
+      if (candidate !== key && candidate !== currentKey) {
+        evictKey = candidate;
+        break;
+      }
+    }
+    if (!evictKey) break;
+    const evicted = state.imageCache.get(evictKey);
+    state.imageCache.delete(evictKey);
+    if (evicted?.objectUrl) {
+      try { URL.revokeObjectURL(evicted.objectUrl); } catch (_) {}
+    }
+  }
+}
+
+function loadImageElement(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = async () => {
+      if (typeof img.decode === "function") {
+        try { await img.decode(); } catch (_) {}
+      }
+      resolve(img);
+    };
+    img.onerror = () => reject(new Error("Could not render source drawing image"));
+    img.src = url;
+  });
+}
+
+async function getPageImage(docPath, page, imageUrl, expectedSha, force) {
+  const key = imageCacheKey(docPath, page);
+  if (!force && state.imageCache instanceof Map) {
+    const cached = state.imageCache.get(key);
+    if (cached && (!expectedSha || cached.sha === expectedSha || cached.url === imageUrl)) {
+      cached.usedAt = Date.now();
+      state.imageCache.delete(key);
+      state.imageCache.set(key, cached);
+      return cached.img;
+    }
+    const inflight = state.imagePreloads instanceof Map ? state.imagePreloads.get(key) : null;
+    if (inflight) {
+      try {
+        const entry = await inflight;
+        if (entry && typeof entry === "object" && entry.img &&
+            (!expectedSha || entry.sha === expectedSha || entry.url === imageUrl)) {
+          entry.usedAt = Date.now();
+          return entry.img;
+        }
+      } catch (_) {}
+    }
+  } else if (force && state.imageCache instanceof Map) {
+    const old = state.imageCache.get(key);
+    if (old?.objectUrl) {
+      try { URL.revokeObjectURL(old.objectUrl); } catch (_) {}
+    }
+    state.imageCache.delete(key);
+  }
+  const img = await loadImageElement(imageUrl);
+  putImageCache(key, { sha: expectedSha || null, url: imageUrl, img, objectUrl: null, usedAt: Date.now() });
+  return img;
+}
+
+async function preloadCachedPageImage(docPath, page) {
+  if (state.modeKind !== "pdf" || !docPath) return "stop";
+  const key = imageCacheKey(docPath, page);
+  if (state.imageCache.has(key)) return "cached";
+  if (state.imagePreloads.has(key)) {
+    const existing = await state.imagePreloads.get(key).catch(() => null);
+    if (existing === "pending") return "pending";
+    return state.imageCache.has(key) ? "cached" : "failed";
+  }
+  const qDoc = "&doc=" + encodeURIComponent(docPath);
+  const task = (async () => {
+    const resp = await fetch(`/api/image?page=${page}${qDoc}&cached=1`, { cache: "no-store" });
+    if (resp.status === 202) return "pending";
+    if (!resp.ok) return null;
+    const sha = resp.headers.get("X-Image-Sha256") || null;
+    const blob = await resp.blob();
+    if (state.currentDocPath !== docPath) return null;
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const img = await loadImageElement(objectUrl);
+      if (state.currentDocPath !== docPath) {
+        URL.revokeObjectURL(objectUrl);
+        return null;
+      }
+      const entry = { sha, url: null, img, objectUrl, usedAt: Date.now() };
+      putImageCache(key, entry);
+      return entry;
+    } catch (_) {
+      URL.revokeObjectURL(objectUrl);
+      return null;
+    }
+  })();
+  state.imagePreloads.set(key, task);
+  try {
+    const res = await task;
+    if (res === "pending") return "pending";
+    return res ? "loaded" : "failed";
+  } finally {
+    if (state.imagePreloads.get(key) === task) state.imagePreloads.delete(key);
+  }
+}
+
+function scheduleImagePreload(page, retryAttempt = 0) {
+  if (state.modeKind !== "pdf" || !state.currentDocPath) return;
+  if (state.preloadTimer) { clearTimeout(state.preloadTimer); state.preloadTimer = null; }
+  if (state.preloadRetryTimer) { clearTimeout(state.preloadRetryTimer); state.preloadRetryTimer = null; }
+  const docAtSchedule = state.currentDocPath;
+  state.preloadTimer = setTimeout(async () => {
+    state.preloadTimer = null;
+    if (state.modeKind !== "pdf" || state.currentDocPath !== docAtSchedule || state.page !== page || state.busy) return;
+    const candidates = [page + 1, page + 2, page - 1].filter(p => p >= 0 && p < state.pageCount);
+    for (const targetPage of candidates) {
+      if (state.currentDocPath !== docAtSchedule || state.page !== page) return;
+      if (state.imageCache.has(imageCacheKey(docAtSchedule, targetPage))) continue;
+      const outcome = await preloadCachedPageImage(docAtSchedule, targetPage);
+      if (outcome === "pending") {
+        if (retryAttempt < 6 && state.currentDocPath === docAtSchedule && state.page === page) {
+          state.preloadRetryTimer = setTimeout(() => {
+            state.preloadRetryTimer = null;
+            scheduleImagePreload(page, retryAttempt + 1);
+          }, 900);
+        }
+        return;
+      }
+      if (targetPage === page + 1 && (outcome === "loaded" || outcome === "cached")) {
+        const deeper = [page + 3, page + 4].filter(p => p >= 0 && p < state.pageCount);
+        if (deeper.length && state.token && state.currentDocPath === docAtSchedule && state.page === page) {
+          api("/api/prefetch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+            body: JSON.stringify({ path: docAtSchedule, pages: deeper }),
+          }).catch(() => {});
+        }
+      }
+    }
+  }, retryAttempt === 0 ? 150 : 0);
+}
+
 // Page navigation for long documents: a request made while a page is loading
 // is remembered (latest wins) and opened as soon as that load finishes, and
 // steps count from the page being opened, so three quick "next" clicks move
@@ -3340,28 +3531,59 @@ function goToPage(page) {
 // server's overview of saved pages and unopened proposal pages, corrected by
 // this tab's unsaved edits.
 async function nextReviewPage() {
-  let overview;
-  try {
-    const q = docQuery();
-    overview = await api("/api/overview" + (q ? "?" + q.slice(1) : ""));
-  } catch (error) {
-    notify("Could not read the page overview: " + (error.message || error), "error");
-    return;
+  if (state.reviewLoading) return;
+  const btn = $("nextReviewPage");
+  const docAtStart = state.currentDocPath;
+  state.reviewLoading = true;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Finding...";
   }
-  const pendingIn = (doc) => (doc?.instances || []).filter(x => x.review_status !== "accepted").length;
-  const pending = new Map((overview.pages || []).map(row => [row.page, row.pending]));
-  for (const [p, cached] of Object.entries(state.pageCache)) pending.set(Number(p), pendingIn(cached.doc));
-  if (state.doc) pending.set(state.page, pendingIn(state.doc));
-  const from = state.pendingPage ?? state.loadingPage ?? state.page;
-  const pages = [...pending].filter(([, n]) => n > 0).map(([p]) => p).sort((a, b) => a - b);
-  const next = pages.find(p => p > from) ?? pages[0];
-  if (next === undefined) {
-    notify("No page in this document has pending boxes.", "saved");
-  } else if (next === from) {
-    notify("Only this page has pending boxes.", "warning");
-  } else {
-    notify(`Page ${next + 1}: ${pending.get(next)} pending (${pages.length} page${pages.length === 1 ? "" : "s"} to review).`);
-    goToPage(next);
+  notify("Finding next page to review...");
+  try {
+    let overview;
+    try {
+      const q = docQuery();
+      overview = await api("/api/overview" + (q ? "?" + q.slice(1) : ""));
+    } catch (error) {
+      if (state.currentDocPath === docAtStart) {
+        notify("Could not read the page overview: " + (error.message || error), "error");
+      }
+      return;
+    }
+    if (state.currentDocPath !== docAtStart) return;
+    const pendingIn = (doc) => (doc?.instances || []).filter(x => x.review_status !== "accepted").length;
+    const pending = new Map((overview.pages || []).map(row => [row.page, row.pending]));
+    for (const [p, cached] of Object.entries(state.pageCache)) {
+      if (cached?.dirty) pending.set(Number(p), pendingIn(cached.doc));
+    }
+    if (state.doc) pending.set(state.page, pendingIn(state.doc));
+    const from = state.pendingPage ?? state.loadingPage ?? state.page;
+    const pages = [...pending].filter(([, n]) => n > 0).map(([p]) => p).sort((a, b) => a - b);
+    const next = pages.find(p => p > from) ?? pages[0];
+    if (next === undefined) {
+      notify("No page in this document has pending boxes.", "saved");
+    } else if (next === from) {
+      notify("Only this page has pending boxes.", "warning");
+      if (state.page === from && !state.busy) nextPending(true);
+    } else {
+      const afterNext = pages.find(p => p > next);
+      if (afterNext !== undefined && state.modeKind === "pdf" && state.token) {
+        api("/api/prefetch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+          body: JSON.stringify({ path: state.currentDocPath || undefined, pages: [afterNext] }),
+        }).catch(() => {});
+      }
+      notify(`Page ${next + 1}: ${pending.get(next)} pending (${pages.length} page${pages.length === 1 ? "" : "s"} to review).`);
+      goToPage(next);
+    }
+  } finally {
+    state.reviewLoading = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Review ›";
+    }
   }
 }
 
@@ -3370,8 +3592,8 @@ function stepPage(delta) {
   goToPage(base + delta);
 }
 
-// "PDF done -> training": training uses only PDFs a person marked done, and
-// only their saved, reviewed pages.
+// "PDF done": progress bookmark only (does not control training). Training
+// uses saved pages marked "Every symbol on this page is labeled" or "No target symbols on this page".
 async function setTrainingReady(event) {
   const box = event.target;
   const ready = box.checked;
@@ -3389,8 +3611,8 @@ async function setTrainingReady(event) {
     });
     box.checked = Boolean(result.training_ready);
     notify(result.training_ready
-      ? `PDF marked done: ${result.usable_pages.length} reviewed page(s) of ${result.saved_pages} saved will train.`
-      : "PDF unmarked: training no longer uses it.", result.training_ready && !result.usable_pages.length ? "warning" : "info");
+      ? `PDF marked done (bookmark only): ${result.usable_pages.length} complete/empty page(s) of ${result.saved_pages} saved are eligible for training.`
+      : "PDF unmarked (bookmark only; page completeness checkboxes still control training).", result.training_ready && !result.usable_pages.length ? "warning" : "info");
     const doc = (state.documents || []).find(isCurrentDoc);
     if (doc) doc.training_ready = Boolean(result.training_ready);
   } catch (error) {
@@ -3403,6 +3625,102 @@ async function setTrainingReady(event) {
 
 function isAnyPageDirty() {
   return Boolean(state.dirty || Object.values(state.pageCache || {}).some(c => c.dirty));
+}
+
+async function evaluateCurrentPage() {
+  if (!state.doc || state.busy) return;
+  if (state.drag) {
+    notify("Finish drawing or moving the box before evaluating.", "warning");
+    return;
+  }
+  if (state.detectorInfo && !state.detectorInfo.available) {
+    notify("No trained model available locally.", "warning");
+    return;
+  }
+  const pageAtStart = state.page;
+  const docAtStart = state.currentDocPath;
+  const confidence = Number($("evalConfidence")?.value || 0.50);
+  const evalBtn = $("evaluatePageBtn");
+  state.busy = true;
+  if (evalBtn) evalBtn.textContent = "Evaluating...";
+  refreshControls();
+  notify(`Evaluating page ${pageAtStart + 1} across full sheet...`);
+  try {
+    const res = await api(`/api/evaluate_page?page=${pageAtStart}${docQuery()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
+      body: JSON.stringify({ confidence }),
+    });
+    if (!state.doc || state.page !== pageAtStart || state.currentDocPath !== docAtStart) return;
+    const existing = state.doc.instances || [];
+    const kept = existing.filter(x => !(x.review_source === "model" && x.review_status !== "accepted"));
+    const replaced = existing.length - kept.length;
+    const rejected = state.doc.rejected_proposals || [];
+    const usedIds = new Set([
+      ...kept.map(x => String(x.instance_id)),
+      ...rejected.map(x => String(x.instance_id)),
+    ]);
+    const toAdd = [];
+    let skippedOverlap = 0;
+    let skippedRejected = 0;
+    for (const rawItem of (res.instances || [])) {
+      const bb = rawItem?.bbox_xyxy;
+      if (!Array.isArray(bb) || bb.length !== 4) continue;
+      if (rejected.some(r => Array.isArray(r.bbox_xyxy) && boxIoU(bb, r.bbox_xyxy) >= 0.45)) {
+        skippedRejected++;
+        continue;
+      }
+      if (kept.some(k => Array.isArray(k.bbox_xyxy) && boxIoU(bb, k.bbox_xyxy) >= 0.45) ||
+          toAdd.some(k => boxIoU(bb, k.bbox_xyxy) >= 0.45)) {
+        skippedOverlap++;
+        continue;
+      }
+      const item = JSON.parse(JSON.stringify(rawItem));
+      let id = String(item.instance_id || "m_det_1");
+      if (usedIds.has(id)) {
+        let n = 1;
+        while (usedIds.has(`${id}_${n}`)) n++;
+        id = `${id}_${n}`;
+      }
+      usedIds.add(id);
+      item.instance_id = id;
+      toAdd.push(item);
+    }
+    if (replaced > 0 || toAdd.length > 0) {
+      remember();
+      state.doc.instances = [...kept, ...toAdd];
+      if (state.selectedId && !state.doc.instances.some(x => x.instance_id === state.selectedId)) {
+        state.selectedId = null;
+      }
+      if (state.selectedIds) {
+        const validIds = new Set(state.doc.instances.map(x => x.instance_id));
+        state.selectedIds = new Set([...state.selectedIds].filter(id => validIds.has(id)));
+      }
+      if (toAdd.length > 0) {
+        state.doc.verified_no_symbols = false;
+        state.doc.page_complete = false;
+      }
+      editState();
+      refresh();
+    }
+    const secs = typeof res.elapsed_ms === "number" ? ` in ${(res.elapsed_ms / 1000).toFixed(1)}s` : "";
+    const tilesTxt = res.tiles ? ` across ${res.tiles} tiles` : "";
+    const extras = [];
+    if (replaced) extras.push(`${replaced} prior model replaced`);
+    if (skippedOverlap) extras.push(`${skippedOverlap} overlapped existing`);
+    if (skippedRejected) extras.push(`${skippedRejected} skipped rejected`);
+    const extraTxt = extras.length ? ` (${extras.join(", ")})` : "";
+    notify(
+      `Evaluated page ${pageAtStart + 1}${tilesTxt}${secs}: added ${toAdd.length} box${toAdd.length === 1 ? "" : "es"}${extraTxt}. Ctrl+Z to undo · Ctrl+S to save.`,
+      toAdd.length ? "saved" : "warning"
+    );
+  } catch (error) {
+    notify("Page evaluation failed: " + (error.message || error), "error");
+  } finally {
+    if (evalBtn) evalBtn.textContent = "Evaluate page";
+    state.busy = false;
+    refreshControls();
+  }
 }
 
 const SESSION_LOST = "local session authorization required";
@@ -3431,6 +3749,7 @@ async function reattachSession() {
   // Requests name this tab's PDF (?doc=), so a restarted server that opened
   // another start-up PDF still reads and saves the right pages.
   state.token = fresh.token;
+  if ("detector" in fresh) state.detectorInfo = fresh.detector || null;
   notify("Reconnected to the restarted labeling server.", "");
 }
 
@@ -3439,6 +3758,8 @@ async function loadPage(page, force = false) {
     state.lastLoadError = state.busy || state.drag ? "the editor is busy; try again" : "no such page";
     return false;
   }
+  if (state.preloadTimer) { clearTimeout(state.preloadTimer); state.preloadTimer = null; }
+  if (state.preloadRetryTimer) { clearTimeout(state.preloadRetryTimer); state.preloadRetryTimer = null; }
   // force means "take this page from disk". Never seed the cache with the
   // in-memory copy of that same page, and never read it back afterwards:
   // otherwise "Reload from disk" returns the stale revision that caused the
@@ -3453,12 +3774,8 @@ async function loadPage(page, force = false) {
   const docAtStart = state.currentDocPath;
   try {
     const result = await api("/api/page?page=" + page + docQuery());
-    const img = new Image();
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = () => reject(new Error("Could not render source drawing image"));
-      img.src = result.image_url;
-    });
+    const docPath = result.current_doc_path || state.currentDocPath || "";
+    const img = await getPageImage(docPath, page, result.image_url, result.document?.image_sha256 || null, force);
     if (img.naturalWidth !== result.document.image_width ||
         img.naturalHeight !== result.document.image_height) {
       throw new Error("Image dimensions do not match annotation metadata");
@@ -3535,6 +3852,7 @@ async function loadPage(page, force = false) {
     refresh();
     notify(`Loaded ${state.jsonFilename || ("page " + (page + 1))}.`);
     prefetchAhead();
+    scheduleImagePreload(page);
     return true;
   } catch (error) {
     state.lastLoadError = String(error.message || error);
@@ -3984,8 +4302,8 @@ function documentsInFolderOrder() {
                                                 { numeric: true, sensitivity: "base" }));
 }
 
-// Ask the server to render what is likely opened next (the following page of
-// this PDF and the first page of the next PDF) while the user works here.
+// Ask the server to render what is likely opened next (the next pages of
+// this PDF first, then the first page of the next PDF) while the user works.
 function prefetchAhead() {
   if (state.modeKind !== "pdf" || !state.token) return;
   const post = (body) => api("/api/prefetch", {
@@ -3993,14 +4311,12 @@ function prefetchAhead() {
     headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
     body: JSON.stringify(body),
   }).catch(() => {});
-  // The worker renders in request order: the next PDF first (a whole-document
-  // switch is the slow one), then the next page of this PDF.
+  const ahead = [state.page + 1, state.page + 2].filter(p => p < state.pageCount);
+  if (ahead.length) post({ path: state.currentDocPath || undefined, pages: ahead });
   const ordered = documentsInFolderOrder();
   const cur = ordered.findIndex(isCurrentDoc);
   const next = ordered.length > 1 ? ordered[(cur + 1) % ordered.length] : null;
   if (next && next.path !== state.currentDocPath) post({ path: next.path, pages: [0] });
-  const ahead = [state.page + 1, state.page + 2].filter(p => p < state.pageCount);
-  if (ahead.length) post({ path: state.currentDocPath || undefined, pages: ahead });
 }
 
 async function nextDocument() {
@@ -4047,6 +4363,7 @@ async function switchDocument(path) {
   notify("Switching document...", "");
   try {
     state.pageCache = {};
+    clearImageCache();
     state.currentDocPath = path;
     state.page = 0;
     // loadPage() caches the in-memory document under state.page before it
@@ -4315,6 +4632,7 @@ function wireEvents() {
   $("undo").addEventListener("click", undo);
   $("redo").addEventListener("click", redo);
   $("save").addEventListener("click", savePage);
+  if ($("evaluatePageBtn")) $("evaluatePageBtn").addEventListener("click", evaluateCurrentPage);
   $("verifiedNoSymbols").addEventListener("change", async (event) => {
     if (!state.doc || state.busy) return;
     const value = event.target.checked;
@@ -4560,6 +4878,7 @@ async function init() {
   try {
     const response = await api("/api/session");
     state.token = response.token;
+    state.detectorInfo = response.detector || null;
     state.modeKind = response.mode || state.modeKind;
     state.currentDocName = response.current_doc_name || "";
     state.currentDocPath = response.current_doc_path || "";
@@ -4567,8 +4886,9 @@ async function init() {
     populateDeviceCategorySelect();
     updateActiveDevicePill();
     renderInlineDeviceCatalog();
-    await loadDocumentsList();
+    const docsReady = loadDocumentsList();
     await loadPage(response.initial_page, true);
+    await docsReady;
   } catch (error) {
     notify("Could not start editor: " + (error.message || error), "error");
   }

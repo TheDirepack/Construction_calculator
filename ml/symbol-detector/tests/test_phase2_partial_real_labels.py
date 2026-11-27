@@ -254,6 +254,18 @@ def test_actual_ultralytics_criterion_masks_unknown_background(tmp_path):
     assert model.model[0].conv.weight.grad is not None
     assert torch.isfinite(model.model[0].conv.weight.grad).all()
 
+    unmasked_batch={k:v for k,v in collated.items() if k!='verified_class_mask'}
+    with pytest.raises(RuntimeError,match='partial real-image training batch lacks class mask'):
+        model.loss(unmasked_batch)
+    model.eval()
+    with pytest.raises(RuntimeError,match='partial real-image training batch lacks class mask'):
+        model.loss(unmasked_batch)
+    with torch.inference_mode():
+        val_preds=model(unmasked_batch['img'])
+        val_loss,val_items=model.loss(unmasked_batch,val_preds)
+    assert torch.isfinite(val_loss).all()
+    assert val_items is not None
+
 
 def test_partial_export_requires_sidecar_even_after_accidental_deletion(tmp_path):
     source, _ = mixed_source_manifest(tmp_path)

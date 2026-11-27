@@ -128,8 +128,8 @@
     <span id="currentDocBadge" style="font-weight:600;font-size:12.5px;color:#56b4db;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
     <select id="docSelect" hidden aria-label="Select blueprint document"></select>
     <label class="checkbox" id="trainingReadyLabel" style="font-size:12.5px;white-space:nowrap;"
-           title="This PDF is done for now: training uses its saved, reviewed pages. Training uses only PDFs marked done.">
-      <input id="trainingReady" type="checkbox"> PDF done → training</label>
+           title="Progress bookmark only (does not control training). Training uses only pages marked &quot;Every symbol on this page is labeled&quot; or &quot;No target symbols on this page&quot;.">
+      <input id="trainingReady" type="checkbox"> PDF done</label>
   </div>
   <div class="toolbar-group">
     <button id="prevPage" title="Previous page or JSON ([)">&lt;</button>
@@ -226,6 +226,17 @@
       <div class="page-checks">
         <label class="checkbox" title="Training uses this page as verified background (no symbols anywhere)"><input id="verifiedNoSymbols" type="checkbox"> No target symbols on this page</label>
         <label class="checkbox" title="Every electrical symbol on the page has a verified box: the page can be used for validation/testing and as verified background"><input id="pageComplete" type="checkbox"> Every symbol on this page is labeled</label>
+      </div>
+      <div class="row tight" style="margin-top:6px;margin-bottom:0">
+        <button type="button" id="evaluatePageBtn" class="primary" style="flex:1" title="Run the trained symbol detector deterministically on this page and add pending bounding boxes">Evaluate page</button>
+        <select id="evalConfidence" aria-label="Model confidence threshold" title="Minimum detector confidence threshold" style="width:96px;flex:0 0 auto;padding:5px 6px">
+          <option value="0.25">Conf ≥ 0.25</option>
+          <option value="0.35">Conf ≥ 0.35</option>
+          <option value="0.50" selected>Conf ≥ 0.50</option>
+          <option value="0.65">Conf ≥ 0.65</option>
+          <option value="0.75">Conf ≥ 0.75</option>
+          <option value="0.85">Conf ≥ 0.85</option>
+        </select>
       </div>
     </section>
 

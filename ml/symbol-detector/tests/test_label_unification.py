@@ -123,15 +123,16 @@ def test_browser_and_agents_open_the_same_page_with_the_same_proposals(tmp_path)
     agent, index, _ = label_store.open_page(doc.page_json(1))   # the agents' entry point
     second, revision, _ = agent.page_document(index)
     assert second == first
-    # Proposals alone give training nothing; a human verifying one does.
+    # Proposals alone (and partial verified pages) give training nothing;
+    # marking every symbol on the page labeled enters training.
     agent.save(index, revision=revision, instances=second["instances"], rejected=[])
-    _mark_done(store)
     assert label_store.training_pages(store) == []
     _, revision, _ = web.page_document(0)
     box = dict(second["instances"][0], symbol_variant="duplex", review_status="accepted",
                review_source="human", verified_ground_truth=True, uncertain=False)
-    web.save(0, revision=revision, instances=[box], rejected=[])
-    _mark_done(store)
+    rev2 = web.save(0, revision=revision, instances=[box], rejected=[])
+    assert label_store.training_pages(store) == []
+    web.save(0, revision=rev2, instances=[box], rejected=[], metadata={"page_complete": True})
     [view] = label_store.training_pages(store)
     assert label_store.page_source(view)[0].folder == doc.folder
     assert label_store.page_source(view)[1] == 1
@@ -224,11 +225,14 @@ def test_verified_labels_become_composite_drawings_of_their_device(tmp_path):
     assert report["per_device"] == {"receptacle.duplex": 1, "luminaire.troffer_2x4": 1}
     assert {(g.family, g.variant) for g in glyphs} == {("receptacle", "duplex"), ("luminaire", "troffer_2x4")}
     assert all(g.alpha.max() == 255 or g.alpha.max() > 150 for g in glyphs)
-    # A project that could be held out for evaluation lends no drawings.
+    # A project that could be held out for evaluation lends no drawings unless allow_complete=True.
     data["annotation_completeness_verified"] = True
     train.write_text(json.dumps(data))
     glyphs, report = verified_symbol_glyphs([train])
     assert glyphs == [] and report["counts"]["skipped_holdout_able_project"] == 2
+    glyphs_all, report_all = verified_symbol_glyphs([train], allow_complete=True)
+    assert report_all["per_device"] == {"receptacle.duplex": 1, "luminaire.troffer_2x4": 1}
+    assert len(glyphs_all) == 2
 
 
 def test_everything_is_labeled_and_only_training_skips_the_evaluation_set(tmp_path):
@@ -264,18 +268,15 @@ def test_everything_is_labeled_and_only_training_skips_the_evaluation_set(tmp_pa
         box = dict(page["instances"][0], symbol_variant="duplex" if family == "receptacle" else "troffer_2x4",
                    review_status="accepted", review_source="human", verified_ground_truth=True,
                    uncertain=False)
-        web.save(0, revision=revision, instances=[box], rejected=[])
-
-    _mark_done(store)
+        web.save(0, revision=revision, instances=[box], rejected=[],
+                 metadata={"page_complete": True})
 
     split = label_store.labeled_pages(store)
     assert [p.parent.name.startswith("eval_set") for p in split["evaluation"]] == [True]
     assert [p.parent.name.startswith("side_set") for p in split["train"]] == [True]
-    _mark_done(store)
     assert label_store.training_pages(store) == split["train"]
     # Moving the PDF into evaluation/ moves its labelled pages there, at once.
     side_pdf.rename(blue / "evaluation" / "side_set.pdf")
-    _mark_done(store)
     moved = label_store.labeled_pages(store, data_root=blue.parent)
     assert moved["train"] == [] and len(moved["evaluation"]) == 2
 
@@ -290,10 +291,10 @@ def test_training_split_skips_documents_whose_pdf_is_gone(tmp_path):
         web = LabelingSession(pdf=pdf)
         page, revision, _ = web.page_document(0)
         box = {**_verified(family, "duplex"), "bbox_xyxy": [10, 10, 30, 30]}
-        web.save(0, revision=revision, instances=[box], rejected=[])
+        web.save(0, revision=revision, instances=[box], rejected=[],
+                 metadata={"page_complete": True})
     (blue / "_set_aside").mkdir()
     gone.rename(blue / "_set_aside" / "gone.pdf")          # neither training nor evaluation now
-    _mark_done(store)
     split = label_store.labeled_pages(store, data_root=blue.parent)
     assert [p.parent.name.startswith("kept") for p in split["train"]] == [True]
     assert split["evaluation"] == []

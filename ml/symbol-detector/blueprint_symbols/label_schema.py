@@ -23,6 +23,7 @@ training readers (``dataset_manifest``, ``raster_training``,
 from __future__ import annotations
 
 import copy
+import functools
 import json
 import re
 from pathlib import Path
@@ -148,15 +149,20 @@ def allowed_rotations(class_name: str | None) -> tuple[int, ...]:
     return _ROTATIONS.get(name.partition(".")[0], _DEFAULT_ROTATIONS)
 
 
-def device_for_raw_type(raw: str | None) -> tuple[str, str] | None:
-    """Catalog (family, variant) of a DEVICES.json ``device_type``; None to skip."""
-    key = re.sub(r"[^a-z0-9]+", "_", str(raw or "").strip().lower()).strip("_")
+@functools.lru_cache(maxsize=4096)
+def _device_for_raw_type_cached(raw_text: str) -> tuple[str, str] | None:
+    key = re.sub(r"[^a-z0-9]+", "_", raw_text.strip().lower()).strip("_")
     if key in RAW_DEVICE_TYPES:
         return RAW_DEVICE_TYPES[key]
     for words, device in _RAW_KEYWORDS:
         if any(w in key for w in words):
             return device
     return ("unknown_symbol", "unspecified")
+
+
+def device_for_raw_type(raw: str | None) -> tuple[str, str] | None:
+    """Catalog (family, variant) of a DEVICES.json ``device_type``; None to skip."""
+    return _device_for_raw_type_cached(str(raw or ""))
 
 
 def _key(text) -> str:
@@ -191,22 +197,9 @@ def canonical_device(device_type: str | None = None, subtype: str | None = None,
     return device
 
 
-def _canonical_device(device_type: str | None = None, subtype: str | None = None, *,
-                      description: str | None = None) -> tuple[str, str] | None:
-    """The one class name for a device, from whatever a source calls it.
-
-    Every box (annotator, agents, model, DEVICES/SAM/CircuitNet/VLM-review
-    proposals, training) is named by this: a catalog device
-    (``receptacle.duplex``), or ``(family, "unspecified")`` while the exact
-    device is not known, or None for marks that are not devices (mechanical
-    equipment, home-run arrows). A source's own subtype is never used as a
-    class name, so one device never gets two names.
-
-    ``device_type``/``subtype`` may be a catalog family/variant, a v7
-    taxonomy pair (``fire_alarm``/``pull_station``) or an extractor's raw
-    type; ``description`` (a legend text) can pick the device within its family.
-    """
-    family_key, sub_key = _key(device_type), _key(subtype)
+@functools.lru_cache(maxsize=4096)
+def _canonical_device_cached(family_raw: str, sub_raw: str, description: str | None) -> tuple[str, str] | None:
+    family_key, sub_key = _key(family_raw), _key(sub_raw)
     if (family_key, sub_key) in _CATALOG_SET:
         return family_key, sub_key
     if (family_key, sub_key) in RENAMED:
@@ -235,6 +228,28 @@ def _canonical_device(device_type: str | None = None, subtype: str | None = None
     if sub_key in _SUBTYPE_ALIASES.get(family, {}):            # plain receptacle = duplex
         return _SUBTYPE_ALIASES[family][sub_key]
     return base
+
+
+def _canonical_device(device_type: str | None = None, subtype: str | None = None, *,
+                      description: str | None = None) -> tuple[str, str] | None:
+    """The one class name for a device, from whatever a source calls it.
+
+    Every box (annotator, agents, model, DEVICES/SAM/CircuitNet/VLM-review
+    proposals, training) is named by this: a catalog device
+    (``receptacle.duplex``), or ``(family, "unspecified")`` while the exact
+    device is not known, or None for marks that are not devices (mechanical
+    equipment, home-run arrows). A source's own subtype is never used as a
+    class name, so one device never gets two names.
+
+    ``device_type``/``subtype`` may be a catalog family/variant, a v7
+    taxonomy pair (``fire_alarm``/``pull_station``) or an extractor's raw
+    type; ``description`` (a legend text) can pick the device within its family.
+    """
+    return _canonical_device_cached(
+        str(device_type or ""),
+        str(subtype or ""),
+        str(description) if description else None,
+    )
 
 
 def _v7_indexes():
@@ -307,12 +322,9 @@ def legend_words(text: str) -> set[str]:
     return set(norm.split())
 
 
-def device_for_legend_text(text: str) -> tuple[str, str] | None:
-    """Catalog device a legend description names (``aliases.legend``), or
-    None when no phrase matches or the best match is a tie between devices.
-    A match scores the number of description words its phrase covers, so
-    "GFCI duplex receptacle" picks the GFCI duplex over the plain duplex."""
-    words = legend_words(text)
+@functools.lru_cache(maxsize=4096)
+def _device_for_legend_text_cached(text_str: str) -> tuple[str, str] | None:
+    words = legend_words(text_str)
     best: dict[tuple[str, str], int] = {}
     for device, phrase, excluded in _LEGEND_PHRASES:
         if all(alts & words for alts in phrase) and not excluded & words:
@@ -323,6 +335,14 @@ def device_for_legend_text(text: str) -> tuple[str, str] | None:
     top = max(best.values())
     winners = [d for d, n in best.items() if n == top]
     return winners[0] if len(winners) == 1 else None
+
+
+def device_for_legend_text(text: str) -> tuple[str, str] | None:
+    """Catalog device a legend description names (``aliases.legend``), or
+    None when no phrase matches or the best match is a tie between devices.
+    A match scores the number of description words its phrase covers, so
+    "GFCI duplex receptacle" picks the GFCI duplex over the plain duplex."""
+    return _device_for_legend_text_cached("" if text is None else str(text))
 
 
 def exhaustive_classes(names: list[str] | set[str]) -> set[str]:
@@ -422,8 +442,12 @@ def annotation_sha256(path: str | Path) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _is_importer_labels(data: dict) -> bool:
+    return str((data.get("training_ready") or {}).get("set_by") or "").startswith("importer:")
+
+
 def labels_training_ready(labels_file: str | Path) -> bool:
-    """Whether a PDF's labels file is marked done for training."""
+    """Whether an imported labels file is marked ready for training."""
     try:
         return bool((_labels_file(Path(labels_file)).get("training_ready") or {}).get("ready"))
     except (OSError, ValueError):
@@ -431,21 +455,41 @@ def labels_training_ready(labels_file: str | Path) -> bool:
 
 
 def page_training_ready(path: str | Path) -> bool:
-    """A page JSON counts; a page of a labels file only when its PDF is marked done."""
+    """Standalone page JSONs count; in a labels file, importer files follow
+    ``training_ready`` while PDF label-store pages require the page itself to
+    be marked complete or verified symbol-free (``training_usable``)."""
     ref = parse_page_ref(path)
-    return True if ref is None else labels_training_ready(ref[0])
+    if ref is None:
+        return True
+    try:
+        data = _labels_file(ref[0])
+    except (OSError, ValueError):
+        return False
+    if _is_importer_labels(data):
+        return bool((data.get("training_ready") or {}).get("ready"))
+    entry = data["pages"].get(str(ref[1]))
+    return isinstance(entry, dict) and training_usable(entry)
 
 
 def expand_page_paths(paths) -> list[Path]:
     """Page JSONs and page references, with every labels file expanded into
-    references to each of its saved pages. Labels files of PDFs not marked
-    done for training (the labeler's "PDF done" flag) give nothing."""
+    eligible page references. Importer labels files follow ``training_ready``;
+    PDF label-store files emit only pages marked complete or verified empty
+    (ignoring the PDF-level bookmark)."""
     out: list[Path] = []
     for path in paths:
         path = Path(path)
         if parse_page_ref(path) is None and path.name.endswith(LABELS_SUFFIX) and path.is_file():
-            if labels_training_ready(path):
-                out += [page_ref(path, int(k)) for k in sorted(_labels_file(path)["pages"], key=int)]
+            data = _labels_file(path)
+            if _is_importer_labels(data):
+                if (data.get("training_ready") or {}).get("ready"):
+                    out += [page_ref(path, int(k)) for k in sorted(data["pages"], key=int)]
+            else:
+                out += [
+                    page_ref(path, int(k))
+                    for k in sorted(data["pages"], key=int)
+                    if isinstance(data["pages"][k], dict) and training_usable(data["pages"][k])
+                ]
         else:
             out.append(path)
     return out
@@ -503,13 +547,12 @@ def load_training_page(path: str | Path) -> dict:
 
 
 def training_usable(data: dict) -> bool:
-    """Whether a saved page gives training anything: a verified box, or an
-    attestation (verified empty / every symbol labeled). Pages holding only
-    proposals teach nothing and are left out."""
-    from .dataset_manifest import trusted_training_instance
-    if data.get("verified_no_symbols") is True or data.get("annotation_completeness_verified") is True:
-        return True
-    return any(isinstance(i, dict) and trusted_training_instance(i) for i in data.get("instances") or [])
+    """Whether a saved page enters training or evaluation: ONLY pages marked
+    'every symbol on this page is labeled' (annotation_completeness_verified=True)
+    or 'no target symbols on this page' (verified_no_symbols=True). Partial /
+    positive-only pages that merely carry some verified labels are left out."""
+    return (data.get("verified_no_symbols") is True
+            or data.get("annotation_completeness_verified") is True)
 
 
 def page_fingerprint(image) -> str:

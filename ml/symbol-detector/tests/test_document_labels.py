@@ -282,8 +282,8 @@ def test_training_reads_pages_straight_from_the_labels_file(drawing, tmp_path):
     from blueprint_symbols import label_schema
     bp, pdf, _ = drawing
     session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
-    revision = session.save(1, revision=None, instances=[_verified("t")], rejected=[])
-    _mark_done(bp)
+    revision = session.save(1, revision=None, instances=[_verified("t")], rejected=[],
+                            metadata={"page_complete": True})
     [ref] = label_store.labeled_pages(bp)["train"]
     assert str(ref) == f"{session.out_dir / 'plans_labels.json'}#p2"
     data = label_schema.read_page(ref)
@@ -293,37 +293,41 @@ def test_training_reads_pages_straight_from_the_labels_file(drawing, tmp_path):
     assert (doc.folder, page) == (session.out_dir, 2)
     assert label_schema.expand_page_paths([session.out_dir / "plans_labels.json"]) == [ref]
     assert not (tmp_path / "label_pages").exists()               # no copies are made
-    # Un-verifying the page takes it out of training.
+    # Partial (not page_complete) or un-verified pages leave training.
     pending = dict(_verified("t"), review_status="unreviewed", verified_ground_truth=False, uncertain=True)
-    session.save(1, revision=revision, instances=[pending], rejected=[])
-    _mark_done(bp)
+    session.save(1, revision=revision, instances=[pending], rejected=[],
+                 metadata={"page_complete": False})
     assert label_store.labeled_pages(bp)["train"] == []
 
 
 def test_merged_pages_get_their_image_recorded_when_training_lists_them(drawing, tmp_path):
     import scripts_unify_labels as merge_script
+    from blueprint_symbols import label_schema
     bp, pdf, _ = drawing
     session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
-    width, height = session.page_pixel_size(0)
+    width, height = session.page_pixel_size(1)
     old = tmp_path / "old"
     old.mkdir()
-    (old / "plans_p0001.json").write_text(json.dumps({
-        "document_id": pdf.name, "page_index": 0, "source_pdf_sha256": web.sha256_file(pdf),
-        "image_width": width, "image_height": height, "instances": [_verified("v")],
+    (old / "plans_p0002.json").write_text(json.dumps({
+        "document_id": pdf.name, "page_index": 1, "source_pdf_sha256": web.sha256_file(pdf),
+        "image_width": width, "image_height": height,
+        "page_complete": True,
+        **label_schema.completeness(page_complete=True),
+        "instances": [_verified("v")],
         "rejected_proposals": []}))
     merge_script.merge(bp, [old], apply=True, with_proposals=False, backup_root=tmp_path / "b")
-    assert document_labels.pages(session.out_dir, "plans")[1]["image_sha256"] is None
+    assert document_labels.pages(session.out_dir, "plans")[2]["image_sha256"] is None
     shutil.rmtree(session.out_dir / "images", ignore_errors=True)
-    _mark_done(bp)
     [ref] = label_store.labeled_pages(bp)["train"]
-    stored = document_labels.pages(session.out_dir, "plans")[1]
+    stored = document_labels.pages(session.out_dir, "plans")[2]
     assert stored["image_sha256"] and (session.out_dir / stored["image_path"]).is_file()
 
 
 def test_pushed_pages_merge_into_the_remote_labels_file(drawing, tmp_path):
     bp, pdf, _ = drawing
     local = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
-    local.save(0, revision=None, instances=[_verified("local_1")], rejected=[])
+    local.save(0, revision=None, instances=[_verified("local_1")], rejected=[],
+               metadata={"page_complete": True})
     local.save(1, revision=None, instances=[dict(_verified("draft"), review_status="unreviewed",
                                                  verified_ground_truth=False, uncertain=True)],
                rejected=[])                                       # not usable: stays here
@@ -590,46 +594,63 @@ def test_training_finds_pages_by_globbing_the_labels_files(drawing, tmp_path):
     bp, pdf, _ = drawing
     session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
     session.save(0, revision=None, instances=[_verified("a")], rejected=[])
-    session.save(2, revision=None, instances=[_verified("c")], rejected=[])
+    session.save(1, revision=None, instances=[_verified("b")], rejected=[],
+                 metadata={"page_complete": True})
+    session.save(2, revision=None, instances=[], rejected=[],
+                 metadata={"verified_no_symbols": True})
     pattern = str(bp / "devices" / "*" / "*_labels.json")
-    assert prep.discover([pattern]) == []                     # not marked done: nothing trains
-    _mark_done(bp)
-    found = prep.discover([pattern])
     labels = session.out_dir / "plans_labels.json"
-    assert found == [Path(f"{labels}#p1"), Path(f"{labels}#p3")]
-    assert prep.complete_pages([str(p) for p in found]) == []
+    # Even before PDF done is ticked, complete and verified-empty pages are
+    # included while partial pages (p1) are excluded.
+    found = prep.discover([pattern])
+    assert found == [Path(f"{labels}#p2"), Path(f"{labels}#p3")]
+    _mark_done(bp)
+    assert prep.discover([pattern]) == [Path(f"{labels}#p2"), Path(f"{labels}#p3")]
+    assert prep.complete_pages([str(p) for p in found]) == [str(Path(f"{labels}#p2")), str(Path(f"{labels}#p3"))]
 
 
 
-# ------------------------------------------------------------------ "PDF done -> training"
+# ------------------------------------------------------------------ "PDF done" bookmark vs page completeness
 
-def test_training_uses_only_pdfs_marked_done(drawing, tmp_path):
+def test_training_uses_only_complete_or_empty_pages(drawing, tmp_path):
     from blueprint_symbols import label_schema
     from blueprint_symbols.dataset_manifest import build_manifest
     bp, pdf, _ = drawing
     session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
     session.save(0, revision=None, instances=[_verified("a")], rejected=[])
     labels = session.out_dir / "plans_labels.json"
+    ref_partial = label_schema.page_ref(labels, 1)
     assert session.page_state(0)["training_ready"] is False
     assert label_store.labeled_pages(bp)["train"] == []
     assert label_schema.expand_page_paths([labels]) == []
-    ref = label_schema.page_ref(labels, 1)
-    assert not label_schema.page_training_ready(ref)
+    assert not label_schema.page_training_ready(ref_partial)
     with pytest.raises(ValueError, match="no training annotation"):
-        build_manifest([ref], val_fraction=.25, test_fraction=.25)    # an explicit page is refused too
+        build_manifest([ref_partial], val_fraction=.25, test_fraction=.25)
 
+    # Ticking "PDF done" does NOT admit a partial page into training.
     result = session.set_training_ready(True)
-    assert result["training_ready"] is True and result["usable_pages"] == [1]
+    assert result["training_ready"] is True and result["usable_pages"] == []
     assert session.page_state(0)["training_ready"] is True
-    assert label_store.labeled_pages(bp)["train"] == [ref]
+    assert label_store.labeled_pages(bp)["train"] == []
+    assert label_schema.expand_page_paths([labels]) == []
+    assert not label_schema.page_training_ready(ref_partial)
     record = json.loads(labels.read_text())["training_ready"]
     assert record["ready"] is True and record["set_by"] == "annotator" and record["set_at"]
-    # Later saves keep the flag; unmarking takes the PDF out again.
-    state = session.page_state(1)
-    session.save(1, revision=state["revision"], instances=[_verified("b")], rejected=[])
-    assert len(label_store.labeled_pages(bp)["train"]) == 2
+
+    # Unmarking "PDF done" leaves complete and verified-empty pages eligible.
     session.set_training_ready(False)
-    assert label_store.labeled_pages(bp)["train"] == []
+    state1 = session.page_state(1)
+    session.save(1, revision=state1["revision"], instances=[_verified("b")], rejected=[],
+                 metadata={"page_complete": True})
+    state2 = session.page_state(2)
+    session.save(2, revision=state2["revision"], instances=[], rejected=[],
+                 metadata={"verified_no_symbols": True})
+    ref_complete = label_schema.page_ref(labels, 2)
+    ref_empty = label_schema.page_ref(labels, 3)
+    assert label_store.labeled_pages(bp)["train"] == [ref_complete, ref_empty]
+    assert label_schema.expand_page_paths([labels]) == [ref_complete, ref_empty]
+    assert label_schema.page_training_ready(ref_complete)
+    assert label_schema.page_training_ready(ref_empty)
     with pytest.raises(web.LabelingError):
         session.set_training_ready("yes")
 
@@ -670,7 +691,8 @@ def test_done_flag_over_http_and_in_the_pdf_list(drawing):
 def test_the_done_flag_travels_with_pushed_labels(drawing, tmp_path):
     bp, pdf, _ = drawing
     local = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
-    local.save(0, revision=None, instances=[_verified("local_1")], rejected=[])
+    local.save(0, revision=None, instances=[_verified("local_1")], rejected=[],
+               metadata={"page_complete": True})
     local.set_training_ready(True)
     remote_root = tmp_path / "remote" / "blueprints_and_libraries"
     remote_bp = remote_root / "1_blueprints"
@@ -691,7 +713,8 @@ def test_browser_marks_a_pdf_done(drawing):
     sync_api = pytest.importorskip("playwright.sync_api")
     bp, pdf, _ = drawing
     session = LabelingSession(pdf=pdf, blueprints_dir=bp, auto_proposals=False)
-    session.save(0, revision=None, instances=[_verified("a")], rejected=[])
+    session.save(0, revision=None, instances=[_verified("a")], rejected=[],
+                 metadata={"page_complete": True})
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
@@ -709,7 +732,7 @@ def test_browser_marks_a_pdf_done(drawing):
             assert not box.is_checked()
             box.check()
             page.wait_for_function("() => document.querySelector('#message').textContent.startsWith('PDF marked done')")
-            assert "1 reviewed page(s)" in page.locator("#message").inner_text()
+            assert "1 complete/empty page(s)" in page.locator("#message").inner_text()
             assert session.is_training_ready()
             page.reload()
             page.wait_for_function("() => window.__labelerState && window.__labelerState.doc"

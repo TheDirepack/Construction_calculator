@@ -78,7 +78,12 @@ def test_annotator_saves_into_the_devices_folder(blueprints):
         # One labels file per document, beside document.json.
         assert [p.name for p in session.out_dir.glob("*.json")] and \
             {p.name for p in session.out_dir.glob("*.json")} == {"document.json", f"{pdf.stem}_labels.json"}
-    _mark_done(bp)
+    assert label_store.labeled_pages(bp) == {"train": [], "evaluation": []}
+    for pdf in (train, exam):
+        session = LabelingSession(pdf=pdf, blueprints_dir=bp)
+        _, rev, _ = session.page_document(0)
+        session.save(0, revision=rev, instances=[_verified()], rejected=[],
+                     metadata={"page_complete": True})
     pages = label_store.labeled_pages(bp)
     folder = lambda view: label_store.page_source(view)[0].folder.parent  # noqa: E731
     assert [folder(p) for p in pages["train"]] == [bp / "devices"]
@@ -95,7 +100,8 @@ def test_annotator_saves_into_the_devices_folder(blueprints):
 def test_a_drawing_moved_to_evaluation_keeps_its_labels(blueprints):
     bp, train, _ = blueprints
     session = LabelingSession(pdf=train, blueprints_dir=bp)
-    session.save(0, revision=None, instances=[_verified()], rejected=[])
+    session.save(0, revision=None, instances=[_verified()], rejected=[],
+                 metadata={"page_complete": True})
     old_folder = session.out_dir
     moved = bp / "evaluation" / train.name
     shutil.move(train, moved)
@@ -105,7 +111,6 @@ def test_a_drawing_moved_to_evaluation_keeps_its_labels(blueprints):
     doc = label_store.create_document(bp, moved)
     assert doc.folder == old_folder
     assert len(list(label_store.iter_documents(bp))) == 1
-    _mark_done(bp)
     assert label_store.labeled_pages(bp)["evaluation"]          # its role follows the PDF
 
 
@@ -138,7 +143,8 @@ def test_migration_copies_into_devices_and_never_touches_the_old_store(tmp_path,
     monkeypatch.setenv("BPS_LABELS_DIR", str(old))
     for pdf in (train, exam):
         LabelingSession(pdf=pdf, blueprints_dir=bp).save(0, revision=None,
-                                                         instances=[_verified()], rejected=[])
+                                                         instances=[_verified()], rejected=[],
+                                                         metadata={"page_complete": True})
     (old / "batches").mkdir()
     (old / "batches" / "batch_01.txt").write_text("\n".join(p.name for p in old.iterdir()
                                                             if p.name != "batches") + "\n")

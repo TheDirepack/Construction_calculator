@@ -17,6 +17,7 @@ are written to the devices/ folder beside each PDF (annotator.label_store).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hashlib
 import hmac
@@ -32,6 +33,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
@@ -204,9 +206,16 @@ def openable_pdfs(blueprints_dir: Path) -> list[Path]:
     from blueprint_symbols.blueprint_sets import EVALUATION_DIR
     found = []
     for folder in (Path(blueprints_dir), Path(blueprints_dir) / EVALUATION_DIR):
-        if folder.is_dir():
-            found += sorted(p.resolve() for p in folder.iterdir()
-                            if p.is_file() and p.suffix.lower() == ".pdf")
+        if not folder.is_dir():
+            continue
+        rfolder = folder.resolve()
+        paths = []
+        with os.scandir(rfolder) as entries:
+            for entry in entries:
+                if entry.name.lower().endswith(".pdf") and entry.is_file():
+                    paths.append(Path(entry.path).resolve() if entry.is_symlink() else (rfolder / entry.name))
+        paths.sort()
+        found += paths
     return found
 
 
@@ -244,6 +253,76 @@ def _find_proposals_for_pdf(pdf: Path, work_dir: Path | None = None) -> Path | N
     """The strongest machine-proposal file for a PDF (``_find_proposal_sources``)."""
     found = _find_proposal_sources(pdf, work_dir)
     return found[0] if found else None
+
+
+def _index_by_stem_prefix(folder: Path, suffix: str) -> dict[str, list[tuple[str, Path]]]:
+    """Index JSON files in ``folder`` by every underscore prefix in the file name."""
+    by_prefix: dict[str, list[tuple[str, Path]]] = {}
+    if not folder.is_dir():
+        return by_prefix
+    entries = sorted((p.name, p.resolve()) for p in folder.iterdir()
+                     if p.is_file() and p.name.endswith(suffix))
+    for name, resolved in entries:
+        idx = name.find("_")
+        while idx > 0:
+            by_prefix.setdefault(name[:idx], []).append((name, resolved))
+            idx = name.find("_", idx + 1)
+    return by_prefix
+
+
+def _build_proposal_lookup(bp_dir: Path, work_dir: Path | None = None):
+    """Return a batch resolver matching ``_find_proposals_for_pdf(pdf, work_dir)``
+    with a single scan per directory instead of globs per PDF."""
+    from blueprint_symbols.blueprint_sets import DEVICES_DIR, EVALUATION_DIR, devices_files
+    work = work_dir or DEFAULT_WORK_DIR
+    local_files: dict[tuple[Path, str], Path] = {}
+    devices_by_parent: dict[Path, dict[str, Path]] = {}
+    for folder in (Path(bp_dir), Path(bp_dir) / EVALUATION_DIR):
+        if not folder.is_dir():
+            continue
+        rfolder = folder.resolve()
+        devices_by_parent[rfolder] = devices_files(rfolder / DEVICES_DIR)
+        with os.scandir(rfolder) as entries:
+            for entry in entries:
+                if entry.name.endswith(("_devices.json", "_DEVICES.json")) and entry.is_file():
+                    local_files[(rfolder, entry.name)] = (
+                        Path(entry.path).resolve() if entry.is_symlink() else (rfolder / entry.name)
+                    )
+    refined = _index_by_stem_prefix(work / "circuitnet_refined_devices", "_REFINED_DEVICES.json")
+    cleaned = _index_by_stem_prefix(work / "sam3_cleaned", "_CLEANED.json")
+    cn = _index_by_stem_prefix(work / "circuitnet_proposals", ".json")
+    sam = _index_by_stem_prefix(work / "sam3_proposals", ".json")
+
+    def lookup(pdf: Path) -> Path | None:
+        stem = pdf.stem
+        if any(ch in stem for ch in "[?*"):
+            return _find_proposals_for_pdf(pdf, work)
+        parent = pdf.parent
+        dev_map = devices_by_parent.get(parent)
+        devices = dev_map.get(pdf.name.casefold()) if dev_map is not None else _devices_json_for(pdf)
+        if devices is not None:
+            return devices
+        for candidate_name in (f"{stem}_devices.json", f"{stem}_DEVICES.json"):
+            hit = local_files.get((parent, candidate_name))
+            if hit is not None:
+                return hit
+        min_ref = len(stem) + 1 + len("_REFINED_DEVICES.json")
+        for _, path in ((n, p) for n, p in refined.get(stem, ()) if len(n) >= min_ref):
+            return path
+        min_cln = len(stem) + 1 + len("_CLEANED.json")
+        cln_hits = [(n, p) for n, p in cleaned.get(stem, ()) if len(n) >= min_cln]
+        if cln_hits:
+            return cln_hits[0][1]
+        min_json = len(stem) + 1 + len(".json")
+        for _, path in ((n, p) for n, p in cn.get(stem, ()) if len(n) >= min_json):
+            return path
+        cleaned_runs = {n[:-len("_CLEANED.json")] for n, _ in cln_hits}
+        for name, path in sam.get(stem, ()):
+            if len(name) >= min_json and name.rsplit("_", 1)[0] not in cleaned_runs:
+                return path
+        return None
+
+    return lookup
 
 
 # Bump when proposal files are turned into boxes differently (fields kept,
@@ -446,6 +525,100 @@ def proposal_pixel_factor(page, dpi: float, render_dpi: float, max_pixels=None) 
     return render_scale(pw, ph, dpi, MAX_PDF_PIXELS) / theirs
 
 
+_MAX_IMAGE_BYTES_CACHE = 64 * 1024 * 1024
+_IMAGE_BYTES_CACHE: "OrderedDict[tuple[str, int, int], bytes]" = OrderedDict()
+_IMAGE_BYTES_TOTAL = 0
+_IMAGE_BYTES_LOCK = threading.Lock()
+
+_RENDER_LOCKS: dict[tuple[str, int, int], threading.Lock] = {}
+_RENDER_LOCKS_GUARD = threading.Lock()
+
+_WORKER_FITZ_CACHE: "OrderedDict[str, tuple[int, int, object]]" = OrderedDict()
+_MAX_WORKER_FITZ_DOCS = 2
+
+
+def _render_slot_lock(pdf_key: str, index: int, dpi: int) -> threading.Lock:
+    slot = (pdf_key, index, dpi)
+    with _RENDER_LOCKS_GUARD:
+        if len(_RENDER_LOCKS) > 512:
+            for old_key in list(_RENDER_LOCKS.keys())[:256]:
+                if not _RENDER_LOCKS[old_key].locked():
+                    _RENDER_LOCKS.pop(old_key, None)
+        lock = _RENDER_LOCKS.get(slot)
+        if lock is None:
+            lock = threading.Lock()
+            _RENDER_LOCKS[slot] = lock
+        return lock
+
+
+def _read_image_bytes(path: Path) -> tuple[bytes, int, int]:
+    """Read image bytes using a bounded LRU cache keyed by (path, size, mtime)."""
+    global _IMAGE_BYTES_TOTAL
+    resolved = str(path.resolve())
+    st = path.stat()
+    key = (resolved, st.st_size, st.st_mtime_ns)
+    with _IMAGE_BYTES_LOCK:
+        cached = _IMAGE_BYTES_CACHE.get(key)
+        if cached is not None:
+            _IMAGE_BYTES_CACHE.move_to_end(key)
+            return cached, st.st_size, st.st_mtime_ns
+    data = path.read_bytes()
+    if len(data) <= _MAX_IMAGE_BYTES_CACHE // 2:
+        with _IMAGE_BYTES_LOCK:
+            if key not in _IMAGE_BYTES_CACHE:
+                _IMAGE_BYTES_CACHE[key] = data
+                _IMAGE_BYTES_TOTAL += len(data)
+                while _IMAGE_BYTES_TOTAL > _MAX_IMAGE_BYTES_CACHE and _IMAGE_BYTES_CACHE:
+                    _, evicted = _IMAGE_BYTES_CACHE.popitem(last=False)
+                    _IMAGE_BYTES_TOTAL -= len(evicted)
+            else:
+                _IMAGE_BYTES_CACHE.move_to_end(key)
+    return data, st.st_size, st.st_mtime_ns
+
+
+def _worker_open_pdf(fitz, source: Path):
+    """Keep up to ``_MAX_WORKER_FITZ_DOCS`` open PyMuPDF handles in a prefetch worker."""
+    key = str(source.resolve())
+    st = source.stat()
+    sig = (st.st_size, st.st_mtime_ns)
+    cached = _WORKER_FITZ_CACHE.get(key)
+    if cached is not None:
+        if cached[:2] == sig:
+            _WORKER_FITZ_CACHE.move_to_end(key)
+            return cached[2]
+        _WORKER_FITZ_CACHE.pop(key, None)
+        try:
+            cached[2].close()
+        except Exception:
+            pass
+    doc = fitz.open(source)
+    _WORKER_FITZ_CACHE[key] = (sig[0], sig[1], doc)
+    while len(_WORKER_FITZ_CACHE) > _MAX_WORKER_FITZ_DOCS:
+        _, (_, _, old_doc) = _WORKER_FITZ_CACHE.popitem(last=False)
+        try:
+            old_doc.close()
+        except Exception:
+            pass
+    return doc
+
+
+def _pixmap_for_page(fitz, doc, index: int, dpi: int):
+    sheet = doc[index]
+    factor = dpi / 72.0
+    if sheet.rect.width * factor * sheet.rect.height * factor > MAX_PDF_PIXELS:
+        factor = math.sqrt(MAX_PDF_PIXELS / (sheet.rect.width * sheet.rect.height))
+    return sheet.get_pixmap(matrix=fitz.Matrix(factor, factor), alpha=False)
+
+
+def _write_pixmap_png(pix, index: int, dpi: int, images_dir: Path, source_hash: str) -> tuple[Path, int, int]:
+    width, height = pix.width, pix.height
+    path = Path(images_dir) / f"page_{index + 1:04d}_{source_hash[:12]}_d{dpi}_{width}x{height}.png"
+    png = pix.tobytes("png")
+    if not path.is_file() or path.read_bytes() != png:
+        _atomic_bytes(path, png)
+    return path, width, height
+
+
 def render_pdf_page(pdf: Path, index: int, dpi: int, images_dir: Path, source_hash: str) -> tuple[Path, int, int]:
     """Render one PDF page to ``images_dir`` (the annotator's page-image cache).
 
@@ -454,17 +627,11 @@ def render_pdf_page(pdf: Path, index: int, dpi: int, images_dir: Path, source_ha
     """
     fitz = _import_fitz()
     with fitz.open(pdf) as doc:
-        sheet = doc[index]
-        factor = dpi / 72.0
-        if sheet.rect.width * factor * sheet.rect.height * factor > MAX_PDF_PIXELS:
-            factor = math.sqrt(MAX_PDF_PIXELS / (sheet.rect.width * sheet.rect.height))
-        pix = sheet.get_pixmap(matrix=fitz.Matrix(factor, factor), alpha=False)
-        width, height = pix.width, pix.height
-        path = Path(images_dir) / f"page_{index + 1:04d}_{source_hash[:12]}_d{dpi}_{width}x{height}.png"
-        png = pix.tobytes("png")
-    if not path.is_file() or path.read_bytes() != png:
-        _atomic_bytes(path, png)
-    return path, width, height
+        pix = _pixmap_for_page(fitz, doc, index, dpi)
+    return _write_pixmap_png(pix, index, dpi, images_dir, source_hash)
+
+
+_DEFAULT_RENDER_PDF_PAGE = render_pdf_page
 
 
 def _find_rendered(images_dir: Path, index: int, dpi: int, source_hash: str) -> tuple[Path, int, int] | None:
@@ -489,18 +656,27 @@ def _prefetch_job(pdf: str, pages: list[int], dpi: int, out_dir: str | None,
     images = Path(out_dir) if out_dir else default_out_dir(source, sha)
     images = images / "images"
     fitz = _import_fitz()
-    with fitz.open(source) as doc:
+    use_cached = (render_pdf_page is _DEFAULT_RENDER_PDF_PAGE)
+    doc = _worker_open_pdf(fitz, source) if use_cached else None
+    if doc is None:
+        with fitz.open(source) as tmp_doc:
+            count = len(tmp_doc)
+    else:
         count = len(doc)
     for index in pages:
         if 0 <= index < count and _find_rendered(images, index, dpi, sha) is None:
-            render_pdf_page(source, index, dpi, images, sha)
+            if use_cached:
+                pix = _pixmap_for_page(fitz, doc, index, dpi)
+                _write_pixmap_png(pix, index, dpi, images, sha)
+            else:
+                render_pdf_page(source, index, dpi, images, sha)
     return str(source), sha
 
 
 class _Prefetcher:
-    """One background process that pre-renders pages the user is about to open.
+    """Background worker processes that pre-render pages the user is about to open.
 
-    A separate process, not a thread: MuPDF is not safe to drive from two
+    Separate processes, not threads: MuPDF is not safe to drive from two
     threads at once, and the render must not stall the page being viewed.
     """
 
@@ -527,7 +703,7 @@ class _Prefetcher:
                 import concurrent.futures
                 import multiprocessing
                 self._pool = concurrent.futures.ProcessPoolExecutor(
-                    max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+                    max_workers=2, mp_context=multiprocessing.get_context("spawn"))
             future = self._pool.submit(_prefetch_job, str(pdf), list(pages), dpi,
                                        str(out_dir) if out_dir else None, sha)
             self._queued.setdefault(stream, []).append(future)
@@ -999,6 +1175,7 @@ class LabelingSession:
         out_dir: Path | None = None, page: int = 0, dpi: int = 150,
         proposals: Path | None = None, walls: Path | None = None, neca_catalog: Path | None = None,
         page_presence: Path | None = None,
+        detector_weights: Path | None = None,
         source_sha256: str | None = None, auto_proposals: bool = True,
         token: str | None = None, lock: threading.RLock | None = None,
     ) -> None:
@@ -1031,11 +1208,20 @@ class LabelingSession:
         # (one page file is never checked and written by two threads at once)
         # and the access token.
         self.lock = lock or threading.RLock()
+        self._documents_lock = threading.RLock()
+        self._render_lock = threading.Lock()
+        self._fitz_lock = threading.Lock()
+        self._fitz_doc = None
+        self._fitz_stat: tuple[int, int] | None = None
         self.token = token or secrets.token_urlsafe(32)
         self._neca_catalog = neca_catalog
+        self._detector_weights = Path(detector_weights).expanduser().resolve() if detector_weights else None
         self._documents: dict[Path, LabelingSession] = {}
         self._overview_cache: dict[str, tuple[int, int, dict]] = {}   # page file -> size, mtime, counts
+        self._proposed_counts_cache: tuple | None = None
+        self._saved_overview_cache: tuple | None = None
         self._render_cache: dict[int, tuple[Path, int, int, str]] = {}
+        self._render_stats: dict[int, tuple[int, int]] = {}
         # Callers that already know the PDF's hash (the label store records it
         # with size and mtime) skip re-reading a large drawing set per command.
         self.source_hash = (source_sha256 or cached_sha256(self.pdf)) if self.pdf else None
@@ -1045,10 +1231,13 @@ class LabelingSession:
         self.device_catalog = load_electrical_device_catalog()
         if self.pdf:
             fitz = _import_fitz()
-            with fitz.open(self.pdf) as doc:
-                self.page_count = len(doc)
+            doc = fitz.open(self.pdf)
+            self.page_count = len(doc)
             if self.page_count < 1:
+                doc.close()
                 raise LabelingError("PDF has no pages")
+            self._fitz_doc = doc
+            self._fitz_stat = (self.source_stat.st_size, self.source_stat.st_mtime_ns)
         else:
             self.page_count = len(self.edit_files)
         self.start_page = page
@@ -1320,7 +1509,7 @@ class LabelingSession:
                 return self
             raise LabelingError("this server edits annotation JSON files; it has no PDFs to open")
         target = self.resolve_pdf(doc)
-        with self.lock:
+        with self._documents_lock:
             if target == self.pdf:
                 return self
             existing = self._documents.get(target)
@@ -1330,14 +1519,27 @@ class LabelingSession:
                                                         existing.source_stat.st_mtime_ns):
                     return existing
                 del self._documents[target]          # PDF replaced on disk: reopen it
-            opened = LabelingSession(
-                pdf=target, blueprints_dir=self.blueprints_dir, out_dir=self._initial_out_dir,
-                dpi=self.dpi, neca_catalog=self._neca_catalog, auto_proposals=self.auto_proposals,
-                token=self.token, lock=self.lock,
-            )
-            opened._origin_pdf = self._origin_pdf
+                existing._close_fitz_doc()
+        opened = LabelingSession(
+            pdf=target, blueprints_dir=self.blueprints_dir, out_dir=self._initial_out_dir,
+            dpi=self.dpi, neca_catalog=self._neca_catalog,
+            detector_weights=self._detector_weights, auto_proposals=self.auto_proposals,
+            token=self.token, lock=None,
+        )
+        opened._origin_pdf = self._origin_pdf
+        with self._documents_lock:
+            existing = self._documents.get(target)
+            if existing is not None:
+                stat = target.stat()
+                if (stat.st_size, stat.st_mtime_ns) == (existing.source_stat.st_size,
+                                                        existing.source_stat.st_mtime_ns):
+                    opened._close_fitz_doc()
+                    return existing
+                del self._documents[target]
+                existing._close_fitz_doc()
             while len(self._documents) >= self.MAX_OPEN_DOCUMENTS:
-                self._documents.pop(next(iter(self._documents)))
+                evicted = self._documents.pop(next(iter(self._documents)))
+                evicted._close_fitz_doc()
             self._documents[target] = opened
             return opened
 
@@ -1377,16 +1579,48 @@ class LabelingSession:
         from annotator import document_labels
         return document_labels.labels_path(self.out_dir, self.json_prefix)
 
+    def _close_fitz_doc(self) -> None:
+        with self._fitz_lock:
+            if self._fitz_doc is not None:
+                try:
+                    self._fitz_doc.close()
+                except Exception:
+                    pass
+                self._fitz_doc = None
+                self._fitz_stat = None
+
+    @contextlib.contextmanager
+    def _with_fitz_doc(self):
+        fitz = _import_fitz()
+        with self._fitz_lock:
+            st = self.pdf.stat()
+            sig = (st.st_size, st.st_mtime_ns)
+            if self._fitz_doc is None or self._fitz_stat != sig:
+                if self._fitz_doc is not None:
+                    try:
+                        self._fitz_doc.close()
+                    except Exception:
+                        pass
+                    self._fitz_doc = None
+                self._fitz_doc = fitz.open(self.pdf)
+                self._fitz_stat = sig
+            yield fitz, self._fitz_doc
+
+    def _render_page_with_cached_doc(self, index: int, images_dir: Path) -> tuple[Path, int, int]:
+        with self._with_fitz_doc() as (fitz, doc):
+            pix = _pixmap_for_page(fitz, doc, index, self.dpi)
+        return _write_pixmap_png(pix, index, self.dpi, images_dir, self.source_hash)
+
     def _raster(self, index: int) -> tuple[Path, int, int, str]:
         self._assert_pdf_unchanged()
-        if index in self._render_cache:
-            cached = self._render_cache[index]
-            if cached[0].is_file():
-                if sha256_file(cached[0]) != cached[3]:
-                    raise RevisionConflict("source image changed during labeling; reopen the session")
-                return cached
-            self._render_cache.pop(index)
         if self.edit:
+            cached = self._render_cache.get(index)
+            if cached is not None:
+                if cached[0].is_file():
+                    if sha256_file(cached[0]) != cached[3]:
+                        raise RevisionConflict("source image changed during labeling; reopen the session")
+                    return cached
+                self._render_cache.pop(index, None)
             json_path = self._json_path(index)
             data = json.loads(json_path.read_text(encoding="utf-8"))
             image = _resolve_edit_image(json_path, str(data.get("image_path", "")))
@@ -1400,13 +1634,51 @@ class LabelingSession:
             result = image, width, height, sha256_file(image)
             self._render_cache[index] = result
             return result
+
+        pdf_path, source_hash, dpi = self.pdf, self.source_hash, self.dpi
+        with self._render_lock:
+            cached = self._render_cache.get(index)
+            cached_stat = self._render_stats.get(index)
+        if cached is not None:
+            path = cached[0]
+            try:
+                st = path.stat()
+            except OSError:
+                with self._render_lock:
+                    if self._render_cache.get(index) == cached:
+                        self._render_cache.pop(index, None)
+                        self._render_stats.pop(index, None)
+            else:
+                sig = (st.st_size, st.st_mtime_ns)
+                if cached_stat == sig:
+                    return cached
+                if sha256_file(path) != cached[3]:
+                    raise RevisionConflict("source image changed during labeling; reopen the session")
+                with self._render_lock:
+                    if self._render_cache.get(index) == cached:
+                        self._render_stats[index] = sig
+                return cached
+
         # A page rendered earlier for this PDF revision and DPI is reused: the
         # render is deterministic and the annotation pins its SHA-256 anyway.
-        found = (_find_rendered(self.out_dir / "images", index, self.dpi, self.source_hash)
-                 or render_pdf_page(self.pdf, index, self.dpi, self.out_dir / "images", self.source_hash))
+        images_dir = self.out_dir / "images"
+        found = _find_rendered(images_dir, index, dpi, source_hash)
+        if found is None:
+            if render_pdf_page is _DEFAULT_RENDER_PDF_PAGE:
+                with _render_slot_lock(str(pdf_path), index, dpi):
+                    found = _find_rendered(images_dir, index, dpi, source_hash)
+                    if found is None:
+                        found = self._render_page_with_cached_doc(index, images_dir)
+            else:
+                found = render_pdf_page(pdf_path, index, dpi, images_dir, source_hash)
         path, width, height = found
-        result = path, width, height, sha256_file(path)
-        self._render_cache[index] = result
+        image_hash = sha256_file(path)
+        st = path.stat()
+        result = path, width, height, image_hash
+        with self._render_lock:
+            if (self.pdf, self.source_hash, self.dpi) == (pdf_path, source_hash, dpi):
+                self._render_cache[index] = result
+                self._render_stats[index] = (st.st_size, st.st_mtime_ns)
         return result
 
     def _proposal_instances(self, index: int, width: int, height: int,
@@ -1457,7 +1729,7 @@ class LabelingSession:
                                        status="devices_json_unresolved"))
                         for n, d in enumerate(proposals.get("unresolved_candidates") or [])
                         if isinstance(d, dict) and devices_bbox_points(d) is not None]
-        with fitz.open(self.pdf) as doc:
+        with self._with_fitz_doc() as (_, doc):
             page = doc[index]
             for number, proposal in entries:
                 if not isinstance(proposal, dict):
@@ -1584,8 +1856,7 @@ class LabelingSession:
         found = _find_rendered(self.out_dir / "images", index, self.dpi, self.source_hash)
         if found:
             return found[1], found[2]
-        fitz = _import_fitz()
-        with fitz.open(self.pdf) as doc:
+        with self._with_fitz_doc() as (fitz, doc):
             sheet = doc[index]
             factor = self.dpi / 72.0
             if sheet.rect.width * factor * sheet.rect.height * factor > MAX_PDF_PIXELS:
@@ -1748,6 +2019,34 @@ class LabelingSession:
         from annotator import document_labels
         return bool(self.pdf) and document_labels.training_ready(self.out_dir, self.json_prefix)
 
+    def _proposed_page_counts(self) -> dict[int, int]:
+        if self.proposals_sha is not None and self._proposed_counts_cache is not None:
+            cached_sha, cached_obj, cached_counts = self._proposed_counts_cache
+            if cached_sha == self.proposals_sha and cached_obj is self.proposals:
+                return dict(cached_counts)
+        proposed: dict[int, int] = {}
+        proposals = self.proposals or {}
+        entries = list(proposals.get("devices", []))
+        for cand in proposals.get("unresolved_candidates") or []:
+            if isinstance(cand, dict) and devices_bbox_points(cand) is not None:
+                entries.append(dict(
+                    cand,
+                    device_type=cand.get("device_type") or cand.get("inferred_type"),
+                    subtype=cand.get("subtype") or cand.get("inferred_subtype"),
+                ))
+        for device in entries:
+            if not isinstance(device, dict):
+                continue
+            number = device.get("pdf_page") or device.get("page")
+            if type(number) is not int or not 1 <= number <= self.page_count:
+                continue
+            if devices_skip_reason(device) or proposal_device(device) is None:
+                continue
+            proposed[number] = proposed.get(number, 0) + 1
+        if self.proposals_sha is not None:
+            self._proposed_counts_cache = (self.proposals_sha, self.proposals, dict(proposed))
+        return proposed
+
     def page_overview(self) -> dict:
         """Which pages need review, without opening them: counts from every
         saved page (the document's labels file, parsed once per change), and
@@ -1762,19 +2061,16 @@ class LabelingSession:
             if self.pdf:
                 from annotator import document_labels
                 self._sync_proposals()
-                proposed: dict[int, int] = {}
-                for device in (self.proposals or {}).get("devices", []):
-                    if not isinstance(device, dict):
-                        continue
-                    number = device.get("pdf_page") or device.get("page")
-                    if type(number) is not int or not 1 <= number <= self.page_count:
-                        continue
-                    if devices_skip_reason(device) or proposal_device(device) is None:
-                        continue
-                    proposed[number] = proposed.get(number, 0) + 1
-                record_sha = (document_labels.proposals_record(self.out_dir, self.json_prefix)
-                              or {}).get("sha256")
-                for number, data in document_labels.pages(self.out_dir, self.json_prefix).items():
+                raw_doc = document_labels.read(self.out_dir, self.json_prefix)
+                if (self.proposals_sha is not None and self._saved_overview_cache is not None
+                        and self._saved_overview_cache[0] is raw_doc
+                        and self._saved_overview_cache[1] == self.proposals_sha
+                        and self._saved_overview_cache[2] is self.proposals):
+                    return {"page_count": self.page_count, "pages": list(self._saved_overview_cache[3])}
+                proposed = self._proposed_page_counts()
+                record_sha = (raw_doc.get("proposals") or {}).get("sha256")
+                for key, data in raw_doc["pages"].items():
+                    number = int(key)
                     if not 1 <= number <= self.page_count:
                         continue
                     row = rows[number - 1] = {"page": number - 1, **_page_counts(data)}
@@ -1791,6 +2087,10 @@ class LabelingSession:
                     if number - 1 not in rows:
                         rows[number - 1] = {"page": number - 1, "saved": False, "pending": count,
                                             "verified": 0, "complete": False, "no_symbols": False}
+                pages_list = [rows[k] for k in sorted(rows)]
+                if self.proposals_sha is not None:
+                    self._saved_overview_cache = (raw_doc, self.proposals_sha, self.proposals, pages_list)
+                return {"page_count": self.page_count, "pages": list(pages_list)}
         return {"page_count": self.page_count, "pages": [rows[k] for k in sorted(rows)]}
 
     @staticmethod
@@ -1852,6 +2152,35 @@ class LabelingSession:
                 pass
             return _geometric_wall_snap(instance_dict, self.walls)
 
+    def detector_info(self) -> dict:
+        from blueprint_symbols.page_detector import describe_detector_weights
+        return describe_detector_weights(self._detector_weights, work_dir=DEFAULT_WORK_DIR)
+
+    def evaluate_page(self, index: int, *, confidence: object = 0.25) -> dict:
+        """Run deterministic local detector inference on one page without mutating disk."""
+        if (isinstance(confidence, bool) or not isinstance(confidence, (int, float))
+                or not math.isfinite(confidence)):
+            raise LabelingError("confidence must be a finite number between 0.01 and 0.99")
+        conf = float(confidence)
+        if not 0.01 <= conf <= 0.99:
+            raise LabelingError("confidence must be between 0.01 and 0.99")
+        with self.lock:
+            _, _, img_path = self._load(index)
+        import cv2
+        from blueprint_symbols.page_detector import get_cached_detector
+
+        image = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+        if image is None:
+            raise LabelingError(f"could not read rendered page image: {img_path.name}")
+        detector = get_cached_detector(self._detector_weights, work_dir=DEFAULT_WORK_DIR)
+        instances, stats = detector.predict_page(image, confidence=conf)
+        for inst in instances:
+            family = inst["symbol_family"]
+            inst["discipline"] = discipline_for(family)
+            inst["device_type"] = family
+        validate_instances(instances, int(image.shape[1]), int(image.shape[0]))
+        return {"instances": instances, **stats}
+
     def page_document(self, index: int) -> tuple[dict, str | None, Path]:
         """Public accessor for the page JSON, its revision and rendered image path."""
         with self.lock:
@@ -1863,13 +2192,15 @@ class LabelingSession:
             json_path = self._json_path(index)
             doc_name = self.pdf.name if self.pdf else (self.edit.name if self.edit else "")
             doc_path = str(self.pdf.resolve()) if self.pdf else (str(self.edit.resolve()) if self.edit else "")
+            image_hash = str(data.get("image_sha256") or "")
             return {
                 "page_index": index,
                 "page_count": self.page_count,
                 "revision": revision,
                 "document": data,
-                "image_url": f"/api/image?page={index}" + (
-                    f"&doc={quote(str(self.pdf), safe='')}" if self.pdf else ""),
+                "image_url": f"/api/image?page={index}"
+                + (f"&doc={quote(str(self.pdf), safe='')}" if self.pdf else "")
+                + (f"&v={image_hash[:16]}" if image_hash else ""),
                 "families": sorted(FAMILY_DISCIPLINES),
                 "family_disciplines": FAMILY_DISCIPLINES,
                 "variants_by_family": self.variants_by_family,
@@ -1942,24 +2273,25 @@ class LabelingSession:
         docs = []
         current_resolved = self.pdf.resolve() if self.pdf else None
         labeled = self._labeled_stems()
+        proposal_lookup = _build_proposal_lookup(bp_dir)
 
         ready_stems = self._ready_stems()
-        for p in pdf_paths:
-            resolved = p.resolve()
-            stem = p.stem
+        for resolved in pdf_paths:
+            stem = resolved.stem
             is_current = (resolved == current_resolved)
-            prop_file = _find_proposals_for_pdf(p)
+            prop_file = proposal_lookup(resolved)
             has_prop = (prop_file is not None)
-            annotated = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem)[:48] in labeled
-            ready = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem)[:48] in ready_stems
+            safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem)[:48]
+            annotated = safe_stem in labeled
+            ready = safe_stem in ready_stems
 
             try:
-                rel = str(p.relative_to(bp_dir))
+                rel = str(resolved.relative_to(bp_dir))
             except ValueError:
-                rel = p.name
+                rel = resolved.name
 
             docs.append({
-                "name": p.name,
+                "name": resolved.name,
                 "stem": stem,
                 "path": str(resolved),
                 "rel_path": rel,
@@ -2011,10 +2343,13 @@ class LabelingSession:
         target = self.resolve_pdf(path_or_name)
 
         with self.lock:
+            self._close_fitz_doc()
             self.pdf = target
             self.edit = None
             self.edit_files = []
-            self._render_cache.clear()
+            with self._render_lock:
+                self._render_cache.clear()
+                self._render_stats.clear()
             # Wall centerlines and page-presence suggestions were derived from
             # the previous PDF; keeping them would guide the new document with
             # another drawing's geometry and page verdicts.
@@ -2023,10 +2358,14 @@ class LabelingSession:
             self.source_hash = cached_sha256(self.pdf)
             self.source_stat = self.pdf.stat()
             fitz = _import_fitz()
-            with fitz.open(self.pdf) as doc:
-                self.page_count = len(doc)
+            doc = fitz.open(self.pdf)
+            self.page_count = len(doc)
             if self.page_count < 1:
+                doc.close()
                 raise LabelingError("PDF has no pages")
+            with self._fitz_lock:
+                self._fitz_doc = doc
+                self._fitz_stat = (self.source_stat.st_size, self.source_stat.st_mtime_ns)
             self.start_page = 0
 
             self.json_prefix = self.pdf.stem[:48]
@@ -2036,8 +2375,9 @@ class LabelingSession:
                 self._register_document()
             self.json_prefix = _store_json_prefix(self.out_dir) or self.json_prefix
             self._proposals_fixed, self._proposals_sig = None, None
+            self._proposed_counts_cache = None
+            self._saved_overview_cache = None
             self._stored_revisions.clear()
-            self._render_cache.clear()
             self._sync_proposals(force=True)
             self._init_proposals_record()
 
@@ -2270,15 +2610,31 @@ class LabelingSession:
                 "page_state": self.page_state(page_index),
             }
 
+    def image_payload(self, index: int, *, cached_only: bool = False) -> tuple[bytes, str, str] | None:
+        """Return ``(bytes, mime, image_sha256)`` or ``None`` when ``cached_only`` and not yet rendered."""
+        if self.edit:
+            with self.lock:
+                _, _, path = self._load(index)
+            data = path.read_bytes()
+            return data, _image_mime(path), hashlib.sha256(data).hexdigest()
+        self._page_index(index)
+        self._assert_pdf_unchanged()
+        if cached_only:
+            with self._render_lock:
+                cached = self._render_cache.get(index)
+            if cached is None and _find_rendered(self.out_dir / "images", index, self.dpi, self.source_hash) is None:
+                return None
+        path, _, _, image_hash = self._raster(index)
+        data, _, _ = _read_image_bytes(path)
+        return data, _image_mime(path), image_hash
+
     def image_bytes(self, index: int) -> bytes:
-        with self.lock:
-            _, _, path = self._load(index)
-            return path.read_bytes()
+        data, _, _ = self.image_payload(index)
+        return data
 
     def image_response(self, index: int) -> tuple[bytes, str]:
-        with self.lock:
-            _, _, path = self._load(index)
-            return path.read_bytes(), _image_mime(path)
+        data, mime, _ = self.image_payload(index)
+        return data, mime
 
     def validate_review_payload(self, index: int, *, revision: str | None,
                                 instances: object, rejected: object,
@@ -2429,6 +2785,22 @@ def _as_pending_import(item: dict) -> dict:
                 verified_ground_truth=False)
 
 
+def _etag_matches(header_value: str | None, etag: str) -> bool:
+    if not header_value:
+        return False
+    raw = header_value.strip()
+    if raw == "*":
+        return True
+    target = etag.strip('"')
+    for part in raw.split(","):
+        token = part.strip()
+        if token.startswith("W/"):
+            token = token[2:].strip()
+        if token.strip('"') == target:
+            return True
+    return False
+
+
 def make_handler(session: LabelingSession):
     # The page and its script are read once, so a long-running server always
     # serves the UI that matches its own API, even after the files are edited.
@@ -2436,14 +2808,15 @@ def make_handler(session: LabelingSession):
     ui_js = (MODULE_DIR / "web_ui.js").read_bytes()
 
     class Handler(BaseHTTPRequestHandler):
-        def _reply(self, code: int, body: bytes, mime: str,
-                   extra_headers: dict[str, str] | None = None) -> None:
-            self.send_response(code)
-            for name, value in (extra_headers or {}).items():
+        def _send_common_headers(self, extra_headers: dict[str, str] | None = None) -> None:
+            extra = extra_headers or {}
+            has_cache_ctrl = False
+            for name, value in extra.items():
+                if name.lower() == "cache-control":
+                    has_cache_ctrl = True
                 self.send_header(name, value)
-            self.send_header("Content-Type", mime)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            if not has_cache_ctrl:
+                self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
             self.send_header("Cross-Origin-Opener-Policy", "same-origin")
@@ -2455,8 +2828,20 @@ def make_handler(session: LabelingSession):
                 "default-src 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
                 "script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
             )
+
+        def _reply(self, code: int, body: bytes, mime: str,
+                   extra_headers: dict[str, str] | None = None) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(body)))
+            self._send_common_headers(extra_headers)
             self.end_headers()
             self.wfile.write(body)
+
+        def _reply_not_modified(self, extra_headers: dict[str, str] | None = None) -> None:
+            self.send_response(304)
+            self._send_common_headers(extra_headers)
+            self.end_headers()
 
         def _json(self, code: int, data: dict, extra_headers: dict[str, str] | None = None) -> None:
             self._reply(code, json.dumps(data, ensure_ascii=False).encode("utf-8"),
@@ -2473,6 +2858,27 @@ def make_handler(session: LabelingSession):
                 return target, target._page_index(int(raw))
             except (ValueError, TypeError):
                 raise LabelingError("invalid page number") from None
+
+        def _doc_page_image(self, query: str) -> tuple[LabelingSession, int, str | None, bool]:
+            """Parse ``/api/image`` query allowing optional cache token ``v`` and ``cached`` flag."""
+            q = parse_qs(query, keep_blank_values=True)
+            if set(q) - {"page", "doc", "v", "cached"} or any(len(v) > 1 for v in q.values()):
+                raise LabelingError("unsupported page query")
+            target = session.for_document(q.get("doc", [""])[0] or None)
+            raw = q.get("page", [str(target.start_page)])[0]
+            try:
+                page_idx = target._page_index(int(raw))
+            except (ValueError, TypeError):
+                raise LabelingError("invalid page number") from None
+            v_param = (q.get("v", [""])[0] or "").strip() or None
+            raw_cached = (q.get("cached", [""])[0] or "").strip().lower()
+            if raw_cached in ("", "0", "false"):
+                cached_only = False
+            elif raw_cached in ("1", "true"):
+                cached_only = True
+            else:
+                raise LabelingError("invalid cached parameter")
+            return target, page_idx, v_param, cached_only
 
         def _trusted_host(self) -> bool:
             host_header = self.headers.get("Host", "").lower()
@@ -2504,6 +2910,7 @@ def make_handler(session: LabelingSession):
                         "current_doc_name": session.pdf.name if session.pdf else (session.edit.name if session.edit else ""),
                         "current_doc_path": str(session.pdf.resolve()) if session.pdf else (str(session.edit.resolve()) if session.edit else ""),
                         "device_catalog": session.device_catalog,
+                        "detector": session.detector_info(),
                     })
                 elif url.path == "/api/device_catalog":
                     self._json(200, session.device_catalog)
@@ -2511,9 +2918,27 @@ def make_handler(session: LabelingSession):
                     target, page_idx = self._doc_page(url.query)
                     self._json(200, target.page_state(page_idx))
                 elif url.path == "/api/image":
-                    target, page_idx = self._doc_page(url.query)
-                    data, mime = target.image_response(page_idx)
-                    self._reply(200, data, mime)
+                    target, page_idx, v_param, cached_only = self._doc_page_image(url.query)
+                    payload = target.image_payload(page_idx, cached_only=cached_only)
+                    if payload is None:
+                        self._json(202, {"ready": False})
+                        return
+                    data, mime, image_hash = payload
+                    etag = f'"{image_hash}"'
+                    cache_ctrl = (
+                        "private, max-age=3600, immutable"
+                        if v_param and v_param == image_hash[:16]
+                        else "private, no-cache"
+                    )
+                    headers = {
+                        "ETag": etag,
+                        "X-Image-Sha256": image_hash,
+                        "Cache-Control": cache_ctrl,
+                    }
+                    if _etag_matches(self.headers.get("If-None-Match"), etag):
+                        self._reply_not_modified(headers)
+                    else:
+                        self._reply(200, data, mime, headers)
                 elif url.path == "/api/overview":
                     q = parse_qs(url.query, keep_blank_values=True)
                     if set(q) - {"doc"} or any(len(v) > 1 for v in q.values()):
@@ -2561,7 +2986,7 @@ def make_handler(session: LabelingSession):
                     return
             url = urlsplit(self.path)
             valid_endpoints = (
-                "/api/save", "/api/validate", "/api/open", "/api/snap",
+                "/api/save", "/api/validate", "/api/open", "/api/snap", "/api/evaluate_page",
                 "/api/document", "/api/server_export", "/api/server_import",
                 "/api/agent/act", "/api/prefetch", "/api/training_ready",
             )
@@ -2599,6 +3024,11 @@ def make_handler(session: LabelingSession):
                     return
                 if url.path == "/api/prefetch":
                     self._json(200, session.prefetch(data.get("path"), data.get("pages", [0])))
+                    return
+                if url.path == "/api/evaluate_page":
+                    target, page_idx = self._doc_page(url.query)
+                    result = target.evaluate_page(page_idx, confidence=data.get("confidence", 0.25))
+                    self._json(200, result)
                     return
                 if url.path == "/api/document":
                     target_path = data.get("path") or data.get("name")
@@ -2685,6 +3115,8 @@ def main() -> None:
                         help="Read-only page candidates from scripts_triage_pdf_symbol_pages.py")
     parser.add_argument("--walls", type=Path, help="Optional JSON file with verified wall centerlines for snap guidance")
     parser.add_argument("--neca-catalog", type=Path, help="Optional NECA symbol library directory to populate live subtypes")
+    parser.add_argument("--detector-weights", type=Path,
+                        help="Optional trained blueprint symbol detector checkpoint (.onnx or .pt) for Evaluate page")
     parser.add_argument("--page", type=int, default=0, help="Initial 0-based page/file index")
     parser.add_argument("--dpi", type=int, default=150)
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Listen host (default 0.0.0.0 for LAN access)")
@@ -2717,6 +3149,7 @@ def main() -> None:
         out_dir=args.out_dir, page=args.page,
         dpi=args.dpi, proposals=args.proposals, walls=args.walls,
         neca_catalog=args.neca_catalog, page_presence=args.page_presence,
+        detector_weights=args.detector_weights,
     )
     lan_ip = get_lan_ip()
     with ThreadingHTTPServer((args.host, args.port), make_handler(session)) as server:

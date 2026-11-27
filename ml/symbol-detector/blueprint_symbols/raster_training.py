@@ -90,9 +90,18 @@ class RasterTileDataset(Dataset):
                  class_balance_exponent: float = .5,
                  cache_max_mb: int = 128,
                  scale_limits: tuple[float,float] = (.15, 32.),
-                 min_symbol_pixels: float = 0.):
+                 min_symbol_pixels: float = 0.,
+                 samples_per_record: list[int] | None = None):
         if not records or not classes or virtual_tiles_per_image <= 0 or size < 32:
             raise ValueError('invalid dataset parameters')
+        if samples_per_record is not None:
+            if len(samples_per_record) != len(records) or any(int(s) < 1 for s in samples_per_record):
+                raise ValueError('invalid samples_per_record')
+            self._sample_to_record: list[int] | None = [
+                ri for ri, count in enumerate(samples_per_record) for _ in range(int(count))
+            ]
+        else:
+            self._sample_to_record = None
         if min(source_scales) <= 0 or source_scales[1] < source_scales[0]:
             raise ValueError('invalid scale range')
         self.records=records
@@ -128,6 +137,8 @@ class RasterTileDataset(Dataset):
                                      for cls,n in counts.items()}
 
     def __len__(self) -> int:
+        if self._sample_to_record is not None:
+            return len(self._sample_to_record)
         return len(self.records)*self.samples
 
     def set_epoch(self, epoch: int) -> None:
@@ -143,7 +154,8 @@ class RasterTileDataset(Dataset):
         """One tile as uint8 RGB (height, width, 3); data export uses this without PyTorch."""
         # Export consecutive tiles from the same source. Reading an 8K raster
         # from disk for every tile is unnecessarily expensive.
-        rec=self.records[index // self.samples]
+        rec_idx = self._sample_to_record[index] if self._sample_to_record is not None else (index // self.samples)
+        rec = self.records[rec_idx]
         # Stable single-worker reproducibility. Multiprocessing workers can
         # create distinct index subsets without sharing a mutable RNG state.
         rng=np.random.default_rng(np.random.SeedSequence([self.seed,self.epoch,index]))

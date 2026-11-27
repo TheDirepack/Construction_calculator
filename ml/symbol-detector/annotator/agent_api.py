@@ -236,6 +236,11 @@ def tool_manifest(session) -> dict:
             },
             "delete_box": {"fields": {"id": "required"}},
             "snap_box": {"fields": {"id": "required", "apply": "true to move the box onto the wall centerline"}},
+            "set_page": {
+                "fields": {
+                    "verified_no_symbols": "required boolean: set/clear the page-level 'No target symbols on this page' tag (same as the web GUI); requires zero active boxes when true",
+                },
+            },
             "assess_page": {
                 "fields": {"page_kind": "required, one of " + ", ".join(PAGE_KINDS),
                            "symbols_present": "required, one of " + ", ".join(SYMBOLS_PRESENT),
@@ -257,7 +262,7 @@ def tool_manifest(session) -> dict:
             "boxes written here are proposals: they are stored unreviewed, uncertain and unverified, and a human must accept them",
             "every write must carry the revision from the context you read; a stale revision is rejected with 409",
             "a box is the outer bounds of the symbol glyph, not of the text label that names it",
-            "agents cannot attest a page as symbol-free; use assess_page with symbols_present 'no' and a human decides",
+            "use set_page with verified_no_symbols true (requiring no active boxes) to tag a page as symbol-free just like the web GUI, paired with assess_page",
             "an existing box is not evidence that a neighbouring symbol is already labelled; check the region view",
         ],
     }
@@ -819,7 +824,7 @@ def apply_actions(session, index: int, *, revision: object, actions: object,
     width, height = int(doc["image_width"]), int(doc["image_height"])
     instances = copy.deepcopy(doc.get("instances") or [])
     rejected = copy.deepcopy(doc.get("rejected_proposals") or [])
-    metadata: dict | None = None
+    metadata: dict = {}
     applied: list[dict] = []
     warnings: list[str] = []
 
@@ -844,15 +849,30 @@ def apply_actions(session, index: int, *, revision: object, actions: object,
                     fields["agent"] = agent[:120]
                 fields["assessed_at"] = _utc_now()
                 assessment = validate_assessment(fields)
-                metadata = {"vlm_assessment": assessment}
+                metadata["vlm_assessment"] = assessment
                 result = {"kind": "assess_page", **{k: assessment[k] for k in
                           ("page_kind", "symbols_present", "labeling_complete")}}
             elif kind == "set_page":
-                raise ValueError("agents cannot attest pages as symbol-free; use assess_page "
-                                 "with symbols_present 'no' so a human can decide")
+                allowed = {"kind", "op", "verified_no_symbols"}
+                unknown = sorted(set(action) - allowed)
+                if unknown:
+                    raise ValueError("unsupported set_page field: " + ", ".join(unknown))
+                if "verified_no_symbols" not in action or type(action["verified_no_symbols"]) is not bool:
+                    raise ValueError("verified_no_symbols must be a boolean")
+                value = action["verified_no_symbols"]
+                if value and instances:
+                    if any(item.get("verified_ground_truth") is True for item in instances):
+                        raise ValueError("cannot mark a page with human-verified boxes as symbol-free")
+                    raise ValueError(
+                        "verified symbol-free pages cannot contain active boxes; delete unverified proposals first"
+                    )
+                metadata["verified_no_symbols"] = value
+                if value:
+                    metadata["page_complete"] = False
+                result = {"kind": "set_page", "verified_no_symbols": value}
             else:
                 raise ValueError(
-                    f"unknown action kind {kind!r}; use add_box, update_box, delete_box, snap_box or assess_page"
+                    f"unknown action kind {kind!r}; use add_box, update_box, delete_box, snap_box, set_page or assess_page"
                 )
         except (KeyError, TypeError, ValueError) as exc:
             message = str(exc) or exc.__class__.__name__
@@ -861,17 +881,23 @@ def apply_actions(session, index: int, *, revision: object, actions: object,
 
     if dry_run:
         session.validate_review_payload(index, revision=revision, instances=instances,
-                                       rejected=rejected, metadata=metadata)
+                                       rejected=rejected, metadata=metadata or None)
         new_revision = actual_revision
         written = False
-        page_flags = {"verified_no_symbols": bool(doc.get("verified_no_symbols", False))}
-        if metadata:
+        page_flags = {
+            "verified_no_symbols": bool(
+                metadata["verified_no_symbols"]
+                if "verified_no_symbols" in metadata
+                else doc.get("verified_no_symbols", False)
+            )
+        }
+        if "vlm_assessment" in metadata:
             page_flags["vlm_assessment"] = metadata["vlm_assessment"]
         elif doc.get("vlm_assessment"):
             page_flags["vlm_assessment"] = doc["vlm_assessment"]
     else:
         new_revision = session.save(index, revision=revision, instances=instances,
-                                    rejected=rejected, metadata=metadata)
+                                    rejected=rejected, metadata=metadata or None)
         written = True
         saved = session.page_state(index)["document"]
         instances = saved.get("instances") or []

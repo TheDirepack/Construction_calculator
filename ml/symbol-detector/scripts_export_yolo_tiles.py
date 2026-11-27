@@ -163,11 +163,23 @@ def _ink_fraction(bgr: np.ndarray, threshold: int = 190) -> float:
     return float((gray < threshold).mean())
 
 
+def _is_real_source_type(source_type: str | None) -> bool:
+    """True only for genuine non-composited construction sheets."""
+    st = str(source_type or '').lower()
+    if not st or any(tok in st for tok in ('synthetic', 'neca_svg', 'composite', 'wall_only')):
+        return False
+    return 'real' in st
+
+
 def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
         stress_val=False,stress_test=False,allow_unverified_completeness=False,
         allow_partial_training=False, train_variants=3, eval_variants=None, train_negative_fraction=.12,
         blank_ink_threshold=.015, blank_negative_fraction=.02,
         verified_wall_negative_fraction=.65, verified_wall_blank_fraction=.12,
+        real_blank_tiles_per_page: int | None = None,
+        real_complete_tiles_per_page: int | None = None,
+        real_blank_negative_fraction: float | None = None,
+        real_complete_negative_fraction: float | None = None,
         eval_empty_keep_fraction=.25, eval_blank_keep_fraction=.02) -> dict:
     mf=json.loads(manifest.read_text())
     validate_manifest_sources(mf)
@@ -182,7 +194,11 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
     if (samples < 1 or not 1 <= train_variants <= 12 or not scales or
             overlap < 0 or overlap >= 512 or not 0 <= train_negative_fraction <= 1 or
             not 0 <= verified_wall_negative_fraction <= 1 or
-            not 0 <= verified_wall_blank_fraction <= 1):
+            not 0 <= verified_wall_blank_fraction <= 1 or
+            (real_blank_tiles_per_page is not None and real_blank_tiles_per_page < 1) or
+            (real_complete_tiles_per_page is not None and real_complete_tiles_per_page < 1) or
+            (real_blank_negative_fraction is not None and not 0 <= real_blank_negative_fraction <= 1) or
+            (real_complete_negative_fraction is not None and not 0 <= real_complete_negative_fraction <= 1)):
         raise ValueError('bad tiling options')
     # Positive-only partial pages need a class-aware masked loss in phase two.
     # The legacy unverified exploratory override must never bypass that requirement.
@@ -213,16 +229,34 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
                          'or --allow-unverified-completeness for UNSAFE exploratory export')
     count=Counter();groups={}; meta=[]
     supervision={}
+    sample_roles={}
     evaluation_coverage={}
     for split,recs in per_split.items():
         for rec in recs:
             if rec.group in groups and groups[rec.group]!=split:
                 raise ValueError(f'cross-split group leakage: {rec.group}')
             groups[rec.group]=split
+    class_set = set(classes)
+    samples_per_record = None
+    if real_blank_tiles_per_page is not None or real_complete_tiles_per_page is not None:
+        samples_per_record = []
+        for rec in per_split['train']:
+            is_real_rec = _is_real_source_type(rec.source_type)
+            if is_real_rec and rec.verified_no_symbols:
+                samples_per_record.append(
+                    real_blank_tiles_per_page if real_blank_tiles_per_page is not None else samples
+                )
+            elif is_real_rec and class_set.issubset(rec.exhaustive_families):
+                samples_per_record.append(
+                    real_complete_tiles_per_page if real_complete_tiles_per_page is not None else samples
+                )
+            else:
+                samples_per_record.append(samples)
     train=RasterTileDataset(per_split['train'], classes, size=512,
         virtual_tiles_per_image=samples, seed=seed, source_scales=TRAIN_RANDOM_SCALES,
         target_symbol_pixels=PIXEL_BANDS, degradation_profile=None,
-        scale_limits=TRAIN_SCALE_LIMITS, min_symbol_pixels=MIN_SYMBOL_PIXELS)
+        scale_limits=TRAIN_SCALE_LIMITS, min_symbol_pixels=MIN_SYMBOL_PIXELS,
+        samples_per_record=samples_per_record)
     for i in range(len(train)):
         rgb,targets,info=train.sample(i)
         image=cv2.cvtColor(rgb,cv2.COLOR_RGB2BGR)
@@ -234,6 +268,15 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
         complete_names=set(info['exhaustive_families'])
         verified_class_ids=sorted(classes[k] for k in classes if k in complete_names)
         partial_positive_only=len(verified_class_ids)<len(classes)
+        is_real = _is_real_source_type(info.get('source_type'))
+        if partial_positive_only:
+            sample_role = 'partial'
+        elif is_real and info.get('verified_page_negative'):
+            sample_role = 'real_blank'
+        elif is_real:
+            sample_role = 'real_complete'
+        else:
+            sample_role = 'synthetic_complete'
         is_empty=not targets
         if allow_partial_training and is_empty and not verified_class_ids:
             # This tile has neither a labeled positive nor any verified
@@ -248,8 +291,14 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
             if info.get('verified_wall_background') or info.get('verified_page_negative'):
                 # Empty crops from attested symbol-free sources are meaningful
                 # hard negatives; retain more without flooding on blank paper.
-                keep_p=(verified_wall_blank_fraction if is_blank
-                        else verified_wall_negative_fraction)
+                nonblank_p = (
+                    real_blank_negative_fraction
+                    if (is_real and info.get('verified_page_negative') and real_blank_negative_fraction is not None)
+                    else verified_wall_negative_fraction
+                )
+                keep_p = verified_wall_blank_fraction if is_blank else nonblank_p
+            elif is_real and not partial_positive_only and real_complete_negative_fraction is not None:
+                keep_p = blank_negative_fraction if is_blank else real_complete_negative_fraction
             else:
                 keep_p=blank_negative_fraction if is_blank else train_negative_fraction
             if np.random.default_rng(neg_seed).random() >= keep_p:
@@ -265,9 +314,12 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
             name=f'train_{i:08d}_v{variant_index:02d}'
             _save_sample(out,'train',name,variant,variant_targets,counters=count)
             supervision[name]=verified_class_ids
+            sample_roles[name]=sample_role
+            count[f'train_role_{sample_role}_images']+=1
             count['train_partial_images' if partial_positive_only else 'train_complete_images']+=1
             meta.append({'verified_negative_class_ids':verified_class_ids,
                          'partial_positive_only':partial_positive_only,
+                         'sample_role':sample_role,
                          'source_type':info['source_type'],
                          'verified_page_negative':info.get('verified_page_negative', False),
                          'sample':name,'source':info['image_path'],'group':info['group'],
@@ -359,6 +411,7 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
         'class_ids':classes,
         'partial_training_enabled':allow_partial_training,
         'samples':supervision,
+        'sample_roles':sample_roles,
     },indent=2))
     report={'source_manifest':str(manifest.resolve()),'classes':classes,
             'counts':dict(count),'unverified_annotation_completeness':sorted(unchecked),
@@ -392,6 +445,14 @@ def main():
                    help='retain nonblank empty tiles from verified wall-only backgrounds')
     p.add_argument('--verified-wall-blank-fraction',type=float,default=.12,
                    help='retain nearly blank empty tiles from verified wall-only backgrounds')
+    p.add_argument('--real-blank-tiles-per-page',type=int,default=None,
+                   help='override base tile sample count for verified-blank real pages')
+    p.add_argument('--real-complete-tiles-per-page',type=int,default=None,
+                   help='override base tile sample count for fully-labeled real pages')
+    p.add_argument('--real-blank-negative-fraction',type=float,default=None,
+                   help='retain nonblank negative tiles from verified-blank real pages')
+    p.add_argument('--real-complete-negative-fraction',type=float,default=None,
+                   help='retain nonblank empty tiles from fully-labeled real pages')
     p.add_argument('--eval-scales',default='1.0',help='comma-separated source pixels per model pixel')
     p.add_argument('--overlap',type=int,default=128)
     p.add_argument('--seed',type=int,default=2026)
@@ -408,6 +469,10 @@ def main():
                allow_partial_training=args.allow_partial_training,
                train_variants=args.train_variants,train_negative_fraction=args.train_negative_fraction,
                verified_wall_negative_fraction=args.verified_wall_negative_fraction,
-               verified_wall_blank_fraction=args.verified_wall_blank_fraction)
+               verified_wall_blank_fraction=args.verified_wall_blank_fraction,
+               real_blank_tiles_per_page=args.real_blank_tiles_per_page,
+               real_complete_tiles_per_page=args.real_complete_tiles_per_page,
+               real_blank_negative_fraction=args.real_blank_negative_fraction,
+               real_complete_negative_fraction=args.real_complete_negative_fraction)
     print(json.dumps(report['counts'],indent=2))
 if __name__=='__main__':main()

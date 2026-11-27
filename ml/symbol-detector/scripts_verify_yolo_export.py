@@ -63,7 +63,11 @@ def verify_export(folder: Path) -> dict:
             count[f'{split}_labels'] += 1
         count[f'{split}_images'] += 1
     actual_images=set(x.resolve() for x in (folder/'images').glob('**/*') if x.is_file())
-    actual_labels=set(x.resolve() for x in (folder/'labels').glob('**/*') if x.is_file())
+    labels_root=(folder/'labels').resolve()
+    actual_labels=set(
+        x.resolve() for x in labels_root.glob('**/*')
+        if x.is_file() and not (x.parent == labels_root and x.suffix == '.cache')
+    )
     if actual_images!=tracked_images or actual_labels!=tracked_labels:
         raise ValueError('untracked or missing image/label files in exported dataset; '
                          f'extra images={len(actual_images-tracked_images)}, '
