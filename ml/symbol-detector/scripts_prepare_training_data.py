@@ -12,10 +12,10 @@ The data output uses YOLO's *file format*, not YOLO's training datasets.
 """
 from __future__ import annotations
 import argparse
-from collections import Counter
 import glob
 import json
 from pathlib import Path
+import sys
 from blueprint_symbols.dataset_manifest import build_manifest
 from scripts_export_yolo_tiles import run
 from scripts_verify_yolo_export import verify_export
@@ -82,7 +82,8 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
             eval_scales: tuple[float, ...] = (1.0,), eval_overlap: int = 128,
             evaluation_files: list[str] | None = None,
             train_only_files: list[str] | None = None,
-            holdout_files: list[str] | None = None) -> dict:
+            holdout_files: list[str] | None = None,
+            require_independent_test: bool = False) -> dict:
     if destination.exists() and any(destination.iterdir()):
         raise FileExistsError(f'refusing to overwrite existing directory: {destination}')
     paths = discover(list(patterns) + list(evaluation_files or []))
@@ -93,7 +94,8 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
                               locked_manifest=lock, allow_partial_training=allow_partial_training,
                               evaluation_files=evaluation_files,
                               train_only_files=train_only_files,
-                              holdout_files=holdout_files)
+                              holdout_files=holdout_files,
+                              require_independent_test=require_independent_test)
     destination.mkdir(parents=True, exist_ok=True)
     mpath = destination / 'source_manifest.json'
     mpath.write_text(json.dumps(manifest, indent=2))
@@ -119,6 +121,9 @@ def prepare(patterns: list[str], destination: Path, *, train_tiles_per_page: int
         'real_holdout_pages': {
             'blank': sum(r['verified_no_symbols'] for r in manifest['real_holdout']),
             'fully_labelled': sum(not r['verified_no_symbols'] for r in manifest['real_holdout'])},
+        # selection pages choose best_real.pt and the cutoffs; test pages are only reported
+        'real_holdout_sets': manifest.get('real_holdout_sets', {}),
+        'val_test_independent': manifest.get('val_test_independent'),
         'classes': manifest['class_ids'],
         'split_counts': export['counts'],
         'verification': audit,
@@ -169,6 +174,9 @@ def main():
                         '--annotations provides complete synthetic groups')
     p.add_argument('--require-real-eval', action='store_true',
                    help='fail if 1_blueprints/evaluation has no complete real evaluation pages')
+    p.add_argument('--require-independent-test', action='store_true',
+                   help='fail when validation and test are the same drawings (only one evaluation '
+                        'project); without it the manifest records val_test_independent: false')
     a = p.parse_args()
     store_pages = label_store_pages(a.label_store, data_root=a.data_root)
     evaluation = complete_pages(store_pages['evaluation'])
@@ -204,8 +212,12 @@ def main():
                      eval_overlap=a.eval_overlap,
                      evaluation_files=evaluation,
                      train_only_files=store_pages['train'] if not evaluation else None,
-                     holdout_files=store_pages['holdout'])
+                     holdout_files=store_pages['holdout'],
+                     require_independent_test=a.require_independent_test)
     print(json.dumps(result, indent=2))
+    if result.get('val_test_independent') is False:
+        print('WARNING: val_test_independent = false: validation and test are the SAME drawings',
+              file=sys.stderr, flush=True)
 
 
 if __name__ == '__main__':

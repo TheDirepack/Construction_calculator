@@ -8,12 +8,20 @@ True evaluation must also run on original whole pages after cross-tile fusion.
 
 python scripts_export_yolo_tiles.py manifest.json out/yolo --train-tiles-per-page 32 \
     --stress-val --stress-test --allow-unverified-completeness
+
+--seed picks every training tile and variant: the same seed re-exports the
+same dataset, a new one re-samples it. Verified-blank real pages are balanced
+per document (--real-blank-tiles-per-document). --hard-negatives (or the
+PHASE2_HARD_NEGATIVES environment variable, for callers such as
+scripts_prepare_training_data.py) reads scripts_mine_hard_negatives.py's
+windows: each becomes extra verified-empty training tiles.
 """
 from __future__ import annotations
 import argparse
 from collections import Counter
 import hashlib
 import json
+import os
 from pathlib import Path
 import cv2
 import numpy as np
@@ -21,7 +29,7 @@ from blueprint_symbols.raster_training import read_records, RasterTileDataset
 from blueprint_symbols.dataset_manifest import validate_manifest_sources, trusted_training_instance
 from blueprint_symbols.variants import (make_variant, rotate90, skew, symbols_survive,
                                         EVAL_VARIANTS, TRAIN_VARIANTS)
-from blueprint_symbols.multiscale import plan_pyramid_tiles, sample_tile
+from blueprint_symbols.multiscale import ScaleTile, plan_pyramid_tiles, sample_tile
 from blueprint_symbols.label_schema import allowed_rotations, load_training_page
 
 # Target refers to MAX(width, height) of a symbol as seen by the detector.
@@ -30,10 +38,80 @@ from blueprint_symbols.label_schema import allowed_rotations, load_training_page
 # size around that, and TRAIN_SCALE_LIMITS keeps each tile within 0.6-2.2
 # source px per model px: a 32 px symbol is never shrunk to 2-5 px (the old
 # bands drew 10-40 px for most tiles: s up to ~6) nor upsampled into blur.
-PIXEL_BANDS = ((14,20,.05),(20,32,.17),(32,48,.28),(48,72,.28),(72,112,.17),(112,160,.05))
+# Large symbols carry real weight: a detector that saw 112-160 px in 5% of
+# tiles lost a troffer above ~115 px (0.99 at 85 px, ~0 at 130 px).
+PIXEL_BANDS = ((14,20,.04),(20,32,.13),(32,48,.21),(48,72,.23),(72,112,.23),(112,160,.16))
 TRAIN_SCALE_LIMITS = (.6, 2.2)        # source px per model px for symbol-centred tiles
 TRAIN_RANDOM_SCALES = (.75, 1.6)      # tiles not centred on a symbol (background, negatives)
 MIN_SYMBOL_PIXELS = 14.               # never shrink the picked symbol below this
+BLANK_VARIANTS = 2                    # variants of a nearly blank kept negative tile
+# A document's verified-blank pages together give at most this many pages'
+# worth of base tiles (each page still gets REAL_BLANK_MIN_TILES), so one big
+# PDF of blank sheets does not dominate the real negatives.
+REAL_BLANK_DOCUMENT_PAGES = 6
+REAL_BLANK_MIN_TILES = 8
+HARD_NEGATIVE_VARIANTS = 4
+HARD_NEGATIVES_ENV = 'PHASE2_HARD_NEGATIVES'
+HARD_NEGATIVE_VARIANTS_ENV = 'PHASE2_HARD_NEGATIVE_VARIANTS'
+
+
+def real_blank_tiles_per_record(groups: list[str], per_page: int, per_document: int) -> list[int]:
+    """Base tiles for each verified-blank real page (``groups``: its document),
+    capping a document at ``per_document`` tiles (0 = no cap), never below
+    ``min(per_page, REAL_BLANK_MIN_TILES)`` per page."""
+    counts = Counter(groups)
+    floor = min(per_page, REAL_BLANK_MIN_TILES)
+    out = []
+    for g in groups:
+        n = counts[g]
+        if per_document <= 0 or n * per_page <= per_document:
+            out.append(per_page)
+        else:
+            out.append(max(floor, min(per_page, per_document // n)))
+    return out
+
+
+def load_hard_negative_windows(path: str | Path) -> list[dict]:
+    """Windows of scripts_mine_hard_negatives.py (validated)."""
+    data = json.loads(Path(path).read_text())
+    if data.get('format') != 'phase2_hard_negative_windows' or int(data.get('format_version', 0)) != 1:
+        raise ValueError(f'not a hard-negative windows file: {path}')
+    out = []
+    for row in data.get('windows', []):
+        x0, y0, x1, y1 = (float(v) for v in row['window_xyxy'])
+        if not (x1 > x0 and y1 > y0):
+            raise ValueError(f'bad hard-negative window: {row}')
+        if row.get('split', 'train') != 'train':
+            raise ValueError('hard-negative windows must come from TRAIN pages only')
+        out.append(row)
+    return out
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, 'rb') as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def hard_negative_tile(window, rec, rng: np.random.Generator, *, jitter: bool, size: int = 512) -> ScaleTile:
+    """The tile showing ``window`` (page px) of ``rec``; with ``jitter`` the
+    view shifts by up to a quarter tile and rescales 0.8-1.3x, keeping the
+    window's centre (where the false detection was) in view."""
+    x0, y0, x1, y1 = (float(v) for v in window)
+    s = max(x1 - x0, y1 - y0) / size
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    if jitter:
+        s *= float(np.exp(rng.uniform(np.log(.8), np.log(1.3))))
+        span = size * s
+        cx += float(rng.uniform(-.25, .25)) * span
+        cy += float(rng.uniform(-.25, .25)) * span
+    s = max(TRAIN_SCALE_LIMITS[0], min(TRAIN_SCALE_LIMITS[1], s))
+    span = size * s
+    tx = float(np.clip(cx - span / 2, 0, max(0., rec.width - span)))
+    ty = float(np.clip(cy - span / 2, 0, max(0., rec.height - span)))
+    return ScaleTile(tx, ty, s, size, rec.width, rec.height)
 
 def _export_annotations(instances: list[dict], tile, classes: dict[str,int],
                         represented_indices: set[int] | None = None):
@@ -180,7 +258,30 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
         real_complete_tiles_per_page: int | None = None,
         real_blank_negative_fraction: float | None = None,
         real_complete_negative_fraction: float | None = None,
-        eval_empty_keep_fraction=.25, eval_blank_keep_fraction=.02) -> dict:
+        eval_empty_keep_fraction=.25, eval_blank_keep_fraction=.02,
+        blank_variants: int = BLANK_VARIANTS,
+        real_blank_tiles_per_document: int | None = None,
+        hard_negatives: str | Path | None = None,
+        hard_negative_variants: int | None = None) -> dict:
+    """Export the manifest's splits as YOLO tiles (see the module docstring).
+
+    Training variants: positive tiles get ``train_variants``; empty tiles of
+    attested symbol-free sources (verified-blank pages, walls-only) get the
+    same; other empty tiles 2; nearly blank tiles ``blank_variants`` (never
+    more than ``train_variants``).
+    ``real_blank_tiles_per_document``: cap on one document's verified-blank
+    base tiles (default ``REAL_BLANK_DOCUMENT_PAGES`` pages' worth; 0 = off).
+    ``hard_negatives``: windows JSON (default: ``$PHASE2_HARD_NEGATIVES``),
+    each exported as ``hard_negative_variants`` (default 4, or
+    ``$PHASE2_HARD_NEGATIVE_VARIANTS``) verified-empty ``real_blank`` tiles
+    of its TRAIN page; windows of any other page are skipped and counted.
+    """
+    if hard_negatives is None:
+        hard_negatives = os.environ.get(HARD_NEGATIVES_ENV) or None
+    if hard_negative_variants is None:
+        hard_negative_variants = int(os.environ.get(HARD_NEGATIVE_VARIANTS_ENV) or HARD_NEGATIVE_VARIANTS)
+    if not 1 <= hard_negative_variants <= 12 or not 1 <= blank_variants <= 12:
+        raise ValueError('bad tiling options')
     mf=json.loads(manifest.read_text())
     validate_manifest_sources(mf)
     splits=mf.get('splits',{})
@@ -205,7 +306,6 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
     if allow_partial_training and allow_unverified_completeness:
         raise ValueError('partial training cannot combine with unsafe completeness override')
     per_split={key:read_records(value,classes=classes) for key,value in splits.items()}
-    paths={str(d['annotation']):d for d in mf.get('source_images',[])}
     unchecked=[]
     incomplete_eval=[]
     for s in per_split:
@@ -238,14 +338,21 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
             groups[rec.group]=split
     class_set = set(classes)
     samples_per_record = None
-    if real_blank_tiles_per_page is not None or real_complete_tiles_per_page is not None:
+    blank_per_page = real_blank_tiles_per_page if real_blank_tiles_per_page is not None else samples
+    if real_blank_tiles_per_document is None:
+        real_blank_tiles_per_document = REAL_BLANK_DOCUMENT_PAGES * blank_per_page
+    real_blank_recs = [rec for rec in per_split['train']
+                       if _is_real_source_type(rec.source_type) and rec.verified_no_symbols]
+    blank_counts = dict(zip(map(id, real_blank_recs), real_blank_tiles_per_record(
+        [rec.group for rec in real_blank_recs], blank_per_page, real_blank_tiles_per_document)))
+    if (real_blank_tiles_per_page is not None or real_complete_tiles_per_page is not None
+            or any(n != samples for n in blank_counts.values())):
         samples_per_record = []
         for rec in per_split['train']:
             is_real_rec = _is_real_source_type(rec.source_type)
             if is_real_rec and rec.verified_no_symbols:
-                samples_per_record.append(
-                    real_blank_tiles_per_page if real_blank_tiles_per_page is not None else samples
-                )
+                samples_per_record.append(blank_counts[id(rec)])
+                count['train_real_blank_base_tiles'] += blank_counts[id(rec)]
             elif is_real_rec and class_set.issubset(rec.exhaustive_families):
                 samples_per_record.append(
                     real_complete_tiles_per_page if real_complete_tiles_per_page is not None else samples
@@ -306,8 +413,16 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
                 continue
             count['train_accepted_blank_negatives' if is_blank else 'train_accepted_negative_bases']+=1
         # Multiple *independent* variants of the SAME crop. Source group stays
-        # unchanged. Positive tiles get all variants; negative tiles get fewer.
-        n_variants = 1 if is_blank else (min(2, train_variants) if is_empty else train_variants)
+        # unchanged. Positive tiles and empty tiles of attested symbol-free
+        # sources get all variants (these teach "no symbol here"); other
+        # empty tiles 2, nearly blank ones ``blank_variants``.
+        verified_source = bool(info.get('verified_wall_background') or info.get('verified_page_negative'))
+        if is_blank:
+            n_variants = min(blank_variants, train_variants)
+        elif is_empty and not verified_source:
+            n_variants = min(2, train_variants)
+        else:
+            n_variants = train_variants
         for variant_index in range(n_variants):
             variant,variant_targets,damage=train_variant(image,targets,classes,base_index=i,
                                                          variant_index=variant_index,seed=seed)
@@ -329,6 +444,10 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
                          'damage':damage,'split':'train', 'variant_index':variant_index,
                          'base_sample':f'train_{i:08d}',
                          'masked_ignore_regions':masked})
+    if hard_negatives:
+        _export_hard_negatives(load_hard_negative_windows(hard_negatives), per_split, classes,
+                               out=out, seed=seed, variants=hard_negative_variants, count=count,
+                               supervision=supervision, sample_roles=sample_roles, meta=meta)
     # Full-coverage tiles for VAL and TEST. No random sampling or augmentation.
     for split in ('val','test'):
         for ri,rec in enumerate(per_split[split]):
@@ -428,11 +547,85 @@ def run(manifest:Path,out:Path,*,samples=32,seed=2026,scales=(1.,),overlap=128,
             'train_negative_fraction':train_negative_fraction,
             'verified_wall_negative_fraction':verified_wall_negative_fraction,
             'verified_wall_blank_fraction':verified_wall_blank_fraction,
+            'seed':seed,
+            'blank_variants':blank_variants,
+            'real_blank_tiles_per_document':real_blank_tiles_per_document,
+            'hard_negatives':str(hard_negatives) if hard_negatives else None,
+            'hard_negative_variants':hard_negative_variants,
             'evaluation_variants':list(eval_variants) if eval_variants is not None else list(EVAL_VARIANTS[1:])}
     (out/'export_report.json').write_text(json.dumps(report,indent=2))
     if count['train_images']==0 or count['val_images']==0 or count['test_images']==0:
         raise ValueError('one of train/val/test generated zero usable tiles; inspect export_report.json')
     return report
+
+
+def _export_hard_negatives(windows, per_split, classes, *, out, seed, variants, count,
+                           supervision, sample_roles, meta) -> None:
+    """Extra verified-empty training tiles at mined false-detection windows.
+
+    A window is used only on a TRAIN record that is a real verified-blank
+    page with the same image (path, or SHA-256 when the path differs and the
+    window records it). Every other window (holdout, evaluation, val/test,
+    unknown or changed image) is skipped and counted, never exported."""
+    train = [rec for rec in per_split['train']
+             if _is_real_source_type(rec.source_type) and rec.verified_no_symbols and not rec.instances]
+    by_path = {str(Path(rec.image).resolve()): rec for rec in train}
+    held = {str(Path(rec.image).resolve()) for split in ('val', 'test') for rec in per_split.get(split, [])}
+    sha_cache: dict[str, str] = {}
+
+    def sha(rec):
+        key = str(rec.image)
+        if key not in sha_cache:
+            sha_cache[key] = _sha256_file(Path(rec.image))
+        return sha_cache[key]
+
+    by_sha = None
+    all_ids = sorted(classes.values())
+    images: dict[str, np.ndarray] = {}
+    for wi, row in enumerate(windows):
+        path = str(Path(str(row.get('image_path') or '')).resolve()) if row.get('image_path') else ''
+        rec = by_path.get(path)
+        want = row.get('image_sha256')
+        if rec is None and want:
+            if by_sha is None:
+                by_sha = {sha(r): r for r in train}
+            rec = by_sha.get(want)
+        if rec is None or path in held:
+            count['train_hard_negative_windows_skipped'] += 1
+            continue
+        if want and sha(rec) != want:
+            count['train_hard_negative_windows_changed_image'] += 1
+            continue
+        key = str(rec.image)
+        if key not in images:
+            if len(images) > 4:
+                images.clear()
+            images[key] = _img(rec)
+        image = images[key]
+        base = f'train_hn_{wi:06d}'
+        for k in range(variants):
+            rng = np.random.default_rng(np.random.SeedSequence(
+                [int(seed) & 0xFFFFFFFF, 0x484E, wi, k]))
+            tile = hard_negative_tile(row['window_xyxy'], rec, rng, jitter=k > 0)
+            patch = sample_tile(image, tile)
+            variant, _, damage = train_variant(patch, [], classes, base_index=10**9 + wi,
+                                               variant_index=k, seed=seed)
+            name = f'{base}_v{k:02d}'
+            _save_sample(out, 'train', name, variant, [], counters=count)
+            supervision[name] = all_ids
+            sample_roles[name] = 'real_blank'
+            count['train_role_real_blank_images'] += 1
+            count['train_complete_images'] += 1
+            count['train_hard_negative_images'] += 1
+            meta.append({'verified_negative_class_ids': all_ids, 'partial_positive_only': False,
+                         'sample_role': 'real_blank', 'source_type': rec.source_type,
+                         'verified_page_negative': True, 'hard_negative': True,
+                         'hard_negative_max_confidence': row.get('max_confidence'),
+                         'sample': name, 'source': str(rec.image), 'group': rec.group,
+                         'source_box': list(tile.source_box), 'source_scale': tile.source_scale,
+                         'target_symbol_pixels': None, 'damage': damage, 'split': 'train',
+                         'variant_index': k, 'base_sample': base, 'masked_ignore_regions': 0})
+        count['train_hard_negative_windows'] += 1
 
 
 def main():
@@ -453,6 +646,15 @@ def main():
                    help='retain nonblank negative tiles from verified-blank real pages')
     p.add_argument('--real-complete-negative-fraction',type=float,default=None,
                    help='retain nonblank empty tiles from fully-labeled real pages')
+    p.add_argument('--blank-variants',type=int,default=BLANK_VARIANTS,
+                   help='variants of a kept nearly blank negative tile (at most --train-variants)')
+    p.add_argument('--real-blank-tiles-per-document',type=int,default=None,
+                   help=f'cap one document\'s verified-blank base tiles (default {REAL_BLANK_DOCUMENT_PAGES} '
+                        'pages\' worth; 0 = no cap)')
+    p.add_argument('--hard-negatives',type=Path,default=None,
+                   help=f'scripts_mine_hard_negatives.py windows JSON (default ${HARD_NEGATIVES_ENV})')
+    p.add_argument('--hard-negative-variants',type=int,default=None,
+                   help=f'tiles per hard-negative window (default {HARD_NEGATIVE_VARIANTS})')
     p.add_argument('--eval-scales',default='1.0',help='comma-separated source pixels per model pixel')
     p.add_argument('--overlap',type=int,default=128)
     p.add_argument('--seed',type=int,default=2026)
@@ -473,6 +675,10 @@ def main():
                real_blank_tiles_per_page=args.real_blank_tiles_per_page,
                real_complete_tiles_per_page=args.real_complete_tiles_per_page,
                real_blank_negative_fraction=args.real_blank_negative_fraction,
-               real_complete_negative_fraction=args.real_complete_negative_fraction)
+               real_complete_negative_fraction=args.real_complete_negative_fraction,
+               blank_variants=args.blank_variants,
+               real_blank_tiles_per_document=args.real_blank_tiles_per_document,
+               hard_negatives=args.hard_negatives,
+               hard_negative_variants=args.hard_negative_variants)
     print(json.dumps(report['counts'],indent=2))
 if __name__=='__main__':main()

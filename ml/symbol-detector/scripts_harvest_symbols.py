@@ -349,8 +349,8 @@ def harvest_pdf(path: Path, pages: list[int] | None) -> list[dict]:
         for x0, y0, x1, y1 in blobs(plain, min_px=1.0 * hp, max_px=9 * hp, join_px=max(2, int(0.3 * hp))):
             crop = _normalise(np.where(plain[y0:y1, x0:x1] < 255, gray[y0:y1, x0:x1], 255).astype(np.uint8))
             if crop is not None and _plausible(crop):
-                found.append({"method": "pdf_blob", "container": f"p{pno}@{x0},{y0}", "text": "",
-                              "device": None, "img": crop})
+                found.append({"method": "pdf_blob", "container": f"p{pno}@{x0},{y0}", "page_index": pno,
+                              "text": "", "device": None, "img": crop})
     return found
 
 
@@ -370,7 +370,12 @@ def _one(args) -> tuple[str, list[dict], str | None]:
     return rel, [], None
 
 
-def source_files(root: Path, skip: set[str]) -> list[tuple[Path, list[int] | None]]:
+def source_files(root: Path, skip: set[str], exclusions=None) -> list[tuple[Path, list[int] | None]]:
+    """Harvestable files under ``root``. Never the drawings in a
+    ``1_blueprints`` folder (training drawings lend crops only through their
+    verified labels, which keep held-out pages out; evaluation drawings never
+    do), and never a file ``exclusions`` names (an evaluation drawing copied
+    elsewhere); held-out PDF pages are dropped from the legend-page lists."""
     manifest_pages: dict[Path, list[int]] = {}
     from scripts_extract_legend_symbols import page_list
     for mf in root.glob("web_symbol_sources/manifest.json"):     # the legend-sheet downloads
@@ -390,16 +395,25 @@ def source_files(root: Path, skip: set[str]) -> list[tuple[Path, list[int] | Non
     for p in sorted(root.rglob("*")):
         if not p.is_file() or any(part in skip for part in p.relative_to(root).parts):
             continue
+        if "1_blueprints" in p.resolve().parts:
+            continue
+        rel = str(p.relative_to(root))
+        if exclusions and exclusions.excludes(rel):
+            continue
         ext = p.suffix.lower()
         if ext in CAD_EXT or ext in IMAGE_EXT or ext == ".pdf":
-            out.append((p, manifest_pages.get(p.resolve())))
+            pages = manifest_pages.get(p.resolve())
+            if pages is not None and exclusions:
+                pages = [n for n in pages if not exclusions.excludes(rel, n, source_path=p)]
+            out.append((p, pages))
     return out
 
 
 def cmd_harvest(a) -> None:
     from scripts_extract_legend_symbols import Store
 
-    files = source_files(a.sources, set(a.skip))
+    from scripts_extract_legend_symbols import default_exclusions
+    files = source_files(a.sources, set(a.skip), default_exclusions(a))
     if a.limit:
         files = files[:a.limit]
     cache = a.out / "_dxf_cache"
@@ -425,7 +439,9 @@ def cmd_harvest(a) -> None:
                     seen.add(shape)
                     crop_id = hashlib.sha1(f"{rel}|{item['container']}|{shape}".encode()).hexdigest()[:12]
                     cv2.imwrite(str(store.crops_dir / f"{crop_id}.png"), item.pop("img"))
-                    store.crops.append({"id": crop_id, "source_file": rel, "shape": shape, **item})
+                    store.crops.append({"id": crop_id, "source_file": rel,
+                                        "source_root": str(Path(a.sources).resolve()),
+                                        "shape": shape, **item})
                     added += 1
                 if n % 100 == 0:
                     print(f"{n}/{len(jobs)} files, {added} new symbols, {errors} unreadable", flush=True)
@@ -482,6 +498,12 @@ def main() -> None:
     p.add_argument("--sources", type=Path, default=root)
     p.add_argument("--out", type=Path, default=root / "harvested_symbols")
     p.add_argument("--agent", default="human")
+    p.add_argument("--label-store", type=Path, action="append", default=[],
+                   help="label store whose held-out pages are never harvested (default: <data root>/1_blueprints)")
+    p.add_argument("--data-root", type=Path,
+                   help="blueprints_and_libraries root: its evaluation drawings are never harvested")
+    p.add_argument("--page-hash-cache", type=Path,
+                   help="work/pdf_page_hashes.sqlite: also skip copies of held-out/evaluation pages")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("harvest")
     s.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))

@@ -32,6 +32,23 @@ ROLE_NAME_TO_ID = {
 }
 
 
+def hard_negative_mask(logits: torch.Tensor, eligible: torch.Tensor, topk: int) -> torch.Tensor:
+    """Top-``topk`` eligible anchors per (tile, class) by predicted score.
+
+    ``logits`` and ``eligible`` are (B, A, C). Returns a bool (B, A, C) mask
+    that is True only on eligible entries; fewer than ``topk`` are selected
+    where a (tile, class) has fewer eligible anchors.
+    """
+    if topk <= 0 or logits.shape[1] == 0:
+        return torch.zeros_like(eligible)
+    k = min(int(topk), int(logits.shape[1]))
+    masked = logits.detach().masked_fill(~eligible, float('-inf'))
+    idx = masked.topk(k, dim=1).indices  # (B, k, C)
+    selected = torch.zeros_like(eligible)
+    selected.scatter_(1, idx, True)
+    return selected & eligible
+
+
 class PositiveAwareBCE(nn.Module):
     """Suppress false negative gradients for unverified classes/background,
     and apply precision-first penalties on verified blank/complete real pages."""
@@ -48,6 +65,10 @@ class PositiveAwareBCE(nn.Module):
         synthetic_complete_wrong_cls_weight: float = DEFAULT_PHASE2_LOSS_CFG['synthetic_complete_wrong_cls_weight'],
         partial_wrong_cls_weight: float = DEFAULT_PHASE2_LOSS_CFG['partial_wrong_cls_weight'],
         fp_boost: float = DEFAULT_PHASE2_LOSS_CFG['fp_boost'],
+        hard_neg_mining: float = DEFAULT_PHASE2_LOSS_CFG['hard_neg_mining'],
+        hard_neg_topk: float = DEFAULT_PHASE2_LOSS_CFG['hard_neg_topk'],
+        hard_neg_base_weight: float = DEFAULT_PHASE2_LOSS_CFG['hard_neg_base_weight'],
+        hard_neg_tile_cap: float = DEFAULT_PHASE2_LOSS_CFG['hard_neg_tile_cap'],
     ):
         super().__init__()
         self.real_blank_neg_weight = float(real_blank_neg_weight)
@@ -59,6 +80,14 @@ class PositiveAwareBCE(nn.Module):
         self.synthetic_complete_wrong_cls_weight = float(synthetic_complete_wrong_cls_weight)
         self.partial_wrong_cls_weight = float(partial_wrong_cls_weight)
         self.fp_boost = float(fp_boost)
+        self.hard_neg_mining = float(hard_neg_mining) > 0.5
+        self.hard_neg_topk = int(round(float(hard_neg_topk)))
+        self.hard_neg_base_weight = float(hard_neg_base_weight)
+        self.hard_neg_tile_cap = float(hard_neg_tile_cap)
+        if self.hard_neg_mining and self.hard_neg_topk < 1:
+            raise ValueError('hard_neg_topk must be >= 1 when hard_neg_mining is enabled')
+        if self.hard_neg_base_weight < 0:
+            raise ValueError('hard_neg_base_weight must be >= 0')
         self.verified_class_mask = None
         self.sample_role = None
         self.near_gt_mask = None
@@ -91,6 +120,14 @@ class PositiveAwareBCE(nn.Module):
         fp_factor = 1.0 + self.fp_boost * p_det
         half_fp_factor = 1.0 + 0.5 * self.fp_boost * p_det
 
+        near_mask = self.near_gt_mask
+        if near_mask is not None:
+            if near_mask.shape != (logits.shape[0], logits.shape[1]):
+                raise ValueError('phase-two near_gt_mask mismatches batch/anchor shape')
+            near_anchor = near_mask[:, :, None] | fg_anchor
+        else:
+            near_anchor = fg_anchor
+
         is_partial = (role == ROLE_PARTIAL)[:, None, None]
         if is_partial.any():
             partial_wrong = is_partial & fg_anchor & (~pos_mask)
@@ -98,36 +135,69 @@ class PositiveAwareBCE(nn.Module):
 
         is_syn_complete = (role == ROLE_SYNTHETIC_COMPLETE)[:, None, None]
         if is_syn_complete.any():
-            syn_bg = is_syn_complete & neg_allowed & (~fg_anchor)
             syn_wrong = is_syn_complete & neg_allowed & fg_anchor
-            weights = torch.where(syn_bg, self.synthetic_complete_neg_weight * half_fp_factor, weights)
+            if self.hard_neg_mining:
+                # Far background is handled by the hard-negative pass below;
+                # near-GT background keeps its old local weight.
+                syn_near = is_syn_complete & neg_allowed & near_anchor & (~fg_anchor)
+                weights = torch.where(syn_near, self.synthetic_complete_neg_weight * half_fp_factor, weights)
+            else:
+                syn_bg = is_syn_complete & neg_allowed & (~fg_anchor)
+                weights = torch.where(syn_bg, self.synthetic_complete_neg_weight * half_fp_factor, weights)
             weights = torch.where(syn_wrong, self.synthetic_complete_wrong_cls_weight * fp_factor, weights)
 
         is_real_blank = (role == ROLE_REAL_BLANK)[:, None, None]
-        if is_real_blank.any():
+        if is_real_blank.any() and not self.hard_neg_mining:
             blank_neg = is_real_blank & neg_allowed
             weights = torch.where(blank_neg, self.real_blank_neg_weight * fp_factor, weights)
 
         is_real_complete = (role == ROLE_REAL_COMPLETE)[:, None, None]
         if is_real_complete.any():
-            near_mask = self.near_gt_mask
-            if near_mask is not None:
-                if near_mask.shape != (logits.shape[0], logits.shape[1]):
-                    raise ValueError('phase-two near_gt_mask mismatches batch/anchor shape')
-                near_anchor = near_mask[:, :, None] | fg_anchor
-            else:
-                near_anchor = fg_anchor
             far_bg = is_real_complete & neg_allowed & (~near_anchor)
             near_bg = is_real_complete & neg_allowed & near_anchor & (~fg_anchor)
             wrong_cls = is_real_complete & neg_allowed & fg_anchor
             right_cls = is_real_complete & pos_mask
-            weights = torch.where(far_bg, self.real_complete_far_neg_weight * fp_factor, weights)
+            if not self.hard_neg_mining:
+                weights = torch.where(far_bg, self.real_complete_far_neg_weight * fp_factor, weights)
             weights = torch.where(near_bg, self.real_complete_near_neg_weight * half_fp_factor, weights)
             weights = torch.where(wrong_cls, self.real_complete_wrong_cls_weight * fp_factor, weights)
             pos_w = weights.new_tensor(self.real_complete_pos_weight)
             weights = torch.where(right_cls, pos_w, weights)
 
+        if self.hard_neg_mining:
+            weights = self._apply_hard_negatives(
+                logits, weights, role, neg_allowed, near_anchor, fp_factor, half_fp_factor)
         return base_loss * weights
+
+    def _apply_hard_negatives(self, logits, weights, role, neg_allowed, near_anchor,
+                              fp_factor, half_fp_factor):
+        """Ordinary weight on all far background; extra only on the hardest entries."""
+        role_w = torch.zeros(role.shape[0], dtype=logits.dtype, device=logits.device)
+        role_w = torch.where(role == ROLE_REAL_BLANK, role_w.new_tensor(self.real_blank_neg_weight), role_w)
+        role_w = torch.where(role == ROLE_REAL_COMPLETE, role_w.new_tensor(self.real_complete_far_neg_weight), role_w)
+        role_w = torch.where(role == ROLE_SYNTHETIC_COMPLETE,
+                             role_w.new_tensor(self.synthetic_complete_neg_weight), role_w)
+        hard_role = ((role == ROLE_REAL_BLANK) | (role == ROLE_REAL_COMPLETE) |
+                     (role == ROLE_SYNTHETIC_COMPLETE))[:, None, None]
+        if not hard_role.any():
+            return weights
+        # Blank pages have no GT, so near_anchor is all False there.
+        far_bg = hard_role & neg_allowed & (~near_anchor)
+        weights = torch.where(far_bg, weights.new_tensor(self.hard_neg_base_weight), weights)
+        hard = hard_negative_mask(logits, far_bg, self.hard_neg_topk)
+        is_syn = (role == ROLE_SYNTHETIC_COMPLETE)[:, None, None]
+        modulation = torch.where(is_syn, half_fp_factor, fp_factor)
+        hard_f = hard.to(dtype=logits.dtype)
+        if self.hard_neg_tile_cap > 0:
+            # Per-tile normalization: a tile's mean hard modulation may be at
+            # most hard_neg_tile_cap; hotter tiles are scaled down as a whole.
+            n_hard = hard_f.sum(dim=(1, 2))
+            mod_sum = (modulation * hard_f).sum(dim=(1, 2))
+            scale = (self.hard_neg_tile_cap * n_hard / mod_sum.clamp(min=1e-6)).clamp(max=1.0)
+        else:
+            scale = torch.ones_like(role_w)
+        extra = (role_w * scale)[:, None, None] * modulation * hard_f
+        return weights + extra
 
 
 class PartialDetectionLoss(v8DetectionLoss):
@@ -176,9 +246,14 @@ class PartialDetectionLoss(v8DetectionLoss):
         if isinstance(role, torch.Tensor):
             role_dev = role.to(device=self.device, dtype=torch.long)
             self.bce.sample_role = role_dev
+            # Hard-negative mining also keeps synthetic near-GT anchors out of
+            # the mined set, so it needs the mask for synthetic tiles too.
+            needs_near = (role_dev == ROLE_REAL_COMPLETE)
+            if self.bce.hard_neg_mining:
+                needs_near = needs_near | (role_dev == ROLE_SYNTHETIC_COMPLETE)
             self.bce.near_gt_mask = (
                 self._compute_near_gt_mask(preds, batch)
-                if bool((role_dev == ROLE_REAL_COMPLETE).any())
+                if bool(needs_near.any())
                 else None
             )
         else:

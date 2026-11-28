@@ -1527,6 +1527,8 @@ class LabelingSession:
             token=self.token, lock=None,
         )
         opened._origin_pdf = self._origin_pdf
+        opened.sheet_gate_mode = self.sheet_gate_mode
+        opened.sheet_gate_confidence = self.sheet_gate_confidence
         with self._documents_lock:
             existing = self._documents.get(target)
             if existing is not None:
@@ -2156,7 +2158,25 @@ class LabelingSession:
         from blueprint_symbols.page_detector import describe_detector_weights
         return describe_detector_weights(self._detector_weights, work_dir=DEFAULT_WORK_DIR)
 
-    def evaluate_page(self, index: int, *, confidence: object = 0.25) -> dict:
+    # Page gate for Evaluate page (set from --sheet-gate / --sheet-gate-confidence,
+    # copied to sessions opened for other PDFs). Unknown sheets are never gated.
+    sheet_gate_mode: str = "off"
+    sheet_gate_confidence: float = 0.90
+
+    def sheet_class(self, index: int):
+        """Sheet discipline of a PDF page from its text layer (None: no PDF/text)."""
+        if not self.pdf:
+            return None
+        from blueprint_symbols.sheet_gate import classify_pdf_page
+        try:
+            with self._with_fitz_doc() as (_fitz, doc):
+                return classify_pdf_page(doc[index])
+        except Exception:                      # unreadable text layer: unknown, not gated
+            return None
+
+    def evaluate_page(self, index: int, *, confidence: object = 0.25,
+                      confidence_source: object = "request",
+                      sheet_gate: object = None) -> dict:
         """Run deterministic local detector inference on one page without mutating disk."""
         if (isinstance(confidence, bool) or not isinstance(confidence, (int, float))
                 or not math.isfinite(confidence)):
@@ -2164,6 +2184,13 @@ class LabelingSession:
         conf = float(confidence)
         if not 0.01 <= conf <= 0.99:
             raise LabelingError("confidence must be between 0.01 and 0.99")
+        if confidence_source not in ("request", "manual", "recommended", "default"):
+            raise LabelingError("confidence_source must be request, manual, recommended or default")
+        from blueprint_symbols.sheet_gate import GATE_MODES, GatePolicy
+        mode = self.sheet_gate_mode if sheet_gate is None else sheet_gate
+        if mode not in GATE_MODES:
+            raise LabelingError(f"sheet_gate must be one of {', '.join(GATE_MODES)}")
+        policy = GatePolicy(mode=mode, raised_confidence=self.sheet_gate_confidence)
         with self.lock:
             _, _, img_path = self._load(index)
         import cv2
@@ -2172,8 +2199,12 @@ class LabelingSession:
         image = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
         if image is None:
             raise LabelingError(f"could not read rendered page image: {img_path.name}")
+        sheet = self.sheet_class(index) if mode != "off" else None
         detector = get_cached_detector(self._detector_weights, work_dir=DEFAULT_WORK_DIR)
-        instances, stats = detector.predict_page(image, confidence=conf)
+        instances, stats = detector.predict_page(
+            image, confidence=conf, sheet=sheet, gate=policy,
+            confidence_source=str(confidence_source), dpi=self.dpi,
+        )
         for inst in instances:
             family = inst["symbol_family"]
             inst["discipline"] = discipline_for(family)
@@ -3027,7 +3058,11 @@ def make_handler(session: LabelingSession):
                     return
                 if url.path == "/api/evaluate_page":
                     target, page_idx = self._doc_page(url.query)
-                    result = target.evaluate_page(page_idx, confidence=data.get("confidence", 0.25))
+                    result = target.evaluate_page(
+                        page_idx, confidence=data.get("confidence", 0.25),
+                        confidence_source=data.get("confidence_source", "request"),
+                        sheet_gate=data.get("sheet_gate"),
+                    )
                     self._json(200, result)
                     return
                 if url.path == "/api/document":
@@ -3117,6 +3152,14 @@ def main() -> None:
     parser.add_argument("--neca-catalog", type=Path, help="Optional NECA symbol library directory to populate live subtypes")
     parser.add_argument("--detector-weights", type=Path,
                         help="Optional trained blueprint symbol detector checkpoint (.onnx or .pt) for Evaluate page")
+    parser.add_argument("--sheet-gate", choices=("off", "raise", "skip"), default="off",
+                        help="Evaluate page on sheets whose title block reads non-electrical "
+                             "(L, C, S, A without RCP, G, M, P...): off (default; every sheet is "
+                             "detected normally), skip the page, or raise the cutoff to "
+                             "--sheet-gate-confidence. Pages of "
+                             "unknown discipline are never gated.")
+    parser.add_argument("--sheet-gate-confidence", type=float, default=0.90,
+                        help="Cutoff used on non-electrical sheets with --sheet-gate raise (default 0.90)")
     parser.add_argument("--page", type=int, default=0, help="Initial 0-based page/file index")
     parser.add_argument("--dpi", type=int, default=150)
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Listen host (default 0.0.0.0 for LAN access)")
@@ -3151,6 +3194,10 @@ def main() -> None:
         neca_catalog=args.neca_catalog, page_presence=args.page_presence,
         detector_weights=args.detector_weights,
     )
+    if not 0.0 < args.sheet_gate_confidence < 1.0:
+        raise SystemExit("--sheet-gate-confidence must be between 0 and 1")
+    session.sheet_gate_mode = args.sheet_gate
+    session.sheet_gate_confidence = args.sheet_gate_confidence
     lan_ip = get_lan_ip()
     with ThreadingHTTPServer((args.host, args.port), make_handler(session)) as server:
         port = server.server_port

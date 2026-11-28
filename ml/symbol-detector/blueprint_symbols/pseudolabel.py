@@ -4,11 +4,8 @@ Keep teachers fully separate from final held-out evaluation groups. Repeated
 predictions across scales are *supporting evidence*, not independent truth.
 """
 from __future__ import annotations
-from collections import defaultdict
 import hashlib
-import json
 from pathlib import Path
-import cv2
 
 
 def image_sha256(path: Path) -> str:
@@ -103,6 +100,12 @@ def consolidate_predictions(candidates:list[dict], *, min_confidence:float = .2,
 
     Confidence is the *maximum teacher prediction*; not calibrated likelihood.
     Results are review candidates, even with multi-scale agreement.
+
+    For tiled page inference (deployment and real-page evaluation) use
+    ``page_detector.merge_tile_detections`` instead: it counts distinct
+    agreeing tiles, reports real multi-scale agreement and sets the review
+    flags from disagreement. This function stays for teacher pseudo-labels,
+    which are always review candidates.
     """
     if not 0 <= min_confidence <= 1 or not 0 < match_iou <= 1:
         raise ValueError('bad confidence or IOU threshold')

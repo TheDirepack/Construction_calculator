@@ -49,6 +49,130 @@ LETTER_SYMBOL = re.compile(r"^[S$][A-Z0-9]{0,2}$", re.I)
 MIN_SYMBOL = 0.8         # smaller than this many line heights is a bullet or dot
 
 
+CROP_PAGE = re.compile(r"^p(\d+)@")
+
+
+# --------------------------------------------------------------------------- held-out / evaluation pages
+
+class SourceExclusions:
+    """PDF pages that may never lend a symbol crop to training: every page of
+    an evaluation drawing (``1_blueprints/evaluation``, by file name, as
+    ``blueprint_sets`` decides roles) and the training pages held out for the
+    real-page test (``label_store.labeled_pages(...)["holdout"]``). With page
+    fingerprints, copies of those pages in other PDFs are caught too."""
+
+    def __init__(self, evaluation_names=(), held_pages=(), excluded_hashes=(), hashes=None):
+        self.evaluation_names = frozenset(str(n).casefold() for n in evaluation_names)
+        self.held_pages = frozenset((str(n).casefold(), int(p)) for n, p in held_pages)
+        self.excluded_hashes = frozenset(excluded_hashes)
+        self.hashes = hashes           # PageHashCache or None
+
+    def __bool__(self) -> bool:
+        return bool(self.evaluation_names or self.held_pages or self.excluded_hashes)
+
+    def excludes(self, source_file: str, page: int | None = None, *, source_path: Path | None = None) -> bool:
+        parts = [p.casefold() for p in Path(str(source_file)).parts]
+        name = parts[-1] if parts else ""
+        if name in self.evaluation_names:
+            return True
+        if "1_blueprints" in parts and "evaluation" in parts[parts.index("1_blueprints"):]:
+            return True
+        if page is not None and (name, int(page)) in self.held_pages:
+            return True
+        if (page is not None and self.hashes is not None and self.excluded_hashes
+                and source_path is not None and Path(source_path).suffix.lower() == ".pdf"
+                and Path(source_path).is_file()):
+            try:
+                return self.hashes.page_hash(source_path, int(page)) in self.excluded_hashes
+            except Exception:
+                return False
+        return False
+
+
+def source_exclusions(label_stores=(), data_root: Path | None = None,
+                      page_hash_cache: Path | None = None) -> SourceExclusions:
+    """Evaluation drawings (by name, from ``data_root``'s ``1_blueprints/evaluation``
+    and the label stores) and held-out pages of ``label_stores``."""
+    eval_names: set[str] = set()
+    held: set[tuple[str, int]] = set()
+    held_paths: list[tuple[Path, int]] = []
+    eval_pdfs: list[Path] = []
+    if data_root is not None:
+        try:
+            from blueprint_symbols.blueprint_sets import blueprint_sets
+            sets = blueprint_sets(data_root)
+            eval_names.update(sets.evaluation)
+            eval_pdfs += sets.pdfs("evaluation")
+        except FileNotFoundError:
+            pass
+    for store in label_stores or ():
+        from annotator import label_store
+        pages = label_store.labeled_pages(Path(store), data_root=data_root)
+        for ref in pages["holdout"]:
+            doc, page = label_store.page_source(ref)
+            held.add((Path(doc.source).name, page - 1))
+            held_paths.append((Path(doc.source), page - 1))
+        for ref in pages["evaluation"]:
+            doc, _ = label_store.page_source(ref)
+            eval_names.add(Path(doc.source).name)
+            eval_pdfs.append(Path(doc.source))
+    hashes, excluded = None, set()
+    if page_hash_cache is not None:
+        from blueprint_symbols.page_hash_cache import PageHashCache
+        hashes = PageHashCache(page_hash_cache)
+        targets = list(held_paths)
+        for pdf in sorted(set(eval_pdfs)):
+            try:
+                import pymupdf
+                with pymupdf.open(pdf) as doc:
+                    targets += [(pdf, i) for i in range(doc.page_count)]
+            except Exception:
+                continue
+        for pdf, page in targets:
+            try:
+                excluded.add(hashes.page_hash(pdf, page))
+            except Exception:
+                pass
+    return SourceExclusions(eval_names, held, excluded, hashes)
+
+
+def crop_page(crop: dict) -> int | None:
+    """0-based PDF page a crop was cut from (legend crops: ``page_index``;
+    harvested PDF blobs: ``container`` ``p<page>@x,y``), else None."""
+    if crop.get("page_index") is not None:
+        return int(crop["page_index"])
+    m = CROP_PAGE.match(str(crop.get("container") or ""))
+    return int(m.group(1)) if m else None
+
+
+def crop_excluded(crop: dict, exclusions: SourceExclusions) -> bool:
+    root = crop.get("source_root")
+    path = Path(root) / crop["source_file"] if root else None
+    return exclusions.excludes(crop.get("source_file", ""), crop_page(crop), source_path=path)
+
+
+def excluded_crop_ids(library: Path, exclusions: SourceExclusions) -> set[str]:
+    """Ids of crops in ``library`` (crops.json) cut from excluded pages."""
+    index = Path(library) / "crops.json"
+    if not exclusions or not index.is_file():
+        return set()
+    crops = json.loads(index.read_text())["crops"]
+    return {c["id"] for c in crops if crop_excluded(c, exclusions)}
+
+
+def default_exclusions(a) -> SourceExclusions:
+    """Exclusions from the CLI's --label-store/--data-root (defaults: the data
+    root beside the default library folder and its 1_blueprints label store)."""
+    data_root = a.data_root
+    stores = list(a.label_store)
+    if data_root is None:
+        guess = Path(__file__).resolve().parents[2] / "blueprints_and_libraries"
+        data_root = guess if (guess / "1_blueprints").is_dir() else None
+    if not stores and data_root is not None and (data_root / "1_blueprints").is_dir():
+        stores = [data_root / "1_blueprints"]
+    return source_exclusions(stores, data_root, getattr(a, "page_hash_cache", None))
+
+
 def page_list(entry: dict, n_pages: int) -> list[int]:
     """0-based legend pages a manifest entry names, else every page."""
     text = str(entry.get("pages_or_sheets_with_symbols") or "")
@@ -210,13 +334,22 @@ def cut_symbol(page, line: dict, lines: list[dict]):
     return crop, box_pt
 
 
-def extract_pdf(path: Path, rel: str, entry: dict, crops_dir: Path, tessdata: str | None = None) -> list[dict]:
+def extract_pdf(path: Path, rel: str, entry: dict, crops_dir: Path, tessdata: str | None = None,
+                exclusions: SourceExclusions | None = None) -> list[dict]:
+    """Crops of one source PDF; pages ``exclusions`` names (held-out or
+    evaluation pages) are never read."""
     import pymupdf
 
     doc = pymupdf.open(path)
+    source_root = Path(path).resolve()
+    for _ in Path(rel).parts:                        # the --sources folder rel is relative to
+        source_root = source_root.parent
+    source_root = str(source_root)
     out = []
     seen_shapes: set[tuple[str, bytes]] = set()     # same legend repeated on several sheets
     for pno in page_list(entry, len(doc)):
+        if exclusions and exclusions.excludes(rel, pno, source_path=path):
+            continue
         page = load_page(doc, pno)
         lines = text_lines(page, tessdata)
         seen_boxes: list[list[float]] = []
@@ -244,6 +377,7 @@ def extract_pdf(path: Path, rel: str, entry: dict, crops_dir: Path, tessdata: st
                 "device": device_class(*device),
                 "legend_text": text,
                 "source_file": rel,
+                "source_root": source_root,
                 "page_index": pno,
                 "bbox_pt": box,
                 "text_bbox_pt": [round(v, 2) for v in line["bbox"]],
@@ -474,6 +608,7 @@ def _manifest_entry(sources: Path, rel: str) -> dict:
 
 def cmd_auto(a) -> None:
     manifest = json.loads((a.sources / "manifest.json").read_text())
+    exclusions = default_exclusions(a)
     found_all: list[dict] = []
     with Store(a.out) as store:
         for entry in manifest:
@@ -483,7 +618,10 @@ def cmd_auto(a) -> None:
             if rel in store.claimed:
                 print(f"   -  {rel} (boxed by agents)", flush=True)
                 continue
-            found = extract_pdf(a.sources / rel, rel, entry, store.crops_dir, a.tessdata)
+            if exclusions.excludes(rel):
+                print(f"   -  {rel} (evaluation drawing: never a crop source)", flush=True)
+                continue
+            found = extract_pdf(a.sources / rel, rel, entry, store.crops_dir, a.tessdata, exclusions)
             print(f"{len(found):4d}  {rel}", flush=True)
             found_all.extend(found)
         redone = {c["source_file"] for c in found_all} | {
@@ -537,6 +675,7 @@ def cmd_add(a) -> None:
     items = json.loads(Path(a.batch).read_text()) if a.batch else [
         {"page": a.page, "box": a.box, "device": a.device, "text": a.text}]
     entry = _manifest_entry(a.sources, a.source)
+    exclusions = default_exclusions(a)
     doc = pymupdf.open(a.sources / a.source)
     previews = a.out / "_agent_previews"
     previews.mkdir(exist_ok=True)
@@ -544,6 +683,9 @@ def cmd_add(a) -> None:
     with Store(a.out) as store:
         for item in items:
             device = _check_device(item["device"])
+            if exclusions.excludes(a.source, int(item["page"]), source_path=a.sources / a.source):
+                results.append({"box": item["box"], "error": "held-out or evaluation page: never a crop source"})
+                continue
             page = load_page(doc, int(item["page"]))
             got = snap_to_ink(page, item["box"])
             if got is None:
@@ -555,6 +697,7 @@ def cmd_add(a) -> None:
             record = {
                 "id": crop_id, "method": "agent", "device": device,
                 "legend_text": item.get("text") or "", "source_file": a.source,
+                "source_root": str(Path(a.sources).resolve()),
                 "page_index": int(item["page"]), "bbox_pt": box,
                 "organisation": entry.get("organisation"), "licence": entry.get("licence"),
                 "added_by": a.agent,
@@ -646,6 +789,13 @@ def main() -> None:
     p.add_argument("--sources", type=Path, default=root / "web_symbol_sources", help="folder with manifest.json")
     p.add_argument("--out", type=Path, default=root / "legend_symbol_crops")
     p.add_argument("--agent", default="human", help="who records adds/reviews")
+    p.add_argument("--label-store", type=Path, action="append", default=[],
+                   help="label store whose held-out pages (real-page test) are never cut "
+                        "(default: <data root>/1_blueprints)")
+    p.add_argument("--data-root", type=Path,
+                   help="blueprints_and_libraries root: its 1_blueprints/evaluation drawings are never cut")
+    p.add_argument("--page-hash-cache", type=Path,
+                   help="work/pdf_page_hashes.sqlite: also skip copies of held-out/evaluation pages")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("auto", help="cut symbols next to legend text that names a device")
     s.add_argument("--only", nargs="*", default=[], help="only source files containing these strings")

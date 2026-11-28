@@ -1956,7 +1956,10 @@ def _draw_panelboard(variant: str, style: int, rng: np.random.Generator) -> np.n
         bw, bh = float(rng.uniform(54.0, 74.0)), float(rng.uniform(16.0, 22.0))
         x0, y0, x1, y1 = cx - bw / 2.0, cy - bh / 2.0, cx + bw / 2.0, cy + bh / 2.0
         if style == 0:
-            c.rect((x0, y0), (x1, y1), fill=True)
+            # No solid black bar: it is indistinguishable from a dash of a bold
+            # dashed (match / limit-of-work) line, and taught exactly that FP.
+            c.rect((x0, y0), (x1, y1))
+            c.text("LP-1", (cx + bw * 0.5 + 18.0, cy), 9.5)
         elif style == 1:
             c.poly([(x0, y0), (x1, y0), (x1, y1)], fill=True)
             c.rect((x0, y0), (x1, y1))

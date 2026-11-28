@@ -147,6 +147,7 @@ const state = {
   deviceModalCategory: "all",
   detectorInfo: null,
   evalConfidenceManual: false,
+  evalConfidenceRecommended: false,
 };
 
 // Read by the browser tests (tests/test_annotator_long_documents.py).
@@ -1772,8 +1773,11 @@ function refreshList() {
     } else {
       tag.className = "tag";
       tag.textContent = (item.review_source === "model" && typeof item.model_confidence === "number")
-        ? `Pending · ${Math.round(item.model_confidence * 100)}%`
+        ? `Pending · ${Math.round(item.model_confidence * 100)}%${item.model_review_required ? " · check" : ""}`
         : "Pending";
+      if (item.review_source === "model" && Array.isArray(item.model_review_reasons) && item.model_review_reasons.length) {
+        tag.title = "Model flags: " + item.model_review_reasons.join(", ");
+      }
     }
     btn.append(txt, tag);
     btn.addEventListener("click", () => select(item.instance_id, true));
@@ -3650,7 +3654,11 @@ async function evaluateCurrentPage() {
     const res = await api(`/api/evaluate_page?page=${pageAtStart}${docQuery()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Labeler-Token": state.token },
-      body: JSON.stringify({ confidence }),
+      body: JSON.stringify({
+        confidence,
+        confidence_source: state.evalConfidenceManual ? "manual"
+          : (state.evalConfidenceRecommended ? "recommended" : "default"),
+      }),
     });
     if (!state.doc || state.page !== pageAtStart || state.currentDocPath !== docAtStart) return;
     const existing = state.doc.instances || [];
@@ -3710,6 +3718,10 @@ async function evaluateCurrentPage() {
     if (replaced) extras.push(`${replaced} prior model replaced`);
     if (skippedOverlap) extras.push(`${skippedOverlap} overlapped existing`);
     if (skippedRejected) extras.push(`${skippedRejected} skipped rejected`);
+    const gate = res.sheet_gate;
+    if (gate && gate.action === "skip") extras.push(`sheet ${gate.sheet?.sheet_number || ""} non-electrical: skipped`);
+    if (gate && gate.action === "raise") extras.push(`sheet ${gate.sheet?.sheet_number || ""} non-electrical: cutoff ${gate.confidence}`);
+    if (res.review_required) extras.push(`${res.review_required} flagged to check`);
     const extraTxt = extras.length ? ` (${extras.join(", ")})` : "";
     notify(
       `Evaluated page ${pageAtStart + 1}${tilesTxt}${secs}: added ${toAdd.length} box${toAdd.length === 1 ? "" : "es"}${extraTxt}. Ctrl+Z to undo · Ctrl+S to save.`,
@@ -3763,6 +3775,7 @@ function applyRecommendedEvalConfidence(det) {
     }
   }
   sel.value = best.value;
+  state.evalConfidenceRecommended = true;
 }
 
 async function reattachSession() {

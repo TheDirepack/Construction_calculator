@@ -173,11 +173,21 @@ def test_score_complete_page_and_deterministic_real_eval_selection(tmp_path):
     sel_a = select_real_eval_pages(mf_path, max_blank_pages=4, max_complete_pages=3)
     sel_b = select_real_eval_pages(mf_path, max_blank_pages=4, max_complete_pages=3)
     assert sel_a == sel_b
+    # No held-out pages: training pages are the (flagged, optimistic) fallback pool,
+    # split in halves into selection (top-level keys) and a locked test set.
+    assert sel_a["page_pool"] == "training_pages_fallback"
+    sets = sel_a["sets"]
+    assert sel_a["blank_pages"] == sets["selection"]["blank_pages"]
+    assert sets["selection"]["available_blank_pages"] + sets["test"]["available_blank_pages"] == 8
+    assert sets["selection"]["available_complete_pages"] + sets["test"]["available_complete_pages"] == 6
+    assert sel_a["available_blank_pages"] == sets["selection"]["available_blank_pages"] == 4
+    assert sel_a["available_complete_pages"] == 3
     assert len(sel_a["blank_pages"]) == 4
     assert len(sel_a["complete_pages"]) == 3
-    assert sel_a["available_blank_pages"] == 8
-    assert sel_a["available_complete_pages"] == 6
     assert len({r["document_id"] for r in sel_a["blank_pages"]}) == 4
+    sel_refs = {r["ref"] for r in sel_a["blank_pages"] + sel_a["complete_pages"]}
+    test_refs = {r["ref"] for r in sets["test"]["blank_pages"] + sets["test"]["complete_pages"]}
+    assert not sel_refs & test_refs
 
 
 def test_scripts_train_ultralytics_plan_only_without_torch(tmp_path):
@@ -312,12 +322,11 @@ def test_role_aware_bce_and_partial_detection_loss(tmp_path):
 
 
 def test_real_page_eval_torch_and_callback(tmp_path):
-    torch = pytest.importorskip("torch")
+    pytest.importorskip("torch")
     ultralytics = pytest.importorskip("ultralytics")
     if ultralytics.__version__ != "8.4.216":
         pytest.skip("real_page_eval test pinned to ultralytics==8.4.216")
     from types import SimpleNamespace as NS
-    from ultralytics import YOLO
     from blueprint_symbols.real_page_eval import (
         build_real_eval_callback,
         evaluate_real_pages,
@@ -327,7 +336,6 @@ def test_real_page_eval_torch_and_callback(tmp_path):
 
     mf_path, mf = _write_manifest(tmp_path, real_blank_docs=2, real_complete_docs=2)
     names = {v: k for k, v in mf["class_ids"].items()}
-    yolo = YOLO("yolo26n-p2.yaml")
     # Rebuild model with nc=1 cleanly.
     from ultralytics.nn.tasks import DetectionModel
     model = DetectionModel(cfg="yolo26n-p2.yaml", nc=1, verbose=False).float().cpu()
@@ -339,10 +347,14 @@ def test_real_page_eval_torch_and_callback(tmp_path):
     assert isinstance(dets, list) and n_tiles == 4
     assert model.training is True
 
-    metrics = evaluate_real_pages(model, mf_path, names=names, imgsz=512, overlap=192, max_blank_pages=2, max_complete_pages=2)
-    assert metrics["blank_pages"] == 2
-    assert metrics["complete_pages"] == 2
+    metrics = evaluate_real_pages(model, mf_path, names=names, imgsz=512, overlap=192, max_blank_pages=2,
+                                  max_complete_pages=2, stress=True)
+    # 2 blank + 2 labelled pages split into selection (top level) and the locked test set.
+    assert metrics["blank_pages"] + metrics["test"]["blank_pages"] == 2
+    assert metrics["complete_pages"] + metrics["test"]["complete_pages"] == 2
+    assert metrics["selection"]["used_for_selection"] and not metrics["test"]["used_for_selection"]
     assert "f05_exact" in metrics and "real_score" in metrics
+    assert set(metrics["stress"]["variants"]) == {"shift_half_stride", "scale_0.75", "scale_1.5"}
 
     save_dir = tmp_path / "run_eval"
     cb = build_real_eval_callback(
@@ -364,9 +376,16 @@ def test_real_page_eval_torch_and_callback(tmp_path):
     cb(trainer)  # final epoch 3 -> evaluated
 
     lines = (save_dir / "real_eval_metrics.jsonl").read_text(encoding="utf-8").strip().splitlines()
-    assert [json.loads(line)["epoch"] for line in lines] == [1, 2, 3]
+    rows = [json.loads(line) for line in lines]
+    assert [r["epoch"] for r in rows] == [1, 2, 3]
     assert (save_dir / "real_eval_latest.json").is_file()
+    assert trainer.real_eval_metrics["epoch"] == 3
+    assert trainer.real_eval_metrics["real_score"] == rows[-1]["real_score"]
     best_real = save_dir / "weights" / "best_real.pt"
-    assert best_real.is_file()
-    meta = read_blueprint_weights(best_real)
-    assert meta["names"] == names
+    # An untrained head finds (almost) nothing: best_real.pt only exists if some
+    # evaluation reached the minimum recall on the selection pages.
+    assert best_real.is_file() == any(r["eligible"] for r in rows)
+    if best_real.is_file():
+        meta = read_blueprint_weights(best_real)
+        assert meta["names"] == names
+        assert meta["real_eval"]["eligible"] is True

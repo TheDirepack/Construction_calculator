@@ -51,6 +51,98 @@ def _deterministic_test_tensor(imgsz: int, verify_image: Path | None = None) -> 
     return np.ascontiguousarray(arr, dtype=np.float32)
 
 
+def _cutoff(raw) -> float | None:
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool) and 0.05 < float(raw) < 1.0:
+        return round(float(raw), 4)
+    return None
+
+
+def _compact_set(rep) -> dict | None:
+    """A page set's report without its full sweep (``real_page_eval._set_report``)."""
+    if not isinstance(rep, dict):
+        return None
+    keep = ("role", "used_for_selection", "evaluated", "reason", "documents", "blank_pages",
+            "complete_pages", "available_blank_pages", "available_complete_pages", "truth_symbols",
+            "blank_max_conf", "at_chosen", "at_class_cutoffs", "blank_fp_classes_by_cutoff", "per_document")
+    return {k: rep[k] for k in keep if k in rep}
+
+
+def real_eval_metadata(real_eval: dict | None) -> dict:
+    """ONNX sidecar fields from a checkpoint's ``real_eval`` (``real_page_eval``).
+
+    ``recommended_confidence`` is the cutoff the SELECTION pages chose, which
+    clears the highest blank-page score by the configured margin
+    (``recommended_confidence_source`` says how it was obtained; checkpoints
+    from before the selection/test split fall back to their margin-free
+    ``best_threshold``). ``recommended_class_confidence`` holds per-class
+    cutoffs (zero blank-page false detections on the selection pages), to be
+    applied as ``recommended_class_confidence.get(cls, recommended_class_base_confidence)``;
+    a value above 1 disables the class. In ``real_eval_summary`` only
+    ``selection`` (and the legacy top-level numbers) chose anything; ``test``,
+    ``cross_document`` and ``stress`` are reported only."""
+    out = {
+        "recommended_confidence": None,
+        "recommended_confidence_source": None,
+        "recommended_class_base_confidence": None,
+        "recommended_class_confidence": None,
+        "real_eval_summary": None,
+    }
+    if real_eval is None:
+        return out
+    summary = {
+        "epoch": real_eval.get("epoch"),
+        "real_score": real_eval.get("real_score"),
+        "blank_pages": real_eval.get("blank_pages"),
+        "complete_pages": real_eval.get("complete_pages"),
+        "best_threshold": real_eval.get("best_threshold"),
+        "at_blank_fp_budget": real_eval.get("at_blank_fp_budget"),
+        "at_zero_blank_fp": real_eval.get("at_zero_blank_fp"),
+    }
+    if "recommended_confidence" in real_eval:           # selection/test-split evaluation
+        summary.update({
+            "scores_used_for_selection": "selection",
+            "metrics_scope": real_eval.get("metrics_scope"),
+            "page_pool": real_eval.get("page_pool"),
+            "val_test_independent": real_eval.get("val_test_independent"),
+            "eligible": real_eval.get("eligible"),
+            "selection_tier": real_eval.get("selection_tier"),
+            "selection_note": real_eval.get("selection_note"),
+            "chosen_threshold": real_eval.get("chosen_threshold"),
+            "margin": real_eval.get("margin"),
+            "min_recall": real_eval.get("min_recall"),
+            "blank_max_conf": real_eval.get("blank_max_conf"),
+            "blank_margin_gap": real_eval.get("blank_margin_gap"),
+            "margin_ok": real_eval.get("margin_ok"),
+            "per_class_point": real_eval.get("per_class_point"),
+            "blank_max_by_class": real_eval.get("blank_max_by_class"),
+            "selection": _compact_set(real_eval.get("selection")),
+            "test": _compact_set(real_eval.get("test")),
+            "cross_document": _compact_set(real_eval.get("cross_document")),
+            "stress": real_eval.get("stress"),
+        })
+        rec = _cutoff(real_eval.get("recommended_confidence")) if real_eval.get("eligible") else None
+        out["recommended_confidence"] = rec
+        if rec is not None:
+            out["recommended_confidence_source"] = (
+                "selection_pages_with_blank_margin" if real_eval.get("margin_ok")
+                else "selection_pages_margin_not_reached")
+        base = _cutoff(real_eval.get("recommended_class_base_confidence"))
+        classes = real_eval.get("recommended_class_confidence")
+        if rec is not None and base is not None and isinstance(classes, dict):
+            out["recommended_class_base_confidence"] = base
+            out["recommended_class_confidence"] = {
+                str(k): round(float(v), 4) for k, v in classes.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    else:                                               # older checkpoint: no margin, no split
+        best_th = real_eval.get("best_threshold") if isinstance(real_eval.get("best_threshold"), dict) else {}
+        rec = _cutoff(best_th.get("threshold"))
+        if rec is not None and rec < 0.999:
+            out["recommended_confidence"] = rec
+            out["recommended_confidence_source"] = "legacy_best_threshold_no_margin_no_test_split"
+    out["real_eval_summary"] = summary
+    return out
+
+
 def export_onnx_detector(
     weights: Path,
     *,
@@ -135,22 +227,7 @@ def export_onnx_detector(
 
     epoch_0idx = payload.get("epoch")
     real_eval = payload.get("real_eval") if isinstance(payload.get("real_eval"), dict) else None
-    rec_conf = None
-    real_eval_summary = None
-    if real_eval is not None:
-        best_th = real_eval.get("best_threshold") if isinstance(real_eval.get("best_threshold"), dict) else {}
-        raw_conf = best_th.get("threshold")
-        if isinstance(raw_conf, (int, float)) and not isinstance(raw_conf, bool) and 0.05 < float(raw_conf) < 0.999:
-            rec_conf = round(float(raw_conf), 4)
-        real_eval_summary = {
-            "epoch": real_eval.get("epoch"),
-            "real_score": real_eval.get("real_score"),
-            "blank_pages": real_eval.get("blank_pages"),
-            "complete_pages": real_eval.get("complete_pages"),
-            "best_threshold": real_eval.get("best_threshold"),
-            "at_blank_fp_budget": real_eval.get("at_blank_fp_budget"),
-            "at_zero_blank_fp": real_eval.get("at_zero_blank_fp"),
-        }
+    eval_meta = real_eval_metadata(real_eval)
     meta = {
         "format_version": 1,
         "kind": "blueprint_only_detector_onnx_yolo26n_p2",
@@ -167,8 +244,7 @@ def export_onnx_detector(
         "epoch_0idx": epoch_0idx,
         "epoch": (int(epoch_0idx) + 1) if isinstance(epoch_0idx, int) else None,
         "best_fitness": payload.get("best_fitness"),
-        "recommended_confidence": rec_conf,
-        "real_eval_summary": real_eval_summary,
+        **eval_meta,
         "parity_max_abs_diff": max_diff,
     }
     tmp_meta = out_meta.with_name(f".{out_meta.name}.{os.getpid()}.tmp")
@@ -182,6 +258,8 @@ def export_onnx_detector(
         "best_fitness": meta["best_fitness"],
         "output_layout": meta["output_layout"],
         "output_shape": meta["output_shape"],
+        "recommended_confidence": meta["recommended_confidence"],
+        "recommended_confidence_source": meta["recommended_confidence_source"],
         "parity_max_abs_diff": max_diff,
     }
 

@@ -8,13 +8,30 @@ known positive target scores remain trainable, even for otherwise incomplete
 classes.
 
 This module is used by the actual Ultralytics E2E one-to-many + one-to-one
-criterion. It never invents bounding boxes, hard negatives or pseudo labels.
+criterion. It never invents bounding boxes or pseudo labels; hard-negative
+mining only re-weights entries that are already verified negatives.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
+# Precision-first negative weighting (all values are floats: Ultralytics
+# checkpoints and the CLI carry this dict as plain numbers).
+#
+# hard_neg_mining=1 (default): on verified blank / complete tiles every
+# far-from-GT background entry keeps the ordinary YOLO weight
+# hard_neg_base_weight; only the hard_neg_topk highest-scoring anchors per
+# tile per class get the extra role weight (real_blank_neg_weight,
+# real_complete_far_neg_weight, synthetic_complete_neg_weight) times the
+# fp_boost modulation (1 + fp_boost * p). A tile's extra mass is capped at
+# hard_neg_tile_cap * role_weight * (number of hard entries), so a tile with
+# dense hot linework cannot dominate the batch. Applying the extra weight
+# uniformly to ~20k anchors x every class only lowered every class bias
+# (missing symbols) instead of teaching devices apart from linework.
+# hard_neg_mining=0 restores the old uniform behaviour exactly.
+# Near-GT background, fg-anchor wrong classes, verified positives and partial
+# tiles (unverified background stays zero-weight) are identical in both modes.
 DEFAULT_PHASE2_LOSS_CFG = {
     'real_blank_neg_weight': 10.0,
     'real_complete_far_neg_weight': 7.0,
@@ -25,6 +42,10 @@ DEFAULT_PHASE2_LOSS_CFG = {
     'synthetic_complete_wrong_cls_weight': 3.5,
     'partial_wrong_cls_weight': 3.0,
     'fp_boost': 8.0,
+    'hard_neg_mining': 1.0,
+    'hard_neg_topk': 32.0,
+    'hard_neg_base_weight': 1.0,
+    'hard_neg_tile_cap': 2.0,
 }
 
 

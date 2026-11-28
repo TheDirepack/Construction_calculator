@@ -623,6 +623,467 @@ def _resize_and_rotate_alpha(alpha: np.ndarray, target_max_px: float, angle_deg:
     return np.ascontiguousarray(rot[ys.min():ys.max() + 1, xs.min():xs.max() + 1])
 
 
+# --------------------------------------------------------------------------- symbol size
+
+def sample_symbol_px(rng: np.random.Generator, lo: float, hi: float, *,
+                     large_px: float | None = None, large_share: float = 0.0) -> float:
+    """Long side of one placed symbol, in page pixels.
+
+    Log-uniform over ``[lo, hi]``; with ``large_share`` > 0 that share of
+    draws is log-uniform over ``[large_px, hi]`` instead and the rest over
+    ``[lo, large_px]``. Real 150-DPI sheets draw devices up to ~115 px, and a
+    detector that never saw 90-140 px symbols misses them (a troffer scored
+    0.99 at 85 px, 0.37 at 114 px, ~0 at 130 px). ``large_share=0`` is the
+    old single draw, so existing seeds place the same sizes.
+    """
+    if not 0 < lo <= hi:
+        raise ValueError('invalid symbol size range')
+    if not 0 <= large_share <= 1:
+        raise ValueError('large_share must be in [0, 1]')
+    if large_share <= 0 or large_px is None or not lo < large_px < hi:
+        return float(np.exp(rng.uniform(math.log(lo), math.log(hi))))
+    a, b = (large_px, hi) if rng.random() < large_share else (lo, large_px)
+    return float(np.exp(rng.uniform(math.log(a), math.log(b))))
+
+
+# --------------------------------------------------------------------------- panelboard context
+
+# A bare dark bar is what the model learned "panelboard" to be: a lone black
+# 60-75 x 20 px rectangle scored 0.66, and so did dashes of bold match lines
+# and ADA wall bars. Real panels sit on a wall WITH a tag ("LP-1", "PANEL A").
+# These variants get a tag beside most placements and a fixed, lower wall
+# probability (placement_policy's 5:1 wall odds made ~9 of 10 a bar beside a
+# wall), so a bar beside a wall is not by itself the panelboard pattern.
+PANEL_CONTEXT_VARIANTS = frozenset({('panelboard', 'panelboard'), ('panelboard', 'switchboard_switchgear')})
+PANEL_WALL_PROBABILITY = 0.45
+PANEL_TAG_PROBABILITY = {'wall': 0.85, 'free': 0.65}
+_PANEL_TAG_PREFIXES = ('LP', 'PP', 'HP', 'DP', 'RP', 'LA', 'HA', 'PNL', 'EP', 'LV', 'MDP', 'CP')
+
+
+def panel_tag_text(rng: np.random.Generator) -> str:
+    """A panel designation as drawn beside a panelboard."""
+    kind = int(rng.integers(6))
+    prefix = _PANEL_TAG_PREFIXES[int(rng.integers(len(_PANEL_TAG_PREFIXES)))]
+    letter = 'ABCDEFGH'[int(rng.integers(8))]
+    num = int(rng.integers(1, 10))
+    if kind == 0:
+        return f'PANEL {letter}'
+    if kind == 1:
+        return f'PANEL "{prefix}{num}"'
+    if kind == 2:
+        return f'{prefix}-{num}{letter if rng.random() < .3 else ""}'
+    if kind == 3:
+        return f'{prefix}{num}'
+    if kind == 4:
+        return f'{prefix}-{num}{letter}'
+    return f'{letter}{num}'
+
+
+def _text_alpha(text: str, height: float, rng: np.random.Generator, *, ss: int = 3) -> np.ndarray:
+    """Anti-aliased text ink mask, tight crop, about ``height`` px tall."""
+    fonts = (cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_PLAIN, cv2.FONT_HERSHEY_DUPLEX,
+             cv2.FONT_HERSHEY_COMPLEX_SMALL)
+    font = fonts[int(rng.integers(len(fonts)))]
+    thick = max(1, int(round(ss * rng.uniform(.7, 1.6) * max(1.0, height / 12.0))))
+    (_, th), _ = cv2.getTextSize(text, font, 1.0, thick)
+    scale = height * ss / max(th, 1)
+    (tw, th), base = cv2.getTextSize(text, font, scale, thick)
+    canvas = np.zeros((th + base + 4 * ss, tw + 4 * ss), np.uint8)
+    cv2.putText(canvas, text, (2 * ss, th + 2 * ss), font, scale, 255, thick, cv2.LINE_AA)
+    small = cv2.resize(canvas, (max(1, canvas.shape[1] // ss), max(1, canvas.shape[0] // ss)),
+                       interpolation=cv2.INTER_AREA)
+    ys, xs = np.nonzero(small > 18)
+    if len(xs) == 0:
+        return small
+    return np.ascontiguousarray(small[ys.min():ys.max() + 1, xs.min():xs.max() + 1])
+
+
+def _blend_alpha(page: np.ndarray, x0: int, y0: int, alpha: np.ndarray, ink_col) -> None:
+    """Darken ``page`` with ink ``alpha`` at (x0, y0), clipped to the page."""
+    h, w = page.shape[:2]
+    ah, aw = alpha.shape
+    ax0, ay0 = max(0, -x0), max(0, -y0)
+    px0, py0 = max(0, x0), max(0, y0)
+    px1, py1 = min(w, x0 + aw), min(h, y0 + ah)
+    if px1 <= px0 or py1 <= py0:
+        return
+    a = (alpha[ay0:ay0 + (py1 - py0), ax0:ax0 + (px1 - px0)].astype(np.float32) / 255.0)[:, :, None]
+    roi = page[py0:py1, px0:px1].astype(np.float32)
+    ink = np.asarray(ink_col, np.float32).reshape(1, 1, 3)
+    page[py0:py1, px0:px1] = np.clip(roi * (1.0 - a) + np.minimum(roi, ink) * a, 0, 255).astype(np.uint8)
+
+
+def _place_panel_tag(page, rng, box, normal, occupied, wall_int, ink_col) -> dict | None:
+    """Draw a panel tag beside ``box``: away from the wall when ``normal``
+    (wall -> open side) is given, else on a random side. Returns its record."""
+    h, w = page.shape[:2]
+    x0, y0, x1, y1 = box
+    text = panel_tag_text(rng)
+    alpha = _text_alpha(text, float(rng.uniform(8.0, 16.0)), rng)
+    th, tw = alpha.shape
+    gap = float(rng.uniform(3.0, 12.0))
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    sides = ['right', 'left', 'below', 'above']
+    if normal is not None:
+        nx, ny = normal
+        first = (('right' if nx > 0 else 'left') if abs(nx) >= abs(ny)
+                 else ('below' if ny > 0 else 'above'))
+        # beside the panel along the wall, or out in the room
+        rest = [s for s in sides if s != first]
+        order = [first] + [rest[int(i)] for i in rng.permutation(len(rest))]
+    else:
+        order = [sides[int(i)] for i in rng.permutation(len(sides))]
+    for side in order:
+        if side == 'right':
+            tx, ty = x1 + gap, cy - th / 2.0
+        elif side == 'left':
+            tx, ty = x0 - gap - tw, cy - th / 2.0
+        elif side == 'below':
+            tx, ty = cx - tw / 2.0, y1 + gap
+        else:
+            tx, ty = cx - tw / 2.0, y0 - gap - th
+        ix, iy = int(round(tx)), int(round(ty))
+        if ix < 2 or iy < 2 or ix + tw > w - 2 or iy + th > h - 2:
+            continue
+        tbox = [float(ix), float(iy), float(ix + tw), float(iy + th)]
+        if _overlaps(tbox, occupied, margin=2.0):
+            continue
+        if _rect_sum(wall_int, ix, iy, ix + tw, iy + th) > 0:
+            continue
+        _blend_alpha(page, ix, iy, alpha, ink_col)
+        return {'text': text, 'bbox_xyxy': [round(v, 2) for v in tbox], 'side': side}
+    return None
+
+
+# --------------------------------------------------------------------------- procedural hard negatives
+
+# Unlabelled look-alikes of what fired on blank sheets: bold dashed match /
+# limit-of-work lines (rows of equal dashes, aspect 3-6:1), wall stubs and
+# ADA grab bars beside walls, long solid bars, filled column squares,
+# concentric circles, tree / shrub outlines, plumbing outlines (drinking
+# fountain) and small dimension text. Drawn ONLY on composites whose
+# background is attested symbol-free (complete for every class), so every
+# distractor pixel is known background. Shapes that ARE catalog symbols are
+# avoided: no panelboard-shaped bar (aspect 2.5-5) stands alone; plain squares
+# with a circle (high bay) or rectangles with diagonals (troffer) are not drawn.
+HARD_NEGATIVE_KINDS: dict[str, float] = {
+    'dash_row': .22,
+    'wall_stub': .12,
+    'grab_bar': .08,
+    'solid_bar': .08,
+    'column_squares': .12,
+    'concentric_circles': .08,
+    'tree': .10,
+    'plumbing_outline': .05,
+    'dimension_text': .15,
+}
+_DIM_TEXTS = ("12'-6\"", "3'-0\"", "10'-0\"", "4'-8 1/2\"", "2'-10\"", '1/A-501', 'TYP.', 'EQ', 'EQ.',
+              'A.F.F.', 'SIM.', '101', '204A', 'W2', 'NOTE 3', '(E)', 'N.I.C.', 'C.L.', '48"', '36" MIN.',
+              'CLR.', 'UP', 'DN', 'B.O.', 'T.O.S.', '7', '12', 'MATCH LINE', 'LIMIT OF WORK', 'ADA')
+
+
+class _Stamp:
+    """Supersampled local ink canvas for one distractor."""
+
+    SS = 3
+
+    def __init__(self, w: float, h: float):
+        self.w, self.h = max(2, int(math.ceil(w))), max(2, int(math.ceil(h)))
+        self.ink = np.zeros((self.h * self.SS, self.w * self.SS), np.uint8)
+
+    def p(self, x, y):
+        return int(round(x * self.SS)), int(round(y * self.SS))
+
+    def t(self, px: float) -> int:
+        return max(1, int(round(px * self.SS)))
+
+    def poly(self, pts, *, fill=False, closed=True, t=1.5):
+        arr = np.array([self.p(*q) for q in pts], np.int32)
+        if fill:
+            cv2.fillPoly(self.ink, [arr], 255, cv2.LINE_AA)
+        else:
+            cv2.polylines(self.ink, [arr], closed, 255, self.t(t), cv2.LINE_AA)
+
+    def circle(self, c, r, *, fill=False, t=1.5):
+        cv2.circle(self.ink, self.p(*c), max(1, int(round(r * self.SS))), 255,
+                   -1 if fill else self.t(t), cv2.LINE_AA)
+
+    def line(self, a, b, t=1.5):
+        cv2.line(self.ink, self.p(*a), self.p(*b), 255, self.t(t), cv2.LINE_AA)
+
+    def alpha(self) -> np.ndarray:
+        return cv2.resize(self.ink, (self.w, self.h), interpolation=cv2.INTER_AREA)
+
+
+def _rotated_rect(cx, cy, length, thick, ux, uy):
+    """Corners of a length x thick rectangle centred at (cx, cy) along (ux, uy)."""
+    vx, vy = -uy, ux
+    hl, ht = length / 2.0, thick / 2.0
+    return [(cx - ux * hl - vx * ht, cy - uy * hl - vy * ht), (cx + ux * hl - vx * ht, cy + uy * hl - vy * ht),
+            (cx + ux * hl + vx * ht, cy + uy * hl + vy * ht), (cx - ux * hl + vx * ht, cy - uy * hl + vy * ht)]
+
+
+def _stamp_polys(polys: list[list[tuple[float, float]]], *, fill=True, t=1.5) -> tuple[np.ndarray, int, int]:
+    """Rasterise page-coordinate polygons into (alpha, x0, y0)."""
+    pts = np.array([q for poly in polys for q in poly], np.float64)
+    x0, y0 = int(math.floor(pts[:, 0].min())) - 2, int(math.floor(pts[:, 1].min())) - 2
+    x1, y1 = pts[:, 0].max() + 2, pts[:, 1].max() + 2
+    st = _Stamp(x1 - x0, y1 - y0)
+    for poly in polys:
+        st.poly([(x - x0, y - y0) for x, y in poly], fill=fill, t=t)
+    return st.alpha(), x0, y0
+
+
+def _draw_kind(kind: str, rng: np.random.Generator, page_shape, wall_sites) -> list[tuple[np.ndarray, int, int]] | None:
+    """One distractor as stamps [(alpha, x0, y0), ...] in page coordinates, or None."""
+    h, w = page_shape[:2]
+
+    def free_xy(margin):
+        if w <= 2 * margin + 4 or h <= 2 * margin + 4:
+            return None
+        return float(rng.uniform(margin, w - margin)), float(rng.uniform(margin, h - margin))
+
+    if kind == 'dash_row':
+        # bold dashed match / limit-of-work line: equal dashes, aspect 3-6:1
+        dash = float(rng.uniform(18.0, 80.0))
+        thick = float(np.clip(dash / rng.uniform(3.0, 6.0), 3.0, 22.0))
+        gap = dash * float(rng.uniform(.35, 1.1))
+        n = int(rng.integers(4, 13))
+        dash_dot = rng.random() < .25          # long-short centre/limit line
+        angle = 0.0 if rng.random() < .45 else (90.0 if rng.random() < .8 else float(rng.choice([45.0, 135.0])))
+        ux, uy = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+        span = n * (dash + gap)
+        start = free_xy(20)
+        if start is None:
+            return None
+        sx, sy = start
+        sx -= ux * span / 2
+        sy -= uy * span / 2
+        stamps = []
+        pos = 0.0
+        for i in range(n):
+            seg = dash
+            if dash_dot and i % 2 == 1:
+                seg = max(thick, dash * .18)
+            cx, cy = sx + ux * (pos + seg / 2), sy + uy * (pos + seg / 2)
+            pos += seg + gap
+            if not (thick < cx < w - thick and thick < cy < h - thick):
+                continue
+            stamps.append(_stamp_polys([_rotated_rect(cx, cy, seg, thick, ux, uy)]))
+        return stamps if len(stamps) >= 3 else None
+
+    if kind in ('wall_stub', 'grab_bar'):
+        if not wall_sites:
+            return None
+        site = wall_sites[int(rng.integers(len(wall_sites)))]
+        nx, ny = site.nx, site.ny
+        norm = math.hypot(nx, ny) or 1.0
+        nx, ny = nx / norm, ny / norm
+        length = float(rng.uniform(30.0, 120.0))
+        if kind == 'wall_stub':
+            # a partition stub growing out of the wall, perpendicular to it
+            thick = float(rng.uniform(4.0, 14.0))
+            cx, cy = site.x + nx * (length / 2 - 1), site.y + ny * (length / 2 - 1)
+            return [_stamp_polys([_rotated_rect(cx, cy, length, thick, nx, ny)])]
+        # thin bar parallel to the wall a few px off it (never panel-shaped)
+        thick = float(min(rng.uniform(2.0, 6.0), length / 6.0))
+        off = float(rng.uniform(3.0, 14.0)) + thick / 2
+        cx, cy = site.x + nx * off, site.y + ny * off
+        rect = _rotated_rect(cx, cy, length, thick, -ny, nx)
+        if rng.random() < .5:
+            return [_stamp_polys([rect])]
+        return [_stamp_polys([rect], fill=False, t=float(rng.uniform(1.0, 2.0)))]
+
+    if kind == 'solid_bar':
+        length = float(rng.uniform(30.0, 120.0))
+        thick = float(np.clip(length / rng.uniform(6.0, 14.0), 2.0, 14.0))
+        c = free_xy(length)
+        if c is None:
+            return None
+        ux, uy = (1.0, 0.0) if rng.random() < .5 else (0.0, 1.0)
+        return [_stamp_polys([_rotated_rect(c[0], c[1], length, thick, ux, uy)])]
+
+    if kind == 'column_squares':
+        side = float(rng.uniform(8.0, 40.0))
+        n = int(rng.integers(1, 6))
+        spacing = float(rng.uniform(120.0, 420.0))
+        c = free_xy(side + 4)
+        if c is None:
+            return None
+        ux, uy = (1.0, 0.0) if rng.random() < .5 else (0.0, 1.0)
+        style = int(rng.integers(3))       # filled concrete / steel H column / hatched outline
+        stamps = []
+        for i in range(n):
+            cx, cy = c[0] + ux * i * spacing, c[1] + uy * i * spacing
+            if not (side < cx < w - side and side < cy < h - side):
+                break
+            if style == 0:
+                stamps.append(_stamp_polys([_rotated_rect(cx, cy, side, side, 1.0, 0.0)]))
+                continue
+            st = _Stamp(side + 4, side + 4)
+            lo_, hi_ = 2.0, side + 2.0
+            if style == 1:                 # wide-flange steel column: two flanges and a web
+                fl = max(2.0, side * .18)
+                st.poly([(lo_, lo_), (hi_, lo_), (hi_, lo_ + fl), (lo_, lo_ + fl)], fill=True)
+                st.poly([(lo_, hi_ - fl), (hi_, hi_ - fl), (hi_, hi_), (lo_, hi_)], fill=True)
+                mid = (lo_ + hi_) / 2
+                st.poly([(mid - fl / 2, lo_), (mid + fl / 2, lo_), (mid + fl / 2, hi_), (mid - fl / 2, hi_)],
+                        fill=True)
+                a = st.alpha()
+            else:                          # hatched (masonry / concrete in section)
+                sq = [(lo_, lo_), (hi_, lo_), (hi_, hi_), (lo_, hi_)]
+                st.poly(sq, t=1.5)
+                hatch, mask = _Stamp(side + 4, side + 4), _Stamp(side + 4, side + 4)
+                for k in np.arange(-side, side, max(2.5, side / 6)):
+                    hatch.line((lo_ + k, lo_), (lo_ + k + side, hi_), t=1.0)
+                mask.poly(sq, fill=True)
+                a = np.maximum(st.alpha(), np.minimum(hatch.alpha(), mask.alpha()))
+            stamps.append((a, int(round(cx - side / 2 - 2)), int(round(cy - side / 2 - 2))))
+        return stamps or None
+
+    if kind == 'concentric_circles':
+        r = float(rng.uniform(10.0, 60.0))
+        c = free_xy(r + 4)
+        if c is None:
+            return None
+        st = _Stamp(2 * r + 6, 2 * r + 6)
+        cc = (r + 3, r + 3)
+        t = float(rng.uniform(1.0, 2.5))
+        if rng.random() < .6:          # 3-4 rings (manhole, tree trunk, survey mark)
+            for k in range(int(rng.integers(3, 5))):
+                st.circle(cc, r * (1 - .22 * k), t=t)
+        else:                          # thick-walled pipe / round column outline
+            st.circle(cc, r, t=t)
+            st.circle(cc, r * float(rng.uniform(.76, .9)), t=t)
+        if rng.random() < .35:
+            st.circle(cc, max(1.0, r * .08), fill=True)
+        return [(st.alpha(), int(c[0] - r - 3), int(c[1] - r - 3))]
+
+    if kind == 'tree':
+        r = float(rng.uniform(20.0, 70.0))
+        c = free_xy(r * 1.3 + 4)
+        if c is None:
+            return None
+        lobes = int(rng.integers(6, 15))
+        amp = float(rng.uniform(.08, .22))
+        th = np.linspace(0, 2 * math.pi, lobes * 12, endpoint=False)
+        jitter = rng.normal(0, .03, th.shape)
+        rad = r * (1 + amp * np.abs(np.sin(lobes * th / 2)) + jitter)
+        size = 2 * r * (1 + amp + .15) + 8
+        st = _Stamp(size, size)
+        cc = size / 2
+        pts = [(cc + q * math.cos(a), cc + q * math.sin(a)) for q, a in zip(rad, th)]
+        t = float(rng.uniform(1.0, 2.2))
+        st.poly(pts, t=t)
+        if rng.random() < .7:          # branches / scribble inside
+            for _ in range(int(rng.integers(3, 9))):
+                a = float(rng.uniform(0, 2 * math.pi))
+                q = r * float(rng.uniform(.3, .85))
+                st.line((cc, cc), (cc + q * math.cos(a), cc + q * math.sin(a)), t=t * .8)
+        if rng.random() < .5:
+            st.circle((cc, cc), max(1.5, r * .06), fill=True)
+        return [(st.alpha(), int(c[0] - cc), int(c[1] - cc))]
+
+    if kind == 'plumbing_outline':
+        bw, bh = float(rng.uniform(22.0, 50.0)), float(rng.uniform(18.0, 40.0))
+        c = free_xy(max(bw, bh) + 4)
+        if c is None:
+            return None
+        st = _Stamp(bw + 8, bh + bw * .5 + 8)
+        t = float(rng.uniform(1.0, 2.0))
+        x0, y0 = 4.0, 4.0
+        arc = [(x0 + bw / 2 + bw / 2 * math.cos(a), y0 + bh + bw * .4 * math.sin(a))
+               for a in np.linspace(0, math.pi, 16)]
+        st.poly([(x0, y0), (x0 + bw, y0)] + arc + [(x0, y0)], t=t)
+        cx, cy = x0 + bw / 2, y0 + bh * .7
+        if rng.random() < .5:
+            cv2.ellipse(st.ink, st.p(cx, cy), (int(bw * .3 * st.SS), int(bh * .3 * st.SS)), 0, 0, 360,
+                        255, st.t(t), cv2.LINE_AA)
+        else:
+            st.circle((cx, cy), min(bw, bh) * .12, fill=True)
+        return [(st.alpha(), int(c[0] - st.w / 2), int(c[1] - st.h / 2))]
+
+    if kind == 'dimension_text':
+        text = _DIM_TEXTS[int(rng.integers(len(_DIM_TEXTS)))]
+        alpha = _text_alpha(text, float(rng.uniform(5.0, 12.0)), rng)
+        th_, tw_ = alpha.shape
+        c = free_xy(max(tw_, th_) + 40)
+        if c is None:
+            return None
+        tx, ty = int(c[0] - tw_ / 2), int(c[1] - th_ / 2)
+        stamps = [(alpha, tx, ty)]
+        if rng.random() < .55:         # with its dimension line and ticks
+            span = tw_ + float(rng.uniform(20.0, 160.0))
+            ly = ty + th_ + float(rng.uniform(3.0, 7.0))
+            st = _Stamp(span + 12, 14)
+            st.line((6, 7), (span + 6, 7), t=1.0)
+            for xx in (6, span + 6):
+                st.line((xx - 4, 11), (xx + 4, 3), t=1.4)
+            stamps.append((st.alpha(), int(c[0] - span / 2 - 6), int(ly - 7)))
+        return stamps
+
+    raise ValueError(f'unknown hard-negative kind: {kind}')
+
+
+def draw_hard_negatives(
+    page: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    count: int,
+    avoid: list[list[float]],
+    wall_sites=(),
+    ink_int: np.ndarray | None = None,
+    ink_bgr=None,
+    kinds: Mapping[str, float] | None = None,
+    margin: float = 10.0,
+    max_clutter_ink: float = 0.12,
+) -> list[dict]:
+    """Draw ``count`` unlabelled distractors onto ``page`` (in place), never
+    within ``margin`` px of an ``avoid`` box (placed symbols, tags). The caller
+    guarantees the page is attested symbol-free apart from those boxes.
+    Returns one record per distractor (kind and bbox) for provenance."""
+    weights = dict(HARD_NEGATIVE_KINDS if kinds is None else kinds)
+    names = sorted(weights)
+    p = np.array([weights[k] for k in names], np.float64)
+    if count <= 0 or p.sum() <= 0:
+        return []
+    p /= p.sum()
+    h, w = page.shape[:2]
+    ink = (np.asarray(ink_bgr, np.float32) if ink_bgr is not None else np.zeros(3, np.float32))
+    drawn: list[list[float]] = []
+    out: list[dict] = []
+    attempts = 0
+    while len(out) < count and attempts < count * 12:
+        attempts += 1
+        kind = names[int(rng.choice(len(names), p=p))]
+        stamps = _draw_kind(kind, rng, page.shape, list(wall_sites))
+        if not stamps:
+            continue
+        kept = []
+        for alpha, x0, y0 in stamps:
+            ah, aw = alpha.shape
+            box = [float(x0), float(y0), float(x0 + aw), float(y0 + ah)]
+            if x0 < 0 or y0 < 0 or x0 + aw > w or y0 + ah > h:
+                continue
+            if _overlaps(box, avoid, margin=margin) or _overlaps(box, drawn, margin=2.0):
+                continue
+            if (ink_int is not None and kind not in ('dash_row', 'wall_stub', 'grab_bar') and
+                    _rect_sum(ink_int, x0, y0, x0 + aw, y0 + ah) / max(1, aw * ah) > max_clutter_ink):
+                continue
+            kept.append((alpha, x0, y0, box))
+        if not kept or (kind == 'dash_row' and len(kept) < 3):
+            continue
+        col = np.clip(ink + rng.normal(0.0, 6.0, 3), 0.0, 180.0)
+        for alpha, x0, y0, box in kept:
+            _blend_alpha(page, x0, y0, alpha, col)
+        boxes = [k[3] for k in kept]
+        drawn += boxes
+        union = [min(b[0] for b in boxes), min(b[1] for b in boxes),
+                 max(b[2] for b in boxes), max(b[3] for b in boxes)]
+        out.append({'kind': kind, 'parts': len(kept), 'bbox_xyxy': [round(v, 2) for v in union]})
+    return out
+
+
 def composite_neca_page(
     doc: dict,
     image: np.ndarray,
@@ -641,8 +1102,32 @@ def composite_neca_page(
     ink_reference: np.ndarray | None = None,
     tag: str = 'neca',
     precomputed_walls: tuple | None = None,
+    large_px: float | None = None,
+    large_share: float = 0.0,
+    absolute_size: bool = False,
+    max_upscale: float | None = None,
+    hard_negatives: int = 0,
+    distractor_log: list | None = None,
 ) -> tuple[np.ndarray, list[dict]]:
-    """Composite NECA 100-2013 SVG devices onto a clean blueprint page with zero wall clipping."""
+    """Composite NECA 100-2013 SVG devices onto a clean blueprint page with zero wall clipping.
+
+    Sizes: ``sample_symbol_px`` over ``size_px_range`` (``large_px`` /
+    ``large_share`` weight the large end). ``absolute_size`` takes the range
+    as page pixels as-is (150-DPI pages, where inference runs at scale 1);
+    otherwise it scales with page size (legacy) or ``drawing_dpi``.
+    ``max_upscale`` caps how far a glyph is enlarged past its own pixels
+    (a 40 px crop blown up to 140 px is blur, not a drawing).
+
+    Panelboards (``PANEL_CONTEXT_VARIANTS``) get a panel tag beside most
+    placements and a fixed wall probability, so the detector learns the panel
+    in its context rather than "dark bar beside a wall".
+
+    ``hard_negatives``: this many unlabelled distractors
+    (``draw_hard_negatives``) are drawn after the symbols, ONLY when ``doc``
+    is attested symbol-free (``verified_no_symbols``), i.e. the composite is
+    completely labelled for every placed class and every distractor pixel is
+    verified background. Their records go to ``distractor_log``.
+    """
     if not 0 <= placement_chaos <= 1:
         raise ValueError("placement_chaos must be a probability")
     from .symbol_chaos import distort_symbol_alpha, sample_free_origin
@@ -678,10 +1163,15 @@ def composite_neca_page(
         # SVG source has no authoritative physical size; choose an apparent
         # symbol size at 200dpi, then scale at the exact PDF-render DPI.
         lo_px, hi_px = sized_symbol_range(size_px_range, drawing_dpi, (h, w))
+    elif absolute_size:
+        lo_px, hi_px = float(size_px_range[0]), float(size_px_range[1])
     else:
         res_factor = float(np.clip(max(h, w) / 2800.0, 0.70, 1.85))
         lo_px = size_px_range[0] * res_factor
         hi_px = size_px_range[1] * res_factor
+    large_at = None
+    if large_px is not None and large_share > 0:
+        large_at = float(large_px) * (hi_px / float(size_px_range[1]))
 
     placed: list[dict] = []
     wall_cursor = 0
@@ -695,7 +1185,11 @@ def composite_neca_page(
     while len(placed) < per_page and attempts < max_attempts:
         attempts += 1
         glyph = bank.sample(rng)
-        target_px = float(np.exp(rng.uniform(math.log(lo_px), math.log(hi_px))))
+        target_px = sample_symbol_px(rng, lo_px, hi_px, large_px=large_at, large_share=large_share)
+        if max_upscale is not None:
+            native = float(max(glyph.alpha.shape[:2]))
+            target_px = min(target_px, max(lo_px, native * float(max_upscale)))
+        panel_context = (glyph.family, glyph.variant) in PANEL_CONTEXT_VARIANTS
         # A common per-page preference is modulated by how devices usually
         # mount: switches/receptacles near walls, troffers/downlights mostly
         # in free/ceiling locations. All classes retain random variation.
@@ -708,6 +1202,8 @@ def composite_neca_page(
         glyph_wall_probability = wall_placement_probability(
             glyph.device_type, placement_subtype, wall_probability
         )
+        if panel_context and 0.0 < wall_probability < 1.0:
+            glyph_wall_probability = PANEL_WALL_PROBABILITY
         want_wall = has_walls and (rng.random() < glyph_wall_probability)
         chaos_details = {"severity": "unchanged", "operations": [], "rejected": 0}
         placement_mode = "wall" if want_wall else "uniform"
@@ -747,6 +1243,7 @@ def composite_neca_page(
             contact = [float(wx), float(wy)]
             vec = [round(wx - bcx, 2), round(wy - bcy, 2)]
             is_wall = True
+            wall_normal = (float(site.nx), float(site.ny))
         else:
             # Free-space placement: NOT touching any wall -> extra vector in the center
             angle = float(rng.choice([0.0, 90.0, 180.0, 270.0]))
@@ -782,6 +1279,7 @@ def composite_neca_page(
             contact = [round(bcx, 2), round(bcy, 2)]
             vec = [0.0, 0.0]
             is_wall = False
+            wall_normal = None
 
         # Blend cleanly onto the clean blueprint (before any noise/compression!)
         roi = page[y0:y0 + gh, x0:x0 + gw].astype(np.float32)
@@ -794,6 +1292,11 @@ def composite_neca_page(
         blended = roi * (1.0 - a) + np.minimum(roi, ink_col) * a
         page[y0:y0 + gh, x0:x0 + gw] = np.clip(blended, 0.0, 255.0).astype(np.uint8)
         occupied.append(box)
+        context_tag = None
+        if panel_context and rng.random() < PANEL_TAG_PROBABILITY['wall' if is_wall else 'free']:
+            context_tag = _place_panel_tag(page, rng, box, wall_normal, occupied, wall_int, ink_col)
+            if context_tag is not None:
+                occupied.append(list(context_tag['bbox_xyxy']))
 
         placed.append({
             'instance_id': f'neca_{tag}_{len(placed):03d}',
@@ -830,7 +1333,19 @@ def composite_neca_page(
                 'wall_angle_degrees_image': round(angle, 3) if is_wall else None,
                 'wall_contact_method': 'raster_line_fit' if is_wall else None,
                 'wall_sampling_probability': round(glyph_wall_probability, 4),
+                'context_tag': context_tag,
             },
         })
+
+    if hard_negatives > 0 and doc.get('verified_no_symbols') is True and not doc.get('instances'):
+        drng = np.random.default_rng(int(rng.integers(2 ** 63)))
+        n = int(drng.integers(max(1, hard_negatives // 2), hard_negatives + hard_negatives // 2 + 1))
+        records = draw_hard_negatives(
+            page, drng, count=n, avoid=occupied, wall_sites=wall_sites, ink_int=ink_int,
+            ink_bgr=(ink_bgr if ink_bgr is not None else
+                     np.percentile(image[ink_mask.astype(bool)], 10, axis=0) if ink_mask.any() else np.zeros(3)),
+        )
+        if distractor_log is not None:
+            distractor_log.extend(records)
 
     return page, placed

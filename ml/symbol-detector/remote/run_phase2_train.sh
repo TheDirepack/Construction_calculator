@@ -33,12 +33,49 @@ PHASE2_VERIFIED_BLANK_PAGES="${PHASE2_VERIFIED_BLANK_PAGES:-150}"
 PHASE2_REAL_EVAL_EVERY="${PHASE2_REAL_EVAL_EVERY:-5}"
 PHASE2_REAL_EVAL_BLANK_PAGES="${PHASE2_REAL_EVAL_BLANK_PAGES:-1000}"     # every held-out page
 PHASE2_REAL_EVAL_COMPLETE_PAGES="${PHASE2_REAL_EVAL_COMPLETE_PAGES:-1000}"
+# Composite symbol sizes in page px (150 DPI, as inference sees them): real
+# devices reach ~115 px, so PHASE2_LARGE_SHARE of symbols are drawn at
+# PHASE2_LARGE_PX..PHASE2_MAX_PX.
+PHASE2_MIN_PX="${PHASE2_MIN_PX:-20}"
+PHASE2_MAX_PX="${PHASE2_MAX_PX:-140}"
+PHASE2_LARGE_PX="${PHASE2_LARGE_PX:-90}"
+PHASE2_LARGE_SHARE="${PHASE2_LARGE_SHARE:-0.35}"
+# Unlabelled hard negatives (dashed match lines, wall stubs, bars, columns,
+# concentric circles, trees, dimension text) per composite on attested
+# symbol-free backgrounds; 0 = off.
+PHASE2_DISTRACTORS_PER_PAGE="${PHASE2_DISTRACTORS_PER_PAGE:-16}"
+# Ultralytics scale augmentation (+-50%): symbol sizes on top of the export's.
+PHASE2_SCALE_AUG="${PHASE2_SCALE_AUG:-0.5}"
 PY="$BASE/.venv/bin/python"
 
 export PYTHONPATH="$CODE"
 export PYTHONUNBUFFERED=1
 cd "$CODE"
 mkdir -p "$WORK"
+
+# One seed picks every composite, tile and variant. A new PHASE2_WORK gets a
+# new seed (derived from its path), so a new run re-samples the data; the
+# seed is kept in $WORK/phase2_seed, so re-running the same PHASE2_WORK (or
+# any run with the same PHASE2_SEED) rebuilds exactly the same data.
+SEED_FILE="$WORK/phase2_seed"
+if [[ -s "$SEED_FILE" ]]; then
+  SAVED_SEED="$(cat "$SEED_FILE")"
+  if [[ -n "${PHASE2_SEED:-}" && "$PHASE2_SEED" != "$SAVED_SEED" ]]; then
+    echo "PHASE2_SEED=$PHASE2_SEED but $WORK was built with seed $SAVED_SEED; use a new PHASE2_WORK." >&2
+    exit 2
+  fi
+  PHASE2_SEED="$SAVED_SEED"
+elif [[ -z "${PHASE2_SEED:-}" && -d "$WORK/composited_neca" ]]; then
+  PHASE2_SEED=2026          # built before per-run seeds: keep its fixed seed
+elif [[ -z "${PHASE2_SEED:-}" ]]; then
+  PHASE2_SEED=$(( $(printf '%s' "$WORK" | cksum | cut -d' ' -f1) % 1000000000 ))
+fi
+if ! [[ "$PHASE2_SEED" =~ ^[0-9]+$ ]]; then
+  echo "PHASE2_SEED must be a non-negative integer: $PHASE2_SEED" >&2
+  exit 2
+fi
+echo "$PHASE2_SEED" > "$SEED_FILE"
+echo "data seed: $PHASE2_SEED ($SEED_FILE)"
 
 if [[ "${PHASE2_ALLOW_UNVERIFIED:-0}" != "0" ]]; then
   echo 'ERROR: PHASE2_ALLOW_UNVERIFIED is forbidden. Use class-masked --allow-partial-training.' >&2
@@ -77,6 +114,16 @@ PY
 # are proven symbol-free, so their composites are completely labelled. Other
 # dataset images may hold symbols: positive-only unless listed in
 # $DATA/symbol_free_images.txt.
+# Verified-blank backgrounds are the label store's TRAIN pages marked "no
+# target symbols on this page" (never held-out or evaluation pages), spread
+# over documents (a document's share grows with the square root of its
+# pages), and the export caps each document's real blank tiles. MORE
+# NON-ELECTRICAL BLANK SHEETS come only from labelling: in the annotator,
+# open architectural / landscape / civil / plumbing / ADA-detail sheets of
+# training drawings ($DATA/1_blueprints/*.pdf) and mark them "no target
+# symbols on this page". Each such page joins the next run as a real blank
+# page, a composite background and a hard-negative mining page.
+# Symbol-library crops cut from held-out or evaluation pages are dropped.
 echo "=== [3/6] COMPOSITE DEVICES: NECA 100-2013 GLYPHS + LEGEND-SHEET AND CAD-LIBRARY CROPS + CROPS OF VERIFIED LABELS ON TRAINING-PDF, WALLS-ONLY AND DATASET PAGES ==="
 if [[ ! -d "$WORK/composited_neca" ]]; then
   "$PY" scripts_composite_neca_svg.py \
@@ -96,10 +143,13 @@ if [[ ! -d "$WORK/composited_neca" ]]; then
     --copies 1 \
     --per-page 24 \
     --wall-fraction 0.60 \
-    --min-px 20 \
-    --max-px 64 \
+    --min-px "$PHASE2_MIN_PX" \
+    --max-px "$PHASE2_MAX_PX" \
+    --large-px "$PHASE2_LARGE_PX" \
+    --large-share "$PHASE2_LARGE_SHARE" \
+    --distractors-per-page "$PHASE2_DISTRACTORS_PER_PAGE" \
     --preview 5 \
-    --seed 2026
+    --seed "$PHASE2_SEED"
 fi
 if ! compgen -G "$WORK/composited_neca/*.json" >/dev/null; then
   echo "No composited NECA symbol annotations in $WORK/composited_neca" >&2
@@ -121,6 +171,32 @@ if [[ -n "${PHASE2_WALL_MANIFEST:-}" ]]; then
       --copies 8 --empty-fraction 0.30 --max-symbols 32
   fi
   ANNOTATIONS+=("$WORK/composited_verified_walls/*.json")
+fi
+
+# Optional hard negatives: PHASE2_HARD_NEGATIVES=<path to windows JSON>.
+# If the file does not exist and PHASE2_MINE_WEIGHTS names a checkpoint
+# (e.g. the previous run's best.pt), it is mined first: tiled inference over
+# the verified-blank TRAIN pages (never held-out or evaluation pages), every
+# detection >= PHASE2_MINE_FLOOR becomes a 512 px window. The export turns
+# each window into PHASE2_HARD_NEGATIVE_VARIANTS (default 4) verified-empty
+# training tiles. Only a fresh prepare (new PHASE2_WORK) reads it.
+if [[ -n "${PHASE2_HARD_NEGATIVES:-}" ]]; then
+  if [[ ! -s "$PHASE2_HARD_NEGATIVES" ]]; then
+    if [[ -z "${PHASE2_MINE_WEIGHTS:-}" ]]; then
+      echo "PHASE2_HARD_NEGATIVES=$PHASE2_HARD_NEGATIVES does not exist; set PHASE2_MINE_WEIGHTS to mine it." >&2
+      exit 2
+    fi
+    echo "=== [3b/6] MINE HARD NEGATIVES WITH $PHASE2_MINE_WEIGHTS ==="
+    "$PY" scripts_mine_hard_negatives.py "$PHASE2_MINE_WEIGHTS" \
+      --label-store "$LABELS" --data-root "$DATA" \
+      --output "$PHASE2_HARD_NEGATIVES" \
+      --floor "${PHASE2_MINE_FLOOR:-0.05}"
+  fi
+  export PHASE2_HARD_NEGATIVES
+  export PHASE2_HARD_NEGATIVE_VARIANTS="${PHASE2_HARD_NEGATIVE_VARIANTS:-4}"
+  echo "hard negatives: $PHASE2_HARD_NEGATIVES (${PHASE2_HARD_NEGATIVE_VARIANTS} variants per window)"
+else
+  unset PHASE2_HARD_NEGATIVES
 fi
 
 echo "=== [4/6] PREPARE CLASS-MASKED, BUILDING-ISOLATED YOLO DATASET (REAL + NECA COMPOSITED) ==="
@@ -172,6 +248,7 @@ PY
     --test-fraction "$TEST_FRAC" \
     --eval-scales 1 \
     --eval-overlap 192 \
+    --seed "$PHASE2_SEED" \
     --allow-partial-training
 fi
 
@@ -221,7 +298,7 @@ TRAIN_ARGS=(
   --weights "$INIT_WEIGHTS"
   --imgsz 512 --batch "$PHASE2_BATCH" --epochs "$PHASE2_EPOCHS"
   --optimizer MuSGD --lr0 "$PHASE2_LR0"
-  --fliplr 0 --flipud 0 --scale 0.2 --translate 0.05
+  --fliplr 0 --flipud 0 --scale "$PHASE2_SCALE_AUG" --translate 0.05
   --real-eval-every "$PHASE2_REAL_EVAL_EVERY"
   --real-eval-manifest "$WORK/prepared/source_manifest.json"
   --real-eval-blank-pages "$PHASE2_REAL_EVAL_BLANK_PAGES"

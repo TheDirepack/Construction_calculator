@@ -445,7 +445,9 @@ def labeled_pages(store: Path, *, data_root: Path | None = None,
     pages of each training PDF (``split_holdout``, per drawing, blank and
     fully labelled pages separately) never train. They are the real-page test
     (``real_page_eval``) and are kept out of composite backgrounds and symbol
-    crops too. Photos always train.
+    crops too. ``dataset_manifest.assign_holdout_eval_sets`` splits them again
+    into ``selection`` pages (choose the checkpoint and cutoffs) and locked
+    ``test`` pages (only reported). Photos always train.
     """
     from blueprint_symbols.label_schema import parse_page_ref, read_page
     out: dict[str, list[Path]] = {"train": [], "holdout": [], "evaluation": []}

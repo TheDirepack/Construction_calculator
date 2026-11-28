@@ -5,6 +5,14 @@
         --backgrounds '../work/pool/background/*new_downloads_202611*.json' \
         --output ../work/neca_composited \
         --per-page 24 --wall-fraction 0.60 --limit 400 --preview 3
+
+Symbol sizes are page pixels (150-DPI pages, as inference sees them):
+log-uniform over --min-px..--max-px (20-140) with --large-share of them in
+--large-px..--max-px (90-140). On attested symbol-free backgrounds
+(verified-blank sheets, walls-only pages) --distractors-per-page unlabelled
+hard negatives (dashed match lines, wall stubs, bars, columns, circles,
+trees, dimension text) are drawn too. Crops from symbol libraries cut from
+held-out or evaluation pages are dropped.
 """
 from __future__ import annotations
 
@@ -174,14 +182,12 @@ def verified_blank_training_backgrounds(
         return []
 
     candidates.sort(key=lambda item: (item[0], str(item[2])))
-    rng = np.random.default_rng(seed)
-    order = rng.permutation(len(candidates))
-    shuffled = [candidates[int(idx)] for idx in order]
+    shuffled = balanced_document_draws(candidates, count, seed=seed,
+                                       key=lambda item: _document_key(item[3], item[2]))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    for i in range(count):
-        digest, _ref, src_img, doc = shuffled[i % len(shuffled)]
+    for i, (digest, _ref, src_img, doc) in enumerate(shuffled):
         stem = f"vblank_{i:04d}_{src_img.stem[:40]}"
         payload = page_header(
             source=str(doc.get("source_id") or src_img.stem),
@@ -210,12 +216,53 @@ def verified_blank_training_backgrounds(
         json_path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
         written.append(json_path)
 
+    docs = {_document_key(item[3], item[2]) for item in candidates}
     print(
         f"Verified-blank training backgrounds: {len(written)} pages "
-        f"from {len(candidates)} unique verified-blank training sheets",
+        f"from {len(candidates)} unique verified-blank training sheets in {len(docs)} documents",
         flush=True,
     )
     return written
+
+
+def _document_key(doc: dict, image: Path) -> str:
+    return str(doc.get("document_id") or doc.get("source_id") or doc.get("project_family_id") or image.stem)
+
+
+def balanced_document_draws(items: list, count: int, *, seed: int, key) -> list:
+    """``count`` draws from ``items`` spread over documents (``key``) so one
+    big PDF does not dominate: a document's share grows with the square root
+    of its page count (a 100-page set gets ~3x a 10-page one, not 10x), its
+    pages are used in shuffled order and repeat only once all were used.
+    Deterministic for a seed."""
+    if count <= 0 or not items:
+        return []
+    rng = np.random.default_rng(seed)
+    groups: dict[str, list] = {}
+    for item in items:
+        groups.setdefault(key(item), []).append(item)
+    names = sorted(groups)
+    weight = np.sqrt(np.array([len(groups[n]) for n in names], np.float64))
+    share = weight / weight.sum() * count
+    slots = np.floor(share).astype(int)
+    for i in np.argsort(-(share - slots), kind="stable")[:count - int(slots.sum())]:
+        slots[i] += 1
+    draws: list = []
+    for name, n in zip(names, slots):
+        pages = [groups[name][int(i)] for i in rng.permutation(len(groups[name]))]
+        draws += [pages[i % len(pages)] for i in range(int(n))]
+    return [draws[int(i)] for i in rng.permutation(len(draws))]
+
+
+def drop_excluded_library_glyphs(glyphs: list, library: Path, exclusions) -> tuple[list, int]:
+    """Glyphs of a crop library (``symbol_id`` ``<library>:<crop id>``) minus
+    crops cut from held-out or evaluation pages."""
+    from scripts_extract_legend_symbols import excluded_crop_ids
+    bad = excluded_crop_ids(library, exclusions)
+    if not bad:
+        return list(glyphs), 0
+    kept = [g for g in glyphs if g.symbol_id.split(':', 1)[-1] not in bad]
+    return kept, len(glyphs) - len(kept)
 
 
 def main() -> None:
@@ -246,7 +293,17 @@ def main() -> None:
     p.add_argument('--copies', type=int, default=1)
     p.add_argument('--wall-fraction', type=float, default=0.60)
     p.add_argument('--min-px', type=float, default=20.0)
-    p.add_argument('--max-px', type=float, default=64.0)
+    p.add_argument('--max-px', type=float, default=140.0)
+    p.add_argument('--large-px', type=float, default=90.0,
+                   help='--large-share of symbols are sized in --large-px..--max-px')
+    p.add_argument('--large-share', type=float, default=0.35)
+    p.add_argument('--page-scaled-sizes', action='store_true',
+                   help='legacy: scale --min-px/--max-px with page size instead of taking them as page pixels')
+    p.add_argument('--max-upscale', type=float, default=3.0,
+                   help='never enlarge a glyph past this many times its own pixel size')
+    p.add_argument('--distractors-per-page', type=int, default=16,
+                   help='unlabelled hard negatives per composite on attested symbol-free backgrounds '
+                        '(about half to 1.5x this many); 0 = off')
     p.add_argument('--limit', type=int, default=0)
     p.add_argument('--preview', type=int, default=3, help='Write N annotated preview overlays into output/_previews')
     p.add_argument('--seed', type=int, default=2026)
@@ -260,6 +317,8 @@ def main() -> None:
                         '(scripts_extract_legend_symbols.py output, e.g. 2_component_libraries/legend_symbol_crops)')
     a = p.parse_args()
 
+    if not 0 <= a.large_share <= 1 or a.min_px <= 0 or a.max_px < a.min_px:
+        raise SystemExit('bad symbol size options')
     bank = NecaSymbolBank(a.neca_dir.resolve(), devices_only=True)
     print('Loaded NECA 100-2013 SVG bank:', json.dumps(bank.summary()), flush=True)
     if a.label_store:
@@ -270,11 +329,19 @@ def main() -> None:
         glyphs, report = verified_symbol_glyphs(pages, allow_complete=True)
         bank.add_glyphs(glyphs)
         print('Verified-label crops:', json.dumps(report), flush=True)
+    exclusions = None
+    if a.symbol_library:
+        from scripts_extract_legend_symbols import source_exclusions
+        # Crop libraries may be cut from drawing sets: never from held-out
+        # (real-page test) or evaluation pages, nor copies of them.
+        exclusions = source_exclusions(a.label_store, a.data_root, a.page_hash_cache)
     for library in a.symbol_library:
         from blueprint_symbols.symbol_library import legend_symbol_glyphs
         glyphs, report = legend_symbol_glyphs(library)
+        glyphs, dropped = drop_excluded_library_glyphs(glyphs, library, exclusions)
         bank.add_glyphs(glyphs)
-        print(f'Legend crops from {library}:', json.dumps(report['counts']), f"{report['devices']} devices", flush=True)
+        print(f'Legend crops from {library}:', json.dumps(report['counts']), f"{report['devices']} devices",
+              f'({dropped} from held-out/evaluation pages dropped)' if dropped else '', flush=True)
     print(f'Devices to place: {len(bank.devices)}', flush=True)
 
     paths = sorted({
@@ -331,6 +398,8 @@ def main() -> None:
         prev_dir.mkdir(parents=True, exist_ok=True)
 
     total = wall_total = free_total = pages_written = 0
+    distractor_counts: dict[str, int] = {}
+    tagged_panels = panels = 0
     for n, path in enumerate(paths):
         doc = read_page(path)
         # Validate source attestations before creating derivative files. A
@@ -345,11 +414,18 @@ def main() -> None:
         for copy in range(a.copies):
             seed = source_seed(path, namespace='neca', seed=a.seed, copy=copy)
             stem = source_stem(path, 'neca', copy)
+            distractors: list[dict] = []
             page, placed = composite_neca_page(
                 doc, image, bank, np.random.default_rng(seed),
                 per_page=a.per_page,
                 wall_fraction=a.wall_fraction,
                 size_px_range=(a.min_px, a.max_px),
+                large_px=a.large_px,
+                large_share=a.large_share,
+                absolute_size=not a.page_scaled_sizes,
+                max_upscale=a.max_upscale,
+                hard_negatives=a.distractors_per_page,
+                distractor_log=distractors,
                 tag=stem,
             )
             if not placed:
@@ -370,8 +446,16 @@ def main() -> None:
                     'supervision': 'complete' if doc.get('verified_no_symbols') is True else 'positive_only',
                     'symbol_library': 'NECA_100_2013_Vector_SVG',
                     'seed': seed,
+                    # unlabelled look-alikes, all verified background
+                    'hard_negative_distractors': distractors,
                 },
             })
+            for d in distractors:
+                distractor_counts[d['kind']] = distractor_counts.get(d['kind'], 0) + 1
+            for inst in placed:
+                if inst.get('symbol_family') == 'panelboard':
+                    panels += 1
+                    tagged_panels += bool((inst.get('source') or {}).get('context_tag'))
             out_img.with_suffix('.json').write_text(json.dumps(new_doc, indent=1))
             if pages_written < a.preview:
                 draw_preview(page, placed, prev_dir / f'{stem}_preview.png')
@@ -389,6 +473,8 @@ def main() -> None:
         'neca_symbols': total,
         'wall_touching': wall_total,
         'free_space_center': free_total,
+        'panelboards_tagged': f'{tagged_panels}/{panels}',
+        'hard_negative_distractors': distractor_counts,
     }, indent=2), flush=True)
 
 

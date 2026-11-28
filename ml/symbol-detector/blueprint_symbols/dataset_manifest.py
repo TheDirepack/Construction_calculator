@@ -6,7 +6,7 @@ Empty validation/test sets and unverified source grouping are rejected.
 from __future__ import annotations
 from pathlib import Path
 from collections import Counter,defaultdict
-import hashlib, json, math
+import hashlib, math, sys
 import cv2
 from .label_schema import (PageFingerprints, annotation_sha256, load_training_page, page_fingerprint,
                            page_training_ready, read_page)
@@ -60,7 +60,8 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
                    locked_manifest: dict | None = None,
                    evaluation_files: list[Path] | None = None,
                    train_only_files: list[Path] | None = None,
-                   holdout_files: list[Path] | None = None) -> dict:
+                   holdout_files: list[Path] | None = None,
+                   require_independent_test: bool = False) -> dict:
     """Stable group-aware partitions; same image in different groups is an error.
 
     ``evaluation_files``: pages of the evaluation drawings
@@ -71,7 +72,13 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
     ``holdout_files``: verified pages of training drawings held out for the
     real-page test (``label_store.labeled_pages``). They never train; a page
     that repeats a training page (same raster, or a symbol-free sheet with the
-    same fingerprint) is dropped. Listed as ``real_holdout``.
+    same fingerprint) is dropped. Listed as ``real_holdout``; each row's
+    ``eval_set`` is ``selection`` (chooses the checkpoint and cutoffs) or
+    ``test`` (only reported), see ``assign_holdout_eval_sets``.
+
+    ``val_test_independent`` is False when validation and test are the same
+    drawings (one evaluation project); that is printed loudly, and with
+    ``require_independent_test`` it is an error.
 
     Stratification cannot guarantee held-out coverage of all rare classes;
     distribution and coverage warnings are explicitly reported.
@@ -176,8 +183,57 @@ def build_manifest(files:list[Path], *, val_fraction:float=.15, test_fraction:fl
                   require_verified_groups=require_verified_groups,
                   allow_partial_training=allow_partial_training, locked_manifest=locked_manifest,
                   evaluation_files=evaluation_files, train_only_files=train_only_files)
+    if not result.get('val_test_independent', True):
+        if require_independent_test:
+            raise ValueError('validation and test are the same drawings (only one evaluation project); '
+                             'add a second project to 1_blueprints/evaluation or drop --require-independent-test')
+        print('!' * 78 + '\nWARNING: val_test_independent = false: only one evaluation project, so '
+              'validation and\ntest are the SAME drawings. Test numbers on them are not an independent '
+              'check.\n' + '!' * 78, file=sys.stderr, flush=True)
     result['real_holdout']=holdout
+    result['real_holdout_sets']=dict(Counter(
+        f"{r['eval_set']}_{'blank' if r['verified_no_symbols'] else 'complete'}" for r in holdout))
     return result
+
+
+EVAL_SET_SALT = 'real-holdout-eval-set-v1'
+
+
+def _holdout_document(row: dict) -> str:
+    """The drawing a held-out page belongs to (document id, else its labels file)."""
+    doc = str(row.get('document_id') or '')
+    return doc or str(row.get('annotation') or row.get('ref') or '').split('#', 1)[0]
+
+
+def _eval_set_key(document: str, page_index: int) -> str:
+    return hashlib.sha256(f'{EVAL_SET_SALT}|{document}|{int(page_index)}'.encode()).hexdigest()
+
+
+def assign_holdout_eval_sets(rows: list[dict]) -> list[dict]:
+    """Split held-out real pages into ``selection`` and ``test`` (sets
+    ``row['eval_set']`` in place and returns ``rows``).
+
+    ``selection`` pages choose ``best_real.pt``, the confidence cutoffs and
+    ``real_score``; ``test`` pages are only reported. Per page kind (blank /
+    fully labelled), drawings are taken in a salted-hash order and their pages
+    in a salted-hash order of (drawing, page), and pages alternate selection,
+    test, selection, ... with one toggle carried across drawings. So every
+    drawing with two or more pages of a kind has pages in both sets, drawings
+    with one page alternate between them, and the sets differ by at most one
+    page per kind. Deterministic for a given set of held-out pages, independent
+    of input order."""
+    by_kind: dict[bool, dict[str, list[dict]]] = {True: defaultdict(list), False: defaultdict(list)}
+    for row in rows:
+        by_kind[bool(row.get('verified_no_symbols'))][_holdout_document(row)].append(row)
+    for kind in (True, False):
+        groups = by_kind[kind]
+        toggle = 0
+        for doc in sorted(groups, key=lambda d: (hashlib.sha256(f'{EVAL_SET_SALT}|{d}'.encode()).hexdigest(), d)):
+            for row in sorted(groups[doc], key=lambda r: (_eval_set_key(doc, r.get('page_index') or 0),
+                                                         str(r.get('annotation') or r.get('ref') or ''))):
+                row['eval_set'] = 'selection' if toggle == 0 else 'test'
+                toggle ^= 1
+    return rows
 
 
 def _real_holdout(files, by_hash, negative_pages, negative_digests, warnings) -> list[dict]:
@@ -209,7 +265,7 @@ def _real_holdout(files, by_hash, negative_pages, negative_digests, warnings) ->
                     'instances':len(data.get('instances') or [])})
     if repeats:
         warnings.append(f'{repeats} held-out real pages repeat a training page and were left out of the real-page test')
-    return out
+    return assign_holdout_eval_sets(out)
 
 
 def _split(docs, by_group, counts, group_counts, warnings, duplicate_negatives, *,
@@ -327,6 +383,7 @@ def _split(docs, by_group, counts, group_counts, warnings, duplicate_negatives, 
             'source_images':docs,'warnings':warnings,
             'deduplicated_negative_pages':duplicate_negatives,
             'partial_training_enabled':allow_partial_training,
+            'val_test_independent':not set(split_groups['val']) & set(split_groups['test']),
             'verification':{'source_group_verified':require_verified_groups,
                             'all_images_hash_checked':True,
                             'training_performed':False}}
@@ -390,7 +447,8 @@ def _evaluation_folder_split(docs, by_group, groups, counts, group_counts, warni
         raise ValueError('no training pages outside the evaluation folder')
     if len(eval_groups)==1:
         split_groups={'train':train,'val':list(eval_groups),'test':list(eval_groups)}
-        warnings.append('only one evaluation project: validation and test are the same drawings')
+        warnings.append('only one evaluation project: validation and test are the same drawings '
+                        '(val_test_independent: false)')
     else:
         split_groups={'train':train,'val':eval_groups[0::2],'test':eval_groups[1::2]}
     splits={name:[d['annotation'] for g in gs for d in by_group[g]] for name,gs in split_groups.items()}
@@ -408,6 +466,7 @@ def _evaluation_folder_split(docs, by_group, groups, counts, group_counts, warni
             'deduplicated_negative_pages':duplicate_negatives,
             'partial_training_enabled':allow_partial_training,
             'holdout':'evaluation_folder',
+            'val_test_independent':len(eval_groups)>1,
             'verification':{'source_group_verified':require_verified_groups,
                             'all_images_hash_checked':True,
                             'training_performed':False}}

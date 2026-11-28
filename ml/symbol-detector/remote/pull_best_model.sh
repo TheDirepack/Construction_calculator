@@ -115,8 +115,45 @@ print(json.dumps({
     "epoch": meta.get("epoch"),
     "best_fitness": meta.get("best_fitness"),
     "recommended_confidence": meta.get("recommended_confidence"),
+    "recommended_confidence_source": meta.get("recommended_confidence_source"),
+    "recommended_class_base_confidence": meta.get("recommended_class_base_confidence"),
+    "recommended_class_confidence": meta.get("recommended_class_confidence"),
     "classes": len(meta.get("names") or {}),
     "output_layout": meta.get("output_layout"),
     "parity_max_abs_diff": meta.get("parity_max_abs_diff"),
 }, indent=2))
+
+# Real-page numbers: only SELECTION chose the checkpoint and cutoffs; TEST and
+# CROSS-DOCUMENT were scored at those cutoffs and are the honest estimate.
+summary = meta.get("real_eval_summary") or {}
+def line(name):
+    rep = summary.get(name) or {}
+    if not rep.get("evaluated"):
+        return f"{name:>14}: not scored ({rep.get('reason', 'not evaluated for this checkpoint')})"
+    p = rep.get("at_chosen") or {}
+    u = p.get("uncertainty") or {}
+    return (f"{name:>14}: {rep.get('documents')} drawings, {rep.get('blank_pages')} blank / "
+            f"{rep.get('complete_pages')} labelled pages, {rep.get('truth_symbols')} symbols | "
+            f"@{p.get('threshold')}: blank FP {p.get('blank_fp')} (<= {u.get('blank_fp_per_page_upper95')}/page, 95%), "
+            f"found {p.get('found')}/{p.get('gt_total')}, labelled FP {p.get('labelled_fp')}, "
+            f"recall 95% CI {u.get('recall_ci95')}")
+if "scores_used_for_selection" in summary:
+    print("Real-page evaluation (selection = used to choose; others = reported only):")
+    for name in ("selection", "test", "cross_document"):
+        print(line(name))
+    stress = summary.get("stress") or {}
+    if stress:
+        print(f"{'stress':>14}: worst blank FP at chosen cutoff {stress.get('worst_blank_fp_at_chosen')} "
+              f"({stress.get('worst_variant')}), worst blank score {stress.get('worst_blank_max_conf')}")
+    print(f"highest selection blank-page score {summary.get('blank_max_conf')}, "
+          f"cutoff gap {summary.get('blank_margin_gap')} (margin {summary.get('margin')})")
+    if not summary.get("margin_ok"):
+        print("WARNING: the recommended cutoff does not clear the highest blank-page score by the margin")
+    if summary.get("val_test_independent") is False:
+        print("WARNING: val_test_independent = false (one evaluation project: val and test are the same drawings)")
+    if summary.get("page_pool") == "training_pages_fallback":
+        print("WARNING: no held-out pages; real-page numbers come from TRAINING pages (optimistic)")
+else:
+    print("WARNING: checkpoint predates the selection/test split; its real-page numbers chose it (optimistic) "
+          "and recommended_confidence has no blank-page margin")
 PY
